@@ -70,13 +70,32 @@ The highest-scoring start that puts the whole clip (±5 s) inside an activity wi
 File names have 1 s resolution and camera clocks drift, so automatic sync is expected to be
 within about 1–2 s; the manual ±60 s slider remains as a fallback.
 
+### Observed file names and metadata
+
+| Source | Example | Time in name |
+|---|---|---|
+| DJI Fly (drone, saved to phone) | `dji_fly_20260524_155144_0147_1783265392318_video_d_logm.mp4` | local start; trailing epoch ms = download time |
+| DJI Mimo export | `dji_export_20261020_211852_1792527178764_editor.mp4` | local start of the exported segment (confirmed by Mimo's own overlay); trailing epoch ms = export time |
+| Samsung camera | `20260517_131512.mp4` | local start |
+
+- Editing in the Samsung gallery rewrites `creation_time` to the editing moment and adds `_001`
+  to the name. The name still carries the original start, so a clip trimmed at its beginning
+  is shifted by the trimmed amount and cannot be detected automatically. Overlay the
+  original files and trim afterwards.
+- Samsung writes `com.samsung.android.utc_offset` (e.g. `+0200`) into the MP4 `udta`; worth
+  reading in the app as an explicit zone for phone clips.
+- Mimo's dashboard holds the last recorded HR value; this app interpolates (e.g. 57 bpm
+  instead of Mimo's 56 between records of 56 and 59).
+
 ## Export (stage 3)
 
 - Media3 Transformer, HEVC, source resolution and frame rate, bitrate near the source.
 - Overlay bitmap sized to the dashboard, not the full frame (3840×3840 frames would otherwise
   upload ~59 MB per frame).
-- 10-bit: D-Log M is most likely tagged as SDR, and the Media3 SDR effect pipeline is 8-bit.
-  To be measured on the Galaxy S25 Ultra; the app warns instead of silently downgrading.
+- 10-bit: a Mimo export is HEVC Main 10, HLG (BT.2020, `arib-std-b67`); Media3 can keep HLG
+  10-bit with effects where the device has a 10-bit HEVC encoder and HDR GL support. D-Log M
+  is most likely tagged as SDR, and the Media3 SDR effect pipeline is 8-bit. Both to be
+  measured on the Galaxy S25 Ultra; the app warns instead of silently downgrading.
 - Output via MediaStore to `DCIM/TelemetryOverlay`, foreground service, progress, cancel.
 
 ## Platform

@@ -7,12 +7,17 @@ import java.time.ZoneOffset
 /** Extracts recording time from the naming schemes of the supported cameras. */
 object FilenameTimeParser {
     private val DJI = Regex("""^DJI_(\d{8})(\d{6})(?:\D|$)""", RegexOption.IGNORE_CASE)
+
+    // Files saved to the phone by DJI apps: `dji_fly_20260524_155144_0147_1783265392318_video_d_logm.mp4`,
+    // `dji_export_20261020_211852_1792527178764_editor.mp4`. The date and time are the recording
+    // (or exported segment) start; the trailing epoch milliseconds are the download/export moment.
+    private val DJI_APP = Regex("""^dji_[a-z]+_(\d{8})_(\d{6})_""", RegexOption.IGNORE_CASE)
     private val PIXEL = Regex("""^PXL_(\d{8})_(\d{6})(\d{3})""", RegexOption.IGNORE_CASE)
     private val PHONE = Regex("""^(?:VID_|IMG_)?(\d{8})_(\d{6})(?:\D|$)""", RegexOption.IGNORE_CASE)
 
     fun parse(fileName: String): TimeEvidence? {
         val name = fileName.substringAfterLast('/')
-        DJI.find(name)?.let { m ->
+        (DJI.find(name) ?: DJI_APP.find(name))?.let { m ->
             val time = localDateTime(m.groupValues[1], m.groupValues[2]) ?: return null
             return TimeEvidence(TimeSource.DJI_FILENAME, ClockReading.Local(time), TimeAnchor.START)
         }

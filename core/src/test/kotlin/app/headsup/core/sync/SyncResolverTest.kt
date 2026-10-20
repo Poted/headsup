@@ -186,4 +186,26 @@ class SyncResolverTest {
         assertEquals(Confidence.LOW, r.confidence)
         assertTrue(r.coverage > 0.0)
     }
+
+    @Test
+    fun `Mimo export trimmed in the Samsung editor matches Mimo's own overlay`() {
+        // Real case: Forerunner 255 activity 19:18:40-19:19:40 UTC (UTC+2). Mimo burned 21:18:52
+        // into the first frame. The Samsung editor rewrote creation_time to the editing moment.
+        val walk = ActivityTrack(
+            emptyMap(), utc("2026-10-20T19:18:40Z"), utc("2026-10-20T19:19:40Z"), 7200, emptyList(), null, Sport.HIKING, null,
+        )
+        val clip = ClipInfo(
+            3_285,
+            listOfNotNull(
+                FilenameTimeParser.parse("dji_export_20261020_211852_1792527178764_editor_001.mp4"),
+                creationTime("2026-10-20T19:54:52Z"),
+            ),
+        )
+
+        val r = assertNotNull(SyncResolver(warsaw).resolve(clip, listOf(walk)))
+
+        assertEquals(utc("2026-10-20T19:18:52Z"), r.startUtcMs)
+        assertEquals(TimeSource.DJI_FILENAME, r.primary.evidence.source)
+        assertEquals(Confidence.HIGH, r.confidence)
+    }
 }

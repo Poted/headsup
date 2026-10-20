@@ -4,7 +4,10 @@ import java.time.LocalDateTime
 
 /** Where a clip's recording time was read from. [reliability] weights it against other sources. */
 enum class TimeSource(val reliability: Double) {
-    /** `DJI_YYYYMMDDhhmmss_…` – wall-clock time of the recording start (Osmo Action, Mini drones). */
+    /**
+     * Wall-clock recording start from a DJI name: `DJI_YYYYMMDDhhmmss_…` on the camera's card,
+     * `dji_fly_…` / `dji_export_…` when saved by the DJI Fly or Mimo app.
+     */
     DJI_FILENAME(1.0),
 
     /** Phone camera names such as Samsung's `YYYYMMDD_hhmmss.mp4`. */

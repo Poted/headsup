@@ -16,6 +16,18 @@ class TimeParsersTest {
     }
 
     @Test
+    fun `DJI Fly and Mimo app names are local start time`() {
+        assertEquals(
+            TimeEvidence(TimeSource.DJI_FILENAME, ClockReading.Local(LocalDateTime.of(2026, 5, 24, 15, 51, 44)), TimeAnchor.START),
+            FilenameTimeParser.parse("dji_fly_20260524_155144_0147_1783265392318_video_d_logm.mp4"),
+        )
+        val expected = TimeEvidence(TimeSource.DJI_FILENAME, ClockReading.Local(LocalDateTime.of(2026, 10, 20, 21, 18, 52)), TimeAnchor.START)
+        assertEquals(expected, FilenameTimeParser.parse("dji_export_20261020_211852_1792527178764_editor.mp4"))
+        // Copy saved by the Samsung gallery editor.
+        assertEquals(expected, FilenameTimeParser.parse("dji_export_20261020_211852_1792527178764_editor_001.mp4"))
+    }
+
+    @Test
     fun `path prefix is ignored`() {
         assertEquals(TimeSource.DJI_FILENAME, FilenameTimeParser.parse("DCIM/DJI_001/DJI_20261020211840_0002_D.MP4")?.source)
     }
@@ -24,6 +36,10 @@ class TimeParsersTest {
     fun `Samsung and generic Android names are local start time`() {
         val expected = TimeEvidence(TimeSource.PHONE_FILENAME, ClockReading.Local(local), TimeAnchor.START)
         assertEquals(expected, FilenameTimeParser.parse("20261020_211840.mp4"))
+        assertEquals(
+            TimeEvidence(TimeSource.PHONE_FILENAME, ClockReading.Local(LocalDateTime.of(2026, 5, 17, 13, 15, 12)), TimeAnchor.START),
+            FilenameTimeParser.parse("20260517_131512.mp4"),
+        )
         assertEquals(expected, FilenameTimeParser.parse("20261020_211840(1).mp4"))
         assertEquals(expected, FilenameTimeParser.parse("VID_20261020_211840.mp4"))
     }
