@@ -108,7 +108,7 @@ private class OpenDocumentsIn(private val initial: Uri) : ActivityResultContract
 }
 
 private enum class Tool(val label: String, val icon: ImageVector) {
-    SYNC("Sync", HeadsupIcons.Sync),
+    FILES("Files", HeadsupIcons.Video),
     COLOUR("Colour", HeadsupIcons.Colour),
     EFFECTS("Effects", HeadsupIcons.Dashboard),
     EXPORT("Export", HeadsupIcons.Export),
@@ -141,19 +141,14 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
         }
     }
 
-    var tool by rememberSaveable { mutableStateOf(Tool.SYNC) }
+    var tool by rememberSaveable { mutableStateOf(Tool.FILES) }
     val exporting = jobs.any { it.status == JobStatus.QUEUED || it.status == JobStatus.RUNNING }
     val previewMaxHeight = (LocalConfiguration.current.screenHeightDp * 0.38f).dp
     TenBitResultDialog(jobs)
 
     Box(Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(HeadsupColors.BackgroundGlow, HeadsupColors.Background, HeadsupColors.Background)))) {
-        Column(Modifier.fillMaxSize().systemBarsPadding()) {
-            Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-                Text("Headsup", Modifier.weight(1f), style = MaterialTheme.typography.titleLarge)
-                RoundIconButton(HeadsupIcons.Watch, "Add FIT files", addFit, badge = true)
-                Spacer(Modifier.width(10.dp))
-                RoundIconButton(HeadsupIcons.Video, "Add videos", addVideos, badge = true)
-            }
+        // No title bar: the picture starts at the top, adding files lives in the Files tool.
+        Column(Modifier.fillMaxSize().systemBarsPadding().padding(top = 8.dp)) {
             if (state.busy) LinearProgressIndicator(Modifier.fillMaxWidth().padding(horizontal = 16.dp))
 
             // The picture stays on screen while any tool below is being used.
@@ -191,7 +186,7 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
             ) {
                 if (state.messages.isNotEmpty()) Messages(state.messages, vm::dismissMessages)
                 when (tool) {
-                    Tool.SYNC -> SyncPanel(state, vm, addFit)
+                    Tool.FILES -> FilesPanel(state, vm, onAddVideos = addVideos, onAddFit = addFit)
                     Tool.COLOUR -> ColourPage(state, vm, onAddLut = { lutPicker.launch(arrayOf("*/*")) })
                     Tool.EFFECTS -> EffectsPanel(state.style, state.activities, vm::updateStyle)
                     Tool.EXPORT -> ExportControls(
@@ -294,10 +289,15 @@ private fun Messages(messages: List<String>, onDismiss: () -> Unit) {
     }
 }
 
-// Sync panel
+// Files panel
 
+/** Adding videos and watch files, plus how the selected clip is matched to the watch data. */
 @Composable
-private fun SyncPanel(state: UiState, vm: HeadsupViewModel, onAddFit: () -> Unit) {
+private fun FilesPanel(state: UiState, vm: HeadsupViewModel, onAddVideos: () -> Unit, onAddFit: () -> Unit) {
+    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+        AddTile(HeadsupIcons.Video, "Videos", "from gallery", onAddVideos, Modifier.weight(1f))
+        AddTile(HeadsupIcons.Watch, "FIT", "from Downloads", onAddFit, Modifier.weight(1f))
+    }
     val index = state.selectedClip
     val clip = state.selected
     if (index != null && clip != null) {
@@ -323,12 +323,27 @@ private fun SyncPanel(state: UiState, vm: HeadsupViewModel, onAddFit: () -> Unit
         Group { OffsetControls(clip.manualOffsetMs) { vm.setManualOffset(index, it) } }
     }
     Group {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text("Activities", Modifier.weight(1f), style = MaterialTheme.typography.labelLarge)
-            TextButton(onClick = onAddFit) { Text("+ FIT") }
-        }
+        Label("Activities")
         if (state.activities.isEmpty()) Hint("Add the .FIT file(s) from your watch.")
         state.activities.forEachIndexed { i, a -> ActivityRow(a, onRemove = { vm.removeActivity(i) }) }
+    }
+}
+
+@Composable
+private fun AddTile(icon: ImageVector, title: String, subtitle: String, onClick: () -> Unit, modifier: Modifier = Modifier) {
+    val shape = RoundedCornerShape(20.dp)
+    Row(
+        modifier.clip(shape).background(HeadsupColors.SurfaceHigh).border(1.dp, HeadsupColors.Outline, shape).clickable(onClick = onClick).padding(12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(Modifier.size(36.dp).clip(CircleShape).border(1.dp, HeadsupColors.Accent, CircleShape), contentAlignment = Alignment.Center) {
+            Icon(icon, contentDescription = null, Modifier.size(18.dp), tint = HeadsupColors.Accent)
+        }
+        Spacer(Modifier.width(10.dp))
+        Column {
+            Text("+ $title", style = MaterialTheme.typography.labelLarge)
+            Text(subtitle, style = MaterialTheme.typography.labelSmall, color = HeadsupColors.TextMuted)
+        }
     }
 }
 
