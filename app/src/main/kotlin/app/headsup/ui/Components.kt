@@ -225,3 +225,17 @@ fun PillTabs(options: List<String>, selected: Int, onSelect: (Int) -> Unit) {
         }
     }
 }
+
+/** Text action without a TextButton's 48 dp touch padding, for compact rows of small actions. */
+@Composable
+fun SmallAction(text: String, onClick: () -> Unit, modifier: Modifier = Modifier, enabled: Boolean = true) {
+    Text(
+        text,
+        modifier
+            .clip(MaterialTheme.shapes.small)
+            .clickable(enabled = enabled, onClick = onClick)
+            .padding(horizontal = 8.dp, vertical = 6.dp),
+        style = MaterialTheme.typography.labelLarge,
+        color = if (enabled) HeadsupColors.Highlight else HeadsupColors.TextMuted,
+    )
+}

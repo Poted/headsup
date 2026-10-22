@@ -76,6 +76,12 @@ import app.headsup.render.Placement
 import app.headsup.render.Widget
 import java.time.Instant
 import java.time.ZoneId
+import androidx.compose.runtime.State
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.media3.common.Player
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 
 /**
  * Plays the clip with the dashboard drawn on top by the same renderer the export uses.
@@ -100,6 +106,11 @@ fun ClipPreview(
     marker: Offset? = null,
     /** Playhead position within the (trimmed) clip, reported as it changes. */
     onPosition: (Long) -> Unit = {},
+    /**
+     * Position in file time while a cut handle is dragged: the whole file is loaded so the
+     * picture can follow the handle, also outside the current cut.
+     */
+    cutScrub: State<Long?> = NO_SCRUB,
 ) {
     val context = LocalContext.current
     val exoPlayer = remember { ExoPlayer.Builder(context).build() }
@@ -108,19 +119,29 @@ fun ClipPreview(
     // are immediate. Older versions fall back to a Media3 effect inside the player.
     val shaderPreview = Build.VERSION.SDK_INT >= 33
     val liveLut = remember { LiveColorLut() }
-    LaunchedEffect(clip.meta.uri, clip.trimStartMs, clip.trimEndMs) {
+    val scope = rememberCoroutineScope()
+    val scrubber = remember { Scrubber(exoPlayer, scope) }
+    val scrubMs = cutScrub.value
+    val scrubbing = scrubMs != null
+    LaunchedEffect(clip.meta.uri, clip.trimStartMs, clip.trimEndMs, scrubbing) {
         if (!shaderPreview) exoPlayer.setVideoEffects(listOf<Effect>(liveLut))
-        // Only the used part of the file plays; positions count from the cut.
-        exoPlayer.setMediaItem(
-            MediaItem.Builder()
-                .setUri(clip.meta.uri)
-                .setClippingConfiguration(
-                    MediaItem.ClippingConfiguration.Builder().setStartPositionMs(clip.trimStartMs).setEndPositionMs(clip.trimEndMs).build(),
-                )
-                .build(),
-        )
+        if (scrubbing) {
+            exoPlayer.pause()
+            exoPlayer.setMediaItem(MediaItem.fromUri(clip.meta.uri), cutScrub.value ?: 0L)
+        } else {
+            // Only the used part of the file plays; positions count from the cut.
+            exoPlayer.setMediaItem(
+                MediaItem.Builder()
+                    .setUri(clip.meta.uri)
+                    .setClippingConfiguration(
+                        MediaItem.ClippingConfiguration.Builder().setStartPositionMs(clip.trimStartMs).setEndPositionMs(clip.trimEndMs).build(),
+                    )
+                    .build(),
+            )
+        }
         exoPlayer.prepare()
     }
+    LaunchedEffect(scrubMs) { scrubMs?.let(scrubber::seek) }
     var nudge by remember { mutableStateOf(1L) }
     LaunchedEffect(gradeCube) {
         if (shaderPreview) return@LaunchedEffect
@@ -154,18 +175,22 @@ fun ClipPreview(
         }
     }
 
-    var positionMs by remember { mutableLongStateOf(0L) }
+    // Player position; in file time while a cut handle is dragged, otherwise within the cut.
+    var playerMs by remember { mutableLongStateOf(0L) }
     val reportPosition by rememberUpdatedState(onPosition)
+    val fileTime by rememberUpdatedState(scrubbing)
     var playing by remember { mutableStateOf(false) }
     LaunchedEffect(exoPlayer) {
         while (true) withFrameMillis {
-            if (positionMs != exoPlayer.currentPosition) {
-                positionMs = exoPlayer.currentPosition
-                reportPosition(positionMs)
+            if (playerMs != exoPlayer.currentPosition) {
+                playerMs = exoPlayer.currentPosition
+                if (!fileTime) reportPosition(playerMs)
             }
             playing = exoPlayer.isPlaying
         }
     }
+    // Position within the clip, as the dashboard and timeline count it (negative before the cut).
+    val positionMs = if (scrubbing) playerMs - clip.trimStartMs else playerMs
 
     val sampler = remember(activity) { activity?.let { TelemetrySampler(it.track) } }
     val renderer = remember { DashboardRenderer(context.assets) }
@@ -264,13 +289,18 @@ fun ClipPreview(
                 Icon(if (playing) HeadsupIcons.Pause else HeadsupIcons.Play, contentDescription = if (playing) "Pause" else "Play", tint = HeadsupColors.OnAccent)
             }
             Text(
-                "  ${timecode(positionMs, clip.meta.frameRate)}",
+                "  ${timecode(if (scrubbing) playerMs else positionMs, clip.meta.frameRate)}",
                 style = MaterialTheme.typography.labelMedium.copy(fontFamily = FontFamily.Monospace),
             )
+            // The thumb follows the finger; the picture follows as fast as the decoder can seek.
+            var dragMs by remember { mutableStateOf<Float?>(null) }
+            val endMs = clip.durationMs.coerceAtLeast(1L).toFloat()
             Slider(
-                value = positionMs.toFloat(),
-                onValueChange = { exoPlayer.seekTo(it.toLong()) },
-                valueRange = 0f..clip.durationMs.coerceAtLeast(1L).toFloat(),
+                value = (dragMs ?: positionMs.toFloat()).coerceIn(0f, endMs),
+                onValueChange = { dragMs = it; scrubber.seek(it.toLong()) },
+                onValueChangeFinished = { dragMs = null },
+                enabled = !scrubbing,
+                valueRange = 0f..endMs,
                 modifier = Modifier.weight(1f).padding(horizontal = 8.dp),
             )
             ToggleDot("H", histogramOn) { histogramOn = !histogramOn }
@@ -281,6 +311,38 @@ fun ClipPreview(
 }
 
 private const val SAMPLE_WIDTH = 192
+
+private val NO_SCRUB: State<Long?> = mutableStateOf(null)
+
+/**
+ * Seeking for a dragged finger: one seek at a time, always to the latest position, so the
+ * picture keeps up instead of the player working through a queue of stale seeks.
+ */
+private class Scrubber(private val player: ExoPlayer, private val scope: CoroutineScope) {
+    private var target = 0L
+    private var running = false
+
+    fun seek(positionMs: Long) {
+        target = positionMs.coerceAtLeast(0L)
+        if (running) return
+        running = true
+        scope.launch {
+            try {
+                var done = -1L
+                while (target != done) {
+                    done = target
+                    player.seekTo(done)
+                    // Until the frame at the new position is ready (bounded, in case it never is).
+                    withTimeoutOrNull(400) {
+                        while (player.playbackState == Player.STATE_BUFFERING) delay(8)
+                    }
+                }
+            } finally {
+                running = false
+            }
+        }
+    }
+}
 
 @Composable
 private fun ToggleDot(label: String, on: Boolean, onClick: () -> Unit) {

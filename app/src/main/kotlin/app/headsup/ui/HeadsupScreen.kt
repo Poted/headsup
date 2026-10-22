@@ -167,6 +167,8 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
     val measuring = tool == Tool.COLOUR && adjustment == Adjustment.SKIN
     // Read only where needed (cut controls), so playback does not recompose the whole screen.
     val playhead = remember { mutableLongStateOf(0L) }
+    // File position of a cut handle being dragged; read only by the preview.
+    val cutScrub = remember { mutableStateOf<Long?>(null) }
     val exporting = jobs.any { it.status == JobStatus.QUEUED || it.status == JobStatus.RUNNING }
     val previewMaxHeight = (LocalConfiguration.current.screenHeightDp * 0.38f).dp
     TenBitResultDialog(jobs)
@@ -197,6 +199,7 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
                     onMoveWidget = vm::moveWidget,
                     onMoveFinished = vm::persistStyle,
                     onPosition = { playhead.longValue = it },
+                    cutScrub = cutScrub,
                 )
             }
             if (state.clips.isNotEmpty()) {
@@ -217,12 +220,9 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
             ) {
                 if (state.messages.isNotEmpty()) Messages(state.messages, vm::dismissMessages)
                 when (tool) {
-                    Tool.FILES -> FilesPanel(state, vm, playhead, onAddVideos = addVideos, onAddFit = addFit)
+                    Tool.FILES -> FilesPanel(state, vm, playhead, onCutScrub = { cutScrub.value = it }, onAddVideos = addVideos, onAddFit = addFit)
                     Tool.COLOUR -> ColourPage(state, vm, adjustment, { adjustment = it }, onAddLut = { lutPicker.launch(arrayOf("*/*")) })
-                    Tool.EFFECTS -> {
-                        LookActions(state, vm)
-                        EffectsPanel(state.style, state.effects, state.activities, vm::updateStyle, vm::updateEffects)
-                    }
+                    Tool.EFFECTS -> EffectsPanel(state, vm)
                     Tool.EXPORT -> ExportControls(
                         bitrateFactor = state.bitrateFactor,
                         sourceBitrate = state.selected?.meta?.bitrate,
@@ -327,10 +327,17 @@ private fun Messages(messages: List<String>, onDismiss: () -> Unit) {
 
 /** Adding videos and watch files, plus how the selected clip is matched to the watch data. */
 @Composable
-private fun FilesPanel(state: UiState, vm: HeadsupViewModel, playhead: LongState, onAddVideos: () -> Unit, onAddFit: () -> Unit) {
+private fun FilesPanel(
+    state: UiState,
+    vm: HeadsupViewModel,
+    playhead: LongState,
+    onCutScrub: (Long?) -> Unit,
+    onAddVideos: () -> Unit,
+    onAddFit: () -> Unit,
+) {
     Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-        AddTile(HeadsupIcons.Video, "Videos", "from gallery", onAddVideos, Modifier.weight(1f))
-        AddTile(HeadsupIcons.Watch, "FIT", "from Downloads", onAddFit, Modifier.weight(1f))
+        AddTile(HeadsupIcons.Video, "Videos", onAddVideos, Modifier.weight(1f))
+        AddTile(HeadsupIcons.Watch, "FIT", onAddFit, Modifier.weight(1f))
     }
     val index = state.selectedClip
     val clip = state.selected
@@ -349,7 +356,7 @@ private fun FilesPanel(state: UiState, vm: HeadsupViewModel, playhead: LongState
                         ).joinToString(" · "),
                     )
                 }
-                TextButton(onClick = { vm.removeClip(index) }) { Text("Remove") }
+                SmallAction("Remove", { vm.removeClip(index) })
             }
             SyncSummary(clip, clip.sync?.let { state.activities.getOrNull(it.trackIndex) })
         }
@@ -359,6 +366,7 @@ private fun FilesPanel(state: UiState, vm: HeadsupViewModel, playhead: LongState
                 playhead = playhead,
                 onTrim = { start, end -> vm.setTrim(index, start, end) },
                 onSplit = { vm.splitClip(index, it) },
+                onScrub = onCutScrub,
             )
         }
         Group { StartTimeControls(clip, state.activities) { vm.setManualStart(index, it) } }
@@ -377,7 +385,13 @@ private fun FilesPanel(state: UiState, vm: HeadsupViewModel, playhead: LongState
 
 /** Trimming and splitting; the watch data follows every cut because the app knows where it was made. */
 @Composable
-private fun CutControls(clip: ClipState, playhead: LongState, onTrim: (Long, Long) -> Unit, onSplit: (Long) -> Unit) {
+private fun CutControls(
+    clip: ClipState,
+    playhead: LongState,
+    onTrim: (Long, Long) -> Unit,
+    onSplit: (Long) -> Unit,
+    onScrub: (Long?) -> Unit,
+) {
     val full = clip.meta.durationMs.coerceAtLeast(1L).toFloat()
     var range by remember(clip.id, clip.trimStartMs, clip.trimEndMs) {
         mutableStateOf(clip.trimStartMs.toFloat()..clip.trimEndMs.toFloat())
@@ -388,26 +402,33 @@ private fun CutControls(clip: ClipState, playhead: LongState, onTrim: (Long, Lon
     }
     RangeSlider(
         value = range,
-        onValueChange = { range = it },
+        onValueChange = {
+            // The picture follows whichever handle moved.
+            onScrub((if (it.start != range.start) it.start else it.endInclusive).toLong())
+            range = it
+        },
         valueRange = 0f..full,
-        onValueChangeFinished = { onTrim(range.start.toLong(), range.endInclusive.toLong()) },
+        onValueChangeFinished = {
+            onTrim(range.start.toLong(), range.endInclusive.toLong())
+            onScrub(null)
+        },
     )
     Row {
         Hint(Formats.duration(range.start.toLong()))
         Spacer(Modifier.weight(1f))
         Hint(Formats.duration(range.endInclusive.toLong()))
     }
+    // "Here" is the playhead; the watch data follows every cut automatically.
     FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
         OutlinedButton(onClick = { onTrim(clip.trimStartMs + playhead.longValue, clip.trimEndMs) }) { Text("Start here") }
         OutlinedButton(onClick = { onTrim(clip.trimStartMs, clip.trimStartMs + playhead.longValue) }) { Text("End here") }
-        OutlinedButton(onClick = { onSplit(playhead.longValue) }) { Text("Split here") }
-        if (clip.isTrimmed) TextButton(onClick = { onTrim(0L, clip.meta.durationMs) }) { Text("Full clip") }
+        OutlinedButton(onClick = { onSplit(playhead.longValue) }) { Text("Split") }
+        if (clip.isTrimmed) SmallAction("Full clip", { onTrim(0L, clip.meta.durationMs) }, Modifier.align(Alignment.CenterVertically))
     }
-    Hint("\"Here\" is the current playhead. The watch data follows every cut automatically.")
 }
 
 @Composable
-private fun AddTile(icon: ImageVector, title: String, subtitle: String, onClick: () -> Unit, modifier: Modifier = Modifier) {
+private fun AddTile(icon: ImageVector, title: String, onClick: () -> Unit, modifier: Modifier = Modifier) {
     val shape = RoundedCornerShape(20.dp)
     Row(
         modifier.clip(shape).background(HeadsupColors.CardGradient).border(1.dp, HeadsupColors.Outline, shape).clickable(onClick = onClick).padding(12.dp),
@@ -417,10 +438,7 @@ private fun AddTile(icon: ImageVector, title: String, subtitle: String, onClick:
             Icon(icon, contentDescription = null, Modifier.size(18.dp), tint = HeadsupColors.OnHighlight)
         }
         Spacer(Modifier.width(10.dp))
-        Column {
-            Text("+ $title", style = MaterialTheme.typography.labelLarge)
-            Text(subtitle, style = MaterialTheme.typography.labelSmall, color = HeadsupColors.TextMuted)
-        }
+        Text("+ $title", style = MaterialTheme.typography.labelLarge)
     }
 }
 
@@ -433,7 +451,7 @@ private fun StartTimeControls(clip: ClipState, activities: List<LoadedActivity>,
         ?: ZoneId.systemDefault().rules.getOffset(Instant.now()).totalSeconds
     Row(verticalAlignment = Alignment.CenterVertically) {
         Column(Modifier.weight(1f)) {
-            Label("Recording start of selected clip")
+            Label("Recording start")
             Hint(
                 when {
                     clip.manualStart != null -> "Entered by hand: ${clip.manualStart.toString().replace('T', ' ')}"
@@ -442,8 +460,8 @@ private fun StartTimeControls(clip: ClipState, activities: List<LoadedActivity>,
                 },
             )
         }
-        TextButton(onClick = { editing = true }) { Text("Set") }
-        if (clip.manualStart != null) TextButton(onClick = { onSet(null) }) { Text("From file") }
+        if (clip.manualStart != null) SmallAction("From file", { onSet(null) })
+        SmallAction("Set", { editing = true })
     }
     if (editing) {
         val initial = clip.manualStart
@@ -494,7 +512,7 @@ private fun ActivityRow(activity: LoadedActivity, onRemove: () -> Unit) {
                     " · " + (if (zone != null) Formats.utcOffset(zone) else "phone time zone"),
             )
         }
-        TextButton(onClick = onRemove) { Text("Remove") }
+        SmallAction("Remove", onRemove)
     }
 }
 
@@ -624,10 +642,10 @@ private fun SyncGraph(clip: ClipState, track: ActivityTrack, playhead: LongState
     Row(verticalAlignment = Alignment.CenterVertically) {
         Hint(
             picked?.let { String.format(Locale.US, "Shift %+.1f s", it / 1000.0) }
-                ?: "Pause on a recognisable moment, then tap the same moment on the graph.",
+                ?: "Pause on a clear moment, tap the same one on the graph.",
             Modifier.weight(1f),
         )
-        picked?.let { d -> TextButton(onClick = { onShift(d); picked = null }) { Text("Apply") } }
+        picked?.let { d -> SmallAction("Apply", { onShift(d); picked = null }) }
     }
 }
 
@@ -641,22 +659,26 @@ private fun OffsetControls(offsetMs: Long, onChange: (Long) -> Unit) {
         onChange = { onChange((it * 10).roundToLong() * 100) },
         onReset = { onChange(0L) },
     )
-    Hint("Drag the ruler to shift the data; double-tap to return to the automatic match.")
 }
 
 // Colour page
 
 /** Copy the selected clip's look (corrections, effects, LUT), paste it on another, or use it everywhere. */
 @Composable
-private fun LookActions(state: UiState, vm: HeadsupViewModel) {
+private fun LookDialog(state: UiState, vm: HeadsupViewModel, onDismiss: () -> Unit) {
     val index = state.selectedClip ?: return
-    if (state.clips.size < 2 && state.copiedLook == null) return
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        Text("Look of this clip", Modifier.weight(1f), style = MaterialTheme.typography.labelLarge, color = HeadsupColors.TextMuted)
-        TextButton(onClick = vm::copyLook) { Text("Copy") }
-        if (state.copiedLook != null) TextButton(onClick = { vm.pasteLook(index) }) { Text("Paste") }
-        if (state.clips.size > 1) TextButton(onClick = vm::applyLookToAll) { Text("To all") }
-    }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Look of this clip") },
+        text = { Hint("Corrections, LUT and effects together.") },
+        confirmButton = {
+            Row {
+                SmallAction("Copy", { vm.copyLook(); onDismiss() })
+                if (state.copiedLook != null) SmallAction("Paste", { vm.pasteLook(index); onDismiss() })
+                if (state.clips.size > 1) SmallAction("Apply to all", { vm.applyLookToAll(); onDismiss() })
+            }
+        },
+    )
 }
 
 internal enum class Adjustment(
@@ -681,6 +703,9 @@ internal enum class Adjustment(
     TINT("Tn", "Tint", -1f..1f, 0.02f, "%+.2f", { it.tint }, { g, v -> g.copy(tint = v) }),
     SKIN("Sk", "Skin tone", -30f..30f, 0.5f, "%+.1f°", { it.skinHue }, { g, v -> g.copy(skinHue = v) }),
     VIGNETTE("Vig", "Vignette", 0f..1f, 0.02f, "%.2f", { it.vignette }, { g, v -> g.copy(vignette = v) }),
+
+    /** Not a ruler value: opens the LUT library (the LUT is applied last, after all corrections). */
+    LUT("LUT", "LUT", 0f..1f, 1f, "", { 0f }, { g, _ -> g }),
 }
 
 @Composable
@@ -697,24 +722,34 @@ private fun ColourPage(
         Hint("Select a clip first.")
         return
     }
+    var lookMenu by remember { mutableStateOf(false) }
     Row(verticalAlignment = Alignment.CenterVertically) {
-        Text("Colour for this clip", Modifier.weight(1f), style = MaterialTheme.typography.labelLarge)
+        Text("Colour", Modifier.weight(1f), style = MaterialTheme.typography.labelLarge)
+        if (clip.colorGrade) {
+            if (state.grade != ColorGrade()) SmallAction("Reset all", { vm.updateGrade { ColorGrade() } })
+            if (state.clips.size > 1 || state.copiedLook != null) SmallAction("Look…", { lookMenu = true })
+        }
         Switch(checked = clip.colorGrade, onCheckedChange = { vm.setClipGrade(index, it) })
     }
+    if (lookMenu) LookDialog(state, vm) { lookMenu = false }
     if (!clip.colorGrade) {
-        Hint("Off: the clip keeps its own colours (for files that are already graded, e.g. Mimo exports).")
+        Hint("Off: the clip keeps its own colours (for already graded files, e.g. Mimo exports).")
         return
     }
-
-    LookActions(state, vm)
 
     // The ruler sits right under the correction picker, so nothing needs scrolling.
     LazyRow(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
         items(Adjustment.entries) { a ->
-            CircleOption(a.symbol, a.label, selected = a == adjustment, modified = a.get(state.grade) != 0f) { onAdjustment(a) }
+            val modified = if (a == Adjustment.LUT) clip.lutName != null else a.get(state.grade) != 0f
+            CircleOption(a.symbol, a.label, selected = a == adjustment, modified = modified) { onAdjustment(a) }
         }
     }
+    if (adjustment == Adjustment.LUT) {
+        LutControls(state, clip, index, vm, onAddLut)
+        return
+    }
     if (adjustment == Adjustment.SKIN) SkinToneTool(state.scope, onMatch = vm::matchSkinLine)
+    // Double-tap the ruler to reset, hold it to see the picture without this correction.
     ValueHeader(adjustment.label, String.format(Locale.US, adjustment.format, adjustment.get(state.grade)))
     RulerSlider(
         value = adjustment.get(state.grade),
@@ -724,22 +759,22 @@ private fun ColourPage(
         onReset = { vm.updateGrade { adjustment.set(it, 0f) } },
         onHold = { held -> vm.setCompareGrade(if (held) adjustment.set(state.grade, 0f) else null) },
     )
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        Hint("Double-tap the ruler to reset, hold it to see the picture without this correction.")
-        if (state.grade != ColorGrade()) TextButton(onClick = { vm.updateGrade { ColorGrade() } }) { Text("Reset all") }
-    }
+}
 
-    Label("LUT (last step)")
-    LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        item { FilterChip(selected = clip.lutName == null, onClick = { vm.setClipLut(index, null) }, label = { Text("None") }) }
-        items(state.luts) { name ->
+/** LUT library: the camera LUT is the last step, after all corrections. */
+@Composable
+private fun LutControls(state: UiState, clip: ClipState, index: Int, vm: HeadsupViewModel, onAddLut: () -> Unit) {
+    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        FilterChip(selected = clip.lutName == null, onClick = { vm.setClipLut(index, null) }, label = { Text("None") })
+        for (name in state.luts) {
             FilterChip(selected = clip.lutName == name, onClick = { vm.setClipLut(index, name) }, label = { Text(name) })
         }
-        item { FilterChip(selected = false, onClick = onAddLut, label = { Text("+ .cube") }) }
+        FilterChip(selected = false, onClick = onAddLut, label = { Text("+ .cube") })
     }
     Row {
-        if (state.clips.size > 1) TextButton(onClick = { vm.setLutForAllClips(clip.lutName) }) { Text("Use for all clips") }
-        clip.lutName?.let { name -> TextButton(onClick = { vm.deleteLut(name) }) { Text("Delete $name") } }
+        if (state.clips.size > 1) SmallAction("Use for all clips", { vm.setLutForAllClips(clip.lutName) })
+        Spacer(Modifier.weight(1f))
+        clip.lutName?.let { name -> SmallAction("Delete $name", { vm.deleteLut(name) }) }
     }
 }
 
@@ -799,14 +834,15 @@ private enum class EffectKind(val symbol: String, val label: String) {
 
 /** Effects over the picture, picked from round options like the colour corrections. */
 @Composable
-private fun EffectsPanel(
-    style: DashboardStyle,
-    effects: EffectSettings,
-    activities: List<LoadedActivity>,
-    updateStyle: ((DashboardStyle) -> DashboardStyle) -> Unit,
-    updateEffects: ((EffectSettings) -> EffectSettings) -> Unit,
-) {
+private fun EffectsPanel(state: UiState, vm: HeadsupViewModel) {
+    val style = state.style
+    val effects = state.effects
+    val activities = state.activities
+    val updateStyle = vm::updateStyle
+    val updateEffects = vm::updateEffects
     var kind by rememberSaveable { mutableStateOf(EffectKind.DASHBOARD) }
+    var lookMenu by remember { mutableStateOf(false) }
+    if (lookMenu) LookDialog(state, vm) { lookMenu = false }
     LazyRow(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
         items(EffectKind.entries) { e ->
             val active = when (e) {
@@ -822,7 +858,8 @@ private fun EffectsPanel(
     when (kind) {
         EffectKind.DASHBOARD -> {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("Show dashboard", Modifier.weight(1f), style = MaterialTheme.typography.labelLarge)
+                Text("Dashboard", Modifier.weight(1f), style = MaterialTheme.typography.labelLarge)
+                if (state.selected != null && (state.clips.size > 1 || state.copiedLook != null)) SmallAction("Look…", { lookMenu = true })
                 Switch(checked = style.enabled, onCheckedChange = { v -> updateStyle { it.copy(enabled = v) } })
             }
             if (style.enabled) {
@@ -836,7 +873,7 @@ private fun EffectsPanel(
             }
         }
         EffectKind.GRAPH -> {
-            Hint("Profile of the whole activity along the bottom, with a marker that moves with the video.")
+            Hint("Activity profile along the bottom, with a moving marker.")
             val available = GraphMetric.entries.filter { m -> activities.isEmpty() || activities.any { it.track.has(m.metric) } }
             LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 item { FilterChip(selected = effects.graph == null, onClick = { updateEffects { it.copy(graph = null) } }, label = { Text("Off") }) }
@@ -856,10 +893,8 @@ private fun EffectsPanel(
             RulerSlider(effects.glow, 0f..1f, 0.02f, { v -> updateEffects { it.copy(glow = v) } }, onReset = { updateEffects { it.copy(glow = 0f) } })
             ValueHeader("Threshold", String.format(Locale.US, "%.0f %%", effects.glowThreshold * 100))
             RulerSlider(effects.glowThreshold, 0.4f..0.98f, 0.02f, { v -> updateEffects { it.copy(glowThreshold = v) } }, onReset = { updateEffects { it.copy(glowThreshold = 0.75f) } })
-            Hint("Highlights above the threshold bloom softly, like the Glow effect in DaVinci Resolve.")
         }
         EffectKind.BARS -> {
-            Hint("Black bars that crop the frame to a cinema aspect ratio.")
             LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 item { FilterChip(selected = effects.barsRatio == null, onClick = { updateEffects { it.copy(barsRatio = null) } }, label = { Text("Off") }) }
                 items(listOf(2.39f to "2.39:1", 2.0f to "2:1", 1.85f to "1.85:1")) { (ratio, label) ->
@@ -898,7 +933,7 @@ private fun LayoutControls(style: DashboardStyle, update: ((DashboardStyle) -> D
             )
         }
     }
-    if (style.placements.isNotEmpty()) Hint("${style.placements.size} widget(s) placed by hand. Pick a layout to reset them.")
+    if (style.placements.isNotEmpty()) Hint("${style.placements.size} placed by hand; pick a layout to reset.")
     ValueHeader("Size", String.format(Locale.US, "%.0f %%", style.scale * 100))
     RulerSlider(
         value = style.scale,
@@ -975,10 +1010,6 @@ private fun ExportControls(
     onClear: () -> Unit,
 ) {
     Label("Video bit rate")
-    Hint(
-        "How much data per second the exported video may use. \"Same as source\" keeps the original's rate; " +
-            "higher values make up for the quality lost by encoding a second time, at the cost of larger files.",
-    )
     FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         for ((factor, name) in listOf(1f to "Same as source", 1.5f to "1.5×", 2f to "2×")) {
             // Mirrors ExportRequest.targetBitrate for the selected clip.
@@ -991,18 +1022,18 @@ private fun ExportControls(
         }
     }
     Button(onClick = onExportVideos, enabled = canExport, modifier = Modifier.fillMaxWidth()) { Text("Export videos with dashboard") }
-    Hint("Colour + dashboard, HEVC, source resolution and frame rate. Saved to DCIM/TelemetryOverlay, for editing in DJI Mimo.")
+    Hint("HEVC, source resolution and frame rate → DCIM/TelemetryOverlay")
     OutlinedButton(onClick = onExportOverlays, enabled = canExport, modifier = Modifier.fillMaxWidth()) { Text("Export dashboard only (PNG)") }
-    Hint("Transparent PNG frames in a ZIP for DaVinci Resolve. Saved to Download/TelemetryOverlay.")
+    Hint("Transparent PNG frames (ZIP) for DaVinci → Download/TelemetryOverlay")
     OutlinedButton(onClick = onTenBitTest, enabled = canTest, modifier = Modifier.fillMaxWidth()) { Text("Test 10-bit export") }
-    Hint("Exports the first 3 s of the selected clip and shows the result in a window; nothing is saved.")
+    Hint("First 3 s of the selected clip; nothing is saved.")
 
     if (jobs.isNotEmpty()) {
         jobs.forEach { JobRow(it) }
         if (jobs.any { it.status == JobStatus.QUEUED || it.status == JobStatus.RUNNING }) {
-            TextButton(onClick = onCancel) { Text("Cancel all") }
+            SmallAction("Cancel all", onCancel)
         } else {
-            TextButton(onClick = onClear) { Text("Clear list") }
+            SmallAction("Clear list", onClear)
         }
     }
 }
