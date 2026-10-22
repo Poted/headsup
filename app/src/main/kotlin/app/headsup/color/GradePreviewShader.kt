@@ -7,6 +7,8 @@ import android.graphics.RuntimeShader
 import android.graphics.Shader
 import androidx.annotation.RequiresApi
 import androidx.compose.ui.graphics.asComposeRenderEffect
+import app.headsup.core.color.ColorGrade
+import app.headsup.core.color.LutBaker
 
 /**
  * Applies the baked colour table to whatever is drawn below it (the preview's TextureView) on the
@@ -16,12 +18,15 @@ import androidx.compose.ui.graphics.asComposeRenderEffect
  */
 @RequiresApi(33)
 object GradePreviewShader {
+    private val identity by lazy { LutBaker.bake(null, ColorGrade()) }
+
     // The table is laid out like Media3's SingleColorLut: N wide, N² high, x = b, y = g + N·r.
     // It is sampled without filtering and interpolated here (trilinear).
     private const val SOURCE = """
         uniform shader image;
         uniform shader lut;
         uniform float n;
+        uniform float zebra;
 
         half3 cell(float r, float g, float b) {
             return lut.eval(float2(b + 0.5, g + n * r + 0.5)).rgb;
@@ -39,17 +44,25 @@ object GradePreviewShader {
             half3 c11 = mix(cell(i0.r, i1.g, i1.b), cell(i1.r, i1.g, i1.b), f.r);
             half3 c0 = mix(c00, c10, f.g);
             half3 c1 = mix(c01, c11, f.g);
-            return half4(mix(c0, c1, f.b), c.a);
+            half3 graded = mix(c0, c1, f.b);
+            // Zebra: stripes where the graded picture is at or near clipping.
+            float y = dot(float3(graded), float3(0.2126, 0.7152, 0.0722));
+            if (zebra > 0.5 && y > 0.95 && mod(coord.x + coord.y, 12.0) < 6.0) {
+                graded = half3(0.15, 0.15, 0.15);
+            }
+            return half4(graded, c.a);
         }
     """
 
-    fun effect(cube: Array<Array<IntArray>>): androidx.compose.ui.graphics.RenderEffect {
-        val table: Bitmap = LiveColorLut.toBitmap(cube)
+    /** [cube] null means untouched colours (identity table), e.g. when only zebra is on. */
+    fun effect(cube: Array<Array<IntArray>>?, zebra: Boolean = false): androidx.compose.ui.graphics.RenderEffect {
+        val table: Bitmap = LiveColorLut.toBitmap(cube ?: identity)
         val lut = BitmapShader(table, Shader.TileMode.CLAMP, Shader.TileMode.CLAMP).apply {
             filterMode = BitmapShader.FILTER_MODE_NEAREST
         }
         val shader = RuntimeShader(SOURCE).apply {
-            setFloatUniform("n", cube.size.toFloat())
+            setFloatUniform("n", (cube ?: identity).size.toFloat())
+            setFloatUniform("zebra", if (zebra) 1f else 0f)
             setInputShader("lut", lut)
         }
         return RenderEffect.createRuntimeShaderEffect(shader, "image").asComposeRenderEffect()

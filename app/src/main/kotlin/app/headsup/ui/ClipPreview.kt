@@ -50,7 +50,12 @@ import androidx.media3.common.MediaItem
 import app.headsup.color.LiveColorLut
 import androidx.media3.exoplayer.ExoPlayer
 import android.os.Build
+import android.graphics.Bitmap
 import android.view.TextureView
+import androidx.compose.foundation.gestures.waitForUpOrCancellation
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.graphics.graphicsLayer
 import app.headsup.color.GradePreviewShader
 import app.headsup.core.track.TelemetrySampler
@@ -80,6 +85,10 @@ fun ClipPreview(
     maxHeight: Dp,
     onMoveWidget: (Widget, Placement) -> Unit,
     onMoveFinished: () -> Unit,
+    /** When set, tapping the picture (away from widgets) grabs the frame for the vectorscope. */
+    onSample: ((Bitmap, Float, Float) -> Unit)? = null,
+    /** Point last measured, 0..1 of the frame, drawn as a target. */
+    marker: Offset? = null,
 ) {
     val context = LocalContext.current
     val exoPlayer = remember { ExoPlayer.Builder(context).build() }
@@ -104,9 +113,13 @@ fun ClipPreview(
             nudge = -nudge
         }
     }
-    val shaderEffect = remember(gradeCube) {
-        if (Build.VERSION.SDK_INT >= 33 && gradeCube != null) GradePreviewShader.effect(gradeCube) else null
+    // Zebra: diagonal stripes over clipped highlights, as on a camera monitor.
+    var zebra by remember { mutableStateOf(false) }
+    val shaderEffect = remember(gradeCube, zebra) {
+        if (Build.VERSION.SDK_INT >= 33 && (gradeCube != null || zebra)) GradePreviewShader.effect(gradeCube, zebra) else null
     }
+    var textureView by remember { mutableStateOf<TextureView?>(null) }
+    val sample by rememberUpdatedState(onSample)
 
     var positionMs by remember { mutableLongStateOf(0L) }
     var playing by remember { mutableStateOf(false) }
@@ -131,7 +144,7 @@ fun ClipPreview(
                 // A TextureView (unlike PlayerView's default SurfaceView) is drawn by the UI, so the
                 // colour shader can be applied to it.
                 AndroidView(
-                    factory = { TextureView(it).also(exoPlayer::setVideoTextureView) },
+                    factory = { TextureView(it).also { tv -> exoPlayer.setVideoTextureView(tv); textureView = tv } },
                     modifier = Modifier.matchParentSize().graphicsLayer { renderEffect = shaderEffect },
                 )
                 Canvas(
@@ -141,7 +154,17 @@ fun ClipPreview(
                             awaitEachGesture {
                                 val down = awaitFirstDown()
                                 val widget = renderer.hitTest(down.position.x, down.position.y, slop = 12.dp.toPx())
-                                    ?: return@awaitEachGesture
+                                if (widget == null) {
+                                    // A tap elsewhere measures colour when the skin tool is open.
+                                    val onTap = sample ?: return@awaitEachGesture
+                                    val up = waitForUpOrCancellation() ?: return@awaitEachGesture
+                                    up.consume()
+                                    val tv = textureView ?: return@awaitEachGesture
+                                    val w = SAMPLE_WIDTH
+                                    val h = (SAMPLE_WIDTH * size.height / size.width.coerceAtLeast(1)).coerceAtLeast(1)
+                                    tv.getBitmap(w, h)?.let { onTap(it, up.position.x / size.width, up.position.y / size.height) }
+                                    return@awaitEachGesture
+                                }
                                 val start = renderer.boxOf(widget) ?: return@awaitEachGesture
                                 down.consume()
                                 var dx = 0f
@@ -164,6 +187,12 @@ fun ClipPreview(
                         },
                 ) {
                     drawIntoCanvas { renderer.drawVignette(it.nativeCanvas, size.width, size.height, vignette) }
+                    marker?.let { m ->
+                        val c = Offset(m.x * size.width, m.y * size.height)
+                        drawCircle(Color.Black.copy(alpha = 0.5f), radius = 14.dp.toPx(), center = c, style = Stroke(3.dp.toPx()))
+                        drawCircle(HeadsupColors.Accent, radius = 14.dp.toPx(), center = c, style = Stroke(1.5.dp.toPx()))
+                        drawCircle(HeadsupColors.Accent, radius = 2.dp.toPx(), center = c)
+                    }
                     val utc = clip.telemetryUtc(positionMs) ?: return@Canvas
                     val track = activity?.track ?: return@Canvas
                     val frame = sampler?.frameAt(utc) ?: return@Canvas
@@ -190,8 +219,8 @@ fun ClipPreview(
                 Icon(if (playing) HeadsupIcons.Pause else HeadsupIcons.Play, contentDescription = if (playing) "Pause" else "Play", tint = HeadsupColors.OnHighlight)
             }
             Text(
-                "  ${Formats.duration(positionMs)}",
-                style = MaterialTheme.typography.labelMedium,
+                "  ${timecode(positionMs, clip.meta.frameRate)}",
+                style = MaterialTheme.typography.labelMedium.copy(fontFamily = FontFamily.Monospace),
             )
             Slider(
                 value = positionMs.toFloat(),
@@ -199,11 +228,29 @@ fun ClipPreview(
                 valueRange = 0f..clip.meta.durationMs.coerceAtLeast(1L).toFloat(),
                 modifier = Modifier.weight(1f).padding(horizontal = 8.dp),
             )
-            Text(
-                "${Formats.duration(clip.meta.durationMs)}  ",
-                style = MaterialTheme.typography.labelMedium,
-                color = HeadsupColors.TextMuted,
-            )
+            if (Build.VERSION.SDK_INT >= 33) {
+                Box(
+                    Modifier
+                        .size(32.dp)
+                        .clip(CircleShape)
+                        .background(if (zebra) HeadsupColors.Accent else Color.Transparent)
+                        .border(1.dp, if (zebra) HeadsupColors.Accent else HeadsupColors.Outline, CircleShape)
+                        .clickable { zebra = !zebra },
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text("Z", style = MaterialTheme.typography.labelLarge, color = if (zebra) HeadsupColors.OnHighlight else HeadsupColors.TextMuted)
+                }
+            }
         }
     }
+}
+
+private const val SAMPLE_WIDTH = 192
+
+/** Camera-style timecode HH:MM:SS:FF. */
+private fun timecode(ms: Long, frameRate: Float?): String {
+    val fps = (frameRate ?: 30f).let { kotlin.math.round(it).toInt().coerceAtLeast(1) }
+    val totalSeconds = ms / 1000
+    val frames = ((ms % 1000) * fps / 1000).toInt()
+    return String.format(java.util.Locale.US, "%02d:%02d:%02d:%02d", totalSeconds / 3600, totalSeconds / 60 % 60, totalSeconds % 60, frames)
 }

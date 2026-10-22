@@ -24,11 +24,13 @@ data class ColorGrade(
     val vibrance: Float = 0f,
     /** Green (−) to magenta (+) balance, complementing [temperature]. */
     val tint: Float = 0f,
+    /** Rotation of skin hues on the vectorscope, degrees; see [SkinTone]. */
+    val skinHue: Float = 0f,
 ) {
     val isNeutralColour: Boolean
         get() = exposure == 0f && brightness == 0f && contrast == 0f && shadows == 0f &&
             highlights == 0f && saturation == 0f && temperature == 0f &&
-            blacks == 0f && whites == 0f && vibrance == 0f && tint == 0f
+            blacks == 0f && whites == 0f && vibrance == 0f && tint == 0f && skinHue == 0f
 }
 
 /**
@@ -76,6 +78,34 @@ object LutBaker {
             lut.sample(rgb[0], rgb[1], rgb[2], rgb)
         }
         for (i in 0..2) rgb[i] = rgb[i].coerceIn(0f, 1f)
+        // The skin line is defined for display-referred (Rec.709) colours, so this runs last.
+        if (grade.skinHue != 0f) {
+            SkinTone.rotate(rgb, grade.skinHue)
+            for (i in 0..2) rgb[i] = rgb[i].coerceIn(0f, 1f)
+        }
+    }
+
+    /** Looks a colour up in a table produced by [bake] (trilinear), e.g. to analyse the graded preview. */
+    fun sampleBaked(cube: Array<Array<IntArray>>, r: Float, g: Float, b: Float, out: FloatArray) {
+        val max = cube.size - 1
+        val fr = r.coerceIn(0f, 1f) * max
+        val fg = g.coerceIn(0f, 1f) * max
+        val fb = b.coerceIn(0f, 1f) * max
+        val r0 = fr.toInt().coerceAtMost(max - 1)
+        val g0 = fg.toInt().coerceAtMost(max - 1)
+        val b0 = fb.toInt().coerceAtMost(max - 1)
+        val dr = fr - r0
+        val dg = fg - g0
+        val db = fb - b0
+        for (c in 0 until 3) {
+            val shift = 16 - 8 * c
+            fun v(ri: Int, gi: Int, bi: Int) = ((cube[ri][gi][bi] shr shift) and 0xFF) / 255f
+            val c00 = v(r0, g0, b0) * (1 - dr) + v(r0 + 1, g0, b0) * dr
+            val c10 = v(r0, g0 + 1, b0) * (1 - dr) + v(r0 + 1, g0 + 1, b0) * dr
+            val c01 = v(r0, g0, b0 + 1) * (1 - dr) + v(r0 + 1, g0, b0 + 1) * dr
+            val c11 = v(r0, g0 + 1, b0 + 1) * (1 - dr) + v(r0 + 1, g0 + 1, b0 + 1) * dr
+            out[c] = (c00 * (1 - dg) + c10 * dg) * (1 - db) + (c01 * (1 - dg) + c11 * dg) * db
+        }
     }
 
     /** Corrections on log-encoded values: exposure and white balance are offsets in log space. */

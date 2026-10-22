@@ -5,7 +5,11 @@ import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import app.headsup.HeadsupApp
+import android.graphics.Bitmap
 import app.headsup.color.GradeStore
+import app.headsup.color.ScopeResult
+import app.headsup.color.Vectorscope
+import app.headsup.core.color.SkinTone
 import app.headsup.core.color.ColorGrade
 import app.headsup.core.color.CubeLut
 import app.headsup.core.color.LutBaker
@@ -78,6 +82,8 @@ data class UiState(
     /** Colour table for the selected clip's preview; null when its colours stay untouched. */
     val previewCube: Array<Array<IntArray>>? = null,
     val bitrateFactor: Float = 1f,
+    /** Vectorscope and skin measurement of the last frame tapped in the preview. */
+    val scope: ScopeResult? = null,
 ) {
     val selected: ClipState? get() = selectedClip?.let { clips.getOrNull(it) }
 }
@@ -99,6 +105,10 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
     val exportJobs = exportManager.jobs
 
     private val lutCache = HashMap<String, CubeLut>()
+    private var scopeFrame: IntArray? = null
+    private var scopeWidth = 0
+    private var scopeHeight = 0
+    private var scopeMarker = 0.5f to 0.5f
     private var previewRunning = false
     private var previewDirty = false
 
@@ -115,7 +125,8 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun selectClip(index: Int) {
-        _state.update { it.copy(selectedClip = index) }
+        scopeFrame = null
+        _state.update { it.copy(selectedClip = index, scope = null) }
         refreshPreview()
     }
 
@@ -191,6 +202,33 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
         refreshPreview()
     }
 
+    /** A small grab of the current (ungraded) preview frame and the tapped point, for the vectorscope. */
+    fun sampleFrame(frame: Bitmap, x: Float, y: Float) {
+        val pixels = IntArray(frame.width * frame.height)
+        frame.getPixels(pixels, 0, frame.width, 0, 0, frame.width, frame.height)
+        scopeFrame = pixels
+        scopeWidth = frame.width
+        scopeHeight = frame.height
+        scopeMarker = x to y
+        frame.recycle()
+        viewModelScope.launch { analyseScope() }
+    }
+
+    /** Sets the skin correction so the measured colour lands on the skin line. */
+    fun matchSkinLine() {
+        val measured = _state.value.scope?.measured ?: return
+        val delta = SkinTone.angleDifference(SkinTone.LINE_DEGREES, measured.angleDegrees).toFloat()
+        updateGrade { it.copy(skinHue = (it.skinHue + delta).coerceIn(-30f, 30f)) }
+    }
+
+    private suspend fun analyseScope() {
+        val frame = scopeFrame ?: return
+        val cube = _state.value.previewCube
+        val (x, y) = scopeMarker
+        val result = withContext(Dispatchers.Default) { Vectorscope.analyse(frame, scopeWidth, scopeHeight, cube, x, y) }
+        if (frame === scopeFrame) _state.update { it.copy(scope = result) }
+    }
+
     /** Shows the preview with [compare] instead of the real grade until called with null. */
     fun setCompareGrade(compare: ColorGrade?) {
         _state.update { it.copy(compareGrade = compare) }
@@ -227,6 +265,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                     val clip = s.selected
                     val cube = if (clip == null || !clip.colorGrade) null else bake(clip.lutName, s.compareGrade ?: s.grade)
                     _state.update { it.copy(previewCube = cube) }
+                    analyseScope()
                 }
             } finally {
                 previewRunning = false

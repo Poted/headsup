@@ -22,14 +22,16 @@ import androidx.compose.ui.unit.sp
 object HeadsupColors {
     // Neutral charcoal surfaces with a faint warm glow; orange is reserved for the camera-style
     // controls (rulers and correction dials).
-    val Background = Color(0xFF0B0B0B)
-    val BackgroundGlow = Color(0xFF221D19)
-    val Surface = Color(0xFF171717)
-    val SurfaceTop = Color(0xFF1F1F1F)
-    val SurfaceHigh = Color(0xFF242424)
-    val Outline = Color(0xFF2E2E2E)
-    val Highlight = Color(0xFFF2EFEB)
-    val OnHighlight = Color(0xFF141414)
+    val Background = Color(0xFF0A0908)
+    val BackgroundGlow = Color(0xFF3A2112)
+    val BackgroundMid = Color(0xFF17110D)
+    val Surface = Color(0xFF161311)
+    val SurfaceTop = Color(0xFF221C18)
+    val SurfaceHigh = Color(0xFF241E1A)
+    val Outline = Color(0xFF33291F)
+    /** Selected states (toolbar, tabs, play button) use the warm accent rather than white. */
+    val Highlight = Color(0xFFFF8A3D)
+    val OnHighlight = Color(0xFF1E1006)
     val Accent = Color(0xFFFF8A3D)
     val AccentSoft = Color(0xFFFFB574)
     val AccentStrong = Color(0xFFE5641C)
@@ -40,6 +42,9 @@ object HeadsupColors {
 
     /** Card fill: slightly lighter at the top, like the reference design. */
     val CardGradient = Brush.verticalGradient(listOf(SurfaceTop, Surface))
+
+    /** Screen background: a warm amber glow fading into near-black. */
+    val BackgroundGradient = Brush.verticalGradient(0f to BackgroundGlow, 0.35f to BackgroundMid, 1f to Background)
 }
 
 @Composable
@@ -47,12 +52,12 @@ fun HeadsupTheme(content: @Composable () -> Unit) {
     val base = Typography()
     MaterialTheme(
         colorScheme = darkColorScheme(
-            primary = HeadsupColors.Highlight,
+            primary = HeadsupColors.Accent,
             onPrimary = HeadsupColors.OnHighlight,
-            primaryContainer = Color(0xFF2C2C2C),
+            primaryContainer = Color(0xFF4A2A14),
             onPrimaryContainer = Color.White,
-            secondaryContainer = Color(0xFF2E2E2E),
-            onSecondaryContainer = Color.White,
+            secondaryContainer = Color(0xFF3D2616),
+            onSecondaryContainer = HeadsupColors.AccentSoft,
             background = HeadsupColors.Background,
             onBackground = Color.White,
             surface = HeadsupColors.Surface,

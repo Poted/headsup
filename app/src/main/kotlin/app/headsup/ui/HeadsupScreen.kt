@@ -74,7 +74,18 @@ import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.compose.foundation.Canvas
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.FilterQuality
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.unit.IntSize
+import app.headsup.color.ScopeResult
+import app.headsup.color.Vectorscope
 import app.headsup.core.color.ColorGrade
+import app.headsup.core.color.SkinTone
+import kotlin.math.cos
+import kotlin.math.sin
 import app.headsup.core.sync.Confidence
 import app.headsup.core.sync.TimeAnchor
 import app.headsup.core.sync.TimeSource
@@ -142,11 +153,13 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
     }
 
     var tool by rememberSaveable { mutableStateOf(Tool.FILES) }
+    var adjustment by rememberSaveable { mutableStateOf(Adjustment.EXPOSURE) }
+    val measuring = tool == Tool.COLOUR && adjustment == Adjustment.SKIN
     val exporting = jobs.any { it.status == JobStatus.QUEUED || it.status == JobStatus.RUNNING }
     val previewMaxHeight = (LocalConfiguration.current.screenHeightDp * 0.38f).dp
     TenBitResultDialog(jobs)
 
-    Box(Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(HeadsupColors.BackgroundGlow, HeadsupColors.Background, HeadsupColors.Background)))) {
+    Box(Modifier.fillMaxSize().background(HeadsupColors.BackgroundGradient)) {
         // No title bar: the picture starts at the top, adding files lives in the Files tool.
         Column(Modifier.fillMaxSize().systemBarsPadding().padding(top = 8.dp)) {
             if (state.busy) LinearProgressIndicator(Modifier.fillMaxWidth().padding(horizontal = 16.dp))
@@ -165,6 +178,8 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
                     style = state.style,
                     gradeCube = state.previewCube,
                     vignette = if (selected.colorGrade) (state.compareGrade ?: state.grade).vignette else 0f,
+                    onSample = if (measuring) vm::sampleFrame else null,
+                    marker = if (measuring) state.scope?.let { Offset(it.markerX, it.markerY) } else null,
                     maxHeight = previewMaxHeight,
                     onMoveWidget = vm::moveWidget,
                     onMoveFinished = vm::persistStyle,
@@ -187,7 +202,7 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
                 if (state.messages.isNotEmpty()) Messages(state.messages, vm::dismissMessages)
                 when (tool) {
                     Tool.FILES -> FilesPanel(state, vm, onAddVideos = addVideos, onAddFit = addFit)
-                    Tool.COLOUR -> ColourPage(state, vm, onAddLut = { lutPicker.launch(arrayOf("*/*")) })
+                    Tool.COLOUR -> ColourPage(state, vm, adjustment, { adjustment = it }, onAddLut = { lutPicker.launch(arrayOf("*/*")) })
                     Tool.EFFECTS -> EffectsPanel(state.style, state.activities, vm::updateStyle)
                     Tool.EXPORT -> ExportControls(
                         bitrateFactor = state.bitrateFactor,
@@ -492,7 +507,7 @@ private fun OffsetControls(offsetMs: Long, onChange: (Long) -> Unit) {
 
 // Colour page
 
-private enum class Adjustment(
+internal enum class Adjustment(
     val symbol: String,
     val label: String,
     val range: ClosedFloatingPointRange<Float>,
@@ -512,11 +527,18 @@ private enum class Adjustment(
     VIBRANCE("Vib", "Vibrance", -1f..1f, 0.02f, "%+.2f", { it.vibrance }, { g, v -> g.copy(vibrance = v) }),
     TEMPERATURE("K", "Temperature", -1f..1f, 0.02f, "%+.2f", { it.temperature }, { g, v -> g.copy(temperature = v) }),
     TINT("Tn", "Tint", -1f..1f, 0.02f, "%+.2f", { it.tint }, { g, v -> g.copy(tint = v) }),
+    SKIN("Sk", "Skin tone", -30f..30f, 0.5f, "%+.1f°", { it.skinHue }, { g, v -> g.copy(skinHue = v) }),
     VIGNETTE("Vig", "Vignette", 0f..1f, 0.02f, "%.2f", { it.vignette }, { g, v -> g.copy(vignette = v) }),
 }
 
 @Composable
-private fun ColourPage(state: UiState, vm: HeadsupViewModel, onAddLut: () -> Unit) {
+private fun ColourPage(
+    state: UiState,
+    vm: HeadsupViewModel,
+    adjustment: Adjustment,
+    onAdjustment: (Adjustment) -> Unit,
+    onAddLut: () -> Unit,
+) {
     val index = state.selectedClip
     val clip = state.selected
     if (index == null || clip == null) {
@@ -533,12 +555,12 @@ private fun ColourPage(state: UiState, vm: HeadsupViewModel, onAddLut: () -> Uni
     }
 
     // The ruler sits right under the correction picker, so nothing needs scrolling.
-    var adjustment by rememberSaveable { mutableStateOf(Adjustment.EXPOSURE) }
     LazyRow(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
         items(Adjustment.entries) { a ->
-            CircleOption(a.symbol, a.label, selected = a == adjustment, modified = a.get(state.grade) != 0f) { adjustment = a }
+            CircleOption(a.symbol, a.label, selected = a == adjustment, modified = a.get(state.grade) != 0f) { onAdjustment(a) }
         }
     }
+    if (adjustment == Adjustment.SKIN) SkinToneTool(state.scope, onMatch = vm::matchSkinLine)
     ValueHeader(adjustment.label, String.format(Locale.US, adjustment.format, adjustment.get(state.grade)))
     RulerSlider(
         value = adjustment.get(state.grade),
@@ -564,6 +586,50 @@ private fun ColourPage(state: UiState, vm: HeadsupViewModel, onAddLut: () -> Uni
     Row {
         if (state.clips.size > 1) TextButton(onClick = { vm.setLutForAllClips(clip.lutName) }) { Text("Use for all clips") }
         clip.lutName?.let { name -> TextButton(onClick = { vm.deleteLut(name) }) { Text("Delete $name") } }
+    }
+}
+
+/** Vectorscope with the skin line, as in DaVinci Resolve, and the measurement of the tapped point. */
+@Composable
+private fun SkinToneTool(scope: ScopeResult?, onMatch: () -> Unit) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        VectorscopeView(scope, Modifier.size(140.dp))
+        Spacer(Modifier.width(14.dp))
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            val measured = scope?.measured
+            if (measured == null) {
+                Hint(if (scope == null) "Tap a face on the picture to measure skin tone." else "That point is too grey to measure; tap skin.")
+            } else {
+                val off = SkinTone.angleDifference(measured.angleDegrees, SkinTone.LINE_DEGREES)
+                Text(String.format(Locale.US, "%.0f°", measured.angleDegrees), style = MaterialTheme.typography.headlineSmall)
+                Hint(
+                    String.format(Locale.US, "%+.0f° from the skin line (%s)", off, if (off > 0) "towards yellow/green" else "towards red/magenta"),
+                )
+            }
+            Button(onClick = onMatch, enabled = measured != null) { Text("Match line") }
+        }
+    }
+}
+
+@Composable
+private fun VectorscopeView(scope: ScopeResult?, modifier: Modifier) {
+    val image = remember(scope) { scope?.image?.asImageBitmap() }
+    Canvas(modifier.clip(CircleShape).background(Color(0xFF0D0B0A)).border(1.dp, HeadsupColors.Outline, CircleShape)) {
+        val r = size.minDimension / 2
+        val c = center
+        image?.let { drawImage(it, dstSize = IntSize(size.width.toInt(), size.height.toInt()), filterQuality = FilterQuality.Low) }
+        // Graticule.
+        for (ring in listOf(0.5f, 1f)) drawCircle(Color.White.copy(alpha = 0.12f), radius = r * ring - 1, center = c, style = Stroke(1f))
+        drawLine(Color.White.copy(alpha = 0.10f), Offset(c.x - r, c.y), Offset(c.x + r, c.y))
+        drawLine(Color.White.copy(alpha = 0.10f), Offset(c.x, c.y - r), Offset(c.x, c.y + r))
+        // Skin line at 123° (counter-clockwise from +Cb, screen y points down).
+        val a = Math.toRadians(SkinTone.LINE_DEGREES)
+        drawLine(HeadsupColors.Accent, c, Offset(c.x + (cos(a) * r).toFloat(), c.y - (sin(a) * r).toFloat()), strokeWidth = 2f)
+        scope?.measured?.let { m ->
+            val k = r / Vectorscope.RANGE.toFloat()
+            val p = Offset(c.x + (m.cb * k).toFloat(), c.y - (m.cr * k).toFloat())
+            drawCircle(Color.White, radius = 5.dp.toPx(), center = p, style = Stroke(2f))
+        }
     }
 }
 
