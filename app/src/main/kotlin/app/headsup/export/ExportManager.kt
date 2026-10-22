@@ -73,7 +73,8 @@ class ExportManager(private val context: Context) {
     fun enqueue(requests: List<ExportRequest>) {
         if (requests.isEmpty()) return
         _jobs.update { jobs -> jobs.filter { it.status == JobStatus.QUEUED || it.status == JobStatus.RUNNING } + requests.map { ExportJob(nextId++, it) } }
-        context.startForegroundService(Intent(context, ExportService::class.java))
+        // Without the service the export still runs, it just may stop if the app goes to the background.
+        runCatching { context.startForegroundService(Intent(context, ExportService::class.java)) }
         startNextIfIdle()
     }
 
@@ -93,9 +94,13 @@ class ExportManager(private val context: Context) {
         if (_jobs.value.any { it.status == JobStatus.RUNNING }) return
         val job = _jobs.value.firstOrNull { it.status == JobStatus.QUEUED } ?: return
         setJob(job.id) { it.copy(status = JobStatus.RUNNING, progress = 0) }
-        when (job.request.kind) {
-            ExportKind.PNG_SEQUENCE -> runPng(job)
-            ExportKind.VIDEO, ExportKind.TEN_BIT_TEST -> runVideo(job)
+        try {
+            when (job.request.kind) {
+                ExportKind.PNG_SEQUENCE -> runPng(job)
+                ExportKind.VIDEO, ExportKind.TEN_BIT_TEST -> runVideo(job)
+            }
+        } catch (e: Throwable) {
+            finish(job.id, JobStatus.FAILED, "Could not start: ${e.stackTraceToString().take(1500)}")
         }
     }
 
@@ -160,7 +165,8 @@ class ExportManager(private val context: Context) {
 
                 override fun onError(composition: Composition, exportResult: ExportResult, exportException: ExportException) {
                     output.delete()
-                    finish(job.id, JobStatus.FAILED, "${exportException.errorCodeName}: ${exportException.message}")
+                    val cause = generateSequence(exportException.cause) { it.cause }.joinToString("\n") { "caused by ${it.javaClass.simpleName}: ${it.message}" }
+                    finish(job.id, JobStatus.FAILED, "${exportException.errorCodeName}: ${exportException.message}\n$cause")
                 }
             })
             .build()

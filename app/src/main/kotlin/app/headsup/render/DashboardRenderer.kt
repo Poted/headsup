@@ -76,7 +76,7 @@ class DashboardRenderer(private val assets: AssetManager) {
         outlinePaint.typeface = typeface
         outlinePaint.strokeWidth = 5f * u
 
-        val placements = style.resolvedPlacements(shown)
+        val placements = style.resolvedPlacements(shown, width / u, height / u)
         for (widget in shown) {
             drawWidget(canvas, widget, placements.getValue(widget), width, height, u, style, data)
         }

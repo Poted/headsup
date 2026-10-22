@@ -6,29 +6,51 @@ import app.headsup.core.color.ColorGrade
 import app.headsup.core.color.CubeLut
 import java.io.File
 
-/** Keeps the imported camera LUT and the basic corrections between sessions. */
+/** Keeps the imported LUTs (e.g. one for the camera, one for the drone) and the basic corrections. */
 class GradeStore(private val context: Context) {
     private val prefs = context.getSharedPreferences("color_grade", Context.MODE_PRIVATE)
-    private val lutFile get() = File(context.filesDir, "camera.cube")
+    private val dir get() = File(context.filesDir, "luts").apply { mkdirs() }
 
-    val lutName: String? get() = prefs.getString(KEY_LUT_NAME, null)?.takeIf { lutFile.exists() }
+    init {
+        // Version 0.3 kept a single LUT in camera.cube.
+        val legacy = File(context.filesDir, "camera.cube")
+        val legacyName = prefs.getString("lut_name", null)
+        if (legacy.exists() && legacyName != null) {
+            legacy.copyTo(fileFor(legacyName), overwrite = true)
+            legacy.delete()
+            prefs.edit().remove("lut_name").putString(KEY_DEFAULT, legacyName).apply()
+        }
+    }
 
-    /** Parses and stores a `.cube` file; throws if it is not a valid 3D LUT. */
-    fun importLut(uri: Uri, name: String): CubeLut {
+    /** Names of the stored LUTs, alphabetically. */
+    fun names(): List<String> = dir.listFiles { f -> f.extension == "cube" }.orEmpty()
+        .map { it.nameWithoutExtension }
+        .sortedBy { it.lowercase() }
+
+    /** The LUT new clips get; the last one imported or picked. */
+    var defaultLut: String?
+        get() = prefs.getString(KEY_DEFAULT, null)?.takeIf { fileFor(it).exists() }
+        set(value) = prefs.edit().putString(KEY_DEFAULT, value).apply()
+
+    /** Parses and stores a `.cube` file under its display name; throws if it is not a valid 3D LUT. */
+    fun import(uri: Uri, displayName: String): String {
         val text = context.contentResolver.openInputStream(uri)?.use { it.readBytes().decodeToString() }
-            ?: error("Cannot open $name")
-        val lut = CubeLut.parse(text)
-        lutFile.writeText(text)
-        prefs.edit().putString(KEY_LUT_NAME, name).apply()
-        return lut
+            ?: error("Cannot open $displayName")
+        CubeLut.parse(text)
+        val name = displayName.substringBeforeLast('.').replace(Regex("[^A-Za-z0-9 _.()-]"), "_").ifBlank { "LUT" }
+        fileFor(name).writeText(text)
+        defaultLut = name
+        return name
     }
 
-    fun loadLut(): CubeLut? = lutName?.let { runCatching { CubeLut.parse(lutFile.readText()) }.getOrNull() }
+    fun load(name: String): CubeLut? = runCatching { CubeLut.parse(fileFor(name).readText()) }.getOrNull()
 
-    fun removeLut() {
-        lutFile.delete()
-        prefs.edit().remove(KEY_LUT_NAME).apply()
+    fun delete(name: String) {
+        fileFor(name).delete()
+        if (prefs.getString(KEY_DEFAULT, null) == name) prefs.edit().remove(KEY_DEFAULT).apply()
     }
+
+    private fun fileFor(name: String) = File(dir, "$name.cube")
 
     fun loadGrade() = ColorGrade(
         exposure = prefs.getFloat("exposure", 0f),
@@ -55,6 +77,6 @@ class GradeStore(private val context: Context) {
     }
 
     private companion object {
-        const val KEY_LUT_NAME = "lut_name"
+        const val KEY_DEFAULT = "default_lut"
     }
 }

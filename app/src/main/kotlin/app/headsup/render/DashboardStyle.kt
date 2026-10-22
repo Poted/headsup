@@ -68,8 +68,9 @@ data class DashboardStyle(
     val unitColor: Int = Layouts.ACCENT,
     val effect: TextEffect = TextEffect.SHADOW,
 ) {
-    fun resolvedPlacements(shown: List<Widget>): Map<Widget, Placement> {
-        val auto = Layouts.arrange(preset, shown.filter { it !in placements })
+    /** Placements for [shown] widgets on a frame of the given size in dashboard units. */
+    fun resolvedPlacements(shown: List<Widget>, frameWidthUnits: Float, frameHeightUnits: Float): Map<Widget, Placement> {
+        val auto = Layouts.arrange(preset, shown.filter { it !in placements }, frameWidthUnits, frameHeightUnits)
         return shown.associateWith { placements[it] ?: auto.getValue(it) }
     }
 }
@@ -85,32 +86,71 @@ object Layouts {
     const val MARGIN = 40f
     const val COLUMN_WIDTH = 320f
     private const val SNAP = 15f
-    private const val MAX_COLUMN = 1000f - 2 * MARGIN
+
+    /** Horizontal room given to one widget when widgets sit side by side along an edge. */
+    private fun slotWidth(widget: Widget) = when (widget) {
+        Widget.MAP -> MAP_SIZE
+        Widget.TIME -> 300f
+        else -> 280f
+    }
+    private const val ROW_GAP = 30f
 
     val ACCENT = Color.rgb(255, 214, 10)
 
     fun contentHeight(widget: Widget) = LABEL_SIZE + LABEL_GAP + if (widget == Widget.MAP) MAP_SIZE else VALUE_SIZE
 
-    fun arrange(preset: LayoutPreset, widgets: List<Widget>): Map<Widget, Placement> = when (preset) {
-        LayoutPreset.TOP_LEFT -> stack(widgets, HAnchor.LEFT, VAnchor.TOP)
-        LayoutPreset.TOP_CENTER -> stack(widgets, HAnchor.CENTER, VAnchor.TOP)
-        LayoutPreset.TOP_RIGHT -> stack(widgets, HAnchor.RIGHT, VAnchor.TOP)
-        LayoutPreset.BOTTOM_LEFT -> stack(widgets, HAnchor.LEFT, VAnchor.BOTTOM)
-        LayoutPreset.BOTTOM_CENTER -> stack(widgets, HAnchor.CENTER, VAnchor.BOTTOM)
-        LayoutPreset.BOTTOM_RIGHT -> stack(widgets, HAnchor.RIGHT, VAnchor.BOTTOM)
-        LayoutPreset.SIDES -> {
-            val half = (widgets.size + 1) / 2
-            stack(widgets.take(half), HAnchor.LEFT, VAnchor.TOP) + stack(widgets.drop(half), HAnchor.RIGHT, VAnchor.TOP)
+    fun arrange(preset: LayoutPreset, widgets: List<Widget>, frameWidthUnits: Float, frameHeightUnits: Float): Map<Widget, Placement> {
+        val maxColumn = frameHeightUnits - 2 * MARGIN
+        val maxRow = frameWidthUnits - 2 * MARGIN
+        return when (preset) {
+            LayoutPreset.TOP_LEFT -> stack(widgets, HAnchor.LEFT, VAnchor.TOP, maxColumn)
+            LayoutPreset.TOP_CENTER -> row(widgets, VAnchor.TOP, maxRow)
+            LayoutPreset.TOP_RIGHT -> stack(widgets, HAnchor.RIGHT, VAnchor.TOP, maxColumn)
+            LayoutPreset.BOTTOM_LEFT -> stack(widgets, HAnchor.LEFT, VAnchor.BOTTOM, maxColumn)
+            LayoutPreset.BOTTOM_CENTER -> row(widgets, VAnchor.BOTTOM, maxRow)
+            LayoutPreset.BOTTOM_RIGHT -> stack(widgets, HAnchor.RIGHT, VAnchor.BOTTOM, maxColumn)
+            LayoutPreset.SIDES -> {
+                val half = (widgets.size + 1) / 2
+                stack(widgets.take(half), HAnchor.LEFT, VAnchor.TOP, maxColumn) +
+                    stack(widgets.drop(half), HAnchor.RIGHT, VAnchor.TOP, maxColumn)
+            }
         }
     }
 
+    /** Lays widgets side by side along the top or bottom edge, centred, wrapping into more rows. */
+    private fun row(widgets: List<Widget>, v: VAnchor, maxRow: Float): Map<Widget, Placement> {
+        val rows = mutableListOf(mutableListOf<Widget>())
+        var used = 0f
+        for (w in widgets) {
+            if (used > 0f && used + slotWidth(w) > maxRow) {
+                rows += mutableListOf<Widget>()
+                used = 0f
+            }
+            rows.last() += w
+            used += slotWidth(w) + ROW_GAP
+        }
+        val result = mutableMapOf<Widget, Placement>()
+        // Rows count from the anchor edge, so for the bottom edge the last row is lowest.
+        var dy = MARGIN
+        for (r in if (v == VAnchor.BOTTOM) rows.reversed() else rows) {
+            val total = r.sumOf { slotWidth(it).toDouble() }.toFloat() + ROW_GAP * (r.size - 1)
+            var x = -total / 2
+            for (w in r) {
+                result[w] = Placement(HAnchor.CENTER, v, x + slotWidth(w) / 2, dy)
+                x += slotWidth(w) + ROW_GAP
+            }
+            dy += r.maxOf { contentHeight(it) } + BLOCK_GAP
+        }
+        return result
+    }
+
     /** Stacks widgets in reading order from the anchor edge, wrapping into further columns. */
-    private fun stack(widgets: List<Widget>, h: HAnchor, v: VAnchor): Map<Widget, Placement> {
+    private fun stack(widgets: List<Widget>, h: HAnchor, v: VAnchor, maxColumn: Float): Map<Widget, Placement> {
         val columns = mutableListOf(mutableListOf<Widget>())
         var used = 0f
         for (w in widgets) {
             val step = contentHeight(w) + BLOCK_GAP
-            if (used > 0f && used + contentHeight(w) > MAX_COLUMN) {
+            if (used > 0f && used + contentHeight(w) > maxColumn) {
                 columns += mutableListOf<Widget>()
                 used = 0f
             }

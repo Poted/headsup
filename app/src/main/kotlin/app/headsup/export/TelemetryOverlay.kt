@@ -4,6 +4,7 @@ import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
 import androidx.annotation.OptIn
+import androidx.media3.common.VideoFrameProcessingException
 import androidx.media3.common.util.Size
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.effect.BitmapOverlay
@@ -39,7 +40,14 @@ class TelemetryOverlay(
         height = videoSize.height
     }
 
-    override fun getBitmap(presentationTimeUs: Long): Bitmap {
+    override fun getBitmap(presentationTimeUs: Long): Bitmap = try {
+        draw(presentationTimeUs)
+    } catch (e: Throwable) {
+        // Report through the export's error callback instead of crashing the app.
+        throw VideoFrameProcessingException(e)
+    }
+
+    private fun draw(presentationTimeUs: Long): Bitmap {
         val w = width.toFloat()
         val h = height.toFloat()
         val data = dataAt(presentationTimeUs / 1000)

@@ -31,6 +31,7 @@ import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.media3.common.Effect
@@ -62,6 +63,7 @@ fun ClipPreview(
     /** Baked colour table to preview, or null for untouched colours. */
     gradeCube: Array<Array<IntArray>>?,
     vignette: Float,
+    maxHeight: Dp,
     onMoveWidget: (Widget, Placement) -> Unit,
     onMoveFinished: () -> Unit,
 ) {
@@ -97,7 +99,7 @@ fun ClipPreview(
 
     Column {
         Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
-            Box(Modifier.heightIn(max = 560.dp).aspectRatio(aspect, matchHeightConstraintsFirst = true)) {
+            Box(Modifier.heightIn(max = maxHeight).aspectRatio(aspect, matchHeightConstraintsFirst = true)) {
                 AndroidView(
                     factory = { PlayerView(it).apply { player = exoPlayer; useController = false } },
                     modifier = Modifier.matchParentSize(),
@@ -158,10 +160,5 @@ fun ClipPreview(
                 style = MaterialTheme.typography.bodySmall,
             )
         }
-        Text(
-            "Drag widgets on the picture to move them.",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
     }
 }
