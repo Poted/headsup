@@ -11,7 +11,9 @@ import app.headsup.core.track.ActivityTrack
 import app.headsup.media.ClipMetadata
 import app.headsup.media.ClipMetadataReader
 import app.headsup.render.DashboardStyle
+import app.headsup.render.Placement
 import app.headsup.render.StylePrefs
+import app.headsup.render.Widget
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -78,6 +80,13 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
         _state.update { it.copy(style = transform(it.style)) }
         stylePrefs.save(_state.value.style)
     }
+
+    /** Called continuously while a widget is dragged; saved by [persistStyle] when the drag ends. */
+    fun moveWidget(widget: Widget, placement: Placement) = _state.update {
+        it.copy(style = it.style.copy(placements = it.style.placements + (widget to placement)))
+    }
+
+    fun persistStyle() = stylePrefs.save(_state.value.style)
 
     fun dismissMessages() = _state.update { it.copy(messages = emptyList()) }
 

@@ -42,9 +42,17 @@ import app.headsup.core.sync.Confidence
 import app.headsup.core.sync.TimeAnchor
 import app.headsup.core.sync.TimeSource
 import app.headsup.core.sync.ZoneReason
-import app.headsup.render.Corner
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.CircleShape
+import app.headsup.render.DashboardFont
 import app.headsup.render.DashboardStyle
 import app.headsup.render.Formats
+import app.headsup.render.Layouts
+import app.headsup.render.LayoutPreset
+import app.headsup.render.TextEffect
 import app.headsup.render.Widget
 import java.time.Instant
 import java.time.ZoneId
@@ -97,7 +105,7 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
                 val (index, clip) = selected
                 Section("Preview") {
                     val activity = clip.sync?.let { state.activities.getOrNull(it.trackIndex) }
-                    ClipPreview(clip, activity, state.style)
+                    ClipPreview(clip, activity, state.style, onMoveWidget = vm::moveWidget, onMoveFinished = vm::persistStyle)
                     if (clip.sync == null) Hint("No activity covers this clip, so there is nothing to show.")
                     OffsetControls(clip.manualOffsetMs) { vm.setManualOffset(index, it) }
                 }
@@ -265,20 +273,75 @@ private fun StyleControls(style: DashboardStyle, activities: List<LoadedActivity
             )
         }
     }
-    Text("Position", style = MaterialTheme.typography.labelLarge)
+    Text("Layout", style = MaterialTheme.typography.labelLarge)
     FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        for (corner in Corner.entries) {
+        for (preset in LayoutPreset.entries) {
             FilterChip(
-                selected = style.corner == corner,
-                onClick = { update { it.copy(corner = corner) } },
-                label = { Text(corner.label) },
+                // Picking a layout puts every widget back into it, including dragged ones.
+                selected = style.preset == preset && style.placements.isEmpty(),
+                onClick = { update { it.copy(preset = preset, placements = emptyMap()) } },
+                label = { Text(preset.label) },
             )
         }
     }
+    if (style.placements.isNotEmpty()) {
+        Hint("${style.placements.size} widget(s) placed by hand. Pick a layout to reset them.")
+    }
+
+    Text("Font", style = MaterialTheme.typography.labelLarge)
+    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        for (font in DashboardFont.entries) {
+            FilterChip(selected = style.font == font, onClick = { update { it.copy(font = font) } }, label = { Text(font.label) })
+        }
+    }
+
+    ColorRow("Values", style.valueColor) { c -> update { it.copy(valueColor = c) } }
+    ColorRow("Labels", style.labelColor) { c -> update { it.copy(labelColor = c) } }
+    ColorRow("Units", style.unitColor) { c -> update { it.copy(unitColor = c) } }
+
+    Text("Text edge", style = MaterialTheme.typography.labelLarge)
+    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        for (effect in TextEffect.entries) {
+            FilterChip(selected = style.effect == effect, onClick = { update { it.copy(effect = effect) } }, label = { Text(effect.label) })
+        }
+    }
+
     Text(String.format(Locale.US, "Size: %.0f%%", style.scale * 100), style = MaterialTheme.typography.labelLarge)
     Slider(value = style.scale, onValueChange = { v -> update { it.copy(scale = v) } }, valueRange = 0.5f..2f)
     Row(verticalAlignment = Alignment.CenterVertically) {
         Text("Colour heart rate by zone", Modifier.weight(1f))
         Switch(checked = style.hrZoneColors, onCheckedChange = { v -> update { it.copy(hrZoneColors = v) } })
+    }
+}
+
+private val SWATCHES = listOf(
+    android.graphics.Color.WHITE,
+    Layouts.ACCENT,
+    android.graphics.Color.rgb(255, 159, 10),
+    android.graphics.Color.rgb(255, 69, 58),
+    android.graphics.Color.rgb(48, 209, 88),
+    android.graphics.Color.rgb(100, 210, 255),
+    android.graphics.Color.rgb(10, 132, 255),
+    android.graphics.Color.rgb(191, 90, 242),
+    android.graphics.Color.BLACK,
+)
+
+@Composable
+private fun ColorRow(title: String, selected: Int, onPick: (Int) -> Unit) {
+    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        Text(title, Modifier.weight(1f), style = MaterialTheme.typography.labelLarge)
+        for (c in SWATCHES) {
+            Box(
+                Modifier
+                    .size(28.dp)
+                    .border(
+                        width = if (c == selected) 3.dp else 1.dp,
+                        color = if (c == selected) MaterialTheme.colorScheme.primary else Color.Gray,
+                        shape = CircleShape,
+                    )
+                    .background(Color(c), CircleShape)
+                    .clickable { onPick(c) },
+            )
+        }
     }
 }

@@ -18,3 +18,8 @@ To also decode your own watch files (kept out of the repository):
 ```
 HEADSUP_FIT_SAMPLES=/path/to/fit/files ./gradlew :core:test --tests '*LocalSamplesTest*' -i
 ```
+
+## Third-party fonts
+
+Barlow Condensed, Oswald, Rajdhani and Orbitron are bundled under the SIL Open Font License 1.1;
+the licence texts are in `app/src/main/assets/licenses/`.

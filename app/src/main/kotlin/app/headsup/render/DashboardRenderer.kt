@@ -1,9 +1,11 @@
 package app.headsup.render
 
+import android.content.res.AssetManager
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.Path
+import android.graphics.RectF
 import android.graphics.Typeface
 import app.headsup.core.track.ActivityTrack
 import app.headsup.core.track.Metric
@@ -26,84 +28,114 @@ data class DashboardData(
  * (in stage 3) every exported frame, so both look identical. Sizes are derived from the
  * shorter side of the frame, which keeps 16:9, 9:16 and square output consistent.
  */
-class DashboardRenderer {
-    private val labelPaint = textPaint(Typeface.DEFAULT_BOLD, Color.argb(235, 255, 255, 255))
-    private val valuePaint = textPaint(Typeface.create(Typeface.DEFAULT, Typeface.BOLD_ITALIC), Color.WHITE)
-    private val unitPaint = textPaint(Typeface.DEFAULT_BOLD, ACCENT)
+class DashboardRenderer(private val assets: AssetManager) {
+    private val labelPaint = Paint(Paint.ANTI_ALIAS_FLAG)
+    private val valuePaint = Paint(Paint.ANTI_ALIAS_FLAG)
+    private val unitPaint = Paint(Paint.ANTI_ALIAS_FLAG)
+    private val outlinePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE
+        strokeJoin = Paint.Join.ROUND
+        color = Color.argb(220, 0, 0, 0)
+    }
     private val mapBackground = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.argb(110, 0, 0, 0) }
     private val routePaint = strokePaint(Color.argb(170, 255, 255, 255))
-    private val donePaint = strokePaint(ACCENT)
+    private val donePaint = strokePaint(Layouts.ACCENT)
     private val dotPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.WHITE }
     private val path = Path()
     private var route: Route? = null
+    private val typefaces = HashMap<DashboardFont, Typeface>()
+
+    /** Boxes of the widgets drawn by the last [draw] call, in canvas pixels, for touch handling. */
+    private val boxes = LinkedHashMap<Widget, RectF>()
+
+    fun boxOf(widget: Widget): RectF? = boxes[widget]?.let(::RectF)
+
+    fun hitTest(x: Float, y: Float, slop: Float): Widget? =
+        boxes.entries.lastOrNull { (_, r) -> x >= r.left - slop && x <= r.right + slop && y >= r.top - slop && y <= r.bottom + slop }?.key
 
     fun draw(canvas: Canvas, width: Float, height: Float, style: DashboardStyle, data: DashboardData) {
-        val widgets = Widget.entries.filter { it in style.widgets && it.isAvailableIn(data.track) }
-        if (widgets.isEmpty()) return
+        boxes.clear()
+        val shown = Widget.entries.filter { it in style.widgets && it.isAvailableIn(data.track) }
+        if (shown.isEmpty()) return
 
-        val u = min(width, height) / 1000f * style.scale
-        val margin = 40f * u
-        labelPaint.textSize = LABEL_SIZE * u
-        valuePaint.textSize = VALUE_SIZE * u
-        unitPaint.textSize = UNIT_SIZE * u
-        for (p in listOf(labelPaint, valuePaint, unitPaint)) p.setShadowLayer(4f * u, 0f, 2f * u, SHADOW)
-
-        // Fill columns from the chosen edge inwards, keeping the widget order top to bottom.
-        val columns = mutableListOf(mutableListOf<Widget>())
-        var used = 0f
-        for (widget in widgets) {
-            val h = blockHeight(widget) * u
-            if (used > 0f && used + h > height - 2 * margin) {
-                columns += mutableListOf<Widget>()
-                used = 0f
-            }
-            columns.last() += widget
-            used += h
+        val u = unit(width, height, style)
+        val typeface = typeface(style.font)
+        for ((p, size, color) in listOf(
+            Triple(labelPaint, Layouts.LABEL_SIZE, style.labelColor),
+            Triple(valuePaint, Layouts.VALUE_SIZE, style.valueColor),
+            Triple(unitPaint, Layouts.UNIT_SIZE, style.unitColor),
+        )) {
+            p.typeface = typeface
+            p.textSize = size * u
+            p.color = color
+            if (style.effect == TextEffect.SHADOW) p.setShadowLayer(4f * u, 0f, 2f * u, SHADOW) else p.clearShadowLayer()
         }
+        outlinePaint.typeface = typeface
+        outlinePaint.strokeWidth = 5f * u
 
-        val corner = style.corner
-        columns.forEachIndexed { index, column ->
-            val edgeX = if (corner.right) width - margin - index * COLUMN_WIDTH * u else margin + index * COLUMN_WIDTH * u
-            val columnHeight = column.sumOf { blockHeight(it).toDouble() }.toFloat() * u
-            var top = if (corner.bottom) height - margin - columnHeight else margin
-            for (widget in column) {
-                drawBlock(canvas, widget, edgeX, top, corner.right, u, style, data)
-                top += blockHeight(widget) * u
-            }
+        val placements = style.resolvedPlacements(shown)
+        for (widget in shown) {
+            drawWidget(canvas, widget, placements.getValue(widget), width, height, u, style, data)
         }
     }
 
-    private fun blockHeight(widget: Widget) =
-        LABEL_SIZE + LABEL_GAP + (if (widget == Widget.MAP) MAP_SIZE else VALUE_SIZE) + BLOCK_GAP
-
-    private fun drawBlock(
-        canvas: Canvas, widget: Widget, edgeX: Float, top: Float, alignRight: Boolean, u: Float,
+    private fun drawWidget(
+        canvas: Canvas, widget: Widget, placement: Placement, width: Float, height: Float, u: Float,
         style: DashboardStyle, data: DashboardData,
     ) {
         val label = if (widget == Widget.TIME) Formats.date(data.utcMs, data.zoneOffsetSeconds) else widget.label
-        val labelX = if (alignRight) edgeX - labelPaint.measureText(label) else edgeX
-        canvas.drawText(label, labelX, top + LABEL_SIZE * 0.8f * u, labelPaint)
-        val contentTop = top + (LABEL_SIZE + LABEL_GAP) * u
+        val reading = if (widget == Widget.MAP) null else reading(widget, data)
+        val unitGap = 8f * u
+        val valueWidth = reading?.let { valuePaint.measureText(it.value) } ?: 0f
+        val unitWidth = if (reading == null || reading.unit.isEmpty()) 0f else unitPaint.measureText(reading.unit) + unitGap
+        val contentWidth = if (widget == Widget.MAP) Layouts.MAP_SIZE * u else valueWidth + unitWidth
+        val boxWidth = max(labelPaint.measureText(label), contentWidth)
+        val boxHeight = Layouts.contentHeight(widget) * u
 
-        if (widget == Widget.MAP) {
-            drawMap(canvas, if (alignRight) edgeX - MAP_SIZE * u else edgeX, contentTop, MAP_SIZE * u, u, data)
+        val left = when (placement.h) {
+            HAnchor.LEFT -> placement.dx * u
+            HAnchor.RIGHT -> width - placement.dx * u - boxWidth
+            HAnchor.CENTER -> width / 2 + placement.dx * u - boxWidth / 2
+        }
+        val top = when (placement.v) {
+            VAnchor.TOP -> placement.dy * u
+            VAnchor.BOTTOM -> height - placement.dy * u - boxHeight
+            VAnchor.CENTER -> height / 2 + placement.dy * u - boxHeight / 2
+        }
+        boxes[widget] = RectF(left, top, left + boxWidth, top + boxHeight)
+
+        // Text lines line up on the side the widget is anchored to.
+        fun alignedX(lineWidth: Float) = when (placement.h) {
+            HAnchor.LEFT -> left
+            HAnchor.RIGHT -> left + boxWidth - lineWidth
+            HAnchor.CENTER -> left + (boxWidth - lineWidth) / 2
+        }
+
+        text(canvas, label, alignedX(labelPaint.measureText(label)), top + Layouts.LABEL_SIZE * 0.8f * u, labelPaint, style)
+        val contentTop = top + (Layouts.LABEL_SIZE + Layouts.LABEL_GAP) * u
+
+        if (reading == null) {
+            drawMap(canvas, alignedX(contentWidth), contentTop, Layouts.MAP_SIZE * u, u, data)
             return
         }
 
-        val reading = reading(widget, data)
         val hr = data.frame[Metric.HEART_RATE]
-        valuePaint.color = if (widget == Widget.HEART_RATE && style.hrZoneColors && hr != null) {
-            data.track.hrZone(hr)?.let { ZONE_COLORS[it.coerceIn(0, ZONE_COLORS.lastIndex)] } ?: Color.WHITE
-        } else {
-            Color.WHITE
+        if (widget == Widget.HEART_RATE && style.hrZoneColors && hr != null) {
+            data.track.hrZone(hr)?.let { valuePaint.color = ZONE_COLORS[it.coerceIn(0, ZONE_COLORS.lastIndex)] }
         }
-        val valueWidth = valuePaint.measureText(reading.value)
-        val unitGap = 8f * u
-        val unitWidth = if (reading.unit.isEmpty()) 0f else unitPaint.measureText(reading.unit) + unitGap
-        val x = if (alignRight) edgeX - valueWidth - unitWidth else edgeX
-        val baseline = contentTop + VALUE_SIZE * 0.82f * u
-        canvas.drawText(reading.value, x, baseline, valuePaint)
-        if (unitWidth > 0f) canvas.drawText(reading.unit, x + valueWidth + unitGap, baseline, unitPaint)
+        val x = alignedX(contentWidth)
+        val baseline = contentTop + Layouts.VALUE_SIZE * 0.82f * u
+        text(canvas, reading.value, x, baseline, valuePaint, style)
+        valuePaint.color = style.valueColor
+        if (unitWidth > 0f) text(canvas, reading.unit, x + valueWidth + unitGap, baseline, unitPaint, style)
+    }
+
+    private fun text(canvas: Canvas, text: String, x: Float, y: Float, paint: Paint, style: DashboardStyle) {
+        if (style.effect == TextEffect.OUTLINE) {
+            outlinePaint.textSize = paint.textSize
+            canvas.drawText(text, x, y, outlinePaint)
+        }
+        canvas.drawText(text, x, y, paint)
     }
 
     private fun reading(widget: Widget, data: DashboardData): Reading {
@@ -124,6 +156,17 @@ class DashboardRenderer {
         }
     }
 
+    private fun typeface(font: DashboardFont): Typeface = typefaces.getOrPut(font) {
+        when {
+            font == DashboardFont.CLASSIC -> Typeface.create(Typeface.DEFAULT, Typeface.BOLD_ITALIC)
+            font == DashboardFont.MONO -> Typeface.create(Typeface.MONOSPACE, Typeface.BOLD)
+            font.weight != null -> Typeface.Builder(assets, font.asset!!)
+                .setFontVariationSettings("'wght' ${font.weight}")
+                .build() ?: Typeface.DEFAULT_BOLD
+            else -> runCatching { Typeface.createFromAsset(assets, font.asset!!) }.getOrDefault(Typeface.DEFAULT_BOLD)
+        }
+    }
+
     private fun drawMap(canvas: Canvas, left: Float, top: Float, size: Float, u: Float, data: DashboardData) {
         canvas.drawRoundRect(left, top, left + size, top + size, 18f * u, 18f * u, mapBackground)
         val r = routeFor(data.track) ?: return
@@ -134,9 +177,9 @@ class DashboardRenderer {
 
         routePaint.strokeWidth = 4f * u
         donePaint.strokeWidth = 6f * u
-        drawPolyline(canvas, r, 0, r.size, ::px, ::py, routePaint)
+        drawPolyline(canvas, 0, r.size, ::px, ::py, routePaint)
         val done = r.indexAfter(data.utcMs)
-        if (done > 1) drawPolyline(canvas, r, 0, done, ::px, ::py, donePaint)
+        if (done > 1) drawPolyline(canvas, 0, done, ::px, ::py, donePaint)
 
         val lat = data.frame[Metric.LATITUDE]
         val lon = data.frame[Metric.LONGITUDE]
@@ -146,9 +189,7 @@ class DashboardRenderer {
         }
     }
 
-    private fun drawPolyline(
-        canvas: Canvas, r: Route, from: Int, until: Int, px: (Int) -> Float, py: (Int) -> Float, paint: Paint,
-    ) {
+    private fun drawPolyline(canvas: Canvas, from: Int, until: Int, px: (Int) -> Float, py: (Int) -> Float, paint: Paint) {
         path.rewind()
         path.moveTo(px(from), py(from))
         for (i in from + 1 until until) path.lineTo(px(i), py(i))
@@ -220,20 +261,11 @@ class DashboardRenderer {
         }
     }
 
-    private companion object {
-        const val LABEL_SIZE = 24f
-        const val LABEL_GAP = 4f
-        const val VALUE_SIZE = 64f
-        const val UNIT_SIZE = 28f
-        const val BLOCK_GAP = 22f
-        const val MAP_SIZE = 260f
-        const val COLUMN_WIDTH = 320f
-
-        val ACCENT = Color.rgb(255, 214, 10)
-        val SHADOW = Color.argb(160, 0, 0, 0)
+    companion object {
+        private val SHADOW = Color.argb(160, 0, 0, 0)
 
         // Garmin zone colours: below zone 1, then zones 1–5.
-        val ZONE_COLORS = intArrayOf(
+        private val ZONE_COLORS = intArrayOf(
             Color.WHITE,
             Color.rgb(170, 170, 170),
             Color.rgb(64, 156, 255),
@@ -242,12 +274,10 @@ class DashboardRenderer {
             Color.rgb(255, 70, 70),
         )
 
-        fun textPaint(typeface: Typeface, color: Int) = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            this.typeface = typeface
-            this.color = color
-        }
+        /** Pixels per dashboard unit for a frame of this size. */
+        fun unit(width: Float, height: Float, style: DashboardStyle) = min(width, height) / 1000f * style.scale
 
-        fun strokePaint(color: Int) = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        private fun strokePaint(color: Int) = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             this.color = color
             style = Paint.Style.STROKE
             strokeCap = Paint.Cap.ROUND
