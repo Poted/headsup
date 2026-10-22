@@ -11,6 +11,7 @@ import androidx.media3.effect.BitmapOverlay
 import app.headsup.render.DashboardData
 import app.headsup.render.DashboardRenderer
 import app.headsup.render.DashboardStyle
+import app.headsup.render.EffectSettings
 
 /**
  * Media3 overlay that draws the dashboard (and vignette) for each exported frame.
@@ -23,6 +24,7 @@ import app.headsup.render.DashboardStyle
 class TelemetryOverlay(
     private val renderer: DashboardRenderer,
     private val style: DashboardStyle,
+    private val effects: EffectSettings,
     private val vignette: Float,
     fallbackWidth: Int,
     fallbackHeight: Int,
@@ -51,7 +53,7 @@ class TelemetryOverlay(
         val w = width.toFloat()
         val h = height.toFloat()
         val data = dataAt(presentationTimeUs / 1000)
-        val key = "${width}x$height " + (data?.let { renderer.contentKey(style, it, w, h) } ?: "-")
+        val key = "${width}x$height " + (data?.let { renderer.contentKey(style, it, w, h, effects) } ?: "-")
         buffers[current]?.let { if (key == lastKey) return it }
 
         current = 1 - current
@@ -60,7 +62,7 @@ class TelemetryOverlay(
         bitmap.eraseColor(Color.TRANSPARENT)
         val canvas = Canvas(bitmap)
         renderer.drawVignette(canvas, w, h, vignette)
-        if (data != null) renderer.draw(canvas, w, h, style, data)
+        if (data != null) renderer.draw(canvas, w, h, style, data, effects)
         lastKey = key
         return bitmap
     }

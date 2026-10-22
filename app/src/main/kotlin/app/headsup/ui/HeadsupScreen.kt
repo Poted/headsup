@@ -94,6 +94,8 @@ import app.headsup.export.ExportJob
 import app.headsup.export.ExportKind
 import app.headsup.export.JobStatus
 import app.headsup.render.DashboardFont
+import app.headsup.render.EffectSettings
+import app.headsup.render.GraphMetric
 import app.headsup.render.DashboardStyle
 import app.headsup.render.Formats
 import app.headsup.render.LayoutPreset
@@ -178,6 +180,7 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
                     style = state.style,
                     gradeCube = state.previewCube,
                     vignette = if (selected.colorGrade) (state.compareGrade ?: state.grade).vignette else 0f,
+                    effects = state.effects,
                     onSample = if (measuring) vm::sampleFrame else null,
                     marker = if (measuring) state.scope?.let { Offset(it.markerX, it.markerY) } else null,
                     maxHeight = previewMaxHeight,
@@ -203,7 +206,7 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
                 when (tool) {
                     Tool.FILES -> FilesPanel(state, vm, onAddVideos = addVideos, onAddFit = addFit)
                     Tool.COLOUR -> ColourPage(state, vm, adjustment, { adjustment = it }, onAddLut = { lutPicker.launch(arrayOf("*/*")) })
-                    Tool.EFFECTS -> EffectsPanel(state.style, state.activities, vm::updateStyle)
+                    Tool.EFFECTS -> EffectsPanel(state.style, state.effects, state.activities, vm::updateStyle, vm::updateEffects)
                     Tool.EXPORT -> ExportControls(
                         bitrateFactor = state.bitrateFactor,
                         sourceBitrate = state.selected?.meta?.bitrate,
@@ -637,30 +640,79 @@ private fun VectorscopeView(scope: ScopeResult?, modifier: Modifier) {
 
 private enum class EffectKind(val symbol: String, val label: String) {
     DASHBOARD("HUD", "Dashboard"),
+    GRAPH("Gr", "Graph"),
+    GRAIN("Gn", "Grain"),
+    GLOW("Gl", "Glow"),
+    BARS("Cin", "Bars"),
 }
 
-/** Effects drawn over the picture, picked from round options like the colour corrections. */
+/** Effects over the picture, picked from round options like the colour corrections. */
 @Composable
-private fun EffectsPanel(style: DashboardStyle, activities: List<LoadedActivity>, update: ((DashboardStyle) -> DashboardStyle) -> Unit) {
-    var effect by rememberSaveable { mutableStateOf(EffectKind.DASHBOARD) }
+private fun EffectsPanel(
+    style: DashboardStyle,
+    effects: EffectSettings,
+    activities: List<LoadedActivity>,
+    updateStyle: ((DashboardStyle) -> DashboardStyle) -> Unit,
+    updateEffects: ((EffectSettings) -> EffectSettings) -> Unit,
+) {
+    var kind by rememberSaveable { mutableStateOf(EffectKind.DASHBOARD) }
     LazyRow(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
         items(EffectKind.entries) { e ->
-            CircleOption(e.symbol, e.label, selected = e == effect, modified = e == EffectKind.DASHBOARD && style.enabled) { effect = e }
+            val active = when (e) {
+                EffectKind.DASHBOARD -> style.enabled
+                EffectKind.GRAPH -> effects.graph != null
+                EffectKind.GRAIN -> effects.grain > 0f
+                EffectKind.GLOW -> effects.glow > 0f
+                EffectKind.BARS -> effects.barsRatio != null
+            }
+            CircleOption(e.symbol, e.label, selected = e == kind, modified = active) { kind = e }
         }
     }
-    when (effect) {
+    when (kind) {
         EffectKind.DASHBOARD -> {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text("Show dashboard", Modifier.weight(1f), style = MaterialTheme.typography.labelLarge)
-                Switch(checked = style.enabled, onCheckedChange = { v -> update { it.copy(enabled = v) } })
+                Switch(checked = style.enabled, onCheckedChange = { v -> updateStyle { it.copy(enabled = v) } })
             }
             if (style.enabled) {
                 var tab by rememberSaveable { mutableStateOf(0) }
                 PillTabs(listOf("Widgets", "Layout", "Text"), tab) { tab = it }
                 when (tab) {
-                    0 -> WidgetControls(style, activities, update)
-                    1 -> LayoutControls(style, update)
-                    else -> TextControls(style, update)
+                    0 -> WidgetControls(style, activities, updateStyle)
+                    1 -> LayoutControls(style, updateStyle)
+                    else -> TextControls(style, updateStyle)
+                }
+            }
+        }
+        EffectKind.GRAPH -> {
+            Hint("Profile of the whole activity along the bottom, with a marker that moves with the video.")
+            val available = GraphMetric.entries.filter { m -> activities.isEmpty() || activities.any { it.track.has(m.metric) } }
+            LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                item { FilterChip(selected = effects.graph == null, onClick = { updateEffects { it.copy(graph = null) } }, label = { Text("Off") }) }
+                items(available) { m ->
+                    FilterChip(selected = effects.graph == m, onClick = { updateEffects { it.copy(graph = m) } }, label = { Text(m.label) })
+                }
+            }
+        }
+        EffectKind.GRAIN -> {
+            ValueHeader("Grain", String.format(Locale.US, "%.0f %%", effects.grain * 100))
+            RulerSlider(effects.grain, 0f..1f, 0.02f, { v -> updateEffects { it.copy(grain = v) } }, onReset = { updateEffects { it.copy(grain = 0f) } })
+            ValueHeader("Size", String.format(Locale.US, "%.1f", effects.grainSize))
+            RulerSlider(effects.grainSize, 0.5f..3f, 0.1f, { v -> updateEffects { it.copy(grainSize = v) } }, onReset = { updateEffects { it.copy(grainSize = 1f) } })
+        }
+        EffectKind.GLOW -> {
+            ValueHeader("Glow", String.format(Locale.US, "%.0f %%", effects.glow * 100))
+            RulerSlider(effects.glow, 0f..1f, 0.02f, { v -> updateEffects { it.copy(glow = v) } }, onReset = { updateEffects { it.copy(glow = 0f) } })
+            ValueHeader("Threshold", String.format(Locale.US, "%.0f %%", effects.glowThreshold * 100))
+            RulerSlider(effects.glowThreshold, 0.4f..0.98f, 0.02f, { v -> updateEffects { it.copy(glowThreshold = v) } }, onReset = { updateEffects { it.copy(glowThreshold = 0.75f) } })
+            Hint("Highlights above the threshold bloom softly, like the Glow effect in DaVinci Resolve.")
+        }
+        EffectKind.BARS -> {
+            Hint("Black bars that crop the frame to a cinema aspect ratio.")
+            LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                item { FilterChip(selected = effects.barsRatio == null, onClick = { updateEffects { it.copy(barsRatio = null) } }, label = { Text("Off") }) }
+                items(listOf(2.39f to "2.39:1", 2.0f to "2:1", 1.85f to "1.85:1")) { (ratio, label) ->
+                    FilterChip(selected = effects.barsRatio == ratio, onClick = { updateEffects { it.copy(barsRatio = ratio) } }, label = { Text(label) })
                 }
             }
         }

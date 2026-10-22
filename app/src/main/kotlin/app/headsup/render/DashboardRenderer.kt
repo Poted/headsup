@@ -4,6 +4,7 @@ import android.content.res.AssetManager
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
+import android.graphics.LinearGradient
 import android.graphics.Path
 import android.graphics.RadialGradient
 import android.graphics.RectF
@@ -44,6 +45,13 @@ class DashboardRenderer(private val assets: AssetManager) {
     private val donePaint = strokePaint(Layouts.ACCENT)
     private val dotPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.WHITE }
     private val vignettePaint = Paint(Paint.ANTI_ALIAS_FLAG)
+    private val barPaint = Paint().apply { color = Color.BLACK }
+    private val fillPath = Path()
+    private val graphFill = Paint(Paint.ANTI_ALIAS_FLAG)
+    private val graphLine = strokePaint(Color.argb(230, 255, 255, 255))
+    private val graphMarker = strokePaint(Color.argb(140, 255, 255, 255))
+    private val graphText = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.WHITE }
+    private var graph: Graph? = null
     private val path = Path()
     private var route: Route? = null
     private val typefaces = HashMap<DashboardFont, Typeface>()
@@ -56,8 +64,10 @@ class DashboardRenderer(private val assets: AssetManager) {
     fun hitTest(x: Float, y: Float, slop: Float): Widget? =
         boxes.entries.lastOrNull { (_, r) -> x >= r.left - slop && x <= r.right + slop && y >= r.top - slop && y <= r.bottom + slop }?.key
 
-    fun draw(canvas: Canvas, width: Float, height: Float, style: DashboardStyle, data: DashboardData) {
+    fun draw(canvas: Canvas, width: Float, height: Float, style: DashboardStyle, data: DashboardData, effects: EffectSettings = EffectSettings()) {
         boxes.clear()
+        drawBars(canvas, width, height, effects)
+        drawGraph(canvas, width, height, style, effects, data)
         if (!style.enabled) return
         val shown = Widget.entries.filter { it in style.widgets && it.isAvailableIn(data.track) }
         if (shown.isEmpty()) return
@@ -133,10 +143,19 @@ class DashboardRenderer(private val assets: AssetManager) {
      * Identifies what [draw] would put on screen. Consecutive video frames usually show the same
      * numbers, so export only redraws (and re-uploads) the overlay when this changes.
      */
-    fun contentKey(style: DashboardStyle, data: DashboardData, width: Float, height: Float): String {
-        if (!style.enabled) return "off"
+    fun contentKey(style: DashboardStyle, data: DashboardData, width: Float, height: Float, effects: EffectSettings = EffectSettings()): String {
         val sb = StringBuilder()
+        sb.append(effects.barsRatio).append('|')
         val u = unit(width, height, style)
+        effects.graph?.let { metric ->
+            val g = graphFor(data.track, metric)
+            if (g != null) {
+                val rect = graphRect(width, height, u, effects)
+                sb.append("g").append((g.fraction(data.utcMs) * rect.width()).toInt()).append(':')
+                    .append(graphReading(metric, data.frame[metric.metric]).value).append('|')
+            }
+        }
+        if (!style.enabled) return sb.append("off").toString()
         for (widget in Widget.entries) {
             if (widget !in style.widgets || !widget.isAvailableIn(data.track)) continue
             sb.append(widget.ordinal).append(':')
@@ -242,6 +261,109 @@ class DashboardRenderer(private val assets: AssetManager) {
         path.moveTo(px(from), py(from))
         for (i in from + 1 until until) path.lineTo(px(i), py(i))
         canvas.drawPath(path, paint)
+    }
+
+    private fun barHeight(width: Float, height: Float, effects: EffectSettings): Float {
+        val ratio = effects.barsRatio ?: return 0f
+        return if (width / height >= ratio) 0f else (height - width / ratio) / 2
+    }
+
+    /** Black bars that crop the picture to a wider (cinema) aspect ratio. */
+    private fun drawBars(canvas: Canvas, width: Float, height: Float, effects: EffectSettings) {
+        val bar = barHeight(width, height, effects)
+        if (bar <= 0f) return
+        canvas.drawRect(0f, 0f, width, bar, barPaint)
+        canvas.drawRect(0f, height - bar, width, height, barPaint)
+    }
+
+    private fun graphRect(width: Float, height: Float, u: Float, effects: EffectSettings): RectF {
+        val bottom = height - barHeight(width, height, effects) - 36f * u
+        return RectF(Layouts.MARGIN * u, bottom - 110f * u, width - Layouts.MARGIN * u, bottom)
+    }
+
+    private fun graphReading(metric: GraphMetric, value: Double?) = when (metric) {
+        GraphMetric.ALTITUDE -> Formats.altitude(value)
+        GraphMetric.HEART_RATE -> Formats.heartRate(value)
+        GraphMetric.SPEED -> Formats.speed(value)
+    }
+
+    /** Profile of the whole activity with a marker at the current moment. */
+    private fun drawGraph(canvas: Canvas, width: Float, height: Float, style: DashboardStyle, effects: EffectSettings, data: DashboardData) {
+        val metric = effects.graph ?: return
+        val g = graphFor(data.track, metric) ?: return
+        val u = unit(width, height, style)
+        val r = graphRect(width, height, u, effects)
+        path.rewind()
+        for (i in g.xs.indices) {
+            val x = r.left + g.xs[i] * r.width()
+            val y = r.bottom - g.ys[i] * r.height()
+            if (i == 0) path.moveTo(x, y) else path.lineTo(x, y)
+        }
+        fillPath.set(path)
+        fillPath.lineTo(r.right, r.bottom)
+        fillPath.lineTo(r.left, r.bottom)
+        fillPath.close()
+        graphFill.shader = LinearGradient(
+            0f, r.top, 0f, r.bottom,
+            (style.unitColor and 0x00FFFFFF) or (0x70 shl 24), style.unitColor and 0x00FFFFFF, Shader.TileMode.CLAMP,
+        )
+        canvas.drawPath(fillPath, graphFill)
+        graphLine.strokeWidth = 2.5f * u
+        canvas.drawPath(path, graphLine)
+
+        val value = data.frame[metric.metric]
+        val x = r.left + g.fraction(data.utcMs) * r.width()
+        val y = value?.let { r.bottom - g.normalise(it) * r.height() } ?: r.bottom
+        graphMarker.strokeWidth = 1.5f * u
+        canvas.drawLine(x, r.top, x, r.bottom, graphMarker)
+        dotPaint.color = style.unitColor
+        canvas.drawCircle(x, y, 7f * u, dotPaint)
+        dotPaint.color = Color.WHITE
+
+        val reading = graphReading(metric, value)
+        graphText.typeface = typeface(style.font)
+        graphText.textSize = 26f * u
+        graphText.setShadowLayer(3f * u, 0f, 1f * u, SHADOW)
+        val label = "${reading.value} ${reading.unit}"
+        val tw = graphText.measureText(label)
+        canvas.drawText(label, (x - tw / 2).coerceIn(r.left, r.right - tw), r.top - 10f * u, graphText)
+    }
+
+    private fun graphFor(track: ActivityTrack, metric: GraphMetric): Graph? {
+        graph?.takeIf { it.track === track && it.metric == metric }?.let { return it }
+        return Graph.of(track, metric)?.also { graph = it }
+    }
+
+    /** Whole-activity series normalised to 0..1 on both axes, thinned to a few hundred points. */
+    private class Graph(
+        val track: ActivityTrack,
+        val metric: GraphMetric,
+        private val startMs: Long,
+        private val endMs: Long,
+        private val min: Double,
+        private val span: Double,
+        val xs: FloatArray,
+        val ys: FloatArray,
+    ) {
+        fun fraction(utcMs: Long) = ((utcMs - startMs).toDouble() / (endMs - startMs)).coerceIn(0.0, 1.0).toFloat()
+        fun normalise(value: Double) = ((value - min) / span).coerceIn(0.0, 1.0).toFloat()
+
+        companion object {
+            fun of(track: ActivityTrack, metric: GraphMetric): Graph? {
+                val s = track.series[metric.metric] ?: return null
+                if (s.size < 2 || track.endMs <= track.startMs) return null
+                val step = max(1, s.size / 600)
+                val idx = (0 until s.size step step).toList()
+                val min = idx.minOf { s.values[it] }
+                val span = max(idx.maxOf { s.values[it] } - min, 1e-6)
+                val total = (track.endMs - track.startMs).toDouble()
+                return Graph(
+                    track, metric, track.startMs, track.endMs, min, span,
+                    FloatArray(idx.size) { ((s.timesMs[idx[it]] - track.startMs) / total).toFloat() },
+                    FloatArray(idx.size) { ((s.values[idx[it]] - min) / span).toFloat() },
+                )
+            }
+        }
     }
 
     private fun routeFor(track: ActivityTrack): Route? {

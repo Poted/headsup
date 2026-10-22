@@ -79,7 +79,7 @@ private fun ClipThumb(clip: ClipState, selected: Boolean, onClick: () -> Unit) {
             .size(width = 96.dp, height = 56.dp)
             .clip(THUMB_SHAPE)
             .background(HeadsupColors.SurfaceHigh)
-            .border(if (selected) 2.dp else 1.dp, if (selected) HeadsupColors.Highlight else HeadsupColors.Outline, THUMB_SHAPE)
+            .border(if (selected) 2.dp else 1.dp, if (selected) HeadsupColors.Accent else HeadsupColors.Outline, THUMB_SHAPE)
             .clickable(onClick = onClick),
     ) {
         thumbnail?.let { Image(it, contentDescription = clip.meta.name, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize()) }

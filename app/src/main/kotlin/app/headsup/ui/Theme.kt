@@ -22,16 +22,18 @@ import androidx.compose.ui.unit.sp
 object HeadsupColors {
     // Neutral charcoal surfaces with a faint warm glow; orange is reserved for the camera-style
     // controls (rulers and correction dials).
-    val Background = Color(0xFF0A0908)
-    val BackgroundGlow = Color(0xFF3A2112)
-    val BackgroundMid = Color(0xFF17110D)
-    val Surface = Color(0xFF161311)
-    val SurfaceTop = Color(0xFF221C18)
-    val SurfaceHigh = Color(0xFF241E1A)
-    val Outline = Color(0xFF33291F)
-    /** Selected states (toolbar, tabs, play button) use the warm accent rather than white. */
-    val Highlight = Color(0xFFFF8A3D)
-    val OnHighlight = Color(0xFF1E1006)
+    // Neutral charcoal with a faint warm glow; light (white) selected states. Orange is kept for
+    // the camera-style controls: play button, rulers, correction dials and the selected clip.
+    val Background = Color(0xFF0A0A0A)
+    val BackgroundGlow = Color(0xFF241F1B)
+    val BackgroundMid = Color(0xFF141312)
+    val Surface = Color(0xFF161616)
+    val SurfaceTop = Color(0xFF1F1E1D)
+    val SurfaceHigh = Color(0xFF242322)
+    val Outline = Color(0xFF2F2E2C)
+    val Highlight = Color(0xFFF2EFEB)
+    val OnHighlight = Color(0xFF141414)
+    val OnAccent = Color(0xFF1E1006)
     val Accent = Color(0xFFFF8A3D)
     val AccentSoft = Color(0xFFFFB574)
     val AccentStrong = Color(0xFFE5641C)
@@ -52,12 +54,12 @@ fun HeadsupTheme(content: @Composable () -> Unit) {
     val base = Typography()
     MaterialTheme(
         colorScheme = darkColorScheme(
-            primary = HeadsupColors.Accent,
+            primary = HeadsupColors.Highlight,
             onPrimary = HeadsupColors.OnHighlight,
-            primaryContainer = Color(0xFF4A2A14),
+            primaryContainer = Color(0xFF2C2C2C),
             onPrimaryContainer = Color.White,
-            secondaryContainer = Color(0xFF3D2616),
-            onSecondaryContainer = HeadsupColors.AccentSoft,
+            secondaryContainer = Color(0xFF2E2D2C),
+            onSecondaryContainer = Color.White,
             background = HeadsupColors.Background,
             onBackground = Color.White,
             surface = HeadsupColors.Surface,

@@ -23,6 +23,8 @@ import app.headsup.export.GradeSetup
 import app.headsup.media.ClipMetadata
 import app.headsup.media.ClipMetadataReader
 import app.headsup.render.DashboardStyle
+import app.headsup.render.EffectPrefs
+import app.headsup.render.EffectSettings
 import app.headsup.render.Placement
 import app.headsup.render.StylePrefs
 import app.headsup.render.Widget
@@ -73,6 +75,7 @@ data class UiState(
     val clips: List<ClipState> = emptyList(),
     val selectedClip: Int? = null,
     val style: DashboardStyle = DashboardStyle(),
+    val effects: EffectSettings = EffectSettings(),
     val busy: Boolean = false,
     val messages: List<String> = emptyList(),
     val grade: ColorGrade = ColorGrade(),
@@ -91,9 +94,11 @@ data class UiState(
 class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
     private val stylePrefs = StylePrefs(app)
     private val gradeStore = GradeStore(app)
+    private val effectPrefs = EffectPrefs(app)
     private val _state = MutableStateFlow(
         UiState(
             style = stylePrefs.load(),
+            effects = effectPrefs.load(),
             grade = gradeStore.loadGrade(),
             luts = gradeStore.names(),
             messages = listOfNotNull((app as HeadsupApp).takeCrashReport()),
@@ -162,6 +167,11 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun persistStyle() = stylePrefs.save(_state.value.style)
+
+    fun updateEffects(transform: (EffectSettings) -> EffectSettings) {
+        _state.update { it.copy(effects = transform(it.effects)) }
+        effectPrefs.save(_state.value.effects)
+    }
 
     fun dismissMessages() = _state.update { it.copy(messages = emptyList()) }
 
@@ -319,6 +329,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                     track = activity.track,
                     telemetryStartUtcMs = sync.startUtcMs + clip.manualOffsetMs,
                     style = s.style,
+                    effects = s.effects,
                     grade = if (graded) GradeSetup(cube, s.grade.vignette) else null,
                     bitrateFactor = s.bitrateFactor,
                 )

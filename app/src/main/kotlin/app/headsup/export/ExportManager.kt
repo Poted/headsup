@@ -135,11 +135,12 @@ class ExportManager(private val context: Context) {
         val test = request.kind == ExportKind.TEN_BIT_TEST
         val sampler = TelemetrySampler(request.track)
         val overlay = TelemetryOverlay(
-            DashboardRenderer(context.assets), request.style, request.grade?.vignette ?: 0f, request.width, request.height,
+            DashboardRenderer(context.assets), request.style, request.effects, request.grade?.vignette ?: 0f, request.width, request.height,
         ) { positionMs -> request.dataAt(positionMs, sampler) }
 
         val effects = mutableListOf<Effect>()
         request.grade?.cube?.let { effects += SingleColorLut.createFromCube(it) }
+        if (request.effects.changesPixels) effects += FinishEffect(request.effects)
         effects += OverlayEffect(ImmutableList.of<TextureOverlay>(overlay))
 
         val mediaItem = MediaItem.Builder().setUri(request.uri).apply {

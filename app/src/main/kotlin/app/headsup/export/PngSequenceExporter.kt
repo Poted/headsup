@@ -45,10 +45,10 @@ object PngSequenceExporter {
                     for (i in 0 until frames) {
                         val positionMs = (i * 1000.0 / fps).roundToLong()
                         val data = request.dataAt(positionMs, sampler)
-                        val key = renderer.contentKey(request.style, data, width.toFloat(), height.toFloat())
+                        val key = renderer.contentKey(request.style, data, width.toFloat(), height.toFloat(), request.effects)
                         if (key != lastKey) {
                             bitmap.eraseColor(Color.TRANSPARENT)
-                            renderer.draw(canvas, width.toFloat(), height.toFloat(), request.style, data)
+                            renderer.draw(canvas, width.toFloat(), height.toFloat(), request.style, data, request.effects)
                             png = ByteArrayOutputStream().also { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }.toByteArray()
                             crc = CRC32().apply { update(png) }.value
                             lastKey = key

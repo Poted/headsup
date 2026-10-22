@@ -6,6 +6,7 @@ import app.headsup.core.track.TelemetrySampler
 import app.headsup.media.VideoFormatInfo
 import app.headsup.render.DashboardData
 import app.headsup.render.DashboardStyle
+import app.headsup.render.EffectSettings
 import java.time.Instant
 import java.time.ZoneId
 
@@ -28,6 +29,7 @@ data class ExportRequest(
     /** UTC of the telemetry shown on the first frame, including any manual correction. */
     val telemetryStartUtcMs: Long,
     val style: DashboardStyle,
+    val effects: EffectSettings,
     val grade: GradeSetup?,
     val bitrateFactor: Float,
 ) {

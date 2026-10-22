@@ -51,6 +51,14 @@ import app.headsup.color.LiveColorLut
 import androidx.media3.exoplayer.ExoPlayer
 import android.os.Build
 import android.graphics.Bitmap
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.width
+import androidx.compose.runtime.mutableIntStateOf
+import app.headsup.core.color.LutBaker
+import app.headsup.render.EffectSettings
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
 import android.view.TextureView
 import androidx.compose.foundation.gestures.waitForUpOrCancellation
 import androidx.compose.ui.geometry.Offset
@@ -82,6 +90,7 @@ fun ClipPreview(
     /** Baked colour table to preview, or null for untouched colours. */
     gradeCube: Array<Array<IntArray>>?,
     vignette: Float,
+    effects: EffectSettings,
     maxHeight: Dp,
     onMoveWidget: (Widget, Placement) -> Unit,
     onMoveFinished: () -> Unit,
@@ -115,11 +124,25 @@ fun ClipPreview(
     }
     // Zebra: diagonal stripes over clipped highlights, as on a camera monitor.
     var zebra by remember { mutableStateOf(false) }
-    val shaderEffect = remember(gradeCube, zebra) {
-        if (Build.VERSION.SDK_INT >= 33 && (gradeCube != null || zebra)) GradePreviewShader.effect(gradeCube, zebra) else null
+    var histogramOn by remember { mutableStateOf(false) }
+    var histogram by remember { mutableStateOf<FloatArray?>(null) }
+    val previewShader = remember { if (Build.VERSION.SDK_INT >= 33) GradePreviewShader() else null }
+    var tableVersion by remember { mutableIntStateOf(0) }
+    LaunchedEffect(gradeCube) {
+        previewShader?.setTable(gradeCube)
+        tableVersion++
     }
     var textureView by remember { mutableStateOf<TextureView?>(null) }
     val sample by rememberUpdatedState(onSample)
+
+    LaunchedEffect(histogramOn, gradeCube) {
+        while (histogramOn) {
+            val tv = textureView
+            val frame = tv?.let { v -> v.getBitmap(160, (160 * v.height / v.width.coerceAtLeast(1)).coerceAtLeast(1)) }
+            if (frame != null) histogram = withContext(Dispatchers.Default) { luminanceHistogram(frame, gradeCube) }
+            delay(250)
+        }
+    }
 
     var positionMs by remember { mutableLongStateOf(0L) }
     var playing by remember { mutableStateOf(false) }
@@ -145,7 +168,12 @@ fun ClipPreview(
                 // colour shader can be applied to it.
                 AndroidView(
                     factory = { TextureView(it).also { tv -> exoPlayer.setVideoTextureView(tv); textureView = tv } },
-                    modifier = Modifier.matchParentSize().graphicsLayer { renderEffect = shaderEffect },
+                    modifier = Modifier.matchParentSize().graphicsLayer {
+                        // Reading these here re-applies the shader when they change, without recomposing.
+                        tableVersion
+                        val frame = if (effects.grain > 0f) (positionMs / 33).toFloat() else 0f
+                        renderEffect = previewShader?.effect(effects, zebra, frame, minOf(size.width, size.height))
+                    },
                 )
                 Canvas(
                     Modifier
@@ -199,7 +227,10 @@ fun ClipPreview(
                     val zone = track.utcOffsetSeconds
                         ?: ZoneId.systemDefault().rules.getOffset(Instant.ofEpochMilli(utc)).totalSeconds
                     val data = DashboardData(track, frame, utc, zone)
-                    drawIntoCanvas { renderer.draw(it.nativeCanvas, size.width, size.height, style, data) }
+                    drawIntoCanvas { renderer.draw(it.nativeCanvas, size.width, size.height, style, data, effects) }
+                }
+                histogram?.takeIf { histogramOn }?.let { bins ->
+                    Histogram(bins, Modifier.align(Alignment.BottomStart).padding(10.dp).size(width = 128.dp, height = 56.dp))
                 }
             }
         }
@@ -212,11 +243,11 @@ fun ClipPreview(
                 Modifier
                     .size(36.dp)
                     .clip(CircleShape)
-                    .background(HeadsupColors.Highlight)
+                    .background(HeadsupColors.Accent)
                     .clickable { if (playing) exoPlayer.pause() else exoPlayer.play() },
                 contentAlignment = Alignment.Center,
             ) {
-                Icon(if (playing) HeadsupIcons.Pause else HeadsupIcons.Play, contentDescription = if (playing) "Pause" else "Play", tint = HeadsupColors.OnHighlight)
+                Icon(if (playing) HeadsupIcons.Pause else HeadsupIcons.Play, contentDescription = if (playing) "Pause" else "Play", tint = HeadsupColors.OnAccent)
             }
             Text(
                 "  ${timecode(positionMs, clip.meta.frameRate)}",
@@ -228,24 +259,67 @@ fun ClipPreview(
                 valueRange = 0f..clip.meta.durationMs.coerceAtLeast(1L).toFloat(),
                 modifier = Modifier.weight(1f).padding(horizontal = 8.dp),
             )
-            if (Build.VERSION.SDK_INT >= 33) {
-                Box(
-                    Modifier
-                        .size(32.dp)
-                        .clip(CircleShape)
-                        .background(if (zebra) HeadsupColors.Accent else Color.Transparent)
-                        .border(1.dp, if (zebra) HeadsupColors.Accent else HeadsupColors.Outline, CircleShape)
-                        .clickable { zebra = !zebra },
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Text("Z", style = MaterialTheme.typography.labelLarge, color = if (zebra) HeadsupColors.OnHighlight else HeadsupColors.TextMuted)
-                }
-            }
+            ToggleDot("H", histogramOn) { histogramOn = !histogramOn }
+            Spacer(Modifier.width(4.dp))
+            if (Build.VERSION.SDK_INT >= 33) ToggleDot("Z", zebra) { zebra = !zebra }
         }
     }
 }
 
 private const val SAMPLE_WIDTH = 192
+
+@Composable
+private fun ToggleDot(label: String, on: Boolean, onClick: () -> Unit) {
+    Box(
+        Modifier
+            .size(32.dp)
+            .clip(CircleShape)
+            .background(if (on) HeadsupColors.Accent else Color.Transparent)
+            .border(1.dp, if (on) HeadsupColors.Accent else HeadsupColors.Outline, CircleShape)
+            .clickable(onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(label, style = MaterialTheme.typography.labelLarge, color = if (on) HeadsupColors.OnAccent else HeadsupColors.TextMuted)
+    }
+}
+
+/** Luminance histogram of the graded picture, drawn over the preview's corner. */
+@Composable
+private fun Histogram(bins: FloatArray, modifier: Modifier) {
+    Canvas(modifier.clip(RoundedCornerShape(8.dp)).background(Color.Black.copy(alpha = 0.5f))) {
+        val path = androidx.compose.ui.graphics.Path()
+        val step = size.width / (bins.size - 1)
+        path.moveTo(0f, size.height)
+        bins.forEachIndexed { i, v -> path.lineTo(i * step, size.height - v * size.height * 0.92f) }
+        path.lineTo(size.width, size.height)
+        path.close()
+        drawPath(path, Color.White.copy(alpha = 0.55f))
+        // Clipping warnings at both ends.
+        if (bins.first() > 0.6f) drawRect(HeadsupColors.Accent, size = androidx.compose.ui.geometry.Size(2.dp.toPx(), size.height))
+        if (bins.last() > 0.6f) drawRect(HeadsupColors.Accent, topLeft = Offset(size.width - 2.dp.toPx(), 0f), size = androidx.compose.ui.geometry.Size(2.dp.toPx(), size.height))
+    }
+}
+
+/** 64-bin luminance histogram of a small frame grab after the colour table, scaled to its peak. */
+private fun luminanceHistogram(frame: Bitmap, cube: Array<Array<IntArray>>?): FloatArray {
+    val pixels = IntArray(frame.width * frame.height)
+    frame.getPixels(pixels, 0, frame.width, 0, 0, frame.width, frame.height)
+    frame.recycle()
+    val bins = FloatArray(64)
+    val rgb = FloatArray(3)
+    for (p in pixels) {
+        rgb[0] = ((p shr 16) and 0xFF) / 255f
+        rgb[1] = ((p shr 8) and 0xFF) / 255f
+        rgb[2] = (p and 0xFF) / 255f
+        if (cube != null) LutBaker.sampleBaked(cube, rgb[0], rgb[1], rgb[2], rgb)
+        val y = 0.2126f * rgb[0] + 0.7152f * rgb[1] + 0.0722f * rgb[2]
+        bins[(y * 63).toInt().coerceIn(0, 63)] += 1f
+    }
+    val peak = bins.max().coerceAtLeast(1f)
+    // Square root keeps small populations visible next to a dominant tone.
+    for (i in bins.indices) bins[i] = kotlin.math.sqrt(bins[i] / peak)
+    return bins
+}
 
 /** Camera-style timecode HH:MM:SS:FF. */
 private fun timecode(ms: Long, frameRate: Float?): String {
