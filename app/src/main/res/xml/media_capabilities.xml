@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Declares that the app reads HEVC/HDR itself, so Android never hands it transcoded copies. -->
+<media-capabilities xmlns:android="http://schemas.android.com/apk/res/android">
+    <format android:name="HEVC" android:supported="true" />
+    <format android:name="HDR10" android:supported="true" />
+    <format android:name="HDR10Plus" android:supported="true" />
+    <format android:name="HLG" android:supported="true" />
+</media-capabilities>

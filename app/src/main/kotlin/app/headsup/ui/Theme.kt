@@ -11,35 +11,41 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.graphics.vector.path
+import androidx.compose.material3.Typography
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 
 object HeadsupColors {
-    val Background = Color(0xFF0B0B10)
-    val Surface = Color(0xFF16161D)
-    val SurfaceHigh = Color(0xFF212129)
-    val Outline = Color(0xFF34343F)
-    val Accent = Color(0xFFC9A7FF)
-    val AccentStrong = Color(0xFF8C5CFF)
-    val TextMuted = Color(0xFF9C9AA8)
-    val Good = Color(0xFF5BD68A)
+    val Background = Color(0xFF0C0907)
+    val BackgroundGlow = Color(0xFF241509)
+    val Surface = Color(0xFF16110D)
+    val SurfaceHigh = Color(0xFF221A14)
+    val Outline = Color(0xFF3A2C21)
+    val Accent = Color(0xFFFF8A3D)
+    val AccentSoft = Color(0xFFFFB574)
+    val AccentStrong = Color(0xFFE5641C)
+    val TextMuted = Color(0xFFA2958A)
+    val Good = Color(0xFF7BD389)
     val Warn = Color(0xFFFFC14D)
-    val Bad = Color(0xFFFF6B6B)
+    val Bad = Color(0xFFFF6B5B)
 }
 
 @Composable
 fun HeadsupTheme(content: @Composable () -> Unit) {
+    val base = Typography()
     MaterialTheme(
         colorScheme = darkColorScheme(
             primary = HeadsupColors.Accent,
-            onPrimary = Color(0xFF1C1033),
-            primaryContainer = Color(0xFF3A2A5C),
+            onPrimary = Color(0xFF2A1405),
+            primaryContainer = Color(0xFF4A2A14),
             onPrimaryContainer = Color.White,
-            secondaryContainer = Color(0xFF2E2540),
-            onSecondaryContainer = Color(0xFFE9DDFF),
+            secondaryContainer = Color(0xFF3A2416),
+            onSecondaryContainer = HeadsupColors.AccentSoft,
             background = HeadsupColors.Background,
             onBackground = Color.White,
             surface = HeadsupColors.Surface,
-            onSurface = Color.White,
+            onSurface = Color(0xFFF3ECE6),
             surfaceVariant = HeadsupColors.SurfaceHigh,
             onSurfaceVariant = HeadsupColors.TextMuted,
             surfaceContainer = HeadsupColors.Surface,
@@ -48,13 +54,19 @@ fun HeadsupTheme(content: @Composable () -> Unit) {
             outline = HeadsupColors.Outline,
             outlineVariant = HeadsupColors.Outline,
             error = HeadsupColors.Bad,
-            errorContainer = Color(0xFF4A1F24),
-            onErrorContainer = Color(0xFFFFDAD6),
+            errorContainer = Color(0xFF3E1A14),
+            onErrorContainer = Color(0xFFFFDAD3),
+        ),
+        // Lighter weights for an elegant look.
+        typography = base.copy(
+            titleLarge = base.titleLarge.copy(fontWeight = FontWeight.Light, letterSpacing = 0.5.sp),
+            titleMedium = base.titleMedium.copy(fontWeight = FontWeight.Normal),
+            headlineSmall = base.headlineSmall.copy(fontWeight = FontWeight.Light),
         ),
         shapes = Shapes(
             small = RoundedCornerShape(12.dp),
-            medium = RoundedCornerShape(16.dp),
-            large = RoundedCornerShape(24.dp),
+            medium = RoundedCornerShape(18.dp),
+            large = RoundedCornerShape(28.dp),
         ),
         content = content,
     )
@@ -68,7 +80,7 @@ object HeadsupIcons {
     private val white = SolidColor(Color.White)
 
     private fun ImageVector.Builder.stroke(block: androidx.compose.ui.graphics.vector.PathBuilder.() -> Unit) =
-        path(stroke = white, strokeLineWidth = 2f, strokeLineCap = StrokeCap.Round, strokeLineJoin = StrokeJoin.Round, pathBuilder = block)
+        path(stroke = white, strokeLineWidth = 1.6f, strokeLineCap = StrokeCap.Round, strokeLineJoin = StrokeJoin.Round, pathBuilder = block)
 
     val Play = icon("play") { path(fill = white) { moveTo(8f, 5f); lineTo(19f, 12f); lineTo(8f, 19f); close() } }
 

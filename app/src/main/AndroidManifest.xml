@@ -12,6 +12,9 @@
         android:largeHeap="true"
         android:label="@string/app_name"
         android:theme="@android:style/Theme.Material.NoActionBar">
+        <property
+            android:name="android.media.PROPERTY_MEDIA_CAPABILITIES"
+            android:resource="@xml/media_capabilities" />
         <activity
             android:name=".MainActivity"
             android:exported="true">

@@ -3,6 +3,11 @@
 package app.headsup.ui
 
 import android.Manifest
+import android.content.Context
+import android.content.Intent
+import android.net.Uri
+import android.provider.DocumentsContract
+import androidx.activity.result.PickVisualMediaRequest
 import android.content.pm.PackageManager
 import android.os.Build
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -14,6 +19,9 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.width
@@ -91,10 +99,18 @@ import java.time.ZoneOffset
 import java.util.Locale
 import kotlin.math.roundToLong
 
+private val DOWNLOADS_FOLDER: Uri = DocumentsContract.buildDocumentUri("com.android.externalstorage.documents", "primary:Download")
+
+/** File picker that opens in [initial] instead of the last used folder. */
+private class OpenDocumentsIn(private val initial: Uri) : ActivityResultContracts.OpenMultipleDocuments() {
+    override fun createIntent(context: Context, input: Array<String>): Intent =
+        super.createIntent(context, input).putExtra(DocumentsContract.EXTRA_INITIAL_URI, initial)
+}
+
 private enum class Tool(val label: String, val icon: ImageVector) {
     SYNC("Sync", HeadsupIcons.Sync),
     COLOUR("Colour", HeadsupIcons.Colour),
-    DASHBOARD("Dashboard", HeadsupIcons.Dashboard),
+    EFFECTS("Effects", HeadsupIcons.Dashboard),
     EXPORT("Export", HeadsupIcons.Export),
 }
 
@@ -102,11 +118,12 @@ private enum class Tool(val label: String, val icon: ImageVector) {
 fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
     val state by vm.state.collectAsStateWithLifecycle()
     val jobs by vm.exportJobs.collectAsStateWithLifecycle()
-    val fitPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { vm.addActivities(it) }
-    val videoPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { vm.addClips(it) }
+    // FIT files usually land in Downloads; videos are picked from the gallery.
+    val fitPicker = rememberLauncherForActivityResult(OpenDocumentsIn(DOWNLOADS_FOLDER)) { vm.addActivities(it) }
+    val videoPicker = rememberLauncherForActivityResult(ActivityResultContracts.PickMultipleVisualMedia()) { vm.addClips(it) }
     val lutPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri -> uri?.let(vm::importLut) }
     val addFit = { fitPicker.launch(arrayOf("*/*")) }
-    val addVideos = { videoPicker.launch(arrayOf("video/*")) }
+    val addVideos = { videoPicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.VideoOnly)) }
 
     // The progress notification needs this on Android 13+; export works without it.
     var pendingExport by remember { mutableStateOf<(() -> Unit)?>(null) }
@@ -129,13 +146,13 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
     val previewMaxHeight = (LocalConfiguration.current.screenHeightDp * 0.38f).dp
     TenBitResultDialog(jobs)
 
-    Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
+    Box(Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(HeadsupColors.BackgroundGlow, HeadsupColors.Background, HeadsupColors.Background)))) {
         Column(Modifier.fillMaxSize().systemBarsPadding()) {
             Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
                 Text("Headsup", Modifier.weight(1f), style = MaterialTheme.typography.titleLarge)
-                PillButton(HeadsupIcons.Watch, "FIT", addFit)
-                Spacer(Modifier.width(8.dp))
-                PillButton(HeadsupIcons.Video, "Videos", addVideos)
+                RoundIconButton(HeadsupIcons.Watch, "Add FIT files", addFit, badge = true)
+                Spacer(Modifier.width(10.dp))
+                RoundIconButton(HeadsupIcons.Video, "Add videos", addVideos, badge = true)
             }
             if (state.busy) LinearProgressIndicator(Modifier.fillMaxWidth().padding(horizontal = 16.dp))
 
@@ -165,8 +182,9 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
                     .weight(1f)
                     .fillMaxWidth()
                     .padding(horizontal = 12.dp)
-                    .clip(RoundedCornerShape(24.dp))
+                    .clip(RoundedCornerShape(28.dp))
                     .background(HeadsupColors.Surface)
+                    .border(1.dp, HeadsupColors.Outline, RoundedCornerShape(28.dp))
                     .verticalScroll(rememberScrollState())
                     .padding(16.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
@@ -175,7 +193,7 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
                 when (tool) {
                     Tool.SYNC -> SyncPanel(state, vm, addFit)
                     Tool.COLOUR -> ColourPage(state, vm, onAddLut = { lutPicker.launch(arrayOf("*/*")) })
-                    Tool.DASHBOARD -> StyleControls(state.style, state.activities, vm::updateStyle)
+                    Tool.EFFECTS -> EffectsPanel(state.style, state.activities, vm::updateStyle)
                     Tool.EXPORT -> ExportControls(
                         bitrateFactor = state.bitrateFactor,
                         sourceBitrate = state.selected?.meta?.bitrate,
@@ -197,38 +215,35 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
 }
 
 @Composable
-private fun PillButton(icon: ImageVector, label: String, onClick: () -> Unit) {
-    Row(
-        Modifier.clip(RoundedCornerShape(50)).background(HeadsupColors.SurfaceHigh).clickable(onClick = onClick).padding(horizontal = 12.dp, vertical = 8.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Icon(HeadsupIcons.Add, contentDescription = null, Modifier.size(16.dp), tint = HeadsupColors.Accent)
-        Icon(icon, contentDescription = null, Modifier.size(18.dp), tint = Color.White)
-        Spacer(Modifier.width(6.dp))
-        Text(label, style = MaterialTheme.typography.labelLarge)
-    }
-}
-
-@Composable
 private fun BottomToolbar(selected: Tool, onSelect: (Tool) -> Unit) {
-    Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp), horizontalArrangement = Arrangement.SpaceEvenly) {
+    val shape = RoundedCornerShape(32.dp)
+    Row(
+        Modifier
+            .padding(horizontal = 16.dp, vertical = 10.dp)
+            .fillMaxWidth()
+            .clip(shape)
+            .background(HeadsupColors.Surface)
+            .border(1.dp, HeadsupColors.Outline, shape)
+            .padding(6.dp),
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
         for (t in Tool.entries) {
             val on = t == selected
             Column(
                 Modifier
-                    .clip(RoundedCornerShape(16.dp))
+                    .weight(1f)
+                    .clip(RoundedCornerShape(26.dp))
                     .background(if (on) HeadsupColors.SurfaceHigh else Color.Transparent)
                     .clickable { onSelect(t) }
-                    .padding(horizontal = 14.dp, vertical = 6.dp),
+                    .padding(vertical = 8.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {
-                Icon(t.icon, contentDescription = t.label, tint = if (on) HeadsupColors.Accent else HeadsupColors.TextMuted)
+                Icon(t.icon, contentDescription = t.label, Modifier.size(22.dp), tint = if (on) HeadsupColors.Accent else HeadsupColors.TextMuted)
                 Text(t.label, style = MaterialTheme.typography.labelSmall, color = if (on) Color.White else HeadsupColors.TextMuted)
             }
         }
     }
 }
-
 @Composable
 private fun EmptyState(hasActivities: Boolean, onAddFit: () -> Unit, onAddVideos: () -> Unit) {
     Column(
@@ -449,35 +464,36 @@ private fun zoneLabel(reason: ZoneReason, offset: Int) = when (reason) {
 
 @Composable
 private fun OffsetControls(offsetMs: Long, onChange: (Long) -> Unit) {
-    Column {
-        Label(String.format(Locale.US, "Data offset for this clip: %+.1f s", offsetMs / 1000.0))
-        Slider(value = offsetMs / 1000f, onValueChange = { onChange((it * 10).roundToLong() * 100) }, valueRange = -60f..60f)
-        FlowRow(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-            for ((delta, label) in listOf(-1000L to "−1 s", -100L to "−0.1 s", 100L to "+0.1 s", 1000L to "+1 s")) {
-                OutlinedButton(onClick = { onChange(offsetMs + delta) }) { Text(label) }
-            }
-            if (offsetMs != 0L) TextButton(onClick = { onChange(0L) }) { Text("Automatic") }
-        }
-    }
+    ValueHeader("Data offset", String.format(Locale.US, "%+.1f s", offsetMs / 1000.0))
+    RulerSlider(
+        value = offsetMs / 1000f,
+        range = -60f..60f,
+        step = 0.1f,
+        onChange = { onChange((it * 10).roundToLong() * 100) },
+        onReset = { onChange(0L) },
+    )
+    Hint("Drag the ruler to shift the data; double-tap to return to the automatic match.")
 }
 
 // Colour page
 
 private enum class Adjustment(
+    val symbol: String,
     val label: String,
     val range: ClosedFloatingPointRange<Float>,
+    val step: Float,
     val format: String,
     val get: (ColorGrade) -> Float,
     val set: (ColorGrade, Float) -> ColorGrade,
 ) {
-    EXPOSURE("Exposure", -2f..2f, "%+.1f", { it.exposure }, { g, v -> g.copy(exposure = v) }),
-    BRIGHTNESS("Brightness", -1f..1f, "%+.2f", { it.brightness }, { g, v -> g.copy(brightness = v) }),
-    CONTRAST("Contrast", -1f..1f, "%+.2f", { it.contrast }, { g, v -> g.copy(contrast = v) }),
-    SHADOWS("Shadows", -1f..1f, "%+.2f", { it.shadows }, { g, v -> g.copy(shadows = v) }),
-    HIGHLIGHTS("Highlights", -1f..1f, "%+.2f", { it.highlights }, { g, v -> g.copy(highlights = v) }),
-    SATURATION("Saturation", -1f..1f, "%+.2f", { it.saturation }, { g, v -> g.copy(saturation = v) }),
-    TEMPERATURE("Temperature", -1f..1f, "%+.2f", { it.temperature }, { g, v -> g.copy(temperature = v) }),
-    VIGNETTE("Vignette", 0f..1f, "%.2f", { it.vignette }, { g, v -> g.copy(vignette = v) }),
+    EXPOSURE("EV", "Exposure", -2f..2f, 0.1f, "%+.1f EV", { it.exposure }, { g, v -> g.copy(exposure = v) }),
+    BRIGHTNESS("Br", "Brightness", -1f..1f, 0.02f, "%+.2f", { it.brightness }, { g, v -> g.copy(brightness = v) }),
+    CONTRAST("Ct", "Contrast", -1f..1f, 0.02f, "%+.2f", { it.contrast }, { g, v -> g.copy(contrast = v) }),
+    SHADOWS("Sh", "Shadows", -1f..1f, 0.02f, "%+.2f", { it.shadows }, { g, v -> g.copy(shadows = v) }),
+    HIGHLIGHTS("Hl", "Highlights", -1f..1f, 0.02f, "%+.2f", { it.highlights }, { g, v -> g.copy(highlights = v) }),
+    SATURATION("Sat", "Saturation", -1f..1f, 0.02f, "%+.2f", { it.saturation }, { g, v -> g.copy(saturation = v) }),
+    TEMPERATURE("K", "Temperature", -1f..1f, 0.02f, "%+.2f", { it.temperature }, { g, v -> g.copy(temperature = v) }),
+    VIGNETTE("Vig", "Vignette", 0f..1f, 0.02f, "%.2f", { it.vignette }, { g, v -> g.copy(vignette = v) }),
 }
 
 @Composable
@@ -485,62 +501,70 @@ private fun ColourPage(state: UiState, vm: HeadsupViewModel, onAddLut: () -> Uni
     val index = state.selectedClip
     val clip = state.selected
     if (index == null || clip == null) {
-        Hint("Select a clip on the Clips page.")
+        Hint("Select a clip first.")
         return
     }
     Row(verticalAlignment = Alignment.CenterVertically) {
-        Text("Apply colour to this clip", Modifier.weight(1f))
+        Text("Colour for this clip", Modifier.weight(1f), style = MaterialTheme.typography.labelLarge)
         Switch(checked = clip.colorGrade, onCheckedChange = { vm.setClipGrade(index, it) })
     }
     if (!clip.colorGrade) {
-        Hint("Off: the clip keeps its own colours (useful for files that are already graded, e.g. Mimo exports).")
+        Hint("Off: the clip keeps its own colours (for files that are already graded, e.g. Mimo exports).")
         return
     }
 
-    Label("LUT")
-    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        FilterChip(selected = clip.lutName == null, onClick = { vm.setClipLut(index, null) }, label = { Text("None") })
-        for (name in state.luts) {
+    // The ruler sits right under the correction picker, so nothing needs scrolling.
+    var adjustment by rememberSaveable { mutableStateOf(Adjustment.EXPOSURE) }
+    LazyRow(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+        items(Adjustment.entries) { a ->
+            CircleOption(a.symbol, a.label, selected = a == adjustment, modified = a.get(state.grade) != 0f) { adjustment = a }
+        }
+    }
+    ValueHeader(adjustment.label, String.format(Locale.US, adjustment.format, adjustment.get(state.grade)))
+    RulerSlider(
+        value = adjustment.get(state.grade),
+        range = adjustment.range,
+        step = adjustment.step,
+        onChange = { v -> vm.updateGrade { adjustment.set(it, v) } },
+        onReset = { vm.updateGrade { adjustment.set(it, 0f) } },
+    )
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Hint("Double-tap the ruler to reset. Corrections apply to all clips, before the LUT.")
+        if (state.grade != ColorGrade()) TextButton(onClick = { vm.updateGrade { ColorGrade() } }) { Text("Reset all") }
+    }
+
+    Label("LUT (last step)")
+    LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        item { FilterChip(selected = clip.lutName == null, onClick = { vm.setClipLut(index, null) }, label = { Text("None") }) }
+        items(state.luts) { name ->
             FilterChip(selected = clip.lutName == name, onClick = { vm.setClipLut(index, name) }, label = { Text(name) })
         }
-        OutlinedButton(onClick = onAddLut) { Text("+ .cube") }
+        item { FilterChip(selected = false, onClick = onAddLut, label = { Text("+ .cube") }) }
     }
     Row {
         if (state.clips.size > 1) TextButton(onClick = { vm.setLutForAllClips(clip.lutName) }) { Text("Use for all clips") }
         clip.lutName?.let { name -> TextButton(onClick = { vm.deleteLut(name) }) { Text("Delete $name") } }
     }
+}
 
-    // One slider at a time, picked from the chips, keeps the page short.
-    var adjustment by rememberSaveable { mutableStateOf(Adjustment.EXPOSURE) }
-    Label("Corrections (all clips)")
-    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        for (a in Adjustment.entries) {
-            val value = a.get(state.grade)
-            val text = if (value == 0f) a.label else "${a.label} ${String.format(Locale.US, a.format, value)}"
-            FilterChip(selected = adjustment == a, onClick = { adjustment = a }, label = { Text(text) })
-        }
-    }
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        Text(adjustment.label, Modifier.weight(1f), style = MaterialTheme.typography.labelLarge)
-        Text(String.format(Locale.US, adjustment.format, adjustment.get(state.grade)), style = MaterialTheme.typography.labelLarge)
-    }
-    Slider(
-        value = adjustment.get(state.grade),
-        onValueChange = { v -> vm.updateGrade { adjustment.set(it, v) } },
-        valueRange = adjustment.range,
-    )
-    Row {
-        TextButton(onClick = { vm.updateGrade { adjustment.set(it, 0f) } }) { Text("Reset ${adjustment.label.lowercase()}") }
-        if (state.grade != ColorGrade()) TextButton(onClick = { vm.updateGrade { ColorGrade() } }) { Text("Reset all") }
+// Effects page
+
+/** Effects drawn over the picture. The dashboard is the first; more can be added as further tabs. */
+@Composable
+private fun EffectsPanel(style: DashboardStyle, activities: List<LoadedActivity>, update: ((DashboardStyle) -> DashboardStyle) -> Unit) {
+    var tab by rememberSaveable { mutableStateOf(0) }
+    Text("Dashboard", style = MaterialTheme.typography.titleMedium)
+    PillTabs(listOf("Widgets", "Layout", "Text"), tab) { tab = it }
+    when (tab) {
+        0 -> WidgetControls(style, activities, update)
+        1 -> LayoutControls(style, update)
+        else -> TextControls(style, update)
     }
 }
 
-// Dashboard page
-
 @Composable
-private fun StyleControls(style: DashboardStyle, activities: List<LoadedActivity>, update: ((DashboardStyle) -> DashboardStyle) -> Unit) {
+private fun WidgetControls(style: DashboardStyle, activities: List<LoadedActivity>, update: ((DashboardStyle) -> DashboardStyle) -> Unit) {
     val available = Widget.entries.filter { w -> activities.isEmpty() || activities.any { w.isAvailableIn(it.track) } }
-    Label("Widgets")
     FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         for (widget in available) {
             val on = widget in style.widgets
@@ -551,7 +575,14 @@ private fun StyleControls(style: DashboardStyle, activities: List<LoadedActivity
             )
         }
     }
-    Label("Layout")
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Text("Colour heart rate by zone", Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
+        Switch(checked = style.hrZoneColors, onCheckedChange = { v -> update { it.copy(hrZoneColors = v) } })
+    }
+}
+
+@Composable
+private fun LayoutControls(style: DashboardStyle, update: ((DashboardStyle) -> DashboardStyle) -> Unit) {
     Hint("Drag widgets on the picture to place them by hand.")
     FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         for (preset in LayoutPreset.entries) {
@@ -564,33 +595,33 @@ private fun StyleControls(style: DashboardStyle, activities: List<LoadedActivity
         }
     }
     if (style.placements.isNotEmpty()) Hint("${style.placements.size} widget(s) placed by hand. Pick a layout to reset them.")
+    ValueHeader("Size", String.format(Locale.US, "%.0f %%", style.scale * 100))
+    RulerSlider(
+        value = style.scale,
+        range = 0.5f..2f,
+        step = 0.02f,
+        onChange = { v -> update { it.copy(scale = v) } },
+        onReset = { update { it.copy(scale = 1f) } },
+    )
+}
 
-    Label("Font")
-    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        for (font in DashboardFont.entries) {
+@Composable
+private fun TextControls(style: DashboardStyle, update: ((DashboardStyle) -> DashboardStyle) -> Unit) {
+    LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        items(DashboardFont.entries) { font ->
             FilterChip(selected = style.font == font, onClick = { update { it.copy(font = font) } }, label = { Text(font.label) })
         }
     }
-
     ColorRow("Values", style.valueColor) { c -> update { it.copy(valueColor = c) } }
     ColorRow("Labels", style.labelColor) { c -> update { it.copy(labelColor = c) } }
     ColorRow("Units", style.unitColor) { c -> update { it.copy(unitColor = c) } }
-
-    Label("Text edge")
-    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+        Text("Edge", style = MaterialTheme.typography.labelLarge)
         for (effect in TextEffect.entries) {
             FilterChip(selected = style.effect == effect, onClick = { update { it.copy(effect = effect) } }, label = { Text(effect.label) })
         }
     }
-
-    Label(String.format(Locale.US, "Size: %.0f%%", style.scale * 100))
-    Slider(value = style.scale, onValueChange = { v -> update { it.copy(scale = v) } }, valueRange = 0.5f..2f)
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        Text("Colour heart rate by zone", Modifier.weight(1f))
-        Switch(checked = style.hrZoneColors, onCheckedChange = { v -> update { it.copy(hrZoneColors = v) } })
-    }
 }
-
 private val SWATCHES = listOf(
     android.graphics.Color.WHITE,
     Layouts.ACCENT,

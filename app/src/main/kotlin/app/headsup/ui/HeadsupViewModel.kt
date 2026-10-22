@@ -23,8 +23,6 @@ import app.headsup.render.Placement
 import app.headsup.render.StylePrefs
 import app.headsup.render.Widget
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -99,7 +97,8 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
     val exportJobs = exportManager.jobs
 
     private val lutCache = HashMap<String, CubeLut>()
-    private var previewJob: Job? = null
+    private var previewRunning = false
+    private var previewDirty = false
 
     fun addActivities(uris: List<Uri>) = load(uris) { uri ->
         val context = getApplication<Application>()
@@ -115,7 +114,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
 
     fun selectClip(index: Int) {
         _state.update { it.copy(selectedClip = index) }
-        refreshPreview(delayMs = 0)
+        refreshPreview()
     }
 
     fun removeClip(index: Int) {
@@ -123,7 +122,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
             val clips = s.clips.filterIndexed { i, _ -> i != index }
             s.copy(clips = clips, selectedClip = s.selectedClip?.let { sel -> if (sel == index) null else if (sel > index) sel - 1 else sel })
         }
-        refreshPreview(delayMs = 0)
+        refreshPreview()
     }
 
     fun removeActivity(index: Int) = _state.update { s ->
@@ -176,7 +175,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
         _state.update { s ->
             s.copy(luts = gradeStore.names(), clips = s.clips.map { if (it.lutName == name) it.copy(lutName = null) else it })
         }
-        refreshPreview(delayMs = 0)
+        refreshPreview()
     }
 
     fun setClipLut(index: Int, name: String?) {
@@ -187,7 +186,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
     fun setLutForAllClips(name: String?) {
         if (name != null) gradeStore.defaultLut = name
         _state.update { s -> s.copy(clips = s.clips.map { it.copy(lutName = name) }) }
-        refreshPreview(delayMs = 0)
+        refreshPreview()
     }
 
     fun setClipGrade(index: Int, enabled: Boolean) = updateClip(index) { it.copy(colorGrade = enabled) }
@@ -200,18 +199,30 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
 
     private fun updateClip(index: Int, transform: (ClipState) -> ClipState) {
         _state.update { s -> s.copy(clips = s.clips.mapIndexed { i, c -> if (i == index) transform(c) else c }) }
-        if (index == _state.value.selectedClip) refreshPreview(delayMs = 0)
+        if (index == _state.value.selectedClip) refreshPreview()
     }
 
-    /** Recomputes the selected clip's colour table; slider events within one frame are coalesced. */
-    private fun refreshPreview(delayMs: Long = 16) {
-        previewJob?.cancel()
-        previewJob = viewModelScope.launch {
-            delay(delayMs)
-            val s = _state.value
-            val clip = s.selected
-            val cube = if (clip == null || !clip.colorGrade) null else bake(clip.lutName, s.grade)
-            _state.update { it.copy(previewCube = cube) }
+    /**
+     * Recomputes the selected clip's colour table. While a slider moves, tables are computed back
+     * to back, each from the latest values, so the picture follows the finger instead of waiting
+     * for it to stop (cancelling on every event would starve the computation).
+     */
+    private fun refreshPreview() {
+        previewDirty = true
+        if (previewRunning) return
+        previewRunning = true
+        viewModelScope.launch {
+            try {
+                while (previewDirty) {
+                    previewDirty = false
+                    val s = _state.value
+                    val clip = s.selected
+                    val cube = if (clip == null || !clip.colorGrade) null else bake(clip.lutName, s.grade)
+                    _state.update { it.copy(previewCube = cube) }
+                }
+            } finally {
+                previewRunning = false
+            }
         }
     }
 
@@ -306,7 +317,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                     ),
                 )
             }
-            refreshPreview(delayMs = 0)
+            refreshPreview()
         }
     }
 
