@@ -19,7 +19,11 @@ data class ExportRequest(
     val kind: ExportKind,
     val uri: Uri,
     val name: String,
+    /** Length of the exported part. */
     val durationMs: Long,
+    /** Part of the source file to export, in file time. */
+    val trimStartMs: Long,
+    val trimEndMs: Long,
     val width: Int,
     val height: Int,
     val frameRate: Float?,
@@ -33,7 +37,9 @@ data class ExportRequest(
     val grade: GradeSetup?,
     val bitrateFactor: Float,
 ) {
-    val baseName: String get() = name.substringBeforeLast('.')
+    /** File name without extension; trimmed parts get their start second so names stay distinct. */
+    val baseName: String
+        get() = name.substringBeforeLast('.') + if (trimStartMs > 0) "_from${trimStartMs / 1000}s" else ""
 
     /** Builds what the renderer needs for a position in the clip, using [sampler] over [track]. */
     fun dataAt(positionMs: Long, sampler: TelemetrySampler): DashboardData {

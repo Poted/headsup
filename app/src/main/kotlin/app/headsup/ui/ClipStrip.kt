@@ -1,7 +1,14 @@
 package app.headsup.ui
 
 import android.media.MediaMetadataRetriever
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -39,10 +46,26 @@ private val THUMB_SHAPE = RoundedCornerShape(12.dp)
 
 /** Horizontal strip of clip thumbnails, like the timeline of a video editor. */
 @Composable
-fun ClipStrip(clips: List<ClipState>, selected: Int?, onSelect: (Int) -> Unit, onAdd: () -> Unit) {
+fun ClipStrip(
+    clips: List<ClipState>,
+    selected: Int?,
+    onSelect: (Int) -> Unit,
+    onAdd: () -> Unit,
+    onMove: (Int, Int) -> Unit,
+    onDelete: (Int) -> Unit,
+) {
     LazyRow(contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        itemsIndexed(clips, key = { _, c -> c.meta.uri.toString() }) { i, clip ->
-            ClipThumb(clip, i == selected) { onSelect(i) }
+        itemsIndexed(clips, key = { _, c -> c.id }) { i, clip ->
+            // Long-press opens the clip menu.
+            var menu by remember { mutableStateOf(false) }
+            Box {
+                ClipThumb(clip, i == selected, onClick = { onSelect(i) }, onLongClick = { onSelect(i); menu = true })
+                DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+                    if (i > 0) DropdownMenuItem(text = { Text("Move left") }, onClick = { menu = false; onMove(i, -1) })
+                    if (i < clips.lastIndex) DropdownMenuItem(text = { Text("Move right") }, onClick = { menu = false; onMove(i, 1) })
+                    DropdownMenuItem(text = { Text("Delete") }, onClick = { menu = false; onDelete(i) })
+                }
+            }
         }
         item {
             Box(
@@ -57,16 +80,17 @@ fun ClipStrip(clips: List<ClipState>, selected: Int?, onSelect: (Int) -> Unit, o
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun ClipThumb(clip: ClipState, selected: Boolean, onClick: () -> Unit) {
+private fun ClipThumb(clip: ClipState, selected: Boolean, onClick: () -> Unit, onLongClick: () -> Unit) {
     val context = LocalContext.current
-    val thumbnail by produceState<ImageBitmap?>(null, clip.meta.uri) {
+    val thumbnail by produceState<ImageBitmap?>(null, clip.meta.uri, clip.trimStartMs) {
         value = withContext(Dispatchers.IO) {
             runCatching {
                 val retriever = MediaMetadataRetriever()
                 try {
                     retriever.setDataSource(context, clip.meta.uri)
-                    retriever.getScaledFrameAtTime(0, MediaMetadataRetriever.OPTION_CLOSEST_SYNC, 320, 320)?.asImageBitmap()
+                    retriever.getScaledFrameAtTime(clip.trimStartMs * 1000, MediaMetadataRetriever.OPTION_CLOSEST_SYNC, 320, 320)?.asImageBitmap()
                 } finally {
                     retriever.release()
                 }
@@ -80,7 +104,7 @@ private fun ClipThumb(clip: ClipState, selected: Boolean, onClick: () -> Unit) {
             .clip(THUMB_SHAPE)
             .background(HeadsupColors.SurfaceHigh)
             .border(if (selected) 2.dp else 1.dp, if (selected) HeadsupColors.Accent else HeadsupColors.Outline, THUMB_SHAPE)
-            .clickable(onClick = onClick),
+            .combinedClickable(onClick = onClick, onLongClick = onLongClick),
     ) {
         thumbnail?.let { Image(it, contentDescription = clip.meta.name, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize()) }
         Box(
@@ -98,7 +122,7 @@ private fun ClipThumb(clip: ClipState, selected: Boolean, onClick: () -> Unit) {
                 ),
         )
         Text(
-            Formats.duration(clip.meta.durationMs),
+            Formats.duration(clip.durationMs) + if (clip.isTrimmed) " ✂" else "",
             Modifier
                 .align(Alignment.BottomStart)
                 .padding(4.dp)

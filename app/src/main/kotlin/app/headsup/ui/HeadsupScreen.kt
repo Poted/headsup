@@ -51,7 +51,10 @@ import androidx.compose.material3.FilterChip
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.RangeSlider
 import androidx.compose.material3.Slider
+import androidx.compose.runtime.LongState
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Tab
@@ -157,6 +160,8 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
     var tool by rememberSaveable { mutableStateOf(Tool.FILES) }
     var adjustment by rememberSaveable { mutableStateOf(Adjustment.EXPOSURE) }
     val measuring = tool == Tool.COLOUR && adjustment == Adjustment.SKIN
+    // Read only where needed (cut controls), so playback does not recompose the whole screen.
+    val playhead = remember { mutableLongStateOf(0L) }
     val exporting = jobs.any { it.status == JobStatus.QUEUED || it.status == JobStatus.RUNNING }
     val previewMaxHeight = (LocalConfiguration.current.screenHeightDp * 0.38f).dp
     TenBitResultDialog(jobs)
@@ -186,9 +191,12 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
                     maxHeight = previewMaxHeight,
                     onMoveWidget = vm::moveWidget,
                     onMoveFinished = vm::persistStyle,
+                    onPosition = { playhead.longValue = it },
                 )
             }
-            if (state.clips.isNotEmpty()) ClipStrip(state.clips, state.selectedClip, vm::selectClip, addVideos)
+            if (state.clips.isNotEmpty()) {
+                ClipStrip(state.clips, state.selectedClip, vm::selectClip, addVideos, onMove = vm::moveClip, onDelete = vm::removeClip)
+            }
 
             Column(
                 Modifier
@@ -204,7 +212,7 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
             ) {
                 if (state.messages.isNotEmpty()) Messages(state.messages, vm::dismissMessages)
                 when (tool) {
-                    Tool.FILES -> FilesPanel(state, vm, onAddVideos = addVideos, onAddFit = addFit)
+                    Tool.FILES -> FilesPanel(state, vm, playhead, onAddVideos = addVideos, onAddFit = addFit)
                     Tool.COLOUR -> ColourPage(state, vm, adjustment, { adjustment = it }, onAddLut = { lutPicker.launch(arrayOf("*/*")) })
                     Tool.EFFECTS -> EffectsPanel(state.style, state.effects, state.activities, vm::updateStyle, vm::updateEffects)
                     Tool.EXPORT -> ExportControls(
@@ -311,7 +319,7 @@ private fun Messages(messages: List<String>, onDismiss: () -> Unit) {
 
 /** Adding videos and watch files, plus how the selected clip is matched to the watch data. */
 @Composable
-private fun FilesPanel(state: UiState, vm: HeadsupViewModel, onAddVideos: () -> Unit, onAddFit: () -> Unit) {
+private fun FilesPanel(state: UiState, vm: HeadsupViewModel, playhead: LongState, onAddVideos: () -> Unit, onAddFit: () -> Unit) {
     Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
         AddTile(HeadsupIcons.Video, "Videos", "from gallery", onAddVideos, Modifier.weight(1f))
         AddTile(HeadsupIcons.Watch, "FIT", "from Downloads", onAddFit, Modifier.weight(1f))
@@ -337,6 +345,14 @@ private fun FilesPanel(state: UiState, vm: HeadsupViewModel, onAddVideos: () -> 
             }
             SyncSummary(clip, clip.sync?.let { state.activities.getOrNull(it.trackIndex) })
         }
+        Group {
+            CutControls(
+                clip = clip,
+                playhead = playhead,
+                onTrim = { start, end -> vm.setTrim(index, start, end) },
+                onSplit = { vm.splitClip(index, it) },
+            )
+        }
         Group { StartTimeControls(clip, state.activities) { vm.setManualStart(index, it) } }
         Group { OffsetControls(clip.manualOffsetMs) { vm.setManualOffset(index, it) } }
     }
@@ -345,6 +361,37 @@ private fun FilesPanel(state: UiState, vm: HeadsupViewModel, onAddVideos: () -> 
         if (state.activities.isEmpty()) Hint("Add the .FIT file(s) from your watch.")
         state.activities.forEachIndexed { i, a -> ActivityRow(a, onRemove = { vm.removeActivity(i) }) }
     }
+}
+
+/** Trimming and splitting; the watch data follows every cut because the app knows where it was made. */
+@Composable
+private fun CutControls(clip: ClipState, playhead: LongState, onTrim: (Long, Long) -> Unit, onSplit: (Long) -> Unit) {
+    val full = clip.meta.durationMs.coerceAtLeast(1L).toFloat()
+    var range by remember(clip.id, clip.trimStartMs, clip.trimEndMs) {
+        mutableStateOf(clip.trimStartMs.toFloat()..clip.trimEndMs.toFloat())
+    }
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Text("Cut", Modifier.weight(1f), style = MaterialTheme.typography.labelLarge)
+        Hint("${Formats.duration((range.endInclusive - range.start).toLong())} of ${Formats.duration(clip.meta.durationMs)}")
+    }
+    RangeSlider(
+        value = range,
+        onValueChange = { range = it },
+        valueRange = 0f..full,
+        onValueChangeFinished = { onTrim(range.start.toLong(), range.endInclusive.toLong()) },
+    )
+    Row {
+        Hint(Formats.duration(range.start.toLong()))
+        Spacer(Modifier.weight(1f))
+        Hint(Formats.duration(range.endInclusive.toLong()))
+    }
+    FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        OutlinedButton(onClick = { onTrim(clip.trimStartMs + playhead.longValue, clip.trimEndMs) }) { Text("Start here") }
+        OutlinedButton(onClick = { onTrim(clip.trimStartMs, clip.trimStartMs + playhead.longValue) }) { Text("End here") }
+        OutlinedButton(onClick = { onSplit(playhead.longValue) }) { Text("Split here") }
+        if (clip.isTrimmed) TextButton(onClick = { onTrim(0L, clip.meta.durationMs) }) { Text("Full clip") }
+    }
+    Hint("\"Here\" is the current playhead. The watch data follows every cut automatically.")
 }
 
 @Composable

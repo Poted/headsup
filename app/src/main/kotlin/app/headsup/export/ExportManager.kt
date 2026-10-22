@@ -143,9 +143,13 @@ class ExportManager(private val context: Context) {
         if (request.effects.changesPixels) effects += FinishEffect(request.effects)
         effects += OverlayEffect(ImmutableList.of<TextureOverlay>(overlay))
 
-        val mediaItem = MediaItem.Builder().setUri(request.uri).apply {
-            if (test) setClippingConfiguration(MediaItem.ClippingConfiguration.Builder().setEndPositionMs(TEST_LENGTH_MS).build())
-        }.build()
+        val endMs = if (test) minOf(request.trimStartMs + TEST_LENGTH_MS, request.trimEndMs) else request.trimEndMs
+        val mediaItem = MediaItem.Builder()
+            .setUri(request.uri)
+            .setClippingConfiguration(
+                MediaItem.ClippingConfiguration.Builder().setStartPositionMs(request.trimStartMs).setEndPositionMs(endMs).build(),
+            )
+            .build()
         val edited = EditedMediaItem.Builder(mediaItem)
             .setEffects(Effects(emptyList(), effects))
             .build()

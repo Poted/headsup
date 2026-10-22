@@ -98,6 +98,8 @@ fun ClipPreview(
     onSample: ((Bitmap, Float, Float) -> Unit)? = null,
     /** Point last measured, 0..1 of the frame, drawn as a target. */
     marker: Offset? = null,
+    /** Playhead position within the (trimmed) clip, reported as it changes. */
+    onPosition: (Long) -> Unit = {},
 ) {
     val context = LocalContext.current
     val exoPlayer = remember { ExoPlayer.Builder(context).build() }
@@ -106,9 +108,17 @@ fun ClipPreview(
     // are immediate. Older versions fall back to a Media3 effect inside the player.
     val shaderPreview = Build.VERSION.SDK_INT >= 33
     val liveLut = remember { LiveColorLut() }
-    LaunchedEffect(clip.meta.uri) {
+    LaunchedEffect(clip.meta.uri, clip.trimStartMs, clip.trimEndMs) {
         if (!shaderPreview) exoPlayer.setVideoEffects(listOf<Effect>(liveLut))
-        exoPlayer.setMediaItem(MediaItem.fromUri(clip.meta.uri))
+        // Only the used part of the file plays; positions count from the cut.
+        exoPlayer.setMediaItem(
+            MediaItem.Builder()
+                .setUri(clip.meta.uri)
+                .setClippingConfiguration(
+                    MediaItem.ClippingConfiguration.Builder().setStartPositionMs(clip.trimStartMs).setEndPositionMs(clip.trimEndMs).build(),
+                )
+                .build(),
+        )
         exoPlayer.prepare()
     }
     var nudge by remember { mutableStateOf(1L) }
@@ -145,10 +155,14 @@ fun ClipPreview(
     }
 
     var positionMs by remember { mutableLongStateOf(0L) }
+    val reportPosition by rememberUpdatedState(onPosition)
     var playing by remember { mutableStateOf(false) }
     LaunchedEffect(exoPlayer) {
         while (true) withFrameMillis {
-            positionMs = exoPlayer.currentPosition
+            if (positionMs != exoPlayer.currentPosition) {
+                positionMs = exoPlayer.currentPosition
+                reportPosition(positionMs)
+            }
             playing = exoPlayer.isPlaying
         }
     }
@@ -256,7 +270,7 @@ fun ClipPreview(
             Slider(
                 value = positionMs.toFloat(),
                 onValueChange = { exoPlayer.seekTo(it.toLong()) },
-                valueRange = 0f..clip.meta.durationMs.coerceAtLeast(1L).toFloat(),
+                valueRange = 0f..clip.durationMs.coerceAtLeast(1L).toFloat(),
                 modifier = Modifier.weight(1f).padding(horizontal = 8.dp),
             )
             ToggleDot("H", histogramOn) { histogramOn = !histogramOn }

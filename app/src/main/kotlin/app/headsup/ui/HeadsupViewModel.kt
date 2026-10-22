@@ -48,6 +48,11 @@ data class LoadedActivity(val name: String, val track: ActivityTrack)
 data class ClipState(
     val meta: ClipMetadata,
     val sync: SyncResult?,
+    /** Identifies the clip on the timeline; one file can yield several clips after splitting. */
+    val id: Long = nextClipId(),
+    /** Part of the file used, in file time. The data follows the cut automatically. */
+    val trimStartMs: Long = 0L,
+    val trimEndMs: Long = meta.durationMs,
     /** Manual correction on top of the automatic match; positive shows later data. */
     val manualOffsetMs: Long = 0L,
     /**
@@ -66,9 +71,18 @@ data class ClipState(
             ClipInfo(meta.durationMs, listOf(TimeEvidence(TimeSource.MANUAL, ClockReading.Local(it), TimeAnchor.START)))
         } ?: meta.info
 
-    /** UTC time of the telemetry shown at [positionMs] into the clip. */
-    fun telemetryUtc(positionMs: Long): Long? = sync?.let { it.startUtcMs + positionMs + manualOffsetMs }
+    val durationMs: Long get() = trimEndMs - trimStartMs
+    val isTrimmed: Boolean get() = trimStartMs > 0 || trimEndMs < meta.durationMs
+
+    /** UTC time of the telemetry shown at [positionMs] into the (trimmed) clip. */
+    fun telemetryUtc(positionMs: Long): Long? = sync?.let { it.startUtcMs + trimStartMs + positionMs + manualOffsetMs }
 }
+
+private var lastClipId = 0L
+private fun nextClipId() = ++lastClipId
+
+/** Shortest piece a trim or split may leave. */
+const val MIN_CLIP_MS = 500L
 
 data class UiState(
     val activities: List<LoadedActivity> = emptyList(),
@@ -133,6 +147,32 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
         scopeFrame = null
         _state.update { it.copy(selectedClip = index, scope = null) }
         refreshPreview()
+    }
+
+    /** Sets the used part of a clip, in file time. */
+    fun setTrim(index: Int, startMs: Long, endMs: Long) = updateClip(index) { c ->
+        val start = startMs.coerceIn(0L, c.meta.durationMs - MIN_CLIP_MS)
+        c.copy(trimStartMs = start, trimEndMs = endMs.coerceIn(start + MIN_CLIP_MS, c.meta.durationMs))
+    }
+
+    /** Cuts a clip in two at [positionMs] (within the clip); both halves keep all settings. */
+    fun splitClip(index: Int, positionMs: Long) {
+        _state.update { s ->
+            val clip = s.clips.getOrNull(index) ?: return@update s
+            val cut = clip.trimStartMs + positionMs
+            if (cut - clip.trimStartMs < MIN_CLIP_MS || clip.trimEndMs - cut < MIN_CLIP_MS) return@update s
+            val first = clip.copy(trimEndMs = cut)
+            val second = clip.copy(id = nextClipId(), trimStartMs = cut)
+            s.copy(clips = s.clips.toMutableList().apply { set(index, first); add(index + 1, second) })
+        }
+    }
+
+    /** Moves a clip one place left (−1) or right (+1) on the timeline. */
+    fun moveClip(index: Int, delta: Int) = _state.update { s ->
+        val target = index + delta
+        if (target !in s.clips.indices) return@update s
+        val clips = s.clips.toMutableList().apply { add(target, removeAt(index)) }
+        s.copy(clips = clips, selectedClip = if (s.selectedClip == index) target else s.selectedClip)
     }
 
     fun removeClip(index: Int) {
@@ -320,14 +360,16 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                     kind = kind,
                     uri = clip.meta.uri,
                     name = clip.meta.name,
-                    durationMs = clip.meta.durationMs,
+                    durationMs = clip.durationMs,
+                    trimStartMs = clip.trimStartMs,
+                    trimEndMs = clip.trimEndMs,
                     width = clip.meta.width,
                     height = clip.meta.height,
                     frameRate = clip.meta.frameRate,
                     sourceBitrate = clip.meta.bitrate,
                     sourceFormat = clip.meta.format,
                     track = activity.track,
-                    telemetryStartUtcMs = sync.startUtcMs + clip.manualOffsetMs,
+                    telemetryStartUtcMs = sync.startUtcMs + clip.trimStartMs + clip.manualOffsetMs,
                     style = s.style,
                     effects = s.effects,
                     grade = if (graded) GradeSetup(cube, s.grade.vignette) else null,
@@ -364,7 +406,9 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                     .distinctBy { it.track.startMs to it.track.endMs }
                     .sortedBy { it.track.startMs }
                 val newClips = loaded.filterIsInstance<Loaded.Clip>().map { ClipState(it.meta, sync = null, lutName = defaultLut) }
-                val clips = (s.clips + newClips).distinctBy { it.meta.uri }
+                // The same file may already be on the timeline as several (split) clips; only skip re-adds.
+                val known = s.clips.map { it.meta.uri }.toSet()
+                val clips = s.clips + newClips.filter { it.meta.uri !in known }.distinctBy { it.meta.uri }
                 resynced(
                     s.copy(
                         activities = activities,

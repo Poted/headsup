@@ -36,6 +36,9 @@ class TelemetryOverlay(
     private var current = 0
     private var lastKey: String? = null
 
+    /** Timestamp of the first frame, so positions count from the start of the exported part. */
+    private var firstUs = Long.MIN_VALUE
+
     override fun configure(videoSize: Size) {
         super.configure(videoSize)
         width = videoSize.width
@@ -52,7 +55,8 @@ class TelemetryOverlay(
     private fun draw(presentationTimeUs: Long): Bitmap {
         val w = width.toFloat()
         val h = height.toFloat()
-        val data = dataAt(presentationTimeUs / 1000)
+        if (firstUs == Long.MIN_VALUE) firstUs = presentationTimeUs
+        val data = dataAt((presentationTimeUs - firstUs).coerceAtLeast(0L) / 1000)
         val key = "${width}x$height " + (data?.let { renderer.contentKey(style, it, w, h, effects) } ?: "-")
         buffers[current]?.let { if (key == lastKey) return it }
 
