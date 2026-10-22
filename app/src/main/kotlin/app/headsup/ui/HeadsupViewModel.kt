@@ -73,6 +73,8 @@ data class UiState(
     val messages: List<String> = emptyList(),
     val grade: ColorGrade = ColorGrade(),
     val luts: List<String> = emptyList(),
+    /** Grade shown in the preview instead of [grade] while comparing (one correction held off). */
+    val compareGrade: ColorGrade? = null,
     /** Colour table for the selected clip's preview; null when its colours stay untouched. */
     val previewCube: Array<Array<IntArray>>? = null,
     val bitrateFactor: Float = 1f,
@@ -189,6 +191,12 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
         refreshPreview()
     }
 
+    /** Shows the preview with [compare] instead of the real grade until called with null. */
+    fun setCompareGrade(compare: ColorGrade?) {
+        _state.update { it.copy(compareGrade = compare) }
+        refreshPreview()
+    }
+
     fun setClipGrade(index: Int, enabled: Boolean) = updateClip(index) { it.copy(colorGrade = enabled) }
 
     fun updateGrade(transform: (ColorGrade) -> ColorGrade) {
@@ -217,7 +225,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                     previewDirty = false
                     val s = _state.value
                     val clip = s.selected
-                    val cube = if (clip == null || !clip.colorGrade) null else bake(clip.lutName, s.grade)
+                    val cube = if (clip == null || !clip.colorGrade) null else bake(clip.lutName, s.compareGrade ?: s.grade)
                     _state.update { it.copy(previewCube = cube) }
                 }
             } finally {

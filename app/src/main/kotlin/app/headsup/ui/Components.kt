@@ -4,7 +4,10 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.foundation.gestures.waitForUpOrCancellation
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -44,7 +47,8 @@ import kotlin.math.roundToInt
 
 /**
  * A ruler with tick marks that slides under a fixed centre marker, as on camera dials.
- * Dragging moves it one [step] per tick; double-tap calls [onReset].
+ * Dragging moves it one [step] per tick; double-tap calls [onReset]; holding a finger still on it
+ * calls [onHold] with true, and with false on release (used to compare before/after).
  */
 @Composable
 fun RulerSlider(
@@ -54,8 +58,10 @@ fun RulerSlider(
     onChange: (Float) -> Unit,
     modifier: Modifier = Modifier,
     onReset: (() -> Unit)? = null,
+    onHold: ((Boolean) -> Unit)? = null,
 ) {
     val current by rememberUpdatedState(value)
+    val hold by rememberUpdatedState(onHold)
     val emit by rememberUpdatedState(onChange)
     val reset by rememberUpdatedState(onReset)
     val tickSpacing = 9.dp
@@ -81,7 +87,26 @@ fun RulerSlider(
                     }
                 }
             }
-            .pointerInput(Unit) { detectTapGestures(onDoubleTap = { reset?.invoke() }) },
+            .pointerInput(Unit) { detectTapGestures(onDoubleTap = { reset?.invoke() }) }
+            .pointerInput(Unit) {
+                // Observes without consuming, so dragging and double-tap keep working.
+                awaitEachGesture {
+                    awaitFirstDown(requireUnconsumed = false)
+                    // True if the finger lifted or started dragging before the long-press time.
+                    val endedEarly = withTimeoutOrNull(viewConfiguration.longPressTimeoutMillis) {
+                        waitForUpOrCancellation()
+                        true
+                    }
+                    if (endedEarly == null) {
+                        hold?.invoke(true)
+                        try {
+                            waitForUpOrCancellation()
+                        } finally {
+                            hold?.invoke(false)
+                        }
+                    }
+                }
+            },
     ) {
         val px = tickSpacing.toPx()
         val cx = size.width / 2

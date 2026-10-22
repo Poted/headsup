@@ -164,7 +164,7 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
                     activity = selected.sync?.let { state.activities.getOrNull(it.trackIndex) },
                     style = state.style,
                     gradeCube = state.previewCube,
-                    vignette = if (selected.colorGrade) state.grade.vignette else 0f,
+                    vignette = if (selected.colorGrade) (state.compareGrade ?: state.grade).vignette else 0f,
                     maxHeight = previewMaxHeight,
                     onMoveWidget = vm::moveWidget,
                     onMoveFinished = vm::persistStyle,
@@ -546,9 +546,10 @@ private fun ColourPage(state: UiState, vm: HeadsupViewModel, onAddLut: () -> Uni
         step = adjustment.step,
         onChange = { v -> vm.updateGrade { adjustment.set(it, v) } },
         onReset = { vm.updateGrade { adjustment.set(it, 0f) } },
+        onHold = { held -> vm.setCompareGrade(if (held) adjustment.set(state.grade, 0f) else null) },
     )
     Row(verticalAlignment = Alignment.CenterVertically) {
-        Hint("Double-tap the ruler to reset. Corrections apply to all clips, before the LUT.")
+        Hint("Double-tap the ruler to reset, hold it to see the picture without this correction.")
         if (state.grade != ColorGrade()) TextButton(onClick = { vm.updateGrade { ColorGrade() } }) { Text("Reset all") }
     }
 
