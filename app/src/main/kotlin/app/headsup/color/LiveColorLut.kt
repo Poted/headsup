@@ -47,8 +47,8 @@ class LiveColorLut : ColorLut {
         pending.compareAndSet(null, current)
     }
 
-    private companion object {
-        val identity: Bitmap by lazy { toBitmap(LutBaker.bake(null, ColorGrade())) }
+    companion object {
+        private val identity: Bitmap by lazy { toBitmap(LutBaker.bake(null, ColorGrade())) }
 
         /** Same layout as Media3's SingleColorLut: N wide, N² high, row = g + N·r, column = b. */
         fun toBitmap(cube: Array<Array<IntArray>>): Bitmap {

@@ -48,7 +48,10 @@ import androidx.media3.common.Effect
 import androidx.media3.common.MediaItem
 import app.headsup.color.LiveColorLut
 import androidx.media3.exoplayer.ExoPlayer
-import androidx.media3.ui.PlayerView
+import android.os.Build
+import android.view.TextureView
+import androidx.compose.ui.graphics.graphicsLayer
+import app.headsup.color.GradePreviewShader
 import app.headsup.core.track.TelemetrySampler
 import app.headsup.render.DashboardData
 import app.headsup.render.DashboardRenderer
@@ -80,22 +83,28 @@ fun ClipPreview(
     val context = LocalContext.current
     val exoPlayer = remember { ExoPlayer.Builder(context).build() }
     DisposableEffect(exoPlayer) { onDispose { exoPlayer.release() } }
-    // One colour effect for the player's whole life; new tables are swapped in without re-preparing.
+    // Android 13+: colours are applied by a GPU shader on the displayed picture, so slider changes
+    // are immediate. Older versions fall back to a Media3 effect inside the player.
+    val shaderPreview = Build.VERSION.SDK_INT >= 33
     val liveLut = remember { LiveColorLut() }
     LaunchedEffect(clip.meta.uri) {
-        exoPlayer.setVideoEffects(listOf<Effect>(liveLut))
+        if (!shaderPreview) exoPlayer.setVideoEffects(listOf<Effect>(liveLut))
         exoPlayer.setMediaItem(MediaItem.fromUri(clip.meta.uri))
         exoPlayer.prepare()
     }
     var nudge by remember { mutableStateOf(1L) }
     LaunchedEffect(gradeCube) {
+        if (shaderPreview) return@LaunchedEffect
         liveLut.update(gradeCube)
-        // A paused player only draws when a new frame is decoded, and ignores a seek to the
-        // position it is already at, so step 1 ms back and forth to re-render the same picture.
+        // A paused player only draws when a new frame is decoded and ignores a seek to its current
+        // position, so step 1 ms back and forth to re-render the picture.
         if (!exoPlayer.isPlaying) {
             exoPlayer.seekTo((exoPlayer.currentPosition + nudge).coerceAtLeast(0L))
             nudge = -nudge
         }
+    }
+    val shaderEffect = remember(gradeCube) {
+        if (Build.VERSION.SDK_INT >= 33 && gradeCube != null) GradePreviewShader.effect(gradeCube) else null
     }
 
     var positionMs by remember { mutableLongStateOf(0L) }
@@ -118,9 +127,11 @@ fun ClipPreview(
             contentAlignment = Alignment.Center,
         ) {
             Box(Modifier.heightIn(max = maxHeight).aspectRatio(aspect, matchHeightConstraintsFirst = true)) {
+                // A TextureView (unlike PlayerView's default SurfaceView) is drawn by the UI, so the
+                // colour shader can be applied to it.
                 AndroidView(
-                    factory = { PlayerView(it).apply { player = exoPlayer; useController = false } },
-                    modifier = Modifier.matchParentSize(),
+                    factory = { TextureView(it).also(exoPlayer::setVideoTextureView) },
+                    modifier = Modifier.matchParentSize().graphicsLayer { renderEffect = shaderEffect },
                 )
                 Canvas(
                     Modifier

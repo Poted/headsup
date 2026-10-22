@@ -203,8 +203,8 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
         if (index == _state.value.selectedClip) refreshPreview(delayMs = 0)
     }
 
-    /** Recomputes the selected clip's colour table, shortly after the last slider change. */
-    private fun refreshPreview(delayMs: Long = 50) {
+    /** Recomputes the selected clip's colour table; slider events within one frame are coalesced. */
+    private fun refreshPreview(delayMs: Long = 16) {
         previewJob?.cancel()
         previewJob = viewModelScope.launch {
             delay(delayMs)

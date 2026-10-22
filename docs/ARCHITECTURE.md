@@ -94,8 +94,10 @@ All colour work is baked into one 33³ table (`LutBaker`) that preview and expor
 single lookup. With a camera LUT the corrections run first, on the log-encoded values, and the
 LUT is the last node (as in DaVinci Resolve), so exposure can still pull back highlights the LUT
 would clip; exposure and white balance are offsets in log space (≈0.075 per stop). Without a
-LUT, footage is treated as display-ready and corrected in display space. The preview uses a
-`ColorLut` whose table is swapped in place, so moving a slider does not re-prepare the player.
+LUT, footage is treated as display-ready and corrected in display space. On Android 13+ the
+preview plays into a TextureView and applies the same table with an AGSL shader
+(`GradePreviewShader`), so slider changes are immediate; older versions use a Media3 `ColorLut`
+whose table is swapped in place.
 
 ## Export (stage 3)
 
@@ -107,6 +109,9 @@ LUT, footage is treated as display-ready and corrected in display space. The pre
   is most likely tagged as SDR, and the Media3 SDR effect pipeline is 8-bit. Both to be
   measured on the Galaxy S25 Ultra; the app warns instead of silently downgrading.
 - Output via MediaStore to `DCIM/TelemetryOverlay`, foreground service, progress, cancel.
+
+Media3 exports SDR input (including D-Log M) in 8 bits; see
+[TEN_BIT_PIPELINE.md](TEN_BIT_PIPELINE.md) for the planned own 10-bit pipeline.
 
 ## Platform
 

@@ -178,6 +178,7 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
                     Tool.DASHBOARD -> StyleControls(state.style, state.activities, vm::updateStyle)
                     Tool.EXPORT -> ExportControls(
                         bitrateFactor = state.bitrateFactor,
+                        sourceBitrate = state.selected?.meta?.bitrate,
                         onBitrateFactor = vm::setBitrateFactor,
                         canExport = state.clips.any { it.sync != null },
                         canTest = state.selected?.sync != null,
@@ -627,6 +628,7 @@ private fun ColorRow(title: String, selected: Int, onPick: (Int) -> Unit) {
 @Composable
 private fun ExportControls(
     bitrateFactor: Float,
+    sourceBitrate: Int?,
     onBitrateFactor: (Float) -> Unit,
     canExport: Boolean,
     canTest: Boolean,
@@ -638,9 +640,19 @@ private fun ExportControls(
     onClear: () -> Unit,
 ) {
     Label("Video bit rate")
+    Hint(
+        "How much data per second the exported video may use. \"Same as source\" keeps the original's rate; " +
+            "higher values make up for the quality lost by encoding a second time, at the cost of larger files.",
+    )
     FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        for ((factor, label) in listOf(1f to "Like source", 1.5f to "1.5×", 2f to "2×")) {
-            FilterChip(selected = bitrateFactor == factor, onClick = { onBitrateFactor(factor) }, label = { Text(label) })
+        for ((factor, name) in listOf(1f to "Same as source", 1.5f to "1.5×", 2f to "2×")) {
+            // Mirrors ExportRequest.targetBitrate for the selected clip.
+            val mbps = sourceBitrate?.let { (it * factor / 1_000_000).toInt().coerceIn(10, 200) }
+            FilterChip(
+                selected = bitrateFactor == factor,
+                onClick = { onBitrateFactor(factor) },
+                label = { Text(if (mbps != null) "$name · $mbps Mb/s" else name) },
+            )
         }
     }
     Button(onClick = onExportVideos, enabled = canExport, modifier = Modifier.fillMaxWidth()) { Text("Export videos with dashboard") }
