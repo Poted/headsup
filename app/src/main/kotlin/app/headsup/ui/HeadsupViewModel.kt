@@ -31,6 +31,12 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import app.headsup.core.sync.ClipInfo
+import app.headsup.core.sync.ClockReading
+import app.headsup.core.sync.TimeAnchor
+import app.headsup.core.sync.TimeEvidence
+import app.headsup.core.sync.TimeSource
+import java.time.LocalDateTime
 import java.time.ZoneId
 
 data class LoadedActivity(val name: String, val track: ActivityTrack)
@@ -47,7 +53,15 @@ data class ClipState(
     val colorGrade: Boolean = meta.format?.isHdr != true,
     /** LUT from the library used for this clip, or null for none. */
     val lutName: String? = null,
+    /** Start time typed in by the user (wall clock), replacing what the file says. */
+    val manualStart: LocalDateTime? = null,
 ) {
+    /** Time evidence used for matching: the manual start if set, otherwise the file's own. */
+    val timeInfo: ClipInfo
+        get() = manualStart?.let {
+            ClipInfo(meta.durationMs, listOf(TimeEvidence(TimeSource.MANUAL, ClockReading.Local(it), TimeAnchor.START)))
+        } ?: meta.info
+
     /** UTC time of the telemetry shown at [positionMs] into the clip. */
     fun telemetryUtc(positionMs: Long): Long? = sync?.let { it.startUtcMs + positionMs + manualOffsetMs }
 }
@@ -114,6 +128,11 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
 
     fun removeActivity(index: Int) = _state.update { s ->
         resynced(s.copy(activities = s.activities.filterIndexed { i, _ -> i != index }))
+    }
+
+    /** Sets (or with null clears) the wall-clock start of a clip and matches it again. */
+    fun setManualStart(index: Int, start: LocalDateTime?) = _state.update { s ->
+        resynced(s.copy(clips = s.clips.mapIndexed { i, c -> if (i == index) c.copy(manualStart = start, manualOffsetMs = 0L) else c }))
     }
 
     fun setManualOffset(index: Int, offsetMs: Long) = updateClip(index) {
@@ -185,7 +204,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /** Recomputes the selected clip's colour table, shortly after the last slider change. */
-    private fun refreshPreview(delayMs: Long = 150) {
+    private fun refreshPreview(delayMs: Long = 50) {
         previewJob?.cancel()
         previewJob = viewModelScope.launch {
             delay(delayMs)
@@ -295,7 +314,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
     private fun resynced(s: UiState): UiState {
         val resolver = SyncResolver(ZoneId.systemDefault())
         val tracks = s.activities.map { it.track }
-        return s.copy(clips = s.clips.map { it.copy(sync = resolver.resolve(it.meta.info, tracks)) })
+        return s.copy(clips = s.clips.map { it.copy(sync = resolver.resolve(it.timeInfo, tracks)) })
     }
 
     companion object {

@@ -88,6 +88,15 @@ within about 1–2 s; the manual ±60 s slider remains as a fallback.
 - Mimo's dashboard holds the last recorded HR value; this app interpolates (e.g. 57 bpm
   instead of Mimo's 56 between records of 56 and 59).
 
+## Colour
+
+All colour work is baked into one 33³ table (`LutBaker`) that preview and export apply in a
+single lookup. With a camera LUT the corrections run first, on the log-encoded values, and the
+LUT is the last node (as in DaVinci Resolve), so exposure can still pull back highlights the LUT
+would clip; exposure and white balance are offsets in log space (≈0.075 per stop). Without a
+LUT, footage is treated as display-ready and corrected in display space. The preview uses a
+`ColorLut` whose table is swapped in place, so moving a slider does not re-prepare the player.
+
 ## Export (stage 3)
 
 - Media3 Transformer, HEVC, source resolution and frame rate, bitrate near the source.

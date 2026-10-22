@@ -36,7 +36,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.media3.common.Effect
 import androidx.media3.common.MediaItem
-import androidx.media3.effect.SingleColorLut
+import app.headsup.color.LiveColorLut
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.ui.PlayerView
 import app.headsup.core.track.TelemetrySampler
@@ -70,17 +70,17 @@ fun ClipPreview(
     val context = LocalContext.current
     val exoPlayer = remember { ExoPlayer.Builder(context).build() }
     DisposableEffect(exoPlayer) { onDispose { exoPlayer.release() } }
-    val lutEffect = remember(gradeCube) { gradeCube?.let { SingleColorLut.createFromCube(it) } }
-    var loadedUri by remember { mutableStateOf<android.net.Uri?>(null) }
-    LaunchedEffect(clip.meta.uri, lutEffect) {
-        // Effects are picked up when the item is prepared, so re-prepare at the same position.
-        val position = if (loadedUri == clip.meta.uri) exoPlayer.currentPosition else 0L
-        loadedUri = clip.meta.uri
-        val wasPlaying = exoPlayer.isPlaying
-        exoPlayer.setVideoEffects(listOfNotNull<Effect>(lutEffect))
-        exoPlayer.setMediaItem(MediaItem.fromUri(clip.meta.uri), position)
+    // One colour effect for the player's whole life; new tables are swapped in without re-preparing.
+    val liveLut = remember { LiveColorLut() }
+    LaunchedEffect(clip.meta.uri) {
+        exoPlayer.setVideoEffects(listOf<Effect>(liveLut))
+        exoPlayer.setMediaItem(MediaItem.fromUri(clip.meta.uri))
         exoPlayer.prepare()
-        if (wasPlaying) exoPlayer.play()
+    }
+    LaunchedEffect(gradeCube) {
+        liveLut.update(gradeCube)
+        // A paused player only redraws on a new frame, so re-render the current one.
+        if (!exoPlayer.isPlaying) exoPlayer.seekTo(exoPlayer.currentPosition)
     }
 
     var positionMs by remember { mutableLongStateOf(0L) }

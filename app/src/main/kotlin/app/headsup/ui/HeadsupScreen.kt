@@ -74,8 +74,13 @@ import app.headsup.render.LayoutPreset
 import app.headsup.render.Layouts
 import app.headsup.render.TextEffect
 import app.headsup.render.Widget
+import androidx.compose.material3.OutlinedTextField
 import java.time.Instant
+import java.time.LocalDate
+import java.time.LocalDateTime
+import java.time.LocalTime
 import java.time.ZoneId
+import java.time.ZoneOffset
 import java.util.Locale
 import kotlin.math.roundToLong
 
@@ -219,9 +224,65 @@ private fun ClipsPage(state: UiState, vm: HeadsupViewModel) {
     val index = state.selectedClip
     val clip = state.selected
     if (index != null && clip != null) {
-        if (clip.sync == null) Hint("No activity covers the selected clip, so there is nothing to show.")
+        StartTimeControls(clip, state.activities) { vm.setManualStart(index, it) }
         OffsetControls(clip.manualOffsetMs) { vm.setManualOffset(index, it) }
     }
+}
+
+/** Lets the user give the recording start of a clip whose file lost it, e.g. an excerpt or an edited copy. */
+@Composable
+private fun StartTimeControls(clip: ClipState, activities: List<LoadedActivity>, onSet: (LocalDateTime?) -> Unit) {
+    var editing by remember { mutableStateOf(false) }
+    val activity = clip.sync?.let { activities.getOrNull(it.trackIndex) }
+    val zone = activity?.track?.utcOffsetSeconds ?: activities.firstOrNull()?.track?.utcOffsetSeconds
+        ?: ZoneId.systemDefault().rules.getOffset(Instant.now()).totalSeconds
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Column(Modifier.weight(1f)) {
+            Label("Recording start of selected clip")
+            Hint(
+                when {
+                    clip.manualStart != null -> "Entered by hand: ${clip.manualStart.toString().replace('T', ' ')}"
+                    clip.sync != null -> "From the file: ${Formats.date(clip.sync.startUtcMs, zone)} ${Formats.clock(clip.sync.startUtcMs, zone)}"
+                    else -> "Unknown"
+                },
+            )
+        }
+        TextButton(onClick = { editing = true }) { Text("Set") }
+        if (clip.manualStart != null) TextButton(onClick = { onSet(null) }) { Text("From file") }
+    }
+    if (editing) {
+        val initial = clip.manualStart
+            ?: clip.sync?.let { LocalDateTime.ofEpochSecond(it.startUtcMs / 1000, 0, ZoneOffset.ofTotalSeconds(zone)) }
+            ?: activities.firstOrNull()?.track?.let { LocalDateTime.ofEpochSecond(it.startMs / 1000, 0, ZoneOffset.ofTotalSeconds(zone)) }
+            ?: LocalDateTime.now().withNano(0)
+        StartTimeDialog(initial, onDismiss = { editing = false }, onConfirm = { editing = false; onSet(it) })
+    }
+}
+
+@Composable
+private fun StartTimeDialog(initial: LocalDateTime, onDismiss: () -> Unit, onConfirm: (LocalDateTime) -> Unit) {
+    var date by remember { mutableStateOf(initial.toLocalDate().toString()) }
+    var time by remember { mutableStateOf(initial.toLocalTime().withNano(0).toString().let { if (it.length == 5) "$it:00" else it }) }
+    val parsed = runCatching { LocalDateTime.of(LocalDate.parse(date.trim()), LocalTime.parse(time.trim())) }.getOrNull()
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Recording start") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Hint("Local time on the camera's clock when this clip begins. Fine-tune afterwards with the offset slider.")
+                OutlinedTextField(value = date, onValueChange = { date = it }, label = { Text("Date (YYYY-MM-DD)") }, singleLine = true)
+                OutlinedTextField(
+                    value = time,
+                    onValueChange = { time = it },
+                    label = { Text("Time (HH:MM:SS)") },
+                    singleLine = true,
+                    isError = parsed == null,
+                )
+            }
+        },
+        confirmButton = { TextButton(onClick = { parsed?.let(onConfirm) }, enabled = parsed != null) { Text("Set") } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+    )
 }
 
 @Composable
@@ -280,7 +341,7 @@ private fun SyncSummary(clip: ClipState, activity: LoadedActivity?) {
     val sync = clip.sync
     if (sync == null || activity == null) {
         Text(
-            if (clip.meta.info.evidence.isEmpty()) "No recording time in the file (edited copy?)" else "No activity covers this clip",
+            if (clip.timeInfo.evidence.isEmpty()) "No recording time in the file – set the start time by hand" else "No activity covers this clip",
             color = MaterialTheme.colorScheme.error,
             style = MaterialTheme.typography.bodySmall,
         )
@@ -321,6 +382,7 @@ private fun sourceLabel(source: TimeSource) = when (source) {
     TimeSource.PHONE_FILENAME -> "phone file name"
     TimeSource.MP4_CREATION_TIME -> "MP4 creation time"
     TimeSource.MEDIASTORE_DATE_TAKEN -> "gallery date"
+    TimeSource.MANUAL -> "time entered by hand"
 }
 
 private fun zoneLabel(reason: ZoneReason, offset: Int) = when (reason) {

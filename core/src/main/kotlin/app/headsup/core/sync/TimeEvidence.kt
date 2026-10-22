@@ -18,6 +18,9 @@ enum class TimeSource(val reliability: Double) {
 
     /** `MediaStore.Video.Media.DATE_TAKEN`. */
     MEDIASTORE_DATE_TAKEN(0.6),
+
+    /** Start time typed in by the user, e.g. for an excerpt cut from a long recording. */
+    MANUAL(1.0),
 }
 
 /** Which moment of the recording the reading refers to. */

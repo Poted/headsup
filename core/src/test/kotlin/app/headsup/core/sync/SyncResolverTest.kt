@@ -208,4 +208,17 @@ class SyncResolverTest {
         assertEquals(TimeSource.DJI_FILENAME, r.primary.evidence.source)
         assertEquals(Confidence.HIGH, r.confidence)
     }
+
+    @Test
+    fun `manually entered start time is read in the watch time zone`() {
+        val ride = activity("2026-10-20T08:00:00Z", 180)
+        val manual = TimeEvidence(TimeSource.MANUAL, ClockReading.Local(LocalDateTime.parse("2026-10-20T11:42:05")), TimeAnchor.START)
+        val clip = ClipInfo(minute, listOf(manual))
+
+        val r = assertNotNull(SyncResolver(warsaw).resolve(clip, listOf(ride)))
+
+        assertEquals(utc("2026-10-20T09:42:05Z"), r.startUtcMs)
+        assertEquals(TimeSource.MANUAL, r.primary.evidence.source)
+        assertEquals(Confidence.HIGH, r.confidence)
+    }
 }
