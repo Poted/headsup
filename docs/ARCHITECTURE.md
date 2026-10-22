@@ -68,7 +68,8 @@ The highest-scoring start that puts the whole clip (±5 s) inside an activity wi
 - **LOW**: only an arbitrary zone shift fits, or the clip does not fit any activity.
 
 File names have 1 s resolution and camera clocks drift, so automatic sync is expected to be
-within about 1–2 s; the manual ±60 s slider remains as a fallback.
+within about 1–2 s; as fallbacks there is a ±10 min offset ruler and a graph picker (tap the moment on the
+speed / heart-rate / altitude graph that matches the paused frame).
 
 ### Observed file names and metadata
 
@@ -98,6 +99,10 @@ LUT, footage is treated as display-ready and corrected in display space. On Andr
 preview plays into a TextureView and applies the same table with an AGSL shader
 (`GradePreviewShader`), so slider changes are immediate; older versions use a Media3 `ColorLut`
 whose table is swapped in place.
+
+Corrections, LUT and effects belong to each clip (`ClipState.grade`, `effects`, `lutName`). The
+last edited values become the default for clips added later, and a clip's look can be copied,
+pasted onto another clip or applied to all. The dashboard layout is shared by all clips.
 
 ## Export (stage 3)
 

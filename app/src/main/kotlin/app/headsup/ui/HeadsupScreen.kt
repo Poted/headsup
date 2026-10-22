@@ -114,6 +114,11 @@ import java.time.ZoneId
 import java.time.ZoneOffset
 import java.util.Locale
 import kotlin.math.roundToLong
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.input.pointer.pointerInput
+import app.headsup.core.track.ActivityTrack
 
 private val DOWNLOADS_FOLDER: Uri = DocumentsContract.buildDocumentUri("com.android.externalstorage.documents", "primary:Download")
 
@@ -214,7 +219,10 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
                 when (tool) {
                     Tool.FILES -> FilesPanel(state, vm, playhead, onAddVideos = addVideos, onAddFit = addFit)
                     Tool.COLOUR -> ColourPage(state, vm, adjustment, { adjustment = it }, onAddLut = { lutPicker.launch(arrayOf("*/*")) })
-                    Tool.EFFECTS -> EffectsPanel(state.style, state.effects, state.activities, vm::updateStyle, vm::updateEffects)
+                    Tool.EFFECTS -> {
+                        LookActions(state, vm)
+                        EffectsPanel(state.style, state.effects, state.activities, vm::updateStyle, vm::updateEffects)
+                    }
                     Tool.EXPORT -> ExportControls(
                         bitrateFactor = state.bitrateFactor,
                         sourceBitrate = state.selected?.meta?.bitrate,
@@ -291,8 +299,8 @@ private fun Group(content: @Composable ColumnScope.() -> Unit) {
 }
 
 @Composable
-private fun Hint(text: String) {
-    Text(text, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+private fun Hint(text: String, modifier: Modifier = Modifier) {
+    Text(text, modifier, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
 }
 
 @Composable
@@ -354,6 +362,10 @@ private fun FilesPanel(state: UiState, vm: HeadsupViewModel, playhead: LongState
             )
         }
         Group { StartTimeControls(clip, state.activities) { vm.setManualStart(index, it) } }
+        val activity = clip.sync?.let { state.activities.getOrNull(it.trackIndex) }
+        if (activity != null) {
+            Group { SyncGraph(clip, activity.track, playhead) { vm.setManualOffset(index, clip.manualOffsetMs + it) } }
+        }
         Group { OffsetControls(clip.manualOffsetMs) { vm.setManualOffset(index, it) } }
     }
     Group {
@@ -543,11 +555,89 @@ private fun zoneLabel(reason: ZoneReason, offset: Int) = when (reason) {
 }
 
 @Composable
+/**
+ * Sync by picking a moment: the graph shows the data around what the playhead is matched to now
+ * (centre line); tapping the same moment on the graph (a stop, a sprint, the top of a climb) and
+ * applying shifts the data by the difference.
+ */
+@Composable
+private fun SyncGraph(clip: ClipState, track: ActivityTrack, playhead: LongState, onShift: (Long) -> Unit) {
+    val metrics = GraphMetric.entries.filter { track.has(it.metric) }
+    if (metrics.isEmpty()) return
+    var chosen by rememberSaveable { mutableStateOf(metrics.first()) }
+    val metric = chosen.takeIf { it in metrics } ?: metrics.first()
+    var windowMs by rememberSaveable { mutableStateOf(30_000L) }
+    // Picked moment relative to the centre, in ms.
+    var picked by remember(clip.id, clip.manualOffsetMs) { mutableStateOf<Long?>(null) }
+    val centre = clip.telemetryUtc(playhead.longValue) ?: return
+    val series = track.series.getValue(metric.metric)
+
+    Label("Sync from the graph")
+    LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        items(metrics) { m -> FilterChip(selected = m == metric, onClick = { chosen = m }, label = { Text(m.label) }) }
+        item { FilterChip(selected = windowMs == 30_000L, onClick = { windowMs = 30_000L; picked = null }, label = { Text("±30 s") }) }
+        item { FilterChip(selected = windowMs == 120_000L, onClick = { windowMs = 120_000L; picked = null }, label = { Text("±2 min") }) }
+    }
+    val from = centre - windowMs
+    val to = centre + windowMs
+    var lo = java.util.Arrays.binarySearch(series.timesMs, from).let { if (it < 0) -it - 1 else it }
+    lo = (lo - 1).coerceAtLeast(0)
+    var hi = java.util.Arrays.binarySearch(series.timesMs, to).let { if (it < 0) -it - 1 else it }
+    hi = (hi + 1).coerceAtMost(series.size)
+    val accent = HeadsupColors.Accent
+    val pick = { x: Float, width: Float -> picked = ((x / width - 0.5f) * 2 * windowMs).toLong() }
+    Canvas(
+        Modifier
+            .fillMaxWidth()
+            .height(90.dp)
+            .clip(RoundedCornerShape(10.dp))
+            .background(HeadsupColors.Surface)
+            .pointerInput(windowMs) { detectTapGestures { pick(it.x, size.width.toFloat()) } }
+            .pointerInput(windowMs) {
+                detectHorizontalDragGestures { change, _ -> change.consume(); pick(change.position.x, size.width.toFloat()) }
+            },
+    ) {
+        fun xOf(t: Long) = (t - from).toFloat() / (to - from) * size.width
+        if (hi - lo >= 2) {
+            var min = Double.MAX_VALUE
+            var max = -Double.MAX_VALUE
+            for (i in lo until hi) {
+                val v = series.values[i]
+                if (v < min) min = v
+                if (v > max) max = v
+            }
+            val span = (max - min).takeIf { it > 1e-6 } ?: 1.0
+            val pad = 8.dp.toPx()
+            val path = Path()
+            for (i in lo until hi) {
+                val x = xOf(series.timesMs[i])
+                val y = pad + (1f - ((series.values[i] - min) / span).toFloat()) * (size.height - 2 * pad)
+                if (i == lo) path.moveTo(x, y) else path.lineTo(x, y)
+            }
+            drawPath(path, Color.White.copy(alpha = 0.85f), style = Stroke(1.5.dp.toPx()))
+        }
+        drawLine(Color.White.copy(alpha = 0.4f), Offset(size.width / 2, 0f), Offset(size.width / 2, size.height), 1.dp.toPx())
+        picked?.let { d ->
+            val x = xOf(centre + d)
+            drawLine(accent, Offset(x, 0f), Offset(x, size.height), 2.dp.toPx())
+        }
+    }
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Hint(
+            picked?.let { String.format(Locale.US, "Shift %+.1f s", it / 1000.0) }
+                ?: "Pause on a recognisable moment, then tap the same moment on the graph.",
+            Modifier.weight(1f),
+        )
+        picked?.let { d -> TextButton(onClick = { onShift(d); picked = null }) { Text("Apply") } }
+    }
+}
+
+@Composable
 private fun OffsetControls(offsetMs: Long, onChange: (Long) -> Unit) {
     ValueHeader("Data offset", String.format(Locale.US, "%+.1f s", offsetMs / 1000.0))
     RulerSlider(
         value = offsetMs / 1000f,
-        range = -60f..60f,
+        range = -600f..600f,
         step = 0.1f,
         onChange = { onChange((it * 10).roundToLong() * 100) },
         onReset = { onChange(0L) },
@@ -556,6 +646,19 @@ private fun OffsetControls(offsetMs: Long, onChange: (Long) -> Unit) {
 }
 
 // Colour page
+
+/** Copy the selected clip's look (corrections, effects, LUT), paste it on another, or use it everywhere. */
+@Composable
+private fun LookActions(state: UiState, vm: HeadsupViewModel) {
+    val index = state.selectedClip ?: return
+    if (state.clips.size < 2 && state.copiedLook == null) return
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Text("Look of this clip", Modifier.weight(1f), style = MaterialTheme.typography.labelLarge, color = HeadsupColors.TextMuted)
+        TextButton(onClick = vm::copyLook) { Text("Copy") }
+        if (state.copiedLook != null) TextButton(onClick = { vm.pasteLook(index) }) { Text("Paste") }
+        if (state.clips.size > 1) TextButton(onClick = vm::applyLookToAll) { Text("To all") }
+    }
+}
 
 internal enum class Adjustment(
     val symbol: String,
@@ -603,6 +706,8 @@ private fun ColourPage(
         Hint("Off: the clip keeps its own colours (for files that are already graded, e.g. Mimo exports).")
         return
     }
+
+    LookActions(state, vm)
 
     // The ruler sits right under the correction picker, so nothing needs scrolling.
     LazyRow(horizontalArrangement = Arrangement.spacedBy(2.dp)) {

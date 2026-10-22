@@ -64,7 +64,13 @@ data class ClipState(
     val lutName: String? = null,
     /** Start time typed in by the user (wall clock), replacing what the file says. */
     val manualStart: LocalDateTime? = null,
+    /** Colour corrections of this clip (applied before the LUT). */
+    val grade: ColorGrade = ColorGrade(),
+    /** Picture effects of this clip. */
+    val effects: EffectSettings = EffectSettings(),
 ) {
+    val look: ClipLook get() = ClipLook(grade, effects, lutName)
+
     /** Time evidence used for matching: the manual start if set, otherwise the file's own. */
     val timeInfo: ClipInfo
         get() = manualStart?.let {
@@ -78,6 +84,9 @@ data class ClipState(
     fun telemetryUtc(positionMs: Long): Long? = sync?.let { it.startUtcMs + trimStartMs + positionMs + manualOffsetMs }
 }
 
+/** What "Copy" takes from a clip and "Paste" gives to another: corrections, effects and LUT. */
+data class ClipLook(val grade: ColorGrade, val effects: EffectSettings, val lutName: String?)
+
 private var lastClipId = 0L
 private fun nextClipId() = ++lastClipId
 
@@ -89,10 +98,12 @@ data class UiState(
     val clips: List<ClipState> = emptyList(),
     val selectedClip: Int? = null,
     val style: DashboardStyle = DashboardStyle(),
-    val effects: EffectSettings = EffectSettings(),
+    /** Effects for new clips: the last ones edited. */
+    val defaultEffects: EffectSettings = EffectSettings(),
     val busy: Boolean = false,
     val messages: List<String> = emptyList(),
-    val grade: ColorGrade = ColorGrade(),
+    /** Corrections for new clips: the last ones edited. */
+    val defaultGrade: ColorGrade = ColorGrade(),
     val luts: List<String> = emptyList(),
     /** Grade shown in the preview instead of [grade] while comparing (one correction held off). */
     val compareGrade: ColorGrade? = null,
@@ -101,8 +112,16 @@ data class UiState(
     val bitrateFactor: Float = 1f,
     /** Vectorscope and skin measurement of the last frame tapped in the preview. */
     val scope: ScopeResult? = null,
+    /** Look copied with "Copy", waiting to be pasted. */
+    val copiedLook: ClipLook? = null,
 ) {
     val selected: ClipState? get() = selectedClip?.let { clips.getOrNull(it) }
+
+    /** Corrections of the selected clip (what the colour page edits). */
+    val grade: ColorGrade get() = selected?.grade ?: defaultGrade
+
+    /** Effects of the selected clip (what the effects page edits). */
+    val effects: EffectSettings get() = selected?.effects ?: defaultEffects
 }
 
 class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
@@ -112,8 +131,8 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
     private val _state = MutableStateFlow(
         UiState(
             style = stylePrefs.load(),
-            effects = effectPrefs.load(),
-            grade = gradeStore.loadGrade(),
+            defaultEffects = effectPrefs.load(),
+            defaultGrade = gradeStore.loadGrade(),
             luts = gradeStore.names(),
             messages = listOfNotNull((app as HeadsupApp).takeCrashReport()),
         ),
@@ -208,10 +227,33 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
 
     fun persistStyle() = stylePrefs.save(_state.value.style)
 
+    /** Changes the selected clip's effects; they also become the default for clips added later. */
     fun updateEffects(transform: (EffectSettings) -> EffectSettings) {
-        _state.update { it.copy(effects = transform(it.effects)) }
-        effectPrefs.save(_state.value.effects)
+        _state.update { s ->
+            val effects = transform(s.effects)
+            s.copy(defaultEffects = effects, clips = s.clips.mapIndexed { i, c -> if (i == s.selectedClip) c.copy(effects = effects) else c })
+        }
+        effectPrefs.save(_state.value.defaultEffects)
     }
+
+    // Look: corrections, effects and LUT of one clip, copied to others
+
+    fun copyLook() = _state.update { s -> s.copy(copiedLook = s.selected?.look) }
+
+    fun pasteLook(index: Int) {
+        val look = _state.value.copiedLook ?: return
+        updateClip(index) { it.withLook(look) }
+    }
+
+    fun applyLookToAll() {
+        _state.update { s ->
+            val look = s.selected?.look ?: return@update s
+            s.copy(clips = s.clips.map { it.withLook(look) })
+        }
+        refreshPreview()
+    }
+
+    private fun ClipState.withLook(look: ClipLook) = copy(grade = look.grade, effects = look.effects, lutName = look.lutName)
 
     fun dismissMessages() = _state.update { it.copy(messages = emptyList()) }
 
@@ -287,9 +329,13 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
 
     fun setClipGrade(index: Int, enabled: Boolean) = updateClip(index) { it.copy(colorGrade = enabled) }
 
+    /** Changes the selected clip's corrections; they also become the default for clips added later. */
     fun updateGrade(transform: (ColorGrade) -> ColorGrade) {
-        _state.update { it.copy(grade = transform(it.grade)) }
-        gradeStore.saveGrade(_state.value.grade)
+        _state.update { s ->
+            val grade = transform(s.grade)
+            s.copy(defaultGrade = grade, clips = s.clips.mapIndexed { i, c -> if (i == s.selectedClip) c.copy(grade = grade) else c })
+        }
+        gradeStore.saveGrade(_state.value.defaultGrade)
         refreshPreview()
     }
 
@@ -313,7 +359,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                     previewDirty = false
                     val s = _state.value
                     val clip = s.selected
-                    val cube = if (clip == null || !clip.colorGrade) null else bake(clip.lutName, s.compareGrade ?: s.grade)
+                    val cube = if (clip == null || !clip.colorGrade) null else bake(clip.lutName, s.compareGrade ?: clip.grade)
                     _state.update { it.copy(previewCube = cube) }
                     analyseScope()
                 }
@@ -349,13 +395,13 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
     private fun enqueue(kind: ExportKind, indices: List<Int>) {
         val s = state.value
         viewModelScope.launch {
-            val cubes = HashMap<String?, Array<Array<IntArray>>?>()
+            val cubes = HashMap<ClipLook, Array<Array<IntArray>>?>()
             val requests = indices.mapNotNull { i ->
                 val clip = s.clips.getOrNull(i) ?: return@mapNotNull null
                 val sync = clip.sync ?: return@mapNotNull null
                 val activity = s.activities.getOrNull(sync.trackIndex) ?: return@mapNotNull null
                 val graded = kind != ExportKind.PNG_SEQUENCE && clip.colorGrade
-                val cube = if (graded) cubes.getOrPut(clip.lutName) { bake(clip.lutName, s.grade) } else null
+                val cube = if (graded) cubes.getOrPut(clip.look.copy(effects = EffectSettings())) { bake(clip.lutName, clip.grade) } else null
                 ExportRequest(
                     kind = kind,
                     uri = clip.meta.uri,
@@ -371,8 +417,8 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                     track = activity.track,
                     telemetryStartUtcMs = sync.startUtcMs + clip.trimStartMs + clip.manualOffsetMs,
                     style = s.style,
-                    effects = s.effects,
-                    grade = if (graded) GradeSetup(cube, s.grade.vignette) else null,
+                    effects = clip.effects,
+                    grade = if (graded) GradeSetup(cube, clip.grade.vignette) else null,
                     bitrateFactor = s.bitrateFactor,
                 )
             }
@@ -405,7 +451,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                 val activities = (s.activities + loaded.filterIsInstance<Loaded.Activity>().map { it.activity })
                     .distinctBy { it.track.startMs to it.track.endMs }
                     .sortedBy { it.track.startMs }
-                val newClips = loaded.filterIsInstance<Loaded.Clip>().map { ClipState(it.meta, sync = null, lutName = defaultLut) }
+                val newClips = loaded.filterIsInstance<Loaded.Clip>().map { ClipState(it.meta, sync = null, lutName = defaultLut, grade = s.defaultGrade, effects = s.defaultEffects) }
                 // The same file may already be on the timeline as several (split) clips; only skip re-adds.
                 val known = s.clips.map { it.meta.uri }.toSet()
                 val clips = s.clips + newClips.filter { it.meta.uri !in known }.distinctBy { it.meta.uri }
@@ -431,6 +477,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     companion object {
-        const val MAX_OFFSET_MS = 60_000L
+        /** Large enough to fix a camera clock that is minutes off. */
+        const val MAX_OFFSET_MS = 600_000L
     }
 }
