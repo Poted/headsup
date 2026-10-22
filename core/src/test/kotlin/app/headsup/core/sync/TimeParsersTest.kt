@@ -21,6 +21,11 @@ class TimeParsersTest {
             TimeEvidence(TimeSource.DJI_FILENAME, ClockReading.Local(LocalDateTime.of(2026, 5, 24, 15, 51, 44)), TimeAnchor.START),
             FilenameTimeParser.parse("dji_fly_20260524_155144_0147_1783265392318_video_d_logm.mp4"),
         )
+        // Osmo Action 6 clip downloaded by Mimo; trailing epoch ms is the download time (19 Oct).
+        assertEquals(
+            TimeEvidence(TimeSource.DJI_FILENAME, ClockReading.Local(LocalDateTime.of(2026, 10, 9, 21, 16, 16)), TimeAnchor.START),
+            FilenameTimeParser.parse("dji_mimo_20261009_211616_0046_1792442826780_video.mp4"),
+        )
         val expected = TimeEvidence(TimeSource.DJI_FILENAME, ClockReading.Local(LocalDateTime.of(2026, 10, 20, 21, 18, 52)), TimeAnchor.START)
         assertEquals(expected, FilenameTimeParser.parse("dji_export_20261020_211852_1792527178764_editor.mp4"))
         // Copy saved by the Samsung gallery editor.

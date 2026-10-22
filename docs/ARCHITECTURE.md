@@ -75,6 +75,7 @@ within about 1–2 s; the manual ±60 s slider remains as a fallback.
 | Source | Example | Time in name |
 |---|---|---|
 | DJI Fly (drone, saved to phone) | `dji_fly_20260524_155144_0147_1783265392318_video_d_logm.mp4` | local start; trailing epoch ms = download time |
+| DJI Mimo download (Osmo Action 6) | `dji_mimo_20261009_211616_0046_1792442826780_video.mp4` | local start; trailing epoch ms = download time |
 | DJI Mimo export | `dji_export_20261020_211852_1792527178764_editor.mp4` | local start of the exported segment (confirmed by Mimo's own overlay); trailing epoch ms = export time |
 | Samsung camera | `20260517_131512.mp4` | local start |
 
