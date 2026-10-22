@@ -126,4 +126,34 @@ class ColorTest {
         LutBaker.apply(identity, ColorGrade(exposure = 1f), rgb)
         assertEquals(0.4f + LutBaker.LOG_STOP, rgb[0], 1e-5f)
     }
+
+    private fun applied(grade: ColorGrade, vararg rgb: Float) = rgb.copyOf().also { LutBaker.apply(null, grade, it) }
+
+    @Test
+    fun `blacks move dark tones and leave bright ones`() {
+        assertTrue(applied(ColorGrade(blacks = 1f), 0.05f, 0.05f, 0.05f)[0] > 0.15f)
+        assertEquals(0.9f, applied(ColorGrade(blacks = 1f), 0.9f, 0.9f, 0.9f)[0], 1e-4f)
+    }
+
+    @Test
+    fun `whites move bright tones and leave dark ones`() {
+        assertTrue(applied(ColorGrade(whites = -1f), 0.95f, 0.95f, 0.95f)[0] < 0.85f)
+        assertEquals(0.1f, applied(ColorGrade(whites = -1f), 0.1f, 0.1f, 0.1f)[0], 1e-4f)
+    }
+
+    @Test
+    fun `vibrance boosts muted colours more than saturated ones`() {
+        fun spread(c: FloatArray) = c.max() - c.min()
+        val muted = floatArrayOf(0.5f, 0.45f, 0.4f)
+        val vivid = floatArrayOf(0.9f, 0.2f, 0.1f)
+        val mutedGain = spread(applied(ColorGrade(vibrance = 1f), *muted)) / spread(muted)
+        val vividGain = spread(applied(ColorGrade(vibrance = 1f), *vivid)) / spread(vivid)
+        assertTrue(mutedGain > vividGain)
+    }
+
+    @Test
+    fun `positive tint shifts towards magenta`() {
+        val out = applied(ColorGrade(tint = 1f), 0.5f, 0.5f, 0.5f)
+        assertTrue(out[1] < 0.5f && out[0] > 0.5f && out[2] > 0.5f)
+    }
 }

@@ -190,12 +190,12 @@ fun PillTabs(options: List<String>, selected: Int, onSelect: (Int) -> Unit) {
                 Modifier
                     .weight(1f)
                     .clip(CircleShape)
-                    .background(if (on) HeadsupColors.Surface else Color.Transparent)
+                    .background(if (on) HeadsupColors.Highlight else Color.Transparent)
                     .clickable { onSelect(i) }
                     .padding(vertical = 8.dp),
                 contentAlignment = Alignment.Center,
             ) {
-                Text(label, style = MaterialTheme.typography.labelLarge, color = if (on) HeadsupColors.AccentSoft else HeadsupColors.TextMuted)
+                Text(label, style = MaterialTheme.typography.labelLarge, color = if (on) HeadsupColors.OnHighlight else HeadsupColors.TextMuted)
             }
         }
     }

@@ -11,24 +11,35 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.graphics.vector.path
+import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.Typography
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
 object HeadsupColors {
-    val Background = Color(0xFF0C0907)
-    val BackgroundGlow = Color(0xFF241509)
-    val Surface = Color(0xFF16110D)
-    val SurfaceHigh = Color(0xFF221A14)
-    val Outline = Color(0xFF3A2C21)
+    // Neutral charcoal surfaces with a faint warm glow; orange is reserved for the camera-style
+    // controls (rulers and correction dials).
+    val Background = Color(0xFF0B0B0B)
+    val BackgroundGlow = Color(0xFF221D19)
+    val Surface = Color(0xFF171717)
+    val SurfaceTop = Color(0xFF1F1F1F)
+    val SurfaceHigh = Color(0xFF242424)
+    val Outline = Color(0xFF2E2E2E)
+    val Highlight = Color(0xFFF2EFEB)
+    val OnHighlight = Color(0xFF141414)
     val Accent = Color(0xFFFF8A3D)
     val AccentSoft = Color(0xFFFFB574)
     val AccentStrong = Color(0xFFE5641C)
-    val TextMuted = Color(0xFFA2958A)
+    val TextMuted = Color(0xFF9A9A9A)
     val Good = Color(0xFF7BD389)
     val Warn = Color(0xFFFFC14D)
     val Bad = Color(0xFFFF6B5B)
+
+    /** Card fill: slightly lighter at the top, like the reference design. */
+    val CardGradient = Brush.verticalGradient(listOf(SurfaceTop, Surface))
 }
 
 @Composable
@@ -36,16 +47,16 @@ fun HeadsupTheme(content: @Composable () -> Unit) {
     val base = Typography()
     MaterialTheme(
         colorScheme = darkColorScheme(
-            primary = HeadsupColors.Accent,
-            onPrimary = Color(0xFF2A1405),
-            primaryContainer = Color(0xFF4A2A14),
+            primary = HeadsupColors.Highlight,
+            onPrimary = HeadsupColors.OnHighlight,
+            primaryContainer = Color(0xFF2C2C2C),
             onPrimaryContainer = Color.White,
-            secondaryContainer = Color(0xFF3A2416),
-            onSecondaryContainer = HeadsupColors.AccentSoft,
+            secondaryContainer = Color(0xFF2E2E2E),
+            onSecondaryContainer = Color.White,
             background = HeadsupColors.Background,
             onBackground = Color.White,
             surface = HeadsupColors.Surface,
-            onSurface = Color(0xFFF3ECE6),
+            onSurface = Color(0xFFF2F2F2),
             surfaceVariant = HeadsupColors.SurfaceHigh,
             onSurfaceVariant = HeadsupColors.TextMuted,
             surfaceContainer = HeadsupColors.Surface,
@@ -54,7 +65,7 @@ fun HeadsupTheme(content: @Composable () -> Unit) {
             outline = HeadsupColors.Outline,
             outlineVariant = HeadsupColors.Outline,
             error = HeadsupColors.Bad,
-            errorContainer = Color(0xFF3E1A14),
+            errorContainer = Color(0xFF3A1B18),
             onErrorContainer = Color(0xFFFFDAD3),
         ),
         // Lighter weights for an elegant look.
@@ -68,8 +79,10 @@ fun HeadsupTheme(content: @Composable () -> Unit) {
             medium = RoundedCornerShape(18.dp),
             large = RoundedCornerShape(28.dp),
         ),
-        content = content,
-    )
+    ) {
+        // Text without an explicit colour is light on the dark background.
+        CompositionLocalProvider(LocalContentColor provides Color(0xFFF2F2F2), content = content)
+    }
 }
 
 /** Small line icons drawn here so the app does not need the large Material icon library. */

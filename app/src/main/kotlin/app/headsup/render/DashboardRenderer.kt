@@ -58,6 +58,7 @@ class DashboardRenderer(private val assets: AssetManager) {
 
     fun draw(canvas: Canvas, width: Float, height: Float, style: DashboardStyle, data: DashboardData) {
         boxes.clear()
+        if (!style.enabled) return
         val shown = Widget.entries.filter { it in style.widgets && it.isAvailableIn(data.track) }
         if (shown.isEmpty()) return
 
@@ -122,14 +123,9 @@ class DashboardRenderer(private val assets: AssetManager) {
             return
         }
 
-        val hr = data.frame[Metric.HEART_RATE]
-        if (widget == Widget.HEART_RATE && style.hrZoneColors && hr != null) {
-            data.track.hrZone(hr)?.let { valuePaint.color = ZONE_COLORS[it.coerceIn(0, ZONE_COLORS.lastIndex)] }
-        }
         val x = alignedX(contentWidth)
         val baseline = contentTop + Layouts.VALUE_SIZE * 0.82f * u
         text(canvas, reading.value, x, baseline, valuePaint, style)
-        valuePaint.color = style.valueColor
         if (unitWidth > 0f) text(canvas, reading.unit, x + valueWidth + unitGap, baseline, unitPaint, style)
     }
 
@@ -138,6 +134,7 @@ class DashboardRenderer(private val assets: AssetManager) {
      * numbers, so export only redraws (and re-uploads) the overlay when this changes.
      */
     fun contentKey(style: DashboardStyle, data: DashboardData, width: Float, height: Float): String {
+        if (!style.enabled) return "off"
         val sb = StringBuilder()
         val u = unit(width, height, style)
         for (widget in Widget.entries) {
@@ -160,10 +157,7 @@ class DashboardRenderer(private val assets: AssetManager) {
                     }
                 }
                 else -> {
-                    val reading = reading(widget, data)
-                    sb.append(reading.value)
-                    val hr = data.frame[Metric.HEART_RATE]
-                    if (widget == Widget.HEART_RATE && style.hrZoneColors && hr != null) sb.append('z').append(data.track.hrZone(hr))
+                    sb.append(reading(widget, data).value)
                 }
             }
             sb.append('|')
@@ -317,16 +311,6 @@ class DashboardRenderer(private val assets: AssetManager) {
 
     companion object {
         private val SHADOW = Color.argb(160, 0, 0, 0)
-
-        // Garmin zone colours: below zone 1, then zones 1–5.
-        private val ZONE_COLORS = intArrayOf(
-            Color.WHITE,
-            Color.rgb(170, 170, 170),
-            Color.rgb(64, 156, 255),
-            Color.rgb(80, 200, 120),
-            Color.rgb(255, 150, 40),
-            Color.rgb(255, 70, 70),
-        )
 
         /** Pixels per dashboard unit for a frame of this size. */
         fun unit(width: Float, height: Float, style: DashboardStyle) = min(width, height) / 1000f * style.scale

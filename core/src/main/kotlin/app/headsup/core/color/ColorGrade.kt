@@ -16,10 +16,19 @@ data class ColorGrade(
     val temperature: Float = 0f,
     /** Darkening towards the frame corners, 0..1. Not a colour operation; drawn as a layer. */
     val vignette: Float = 0f,
+    /** Moves the darkest tones (black point) up or down. */
+    val blacks: Float = 0f,
+    /** Moves the brightest tones (white point) up or down. */
+    val whites: Float = 0f,
+    /** Saturation that mostly affects muted colours and spares already saturated ones. */
+    val vibrance: Float = 0f,
+    /** Green (−) to magenta (+) balance, complementing [temperature]. */
+    val tint: Float = 0f,
 ) {
     val isNeutralColour: Boolean
         get() = exposure == 0f && brightness == 0f && contrast == 0f && shadows == 0f &&
-            highlights == 0f && saturation == 0f && temperature == 0f
+            highlights == 0f && saturation == 0f && temperature == 0f &&
+            blacks == 0f && whites == 0f && vibrance == 0f && tint == 0f
 }
 
 /**
@@ -88,6 +97,8 @@ object LutBaker {
         }
         rgb[0] += grade.temperature * 0.3f * LOG_STOP
         rgb[2] -= grade.temperature * 0.3f * LOG_STOP
+        toneEnds(grade, rgb, 2 * LOG_STOP)
+        vibranceAndTint(grade, rgb, 0.3f * LOG_STOP)
     }
 
     /** Corrections on display (gamma-encoded) values, for footage without a LUT. */
@@ -114,6 +125,30 @@ object LutBaker {
         if (grade.temperature != 0f) {
             rgb[0] *= 1 + grade.temperature * 0.1f
             rgb[2] *= 1 - grade.temperature * 0.1f
+        }
+        toneEnds(grade, rgb, 0.15f)
+        vibranceAndTint(grade, rgb, 0.05f)
+    }
+
+    /** Blacks and whites: shifts weighted towards the dark or bright end, equal on all channels. */
+    private fun toneEnds(grade: ColorGrade, rgb: FloatArray, amount: Float) {
+        if (grade.blacks == 0f && grade.whites == 0f) return
+        val y = luma(rgb).coerceIn(0f, 1f)
+        val shift = grade.blacks * amount * (1 - smoothstep(0f, 0.4f, y)) + grade.whites * amount * smoothstep(0.55f, 1f, y)
+        for (i in 0..2) rgb[i] += shift
+    }
+
+    private fun vibranceAndTint(grade: ColorGrade, rgb: FloatArray, tintAmount: Float) {
+        if (grade.vibrance != 0f) {
+            val chroma = (maxOf(rgb[0], rgb[1], rgb[2]) - minOf(rgb[0], rgb[1], rgb[2])).coerceIn(0f, 1f)
+            val factor = 1 + grade.vibrance * (1 - chroma)
+            val l = luma(rgb)
+            for (i in 0..2) rgb[i] = l + (rgb[i] - l) * factor
+        }
+        if (grade.tint != 0f) {
+            rgb[1] -= grade.tint * tintAmount
+            rgb[0] += grade.tint * tintAmount / 2
+            rgb[2] += grade.tint * tintAmount / 2
         }
     }
 

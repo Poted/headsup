@@ -55,13 +55,14 @@ enum class TextEffect(val label: String) { SHADOW("Shadow"), OUTLINE("Outline"),
 
 /** One look shared by every clip in a batch, so footage from different cameras matches. */
 data class DashboardStyle(
+    /** Whether the dashboard effect is drawn at all. */
+    val enabled: Boolean = true,
     val widgets: Set<Widget> = setOf(Widget.HEART_RATE, Widget.PACE, Widget.ALTITUDE, Widget.DISTANCE, Widget.MAP),
     val preset: LayoutPreset = LayoutPreset.BOTTOM_LEFT,
     /** Widgets the user dragged; all others follow [preset]. */
     val placements: Map<Widget, Placement> = emptyMap(),
     /** Relative to the default size, which is derived from the shorter side of the frame. */
     val scale: Float = 1f,
-    val hrZoneColors: Boolean = true,
     val font: DashboardFont = DashboardFont.CLASSIC,
     val valueColor: Int = Color.WHITE,
     val labelColor: Int = Color.WHITE,
@@ -233,7 +234,7 @@ class StylePrefs(context: Context) {
             preset = enumOrNull<LayoutPreset>(prefs.getString(KEY_PRESET, null)) ?: d.preset,
             placements = placements,
             scale = prefs.getFloat(KEY_SCALE, d.scale),
-            hrZoneColors = prefs.getBoolean(KEY_ZONES, d.hrZoneColors),
+            enabled = prefs.getBoolean(KEY_ENABLED, d.enabled),
             font = enumOrNull<DashboardFont>(prefs.getString(KEY_FONT, null)) ?: d.font,
             valueColor = prefs.getInt(KEY_VALUE_COLOR, d.valueColor),
             labelColor = prefs.getInt(KEY_LABEL_COLOR, d.labelColor),
@@ -251,7 +252,7 @@ class StylePrefs(context: Context) {
                 style.placements.entries.joinToString(";") { (w, p) -> "${w.name},${p.h.name},${p.v.name},${p.dx},${p.dy}" },
             )
             .putFloat(KEY_SCALE, style.scale)
-            .putBoolean(KEY_ZONES, style.hrZoneColors)
+            .putBoolean(KEY_ENABLED, style.enabled)
             .putString(KEY_FONT, style.font.name)
             .putInt(KEY_VALUE_COLOR, style.valueColor)
             .putInt(KEY_LABEL_COLOR, style.labelColor)
@@ -268,7 +269,7 @@ class StylePrefs(context: Context) {
         const val KEY_PRESET = "preset"
         const val KEY_PLACEMENTS = "placements"
         const val KEY_SCALE = "scale"
-        const val KEY_ZONES = "hr_zone_colors"
+        const val KEY_ENABLED = "enabled"
         const val KEY_FONT = "font"
         const val KEY_VALUE_COLOR = "value_color"
         const val KEY_LABEL_COLOR = "label_color"

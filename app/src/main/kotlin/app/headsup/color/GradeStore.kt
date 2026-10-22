@@ -61,6 +61,10 @@ class GradeStore(private val context: Context) {
         saturation = prefs.getFloat("saturation", 0f),
         temperature = prefs.getFloat("temperature", 0f),
         vignette = prefs.getFloat("vignette", 0f),
+        blacks = prefs.getFloat("blacks", 0f),
+        whites = prefs.getFloat("whites", 0f),
+        vibrance = prefs.getFloat("vibrance", 0f),
+        tint = prefs.getFloat("tint", 0f),
     )
 
     fun saveGrade(g: ColorGrade) {
@@ -73,6 +77,10 @@ class GradeStore(private val context: Context) {
             .putFloat("saturation", g.saturation)
             .putFloat("temperature", g.temperature)
             .putFloat("vignette", g.vignette)
+            .putFloat("blacks", g.blacks)
+            .putFloat("whites", g.whites)
+            .putFloat("vibrance", g.vibrance)
+            .putFloat("tint", g.tint)
             .apply()
     }
 

@@ -178,7 +178,7 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
                     .fillMaxWidth()
                     .padding(horizontal = 12.dp)
                     .clip(RoundedCornerShape(28.dp))
-                    .background(HeadsupColors.Surface)
+                    .background(HeadsupColors.CardGradient)
                     .border(1.dp, HeadsupColors.Outline, RoundedCornerShape(28.dp))
                     .verticalScroll(rememberScrollState())
                     .padding(16.dp),
@@ -228,13 +228,13 @@ private fun BottomToolbar(selected: Tool, onSelect: (Tool) -> Unit) {
                 Modifier
                     .weight(1f)
                     .clip(RoundedCornerShape(26.dp))
-                    .background(if (on) HeadsupColors.SurfaceHigh else Color.Transparent)
+                    .background(if (on) HeadsupColors.Highlight else Color.Transparent)
                     .clickable { onSelect(t) }
                     .padding(vertical = 8.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {
-                Icon(t.icon, contentDescription = t.label, Modifier.size(22.dp), tint = if (on) HeadsupColors.Accent else HeadsupColors.TextMuted)
-                Text(t.label, style = MaterialTheme.typography.labelSmall, color = if (on) Color.White else HeadsupColors.TextMuted)
+                Icon(t.icon, contentDescription = t.label, Modifier.size(22.dp), tint = if (on) HeadsupColors.OnHighlight else HeadsupColors.TextMuted)
+                Text(t.label, style = MaterialTheme.typography.labelSmall, color = if (on) HeadsupColors.OnHighlight else HeadsupColors.TextMuted)
             }
         }
     }
@@ -258,7 +258,7 @@ private fun EmptyState(hasActivities: Boolean, onAddFit: () -> Unit, onAddVideos
 @Composable
 private fun Group(content: @Composable ColumnScope.() -> Unit) {
     Column(
-        Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(HeadsupColors.SurfaceHigh).padding(12.dp),
+        Modifier.fillMaxWidth().clip(RoundedCornerShape(18.dp)).background(HeadsupColors.SurfaceHigh).border(1.dp, HeadsupColors.Outline, RoundedCornerShape(18.dp)).padding(12.dp),
         verticalArrangement = Arrangement.spacedBy(6.dp),
         content = content,
     )
@@ -333,11 +333,11 @@ private fun FilesPanel(state: UiState, vm: HeadsupViewModel, onAddVideos: () -> 
 private fun AddTile(icon: ImageVector, title: String, subtitle: String, onClick: () -> Unit, modifier: Modifier = Modifier) {
     val shape = RoundedCornerShape(20.dp)
     Row(
-        modifier.clip(shape).background(HeadsupColors.SurfaceHigh).border(1.dp, HeadsupColors.Outline, shape).clickable(onClick = onClick).padding(12.dp),
+        modifier.clip(shape).background(HeadsupColors.CardGradient).border(1.dp, HeadsupColors.Outline, shape).clickable(onClick = onClick).padding(12.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Box(Modifier.size(36.dp).clip(CircleShape).border(1.dp, HeadsupColors.Accent, CircleShape), contentAlignment = Alignment.Center) {
-            Icon(icon, contentDescription = null, Modifier.size(18.dp), tint = HeadsupColors.Accent)
+        Box(Modifier.size(36.dp).clip(CircleShape).background(HeadsupColors.Highlight), contentAlignment = Alignment.Center) {
+            Icon(icon, contentDescription = null, Modifier.size(18.dp), tint = HeadsupColors.OnHighlight)
         }
         Spacer(Modifier.width(10.dp))
         Column {
@@ -504,10 +504,14 @@ private enum class Adjustment(
     EXPOSURE("EV", "Exposure", -2f..2f, 0.1f, "%+.1f EV", { it.exposure }, { g, v -> g.copy(exposure = v) }),
     BRIGHTNESS("Br", "Brightness", -1f..1f, 0.02f, "%+.2f", { it.brightness }, { g, v -> g.copy(brightness = v) }),
     CONTRAST("Ct", "Contrast", -1f..1f, 0.02f, "%+.2f", { it.contrast }, { g, v -> g.copy(contrast = v) }),
-    SHADOWS("Sh", "Shadows", -1f..1f, 0.02f, "%+.2f", { it.shadows }, { g, v -> g.copy(shadows = v) }),
     HIGHLIGHTS("Hl", "Highlights", -1f..1f, 0.02f, "%+.2f", { it.highlights }, { g, v -> g.copy(highlights = v) }),
+    SHADOWS("Sh", "Shadows", -1f..1f, 0.02f, "%+.2f", { it.shadows }, { g, v -> g.copy(shadows = v) }),
+    WHITES("Wh", "Whites", -1f..1f, 0.02f, "%+.2f", { it.whites }, { g, v -> g.copy(whites = v) }),
+    BLACKS("Bk", "Blacks", -1f..1f, 0.02f, "%+.2f", { it.blacks }, { g, v -> g.copy(blacks = v) }),
     SATURATION("Sat", "Saturation", -1f..1f, 0.02f, "%+.2f", { it.saturation }, { g, v -> g.copy(saturation = v) }),
+    VIBRANCE("Vib", "Vibrance", -1f..1f, 0.02f, "%+.2f", { it.vibrance }, { g, v -> g.copy(vibrance = v) }),
     TEMPERATURE("K", "Temperature", -1f..1f, 0.02f, "%+.2f", { it.temperature }, { g, v -> g.copy(temperature = v) }),
+    TINT("Tn", "Tint", -1f..1f, 0.02f, "%+.2f", { it.tint }, { g, v -> g.copy(tint = v) }),
     VIGNETTE("Vig", "Vignette", 0f..1f, 0.02f, "%.2f", { it.vignette }, { g, v -> g.copy(vignette = v) }),
 }
 
@@ -564,16 +568,35 @@ private fun ColourPage(state: UiState, vm: HeadsupViewModel, onAddLut: () -> Uni
 
 // Effects page
 
-/** Effects drawn over the picture. The dashboard is the first; more can be added as further tabs. */
+private enum class EffectKind(val symbol: String, val label: String) {
+    DASHBOARD("HUD", "Dashboard"),
+}
+
+/** Effects drawn over the picture, picked from round options like the colour corrections. */
 @Composable
 private fun EffectsPanel(style: DashboardStyle, activities: List<LoadedActivity>, update: ((DashboardStyle) -> DashboardStyle) -> Unit) {
-    var tab by rememberSaveable { mutableStateOf(0) }
-    Text("Dashboard", style = MaterialTheme.typography.titleMedium)
-    PillTabs(listOf("Widgets", "Layout", "Text"), tab) { tab = it }
-    when (tab) {
-        0 -> WidgetControls(style, activities, update)
-        1 -> LayoutControls(style, update)
-        else -> TextControls(style, update)
+    var effect by rememberSaveable { mutableStateOf(EffectKind.DASHBOARD) }
+    LazyRow(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+        items(EffectKind.entries) { e ->
+            CircleOption(e.symbol, e.label, selected = e == effect, modified = e == EffectKind.DASHBOARD && style.enabled) { effect = e }
+        }
+    }
+    when (effect) {
+        EffectKind.DASHBOARD -> {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("Show dashboard", Modifier.weight(1f), style = MaterialTheme.typography.labelLarge)
+                Switch(checked = style.enabled, onCheckedChange = { v -> update { it.copy(enabled = v) } })
+            }
+            if (style.enabled) {
+                var tab by rememberSaveable { mutableStateOf(0) }
+                PillTabs(listOf("Widgets", "Layout", "Text"), tab) { tab = it }
+                when (tab) {
+                    0 -> WidgetControls(style, activities, update)
+                    1 -> LayoutControls(style, update)
+                    else -> TextControls(style, update)
+                }
+            }
+        }
     }
 }
 
@@ -589,10 +612,6 @@ private fun WidgetControls(style: DashboardStyle, activities: List<LoadedActivit
                 label = { Text(widget.label) },
             )
         }
-    }
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        Text("Colour heart rate by zone", Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
-        Switch(checked = style.hrZoneColors, onCheckedChange = { v -> update { it.copy(hrZoneColors = v) } })
     }
 }
 

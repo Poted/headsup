@@ -5,6 +5,7 @@ import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.drag
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -175,18 +176,18 @@ fun ClipPreview(
         }
 
         Row(
-            Modifier.fillMaxWidth().clip(RoundedCornerShape(50)).background(HeadsupColors.Surface).padding(horizontal = 6.dp),
+            Modifier.fillMaxWidth().clip(RoundedCornerShape(50)).background(HeadsupColors.CardGradient).border(1.dp, HeadsupColors.Outline, RoundedCornerShape(50)).padding(horizontal = 6.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Box(
                 Modifier
                     .size(36.dp)
                     .clip(CircleShape)
-                    .background(HeadsupColors.AccentStrong)
+                    .background(HeadsupColors.Highlight)
                     .clickable { if (playing) exoPlayer.pause() else exoPlayer.play() },
                 contentAlignment = Alignment.Center,
             ) {
-                Icon(if (playing) HeadsupIcons.Pause else HeadsupIcons.Play, contentDescription = if (playing) "Pause" else "Play", tint = Color.White)
+                Icon(if (playing) HeadsupIcons.Pause else HeadsupIcons.Play, contentDescription = if (playing) "Pause" else "Play", tint = HeadsupColors.OnHighlight)
             }
             Text(
                 "  ${Formats.duration(positionMs)}",
