@@ -1,6 +1,9 @@
 package app.headsup.media
 
 import android.content.Context
+import android.media.MediaCodecInfo.CodecProfileLevel
+import android.media.MediaExtractor
+import android.media.MediaFormat
 import android.media.MediaMetadataRetriever
 import android.net.Uri
 import android.provider.OpenableColumns
@@ -11,6 +14,66 @@ import app.headsup.core.sync.Mp4DateParser
 import app.headsup.core.sync.TimeAnchor
 import app.headsup.core.sync.TimeEvidence
 import app.headsup.core.sync.TimeSource
+import java.util.Locale
+import kotlin.math.abs
+
+/** Codec and colour description of the video track, as stored in the file. */
+data class VideoFormatInfo(
+    val mime: String,
+    val tenBit: Boolean,
+    /** "SDR", "HLG", "PQ" or "unknown". Log footage such as D-Log M is usually tagged SDR. */
+    val transfer: String,
+    val primaries: String,
+) {
+    val isHdr: Boolean get() = transfer == "HLG" || transfer == "PQ"
+
+    override fun toString() =
+        "${mime.removePrefix("video/").uppercase(Locale.US)} ${if (tenBit) "10-bit" else "8-bit"} $transfer $primaries"
+
+    companion object {
+        fun from(format: MediaFormat): VideoFormatInfo {
+            fun int(key: String) = if (format.containsKey(key)) format.getInteger(key) else null
+            val mime = format.getString(MediaFormat.KEY_MIME).orEmpty()
+            val profile = int(MediaFormat.KEY_PROFILE)
+            val tenBit = when (mime) {
+                MediaFormat.MIMETYPE_VIDEO_HEVC -> profile == CodecProfileLevel.HEVCProfileMain10 ||
+                    profile == CodecProfileLevel.HEVCProfileMain10HDR10 ||
+                    profile == CodecProfileLevel.HEVCProfileMain10HDR10Plus
+                MediaFormat.MIMETYPE_VIDEO_AVC -> profile == CodecProfileLevel.AVCProfileHigh10
+                else -> false
+            }
+            val transfer = when (int(MediaFormat.KEY_COLOR_TRANSFER)) {
+                MediaFormat.COLOR_TRANSFER_HLG -> "HLG"
+                MediaFormat.COLOR_TRANSFER_ST2084 -> "PQ"
+                MediaFormat.COLOR_TRANSFER_SDR_VIDEO -> "SDR"
+                MediaFormat.COLOR_TRANSFER_LINEAR -> "linear"
+                else -> "unknown"
+            }
+            val primaries = when (int(MediaFormat.KEY_COLOR_STANDARD)) {
+                MediaFormat.COLOR_STANDARD_BT2020 -> "BT.2020"
+                MediaFormat.COLOR_STANDARD_BT709 -> "BT.709"
+                MediaFormat.COLOR_STANDARD_BT601_NTSC, MediaFormat.COLOR_STANDARD_BT601_PAL -> "BT.601"
+                else -> "unknown"
+            }
+            return VideoFormatInfo(mime, tenBit, transfer, primaries)
+        }
+
+        fun read(context: Context, uri: Uri): VideoFormatInfo? {
+            val extractor = MediaExtractor()
+            return try {
+                extractor.setDataSource(context, uri, null)
+                (0 until extractor.trackCount)
+                    .map { extractor.getTrackFormat(it) }
+                    .firstOrNull { it.getString(MediaFormat.KEY_MIME)?.startsWith("video/") == true }
+                    ?.let(::from)
+            } catch (e: Exception) {
+                null
+            } finally {
+                extractor.release()
+            }
+        }
+    }
+}
 
 data class ClipMetadata(
     val uri: Uri,
@@ -19,10 +82,16 @@ data class ClipMetadata(
     /** Display size, i.e. already swapped for rotated (portrait) recordings. */
     val width: Int,
     val height: Int,
+    /** Container bit rate (video + audio), bits per second. */
+    val bitrate: Int?,
+    val frameRate: Float?,
+    val format: VideoFormatInfo?,
     val info: ClipInfo,
 )
 
 object ClipMetadataReader {
+    private val STANDARD_RATES = floatArrayOf(23.976f, 24f, 25f, 29.97f, 30f, 48f, 50f, 59.94f, 60f, 100f, 119.88f, 120f)
+
     fun read(context: Context, uri: Uri): ClipMetadata {
         val name = displayName(context, uri) ?: uri.lastPathSegment.orEmpty()
         val retriever = MediaMetadataRetriever()
@@ -34,6 +103,8 @@ object ClipMetadataReader {
             val h = key(MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT)?.toIntOrNull() ?: 0
             val rotation = key(MediaMetadataRetriever.METADATA_KEY_VIDEO_ROTATION)?.toIntOrNull() ?: 0
             val rotated = rotation == 90 || rotation == 270
+            val frames = key(MediaMetadataRetriever.METADATA_KEY_VIDEO_FRAME_COUNT)?.toLongOrNull()
+            val frameRate = if (frames != null && duration > 0) snapFrameRate(frames * 1000f / duration) else null
 
             val evidence = listOfNotNull(
                 FilenameTimeParser.parse(name),
@@ -47,12 +118,19 @@ object ClipMetadataReader {
                 durationMs = duration,
                 width = if (rotated) h else w,
                 height = if (rotated) w else h,
+                bitrate = key(MediaMetadataRetriever.METADATA_KEY_BITRATE)?.toIntOrNull(),
+                frameRate = frameRate,
+                format = VideoFormatInfo.read(context, uri),
                 info = ClipInfo(duration, evidence),
             )
         } finally {
             retriever.release()
         }
     }
+
+    /** Frame counts over a rounded duration give e.g. 29.94; report the nominal rate. */
+    private fun snapFrameRate(measured: Float): Float =
+        STANDARD_RATES.minBy { abs(it - measured) }.takeIf { abs(it - measured) / it < 0.02f } ?: measured
 
     fun displayName(context: Context, uri: Uri): String? =
         context.contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { c ->

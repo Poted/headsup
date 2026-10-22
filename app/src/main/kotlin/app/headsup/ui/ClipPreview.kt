@@ -33,7 +33,9 @@ import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.media3.common.Effect
 import androidx.media3.common.MediaItem
+import androidx.media3.effect.SingleColorLut
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.ui.PlayerView
 import app.headsup.core.track.TelemetrySampler
@@ -57,15 +59,26 @@ fun ClipPreview(
     clip: ClipState,
     activity: LoadedActivity?,
     style: DashboardStyle,
+    /** Baked colour table to preview, or null for untouched colours. */
+    gradeCube: Array<Array<IntArray>>?,
+    vignette: Float,
     onMoveWidget: (Widget, Placement) -> Unit,
     onMoveFinished: () -> Unit,
 ) {
     val context = LocalContext.current
     val exoPlayer = remember { ExoPlayer.Builder(context).build() }
     DisposableEffect(exoPlayer) { onDispose { exoPlayer.release() } }
-    LaunchedEffect(clip.meta.uri) {
-        exoPlayer.setMediaItem(MediaItem.fromUri(clip.meta.uri))
+    val lutEffect = remember(gradeCube) { gradeCube?.let { SingleColorLut.createFromCube(it) } }
+    var loadedUri by remember { mutableStateOf<android.net.Uri?>(null) }
+    LaunchedEffect(clip.meta.uri, lutEffect) {
+        // Effects are picked up when the item is prepared, so re-prepare at the same position.
+        val position = if (loadedUri == clip.meta.uri) exoPlayer.currentPosition else 0L
+        loadedUri = clip.meta.uri
+        val wasPlaying = exoPlayer.isPlaying
+        exoPlayer.setVideoEffects(listOfNotNull<Effect>(lutEffect))
+        exoPlayer.setMediaItem(MediaItem.fromUri(clip.meta.uri), position)
         exoPlayer.prepare()
+        if (wasPlaying) exoPlayer.play()
     }
 
     var positionMs by remember { mutableLongStateOf(0L) }
@@ -118,6 +131,7 @@ fun ClipPreview(
                             }
                         },
                 ) {
+                    drawIntoCanvas { renderer.drawVignette(it.nativeCanvas, size.width, size.height, vignette) }
                     val utc = clip.telemetryUtc(positionMs) ?: return@Canvas
                     val track = activity?.track ?: return@Canvas
                     val frame = sampler?.frameAt(utc) ?: return@Canvas

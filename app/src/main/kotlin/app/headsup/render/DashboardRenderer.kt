@@ -5,7 +5,9 @@ import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.Path
+import android.graphics.RadialGradient
 import android.graphics.RectF
+import android.graphics.Shader
 import android.graphics.Typeface
 import app.headsup.core.track.ActivityTrack
 import app.headsup.core.track.Metric
@@ -41,6 +43,7 @@ class DashboardRenderer(private val assets: AssetManager) {
     private val routePaint = strokePaint(Color.argb(170, 255, 255, 255))
     private val donePaint = strokePaint(Layouts.ACCENT)
     private val dotPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.WHITE }
+    private val vignettePaint = Paint(Paint.ANTI_ALIAS_FLAG)
     private val path = Path()
     private var route: Route? = null
     private val typefaces = HashMap<DashboardFont, Typeface>()
@@ -128,6 +131,57 @@ class DashboardRenderer(private val assets: AssetManager) {
         text(canvas, reading.value, x, baseline, valuePaint, style)
         valuePaint.color = style.valueColor
         if (unitWidth > 0f) text(canvas, reading.unit, x + valueWidth + unitGap, baseline, unitPaint, style)
+    }
+
+    /**
+     * Identifies what [draw] would put on screen. Consecutive video frames usually show the same
+     * numbers, so export only redraws (and re-uploads) the overlay when this changes.
+     */
+    fun contentKey(style: DashboardStyle, data: DashboardData, width: Float, height: Float): String {
+        val sb = StringBuilder()
+        val u = unit(width, height, style)
+        for (widget in Widget.entries) {
+            if (widget !in style.widgets || !widget.isAvailableIn(data.track)) continue
+            sb.append(widget.ordinal).append(':')
+            when (widget) {
+                Widget.TIME -> sb.append(Formats.date(data.utcMs, data.zoneOffsetSeconds)).append(' ')
+                    .append(Formats.clock(data.utcMs, data.zoneOffsetSeconds))
+                Widget.MAP -> {
+                    val r = routeFor(data.track)
+                    val lat = data.frame[Metric.LATITUDE]
+                    val lon = data.frame[Metric.LONGITUDE]
+                    if (r != null) {
+                        sb.append(r.indexAfter(data.utcMs))
+                        if (lat != null && lon != null) {
+                            val inner = (Layouts.MAP_SIZE - 36f) * u
+                            val (nx, ny) = r.project(lat, lon)
+                            sb.append('@').append((nx * inner).toInt()).append(',').append((ny * inner).toInt())
+                        }
+                    }
+                }
+                else -> {
+                    val reading = reading(widget, data)
+                    sb.append(reading.value)
+                    val hr = data.frame[Metric.HEART_RATE]
+                    if (widget == Widget.HEART_RATE && style.hrZoneColors && hr != null) sb.append('z').append(data.track.hrZone(hr))
+                }
+            }
+            sb.append('|')
+        }
+        return sb.toString()
+    }
+
+    /** Darkens the frame towards its corners; drawn under the dashboard so the numbers stay bright. */
+    fun drawVignette(canvas: Canvas, width: Float, height: Float, strength: Float) {
+        if (strength <= 0f) return
+        val radius = kotlin.math.hypot(width, height) / 2f
+        vignettePaint.shader = RadialGradient(
+            width / 2f, height / 2f, radius,
+            intArrayOf(Color.TRANSPARENT, Color.TRANSPARENT, Color.argb((strength.coerceIn(0f, 1f) * 230).toInt(), 0, 0, 0)),
+            floatArrayOf(0f, 0.45f, 1f),
+            Shader.TileMode.CLAMP,
+        )
+        canvas.drawRect(0f, 0f, width, height, vignettePaint)
     }
 
     private fun text(canvas: Canvas, text: String, x: Float, y: Float, paint: Paint, style: DashboardStyle) {

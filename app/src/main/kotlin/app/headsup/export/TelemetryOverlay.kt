@@ -1,0 +1,59 @@
+package app.headsup.export
+
+import android.graphics.Bitmap
+import android.graphics.Canvas
+import android.graphics.Color
+import androidx.annotation.OptIn
+import androidx.media3.common.util.Size
+import androidx.media3.common.util.UnstableApi
+import androidx.media3.effect.BitmapOverlay
+import app.headsup.render.DashboardData
+import app.headsup.render.DashboardRenderer
+import app.headsup.render.DashboardStyle
+
+/**
+ * Media3 overlay that draws the dashboard (and vignette) for each exported frame.
+ *
+ * Uploading a full 4K bitmap to the GPU for every frame is slow, and most consecutive frames
+ * show identical numbers. The overlay therefore keeps two bitmaps and only draws into the other
+ * one (handing Media3 a new instance, which triggers an upload) when the visible content changes.
+ */
+@OptIn(UnstableApi::class)
+class TelemetryOverlay(
+    private val renderer: DashboardRenderer,
+    private val style: DashboardStyle,
+    private val vignette: Float,
+    fallbackWidth: Int,
+    fallbackHeight: Int,
+    private val dataAt: (positionMs: Long) -> DashboardData?,
+) : BitmapOverlay() {
+    private var width = fallbackWidth
+    private var height = fallbackHeight
+    private val buffers = arrayOfNulls<Bitmap>(2)
+    private var current = 0
+    private var lastKey: String? = null
+
+    override fun configure(videoSize: Size) {
+        super.configure(videoSize)
+        width = videoSize.width
+        height = videoSize.height
+    }
+
+    override fun getBitmap(presentationTimeUs: Long): Bitmap {
+        val w = width.toFloat()
+        val h = height.toFloat()
+        val data = dataAt(presentationTimeUs / 1000)
+        val key = "${width}x$height " + (data?.let { renderer.contentKey(style, it, w, h) } ?: "-")
+        buffers[current]?.let { if (key == lastKey) return it }
+
+        current = 1 - current
+        val bitmap = buffers[current]?.takeIf { it.width == width && it.height == height }
+            ?: Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888).also { buffers[current] = it }
+        bitmap.eraseColor(Color.TRANSPARENT)
+        val canvas = Canvas(bitmap)
+        renderer.drawVignette(canvas, w, h, vignette)
+        if (data != null) renderer.draw(canvas, w, h, style, data)
+        lastKey = key
+        return bitmap
+    }
+}

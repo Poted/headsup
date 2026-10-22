@@ -58,4 +58,6 @@ dependencies {
     val media3 = "1.8.0"
     implementation("androidx.media3:media3-exoplayer:$media3")
     implementation("androidx.media3:media3-ui:$media3")
+    implementation("androidx.media3:media3-effect:$media3")
+    implementation("androidx.media3:media3-transformer:$media3")
 }

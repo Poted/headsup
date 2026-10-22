@@ -5,6 +5,7 @@ package app.headsup.ui
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -31,6 +32,17 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import android.Manifest
+import android.content.pm.PackageManager
+import android.os.Build
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.platform.LocalContext
+import app.headsup.core.color.ColorGrade
+import app.headsup.export.ExportJob
+import app.headsup.export.ExportKind
+import app.headsup.export.JobStatus
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -64,6 +76,23 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
     val state by vm.state.collectAsStateWithLifecycle()
     val fitPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { vm.addActivities(it) }
     val videoPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { vm.addClips(it) }
+    val lutPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri -> uri?.let(vm::loadLut) }
+    val jobs by vm.exportJobs.collectAsStateWithLifecycle()
+    // The progress notification needs this on Android 13+; export works without it.
+    var pendingExport by remember { mutableStateOf<(() -> Unit)?>(null) }
+    val notificationPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {
+        pendingExport?.invoke()
+        pendingExport = null
+    }
+    val context = LocalContext.current
+    fun startExport(action: () -> Unit) {
+        val granted = Build.VERSION.SDK_INT < 33 ||
+            context.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
+        if (granted) action() else {
+            pendingExport = action
+            notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
+        }
+    }
 
     Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
         Column(
@@ -105,16 +134,50 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
                 val (index, clip) = selected
                 Section("Preview") {
                     val activity = clip.sync?.let { state.activities.getOrNull(it.trackIndex) }
-                    ClipPreview(clip, activity, state.style, onMoveWidget = vm::moveWidget, onMoveFinished = vm::persistStyle)
+                    ClipPreview(
+                        clip, activity, state.style,
+                        gradeCube = if (clip.colorGrade) state.gradeCube else null,
+                        vignette = if (clip.colorGrade) state.grade.vignette else 0f,
+                        onMoveWidget = vm::moveWidget,
+                        onMoveFinished = vm::persistStyle,
+                    )
                     if (clip.sync == null) Hint("No activity covers this clip, so there is nothing to show.")
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text("Apply colour to this clip", Modifier.weight(1f))
+                        Switch(checked = clip.colorGrade, onCheckedChange = { vm.setClipGrade(index, it) })
+                    }
                     OffsetControls(clip.manualOffsetMs) { vm.setManualOffset(index, it) }
                 }
+            }
+
+            Section("Colour") {
+                ColorControls(
+                    grade = state.grade,
+                    lutName = state.lutName,
+                    onLoadLut = { lutPicker.launch(arrayOf("*/*")) },
+                    onRemoveLut = vm::removeLut,
+                    update = vm::updateGrade,
+                )
             }
 
             Section("Dashboard") {
                 StyleControls(state.style, state.activities, vm::updateStyle)
             }
-            Hint("Export comes in the next stage.")
+
+            Section("Export") {
+                ExportControls(
+                    bitrateFactor = state.bitrateFactor,
+                    onBitrateFactor = vm::setBitrateFactor,
+                    canExport = state.clips.any { it.sync != null },
+                    canTest = state.selectedClip?.let { state.clips.getOrNull(it)?.sync } != null,
+                    jobs = jobs,
+                    onExportVideos = { startExport(vm::exportVideos) },
+                    onExportOverlays = { startExport(vm::exportOverlays) },
+                    onTenBitTest = { startExport(vm::runTenBitTest) },
+                    onCancel = vm::cancelExports,
+                    onClear = vm::clearFinishedExports,
+                )
+            }
         }
     }
 }
@@ -176,7 +239,16 @@ private fun ClipCard(clip: ClipState, activity: LoadedActivity?, selected: Boole
         Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                 Text(m.name, style = MaterialTheme.typography.titleSmall)
-                Text("${m.width}×${m.height} · ${Formats.duration(m.durationMs)}", style = MaterialTheme.typography.bodySmall)
+                Text(
+                    listOfNotNull(
+                        "${m.width}×${m.height}",
+                        m.frameRate?.let { String.format(Locale.US, "%.4g fps", it) },
+                        Formats.duration(m.durationMs),
+                        m.bitrate?.let { "${it / 1_000_000} Mb/s" },
+                    ).joinToString(" · "),
+                    style = MaterialTheme.typography.bodySmall,
+                )
+                m.format?.let { Text(it.toString(), style = MaterialTheme.typography.bodySmall) }
                 SyncSummary(clip, activity)
             }
             TextButton(onClick = onRemove) { Text("Remove") }
@@ -342,6 +414,110 @@ private fun ColorRow(title: String, selected: Int, onPick: (Int) -> Unit) {
                     .background(Color(c), CircleShape)
                     .clickable { onPick(c) },
             )
+        }
+    }
+}
+
+@Composable
+private fun ColorControls(
+    grade: ColorGrade,
+    lutName: String?,
+    onLoadLut: () -> Unit,
+    onRemoveLut: () -> Unit,
+    update: ((ColorGrade) -> ColorGrade) -> Unit,
+) {
+    Hint("Applied to clips with \"Apply colour\" on (log footage by default). The dashboard is drawn on top and is not affected.")
+    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text(lutName ?: "No camera LUT", Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
+        OutlinedButton(onClick = onLoadLut) { Text(if (lutName == null) "Load .cube" else "Change") }
+        if (lutName != null) TextButton(onClick = onRemoveLut) { Text("Remove") }
+    }
+    GradeSlider("Exposure", grade.exposure, -2f..2f, "%+.1f EV") { v -> update { it.copy(exposure = v) } }
+    GradeSlider("Brightness", grade.brightness, -1f..1f) { v -> update { it.copy(brightness = v) } }
+    GradeSlider("Contrast", grade.contrast, -1f..1f) { v -> update { it.copy(contrast = v) } }
+    GradeSlider("Shadows", grade.shadows, -1f..1f) { v -> update { it.copy(shadows = v) } }
+    GradeSlider("Highlights", grade.highlights, -1f..1f) { v -> update { it.copy(highlights = v) } }
+    GradeSlider("Saturation", grade.saturation, -1f..1f) { v -> update { it.copy(saturation = v) } }
+    GradeSlider("Temperature", grade.temperature, -1f..1f) { v -> update { it.copy(temperature = v) } }
+    GradeSlider("Vignette", grade.vignette, 0f..1f) { v -> update { it.copy(vignette = v) } }
+    if (grade != ColorGrade()) TextButton(onClick = { update { ColorGrade() } }) { Text("Reset corrections") }
+}
+
+@Composable
+private fun GradeSlider(title: String, value: Float, range: ClosedFloatingPointRange<Float>, format: String = "%+.2f", onChange: (Float) -> Unit) {
+    Column {
+        Row {
+            Text(title, Modifier.weight(1f), style = MaterialTheme.typography.labelLarge)
+            Text(String.format(Locale.US, format, value), style = MaterialTheme.typography.labelLarge)
+        }
+        Slider(value = value, onValueChange = onChange, valueRange = range)
+    }
+}
+
+@Composable
+private fun ExportControls(
+    bitrateFactor: Float,
+    onBitrateFactor: (Float) -> Unit,
+    canExport: Boolean,
+    canTest: Boolean,
+    jobs: List<ExportJob>,
+    onExportVideos: () -> Unit,
+    onExportOverlays: () -> Unit,
+    onTenBitTest: () -> Unit,
+    onCancel: () -> Unit,
+    onClear: () -> Unit,
+) {
+    Text("Video bit rate", style = MaterialTheme.typography.labelLarge)
+    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        for ((factor, label) in listOf(1f to "Like source", 1.5f to "1.5×", 2f to "2×")) {
+            FilterChip(selected = bitrateFactor == factor, onClick = { onBitrateFactor(factor) }, label = { Text(label) })
+        }
+    }
+    Button(onClick = onExportVideos, enabled = canExport, modifier = Modifier.fillMaxWidth()) {
+        Text("Export videos with dashboard")
+    }
+    Hint("HEVC, source resolution and frame rate, saved to DCIM/TelemetryOverlay. For editing in DJI Mimo.")
+    OutlinedButton(onClick = onExportOverlays, enabled = canExport, modifier = Modifier.fillMaxWidth()) {
+        Text("Export dashboard only (PNG for DaVinci)")
+    }
+    Hint("Transparent PNG frames in a ZIP, saved to Download/TelemetryOverlay. Colour settings are not applied.")
+    OutlinedButton(onClick = onTenBitTest, enabled = canTest, modifier = Modifier.fillMaxWidth()) {
+        Text("Test 10-bit export (first 3 s of selected clip)")
+    }
+
+    if (jobs.isNotEmpty()) {
+        jobs.forEach { JobRow(it) }
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            if (jobs.any { it.status == JobStatus.QUEUED || it.status == JobStatus.RUNNING }) {
+                TextButton(onClick = onCancel) { Text("Cancel all") }
+            } else {
+                TextButton(onClick = onClear) { Text("Clear list") }
+            }
+        }
+    }
+}
+
+@Composable
+private fun JobRow(job: ExportJob) {
+    val kind = when (job.request.kind) {
+        ExportKind.VIDEO -> "Video"
+        ExportKind.PNG_SEQUENCE -> "PNG"
+        ExportKind.TEN_BIT_TEST -> "10-bit test"
+    }
+    Card(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Text("$kind · ${job.request.name}", style = MaterialTheme.typography.titleSmall)
+            when (job.status) {
+                JobStatus.QUEUED -> Text("Waiting", style = MaterialTheme.typography.bodySmall)
+                JobStatus.RUNNING -> {
+                    LinearProgressIndicator(progress = { job.progress / 100f }, modifier = Modifier.fillMaxWidth())
+                    Text("${job.progress}%", style = MaterialTheme.typography.bodySmall)
+                }
+                JobStatus.DONE -> Text("Done", color = Color(0xFF4CAF50), style = MaterialTheme.typography.bodySmall)
+                JobStatus.FAILED -> Text("Failed", color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                JobStatus.CANCELLED -> Text("Cancelled", style = MaterialTheme.typography.bodySmall)
+            }
+            job.message?.let { SelectionContainer { Text(it, style = MaterialTheme.typography.bodySmall) } }
         }
     }
 }
