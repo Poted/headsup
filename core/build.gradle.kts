@@ -1,7 +1,7 @@
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 
 plugins {
-    kotlin("jvm")
+    kotlin("jvm") version "2.2.0"
 }
 
 // Bytecode stays at Java 17 so the module can be consumed by the Android app.
