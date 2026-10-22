@@ -4,7 +4,17 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.drag
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.Icon
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.aspectRatio
@@ -77,10 +87,15 @@ fun ClipPreview(
         exoPlayer.setMediaItem(MediaItem.fromUri(clip.meta.uri))
         exoPlayer.prepare()
     }
+    var nudge by remember { mutableStateOf(1L) }
     LaunchedEffect(gradeCube) {
         liveLut.update(gradeCube)
-        // A paused player only redraws on a new frame, so re-render the current one.
-        if (!exoPlayer.isPlaying) exoPlayer.seekTo(exoPlayer.currentPosition)
+        // A paused player only draws when a new frame is decoded, and ignores a seek to the
+        // position it is already at, so step 1 ms back and forth to re-render the same picture.
+        if (!exoPlayer.isPlaying) {
+            exoPlayer.seekTo((exoPlayer.currentPosition + nudge).coerceAtLeast(0L))
+            nudge = -nudge
+        }
     }
 
     var positionMs by remember { mutableLongStateOf(0L) }
@@ -97,8 +112,11 @@ fun ClipPreview(
     val currentStyle by rememberUpdatedState(style)
     val aspect = if (clip.meta.width > 0 && clip.meta.height > 0) clip.meta.width.toFloat() / clip.meta.height else 16f / 9f
 
-    Column {
-        Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+    Column(Modifier.padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Box(
+            Modifier.fillMaxWidth().clip(RoundedCornerShape(20.dp)).background(Color.Black),
+            contentAlignment = Alignment.Center,
+        ) {
             Box(Modifier.heightIn(max = maxHeight).aspectRatio(aspect, matchHeightConstraintsFirst = true)) {
                 AndroidView(
                     factory = { PlayerView(it).apply { player = exoPlayer; useController = false } },
@@ -145,19 +163,34 @@ fun ClipPreview(
             }
         }
 
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            TextButton(onClick = { if (playing) exoPlayer.pause() else exoPlayer.play() }) {
-                Text(if (playing) "Pause" else "Play")
+        Row(
+            Modifier.fillMaxWidth().clip(RoundedCornerShape(50)).background(HeadsupColors.Surface).padding(horizontal = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Box(
+                Modifier
+                    .size(36.dp)
+                    .clip(CircleShape)
+                    .background(HeadsupColors.AccentStrong)
+                    .clickable { if (playing) exoPlayer.pause() else exoPlayer.play() },
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(if (playing) HeadsupIcons.Pause else HeadsupIcons.Play, contentDescription = if (playing) "Pause" else "Play", tint = Color.White)
             }
+            Text(
+                "  ${Formats.duration(positionMs)}",
+                style = MaterialTheme.typography.labelMedium,
+            )
             Slider(
                 value = positionMs.toFloat(),
                 onValueChange = { exoPlayer.seekTo(it.toLong()) },
                 valueRange = 0f..clip.meta.durationMs.coerceAtLeast(1L).toFloat(),
-                modifier = Modifier.weight(1f),
+                modifier = Modifier.weight(1f).padding(horizontal = 8.dp),
             )
             Text(
-                " ${Formats.duration(positionMs)} / ${Formats.duration(clip.meta.durationMs)}",
-                style = MaterialTheme.typography.bodySmall,
+                "${Formats.duration(clip.meta.durationMs)}  ",
+                style = MaterialTheme.typography.labelMedium,
+                color = HeadsupColors.TextMuted,
             )
         }
     }

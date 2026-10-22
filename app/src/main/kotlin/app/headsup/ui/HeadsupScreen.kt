@@ -14,6 +14,13 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.Icon
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
@@ -84,7 +91,12 @@ import java.time.ZoneOffset
 import java.util.Locale
 import kotlin.math.roundToLong
 
-private enum class Page(val label: String) { CLIPS("Clips"), COLOUR("Colour"), DASHBOARD("Dashboard"), EXPORT("Export") }
+private enum class Tool(val label: String, val icon: ImageVector) {
+    SYNC("Sync", HeadsupIcons.Sync),
+    COLOUR("Colour", HeadsupIcons.Colour),
+    DASHBOARD("Dashboard", HeadsupIcons.Dashboard),
+    EXPORT("Export", HeadsupIcons.Export),
+}
 
 @Composable
 fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
@@ -93,6 +105,8 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
     val fitPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { vm.addActivities(it) }
     val videoPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { vm.addClips(it) }
     val lutPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri -> uri?.let(vm::importLut) }
+    val addFit = { fitPicker.launch(arrayOf("*/*")) }
+    val addVideos = { videoPicker.launch(arrayOf("video/*")) }
 
     // The progress notification needs this on Android 13+; export works without it.
     var pendingExport by remember { mutableStateOf<(() -> Unit)?>(null) }
@@ -110,55 +124,59 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
         }
     }
 
-    var page by rememberSaveable { mutableStateOf(Page.CLIPS) }
+    var tool by rememberSaveable { mutableStateOf(Tool.SYNC) }
     val exporting = jobs.any { it.status == JobStatus.QUEUED || it.status == JobStatus.RUNNING }
-    val previewMaxHeight = (LocalConfiguration.current.screenHeightDp * 0.42f).dp
+    val previewMaxHeight = (LocalConfiguration.current.screenHeightDp * 0.38f).dp
     TenBitResultDialog(jobs)
 
     Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
         Column(Modifier.fillMaxSize().systemBarsPadding()) {
-            Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+            Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
                 Text("Headsup", Modifier.weight(1f), style = MaterialTheme.typography.titleLarge)
-                TextButton(onClick = { fitPicker.launch(arrayOf("*/*")) }) { Text("+ FIT") }
-                TextButton(onClick = { videoPicker.launch(arrayOf("video/*")) }) { Text("+ Videos") }
+                PillButton(HeadsupIcons.Watch, "FIT", addFit)
+                Spacer(Modifier.width(8.dp))
+                PillButton(HeadsupIcons.Video, "Videos", addVideos)
             }
-            if (state.busy) LinearProgressIndicator(Modifier.fillMaxWidth())
+            if (state.busy) LinearProgressIndicator(Modifier.fillMaxWidth().padding(horizontal = 16.dp))
 
-            // The picture stays on screen while any page below is being edited.
+            // The picture stays on screen while any tool below is being used.
             val selected = state.selected
-            if (selected != null) {
-                if (exporting) {
-                    Box(
-                        Modifier.fillMaxWidth().height(96.dp).background(MaterialTheme.colorScheme.surfaceVariant),
-                        contentAlignment = Alignment.Center,
-                    ) { Text("Preview paused while exporting") }
-                } else {
-                    ClipPreview(
-                        clip = selected,
-                        activity = selected.sync?.let { state.activities.getOrNull(it.trackIndex) },
-                        style = state.style,
-                        gradeCube = state.previewCube,
-                        vignette = if (selected.colorGrade) state.grade.vignette else 0f,
-                        maxHeight = previewMaxHeight,
-                        onMoveWidget = vm::moveWidget,
-                        onMoveFinished = vm::persistStyle,
-                    )
-                }
+            when {
+                selected == null -> EmptyState(hasActivities = state.activities.isNotEmpty(), onAddFit = addFit, onAddVideos = addVideos)
+                exporting -> Box(
+                    Modifier.padding(horizontal = 16.dp).fillMaxWidth().height(120.dp).clip(RoundedCornerShape(20.dp)).background(HeadsupColors.Surface),
+                    contentAlignment = Alignment.Center,
+                ) { Hint("Preview paused while exporting") }
+                else -> ClipPreview(
+                    clip = selected,
+                    activity = selected.sync?.let { state.activities.getOrNull(it.trackIndex) },
+                    style = state.style,
+                    gradeCube = state.previewCube,
+                    vignette = if (selected.colorGrade) state.grade.vignette else 0f,
+                    maxHeight = previewMaxHeight,
+                    onMoveWidget = vm::moveWidget,
+                    onMoveFinished = vm::persistStyle,
+                )
             }
+            if (state.clips.isNotEmpty()) ClipStrip(state.clips, state.selectedClip, vm::selectClip, addVideos)
 
-            TabRow(selectedTabIndex = page.ordinal) {
-                for (p in Page.entries) Tab(selected = page == p, onClick = { page = p }, text = { Text(p.label) })
-            }
             Column(
-                Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState()).padding(16.dp),
+                Modifier
+                    .weight(1f)
+                    .fillMaxWidth()
+                    .padding(horizontal = 12.dp)
+                    .clip(RoundedCornerShape(24.dp))
+                    .background(HeadsupColors.Surface)
+                    .verticalScroll(rememberScrollState())
+                    .padding(16.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
                 if (state.messages.isNotEmpty()) Messages(state.messages, vm::dismissMessages)
-                when (page) {
-                    Page.CLIPS -> ClipsPage(state, vm)
-                    Page.COLOUR -> ColourPage(state, vm, onAddLut = { lutPicker.launch(arrayOf("*/*")) })
-                    Page.DASHBOARD -> StyleControls(state.style, state.activities, vm::updateStyle)
-                    Page.EXPORT -> ExportControls(
+                when (tool) {
+                    Tool.SYNC -> SyncPanel(state, vm, addFit)
+                    Tool.COLOUR -> ColourPage(state, vm, onAddLut = { lutPicker.launch(arrayOf("*/*")) })
+                    Tool.DASHBOARD -> StyleControls(state.style, state.activities, vm::updateStyle)
+                    Tool.EXPORT -> ExportControls(
                         bitrateFactor = state.bitrateFactor,
                         onBitrateFactor = vm::setBitrateFactor,
                         canExport = state.clips.any { it.sync != null },
@@ -172,8 +190,67 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
                     )
                 }
             }
+            BottomToolbar(tool) { tool = it }
         }
     }
+}
+
+@Composable
+private fun PillButton(icon: ImageVector, label: String, onClick: () -> Unit) {
+    Row(
+        Modifier.clip(RoundedCornerShape(50)).background(HeadsupColors.SurfaceHigh).clickable(onClick = onClick).padding(horizontal = 12.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(HeadsupIcons.Add, contentDescription = null, Modifier.size(16.dp), tint = HeadsupColors.Accent)
+        Icon(icon, contentDescription = null, Modifier.size(18.dp), tint = Color.White)
+        Spacer(Modifier.width(6.dp))
+        Text(label, style = MaterialTheme.typography.labelLarge)
+    }
+}
+
+@Composable
+private fun BottomToolbar(selected: Tool, onSelect: (Tool) -> Unit) {
+    Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp), horizontalArrangement = Arrangement.SpaceEvenly) {
+        for (t in Tool.entries) {
+            val on = t == selected
+            Column(
+                Modifier
+                    .clip(RoundedCornerShape(16.dp))
+                    .background(if (on) HeadsupColors.SurfaceHigh else Color.Transparent)
+                    .clickable { onSelect(t) }
+                    .padding(horizontal = 14.dp, vertical = 6.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+                Icon(t.icon, contentDescription = t.label, tint = if (on) HeadsupColors.Accent else HeadsupColors.TextMuted)
+                Text(t.label, style = MaterialTheme.typography.labelSmall, color = if (on) Color.White else HeadsupColors.TextMuted)
+            }
+        }
+    }
+}
+
+@Composable
+private fun EmptyState(hasActivities: Boolean, onAddFit: () -> Unit, onAddVideos: () -> Unit) {
+    Column(
+        Modifier.padding(horizontal = 16.dp).fillMaxWidth().clip(RoundedCornerShape(20.dp)).background(HeadsupColors.Surface).padding(20.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Text("Start a project", style = MaterialTheme.typography.titleMedium)
+        Hint("Clips are matched to your watch data automatically by their recording time.")
+        Button(onClick = onAddFit, modifier = Modifier.fillMaxWidth()) {
+            Text(if (hasActivities) "1. Activity added ✓  (add another)" else "1. Add the FIT file from your watch")
+        }
+        Button(onClick = onAddVideos, modifier = Modifier.fillMaxWidth()) { Text("2. Add videos") }
+    }
+}
+
+/** Rounded block used to group related controls inside a panel. */
+@Composable
+private fun Group(content: @Composable ColumnScope.() -> Unit) {
+    Column(
+        Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(HeadsupColors.SurfaceHigh).padding(12.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+        content = content,
+    )
 }
 
 @Composable
@@ -201,31 +278,41 @@ private fun Messages(messages: List<String>, onDismiss: () -> Unit) {
     }
 }
 
-// Clips page
+// Sync panel
 
 @Composable
-private fun ClipsPage(state: UiState, vm: HeadsupViewModel) {
-    Label("Activities")
-    if (state.activities.isEmpty()) Hint("Add the .FIT file(s) from your watch with + FIT.")
-    state.activities.forEachIndexed { i, a -> ActivityCard(a, onRemove = { vm.removeActivity(i) }) }
-
-    Label("Clips")
-    if (state.clips.isEmpty()) Hint("Add videos with + Videos. Each one is matched to the activity that covers it.")
-    state.clips.forEachIndexed { i, clip ->
-        ClipCard(
-            clip = clip,
-            activity = clip.sync?.let { state.activities.getOrNull(it.trackIndex) },
-            selected = i == state.selectedClip,
-            onClick = { vm.selectClip(i) },
-            onRemove = { vm.removeClip(i) },
-        )
-    }
-
+private fun SyncPanel(state: UiState, vm: HeadsupViewModel, onAddFit: () -> Unit) {
     val index = state.selectedClip
     val clip = state.selected
     if (index != null && clip != null) {
-        StartTimeControls(clip, state.activities) { vm.setManualStart(index, it) }
-        OffsetControls(clip.manualOffsetMs) { vm.setManualOffset(index, it) }
+        val m = clip.meta
+        Group {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text(m.name, style = MaterialTheme.typography.titleSmall)
+                    Hint(
+                        listOfNotNull(
+                            "${m.width}×${m.height}",
+                            m.frameRate?.let { String.format(Locale.US, "%.4g fps", it) },
+                            m.bitrate?.let { "${it / 1_000_000} Mb/s" },
+                            m.format?.toString(),
+                        ).joinToString(" · "),
+                    )
+                }
+                TextButton(onClick = { vm.removeClip(index) }) { Text("Remove") }
+            }
+            SyncSummary(clip, clip.sync?.let { state.activities.getOrNull(it.trackIndex) })
+        }
+        Group { StartTimeControls(clip, state.activities) { vm.setManualStart(index, it) } }
+        Group { OffsetControls(clip.manualOffsetMs) { vm.setManualOffset(index, it) } }
+    }
+    Group {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("Activities", Modifier.weight(1f), style = MaterialTheme.typography.labelLarge)
+            TextButton(onClick = onAddFit) { Text("+ FIT") }
+        }
+        if (state.activities.isEmpty()) Hint("Add the .FIT file(s) from your watch.")
+        state.activities.forEachIndexed { i, a -> ActivityRow(a, onRemove = { vm.removeActivity(i) }) }
     }
 }
 
@@ -285,54 +372,21 @@ private fun StartTimeDialog(initial: LocalDateTime, onDismiss: () -> Unit, onCon
     )
 }
 
+
 @Composable
-private fun ActivityCard(activity: LoadedActivity, onRemove: () -> Unit) {
+private fun ActivityRow(activity: LoadedActivity, onRemove: () -> Unit) {
     val t = activity.track
     val zone = t.utcOffsetSeconds
     val shownZone = zone ?: ZoneId.systemDefault().rules.getOffset(Instant.ofEpochMilli(t.startMs)).totalSeconds
-    Card(Modifier.fillMaxWidth()) {
-        Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
-            Column(Modifier.weight(1f)) {
-                Text(t.sportName ?: t.sport.name.lowercase().replaceFirstChar { it.uppercase() }, style = MaterialTheme.typography.titleSmall)
-                Text(
-                    "${Formats.date(t.startMs, shownZone)}  ${Formats.clock(t.startMs, shownZone)}–${Formats.clock(t.endMs, shownZone)}" +
-                        "  (${Formats.duration(t.endMs - t.startMs)})",
-                    style = MaterialTheme.typography.bodySmall,
-                )
-                Text(
-                    if (zone != null) "Watch time zone ${Formats.utcOffset(zone)}" else "No time zone in file, using the phone's",
-                    style = MaterialTheme.typography.bodySmall,
-                )
-            }
-            TextButton(onClick = onRemove) { Text("Remove") }
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Column(Modifier.weight(1f)) {
+            Text(t.sportName ?: t.sport.name.lowercase().replaceFirstChar { it.uppercase() }, style = MaterialTheme.typography.bodyMedium)
+            Hint(
+                "${Formats.date(t.startMs, shownZone)}  ${Formats.clock(t.startMs, shownZone)}–${Formats.clock(t.endMs, shownZone)}" +
+                    " · " + (if (zone != null) Formats.utcOffset(zone) else "phone time zone"),
+            )
         }
-    }
-}
-
-@Composable
-private fun ClipCard(clip: ClipState, activity: LoadedActivity?, selected: Boolean, onClick: () -> Unit, onRemove: () -> Unit) {
-    val m = clip.meta
-    Card(
-        Modifier.fillMaxWidth().clickable(onClick = onClick),
-        border = if (selected) BorderStroke(2.dp, MaterialTheme.colorScheme.primary) else null,
-    ) {
-        Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
-            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                Text(m.name, style = MaterialTheme.typography.titleSmall)
-                Text(
-                    listOfNotNull(
-                        "${m.width}×${m.height}",
-                        m.frameRate?.let { String.format(Locale.US, "%.4g fps", it) },
-                        Formats.duration(m.durationMs),
-                        m.bitrate?.let { "${it / 1_000_000} Mb/s" },
-                        m.format?.toString(),
-                    ).joinToString(" · "),
-                    style = MaterialTheme.typography.bodySmall,
-                )
-                SyncSummary(clip, activity)
-            }
-            TextButton(onClick = onRemove) { Text("Remove") }
-        }
+        TextButton(onClick = onRemove) { Text("Remove") }
     }
 }
 
