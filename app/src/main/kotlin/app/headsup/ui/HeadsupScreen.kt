@@ -554,7 +554,6 @@ private fun zoneLabel(reason: ZoneReason, offset: Int) = when (reason) {
     ZoneReason.SEARCHED -> "guessed time zone (${Formats.utcOffset(offset)})"
 }
 
-@Composable
 /**
  * Sync by picking a moment: the graph shows the data around what the playhead is matched to now
  * (centre line); tapping the same moment on the graph (a stop, a sprint, the top of a climb) and
