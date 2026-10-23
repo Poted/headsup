@@ -160,6 +160,7 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
     val fitPicker = rememberLauncherForActivityResult(OpenDocumentsIn(DOWNLOADS_FOLDER)) { vm.addActivities(it) }
     val videoPicker = rememberLauncherForActivityResult(ActivityResultContracts.PickMultipleVisualMedia()) { vm.addClips(it) }
     val lutPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri -> uri?.let(vm::importLut) }
+    val musicPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri -> uri?.let(vm::setMusic) }
     val addFit = { fitPicker.launch(arrayOf("*/*")) }
     val addVideos = { videoPicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageAndVideo)) }
 
@@ -246,6 +247,8 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
                         autoPlay = continuePlaying,
                         seekRequest = seekRequest,
                         onSeekDone = { seekRequest = null },
+                        music = state.music,
+                        timelineOffsetMs = state.clips.take(state.selectedClip ?: 0).sumOf { it.timelineDurationMs },
                         onAutoPlayStarted = { continuePlaying = false },
                         onEnded = {
                             // The timeline plays through: the next clip follows.
@@ -284,6 +287,7 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
                 when (tool) {
                     Tool.FILES -> FilesPanel(
                         state, vm, playhead, onCutScrub = { cutScrub.value = it }, onAddVideos = addVideos, onAddFit = addFit,
+                        onAddMusic = { musicPicker.launch(arrayOf("audio/*")) },
                         onShowHighlight = { f ->
                             val index = state.clips.indexOfFirst { it.id == f.clipId }
                             if (index >= 0) {
@@ -427,6 +431,7 @@ private fun FilesPanel(
     onAddVideos: () -> Unit,
     onAddFit: () -> Unit,
     onShowHighlight: (FoundHighlight) -> Unit,
+    onAddMusic: () -> Unit,
 ) {
     ProjectRow(state, vm)
     Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -488,7 +493,32 @@ private fun FilesPanel(
         if (state.activities.isEmpty()) Hint("Add the .FIT file(s) from your watch.")
         state.activities.forEachIndexed { i, a -> ActivityRow(a, onRemove = { vm.removeActivity(i) }) }
     }
+    Group { MusicControls(state, vm, onAddMusic) }
     Group { HighlightControls(state, vm, onShowHighlight) }
+}
+
+/** Music under the whole timeline, with its level and the level of the clips' own sound. */
+@Composable
+private fun MusicControls(state: UiState, vm: HeadsupViewModel, onAdd: () -> Unit) {
+    val music = state.music
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Label("Music")
+        Spacer(Modifier.weight(1f))
+        if (music != null) SmallAction("Remove", vm::removeMusic)
+        SmallAction(if (music == null) "+ Add" else "Change", onAdd, enabled = !state.busy)
+    }
+    if (music == null) {
+        Hint("A track under the whole timeline; it loops if shorter and fades out at the end.")
+        return
+    }
+    Text(music.name, style = MaterialTheme.typography.bodyMedium, maxLines = 1)
+    ValueHeader("Music", String.format(Locale.US, "%.0f %%", music.volume * 100))
+    RulerSlider(music.volume, 0f..1f, 0.02f, { v -> vm.updateMusic { it.copy(volume = v) } }, onReset = { vm.updateMusic { it.copy(volume = 0.8f) } })
+    ValueHeader("Clip sound", String.format(Locale.US, "%.0f %%", music.originalVolume * 100))
+    RulerSlider(
+        music.originalVolume, 0f..1f, 0.02f, { v -> vm.updateMusic { it.copy(originalVolume = v) } },
+        onReset = { vm.updateMusic { it.copy(originalVolume = 0.4f) } },
+    )
 }
 
 /**
