@@ -143,6 +143,9 @@ fun ClipPreview(
     onAutoPlayStarted: () -> Unit = {},
     /** Playback reached the end of the clip. */
     onEnded: () -> Unit = {},
+    /** Position in the clip to jump to once (e.g. a highlight), then [onSeekDone]. */
+    seekRequest: Long? = null,
+    onSeekDone: () -> Unit = {},
 ) {
     val context = LocalContext.current
     val exoPlayer = remember { ExoPlayer.Builder(context).build() }
@@ -188,6 +191,13 @@ fun ClipPreview(
         onDispose { exoPlayer.removeListener(listener) }
     }
     LaunchedEffect(scrubMs) { scrubMs?.let(scrubber::seek) }
+    // Declared after the media item is set, so it runs after it for a newly selected clip.
+    LaunchedEffect(seekRequest, clip.id) {
+        val target = seekRequest ?: return@LaunchedEffect
+        exoPlayer.pause()
+        exoPlayer.seekTo(target.coerceIn(0L, clip.durationMs))
+        onSeekDone()
+    }
     var nudge by remember { mutableStateOf(1L) }
     LaunchedEffect(gradeCube) {
         if (shaderPreview) return@LaunchedEffect

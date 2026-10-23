@@ -161,3 +161,12 @@ The timeline is saved automatically (`ProjectStore`, JSON in the app's private s
 after each change and the last project reopens on start. A project stores file URIs, cuts, sync
 corrections, colour (clip, group, mask, global) and effects; the dashboard layout stays an app
 setting. Picked files get a persistable read permission so a project can open them again later.
+
+## Highlights
+
+`HighlightFinder` looks at the watch data once a second, only where there is video: smoothed
+top speed, sprints (speed gained in 5 s), fastest descent and steepest climb (vertical speed over
+10 s), highest point, heart-rate and power peaks. Each kind is scored against the whole
+activity (median → best = 0 → 1), weighted (speed and descents first), and moments closer than
+20 s merge. A highlight reel is a new project of short clips around the chosen moments, cut
+from the clips that show them with their colour and effects.

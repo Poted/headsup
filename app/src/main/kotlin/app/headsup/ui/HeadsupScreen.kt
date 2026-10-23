@@ -89,6 +89,8 @@ import app.headsup.core.color.ColorGrade
 import app.headsup.core.color.ColourMask
 import app.headsup.core.color.MaskKind
 import app.headsup.core.frame.Reframe
+import app.headsup.core.highlight.HighlightFinder
+import app.headsup.core.highlight.HighlightKind
 import app.headsup.core.color.CineStyle
 import android.graphics.Bitmap
 import app.headsup.core.color.SkinTone
@@ -106,6 +108,7 @@ import app.headsup.render.EffectSettings
 import app.headsup.render.GraphMetric
 import app.headsup.render.DashboardStyle
 import app.headsup.render.Formats
+import app.headsup.render.Reading
 import app.headsup.render.LayoutPreset
 import app.headsup.render.Layouts
 import app.headsup.render.TextEffect
@@ -173,6 +176,8 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
     val framing = tool == Tool.EFFECTS && effectKind == EffectKind.FRAME
     // Set when a clip ended during playback, so the next one starts playing on its own.
     var continuePlaying by remember { mutableStateOf(false) }
+    // Where to jump in the selected clip, e.g. after tapping a highlight.
+    var seekRequest by remember { mutableStateOf<Long?>(null) }
     val measuring = tool == Tool.COLOUR && adjustment == Adjustment.SKIN && state.target != GradeTarget.MASK
     val editingMasks = tool == Tool.COLOUR && state.target == GradeTarget.MASK && state.selected?.colorGrade == true
     // Read only where needed (cut controls), so playback does not recompose the whole screen.
@@ -223,6 +228,8 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
                     onReframe = if (framing) { r -> vm.updateReframe { r } } else null,
                     showGrid = framing,
                     autoPlay = continuePlaying,
+                    seekRequest = seekRequest,
+                    onSeekDone = { seekRequest = null },
                     onAutoPlayStarted = { continuePlaying = false },
                     onEnded = {
                         // The timeline plays through: the next clip follows.
@@ -256,7 +263,16 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
             ) {
                 if (state.messages.isNotEmpty()) Messages(state.messages, vm::dismissMessages)
                 when (tool) {
-                    Tool.FILES -> FilesPanel(state, vm, playhead, onCutScrub = { cutScrub.value = it }, onAddVideos = addVideos, onAddFit = addFit)
+                    Tool.FILES -> FilesPanel(
+                        state, vm, playhead, onCutScrub = { cutScrub.value = it }, onAddVideos = addVideos, onAddFit = addFit,
+                        onShowHighlight = { f ->
+                            val index = state.clips.indexOfFirst { it.id == f.clipId }
+                            if (index >= 0) {
+                                if (index != state.selectedClip) vm.selectClip(index)
+                                seekRequest = f.positionMs
+                            }
+                        },
+                    )
                     Tool.COLOUR -> ColourPage(state, vm, adjustment, { adjustment = it }, onAddLut = { lutPicker.launch(arrayOf("*/*")) }, frameSource.value)
                     Tool.EFFECTS -> EffectsPanel(state, vm, effectKind) { effectKind = it }
                     Tool.EXPORT -> ExportControls(
@@ -370,6 +386,7 @@ private fun FilesPanel(
     onCutScrub: (Long?) -> Unit,
     onAddVideos: () -> Unit,
     onAddFit: () -> Unit,
+    onShowHighlight: (FoundHighlight) -> Unit,
 ) {
     ProjectRow(state, vm)
     Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -417,6 +434,82 @@ private fun FilesPanel(
         Label("Activities")
         if (state.activities.isEmpty()) Hint("Add the .FIT file(s) from your watch.")
         state.activities.forEachIndexed { i, a -> ActivityRow(a, onRemove = { vm.removeActivity(i) }) }
+    }
+    Group { HighlightControls(state, vm, onShowHighlight) }
+}
+
+/**
+ * Highlights: the best moments found in the watch data (top speed, sprints, descents, climbs,
+ * summit, heart-rate and power peaks) where there is video. Tap one to see it; pick some and make
+ * a highlight reel (a new project of short clips around them).
+ */
+@Composable
+private fun HighlightControls(state: UiState, vm: HeadsupViewModel, onShow: (FoundHighlight) -> Unit) {
+    val found = state.highlights
+    var picked by remember(found) { mutableStateOf(found.orEmpty().take(6).toSet()) }
+    var lengthMs by rememberSaveable { mutableStateOf(8_000L) }
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Label("Highlights")
+        Spacer(Modifier.weight(1f))
+        SmallAction(if (found == null) "Find" else "Search again", vm::findHighlights, enabled = state.clips.any { it.sync != null } && !state.busy)
+    }
+    if (found == null) {
+        Hint("Finds the best moments from your watch data (speed, descents, climbs, peaks) in the clips.")
+        return
+    }
+    if (found.isEmpty()) {
+        Hint("Nothing stands out in the parts with video.")
+        return
+    }
+    for (f in found) {
+        val on = f in picked
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(12.dp))
+                .clickable { onShow(f) }
+                .padding(vertical = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Box(
+                Modifier
+                    .size(22.dp)
+                    .clip(CircleShape)
+                    .background(if (on) HeadsupColors.Accent else Color.Transparent)
+                    .border(1.dp, if (on) HeadsupColors.Accent else HeadsupColors.Outline, CircleShape)
+                    .clickable { picked = if (on) picked - f else picked + f },
+                contentAlignment = Alignment.Center,
+            ) { if (on) Text("✓", style = MaterialTheme.typography.labelSmall, color = HeadsupColors.OnAccent) }
+            Spacer(Modifier.width(10.dp))
+            Column(Modifier.weight(1f)) {
+                Text("${f.highlight.kind.label} · ${highlightValue(f)}", style = MaterialTheme.typography.bodyMedium)
+                Hint("${f.clipName} · ${Formats.duration(f.positionMs)}")
+            }
+        }
+    }
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+        for ((ms, label) in listOf(5_000L to "5 s", 8_000L to "8 s", 12_000L to "12 s")) {
+            FilterChip(selected = lengthMs == ms, onClick = { lengthMs = ms }, label = { Text(label) })
+        }
+    }
+    Button(
+        onClick = { vm.makeHighlightReel(found.filter { it in picked }, lengthMs) },
+        enabled = picked.isNotEmpty(),
+        modifier = Modifier.fillMaxWidth(),
+    ) { Text("Make highlight reel (${picked.size})") }
+    Hint("Creates a new project with these moments as clips, ready to export; this project stays saved.")
+}
+
+private fun highlightValue(f: FoundHighlight): String {
+    val h = f.highlight
+    fun Reading.text() = "$value $unit"
+    return when (h.kind) {
+        HighlightKind.TOP_SPEED -> Formats.speed(h.value).text()
+        HighlightKind.ACCELERATION -> String.format(Locale.US, "+%.0f km/h in %d s", h.value * 3.6, HighlightFinder.ACCEL_WINDOW_S)
+        HighlightKind.FAST_DESCENT, HighlightKind.STEEP_CLIMB -> String.format(Locale.US, "%.1f m/s vertical", h.value)
+        HighlightKind.SUMMIT -> Formats.altitude(h.value).text()
+        HighlightKind.PEAK_HEART_RATE -> Formats.heartRate(h.value).text()
+        HighlightKind.POWER_PEAK -> String.format(Locale.US, "%.0f W", h.value)
     }
 }
 

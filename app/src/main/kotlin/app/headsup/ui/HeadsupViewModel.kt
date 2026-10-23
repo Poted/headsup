@@ -14,6 +14,9 @@ import app.headsup.core.color.ColorGrade
 import app.headsup.core.color.ColourMask
 import app.headsup.core.color.MaskKind
 import app.headsup.core.frame.Reframe
+import app.headsup.core.highlight.Highlight
+import app.headsup.core.highlight.HighlightFinder
+import app.headsup.core.track.TimeRange
 import app.headsup.core.color.CineAssistant
 import app.headsup.core.color.CineStyle
 import app.headsup.core.color.FrameStats
@@ -131,6 +134,9 @@ data class CineSession(
     val strength: Float = 1f,
 )
 
+/** A highlight found in the watch data, placed in the clip that shows it. */
+data class FoundHighlight(val highlight: Highlight, val clipId: Long, val clipName: String, val positionMs: Long)
+
 /** What the colour page edits; the order is that of its tabs. */
 enum class GradeTarget { CLIP, GROUP, MASK, GLOBAL }
 
@@ -172,6 +178,8 @@ data class UiState(
     val selectedMask: Int = 0,
     /** Cine assistant for the selected clip, while it is open. */
     val cine: CineSession? = null,
+    /** Result of the last highlight search; null until searched. */
+    val highlights: List<FoundHighlight>? = null,
     val bitrateFactor: Float = 1f,
     /** Vectorscope and skin measurement of the last frame tapped in the preview. */
     val scope: ScopeResult? = null,
@@ -343,6 +351,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                         groups = project.groups.map { ClipGroup(it.id, it.name, it.grade, it.lutName) },
                         globalGrade = project.globalGrade,
                         selectedClip = clips.indices.firstOrNull(),
+                        highlights = null,
                         target = GradeTarget.CLIP,
                         compareGrade = null,
                         scope = null,
@@ -368,6 +377,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                 groups = emptyList(),
                 globalGrade = ColorGrade(),
                 selectedClip = null,
+                highlights = null,
                 target = GradeTarget.CLIP,
                 compareGrade = null,
                 scope = null,
@@ -395,10 +405,11 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
         refreshProjects()
     }
 
-    private fun newProjectName(): String {
-        val base = "Project " + LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH.mm"))
-        return generateSequence(1) { it + 1 }.map { if (it == 1) base else "$base ($it)" }.first { !projectStore.exists(it) }
-    }
+    private fun newProjectName(): String =
+        uniqueProjectName("Project " + LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH.mm")))
+
+    private fun uniqueProjectName(base: String): String =
+        generateSequence(1) { it + 1 }.map { if (it == 1) base else "$base ($it)" }.first { !projectStore.exists(it) }
 
     /** Keeps access to a picked file after restarts, so projects can open it again. */
     private fun keepAccess(uri: Uri) {
@@ -639,6 +650,64 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
 
     private fun updateGroup(id: Long, transform: (ClipGroup) -> ClipGroup) {
         _state.update { s -> s.copy(groups = s.groups.map { if (it.id == id) transform(it) else it }) }
+        refreshPreview()
+    }
+
+    // Highlights
+
+    /** Looks for the best moments in the watch data, only where there is video. */
+    fun findHighlights() {
+        val s = _state.value
+        _state.update { it.copy(busy = true) }
+        viewModelScope.launch {
+            val found = withContext(Dispatchers.Default) {
+                s.activities.indices.flatMap { trackIndex ->
+                    val clips = s.clips.filter { it.sync?.trackIndex == trackIndex }
+                    val covered = clips.mapNotNull { c ->
+                        val start = c.telemetryUtc(0) ?: return@mapNotNull null
+                        TimeRange(start, start + c.durationMs)
+                    }
+                    HighlightFinder.find(s.activities[trackIndex].track, covered).mapNotNull { h ->
+                        // The first clip on the timeline that shows the moment.
+                        clips.firstNotNullOfOrNull { c ->
+                            val start = c.telemetryUtc(0) ?: return@firstNotNullOfOrNull null
+                            val position = h.timeMs - start
+                            if (position in 0..c.durationMs) FoundHighlight(h, c.id, c.meta.name, position) else null
+                        }
+                    }
+                }.sortedByDescending { it.highlight.score }
+            }
+            _state.update { it.copy(busy = false, highlights = found) }
+        }
+    }
+
+    /**
+     * Starts a new project with one short clip of [lengthMs] around each of [chosen] (the moment a
+     * little after the middle, so the build-up shows), with the source clips' colour and effects.
+     * The current project stays saved.
+     */
+    fun makeHighlightReel(chosen: List<FoundHighlight>, lengthMs: Long) {
+        val s = _state.value
+        val reel = chosen.sortedBy { it.highlight.timeMs }.mapNotNull { f ->
+            val clip = s.clips.firstOrNull { it.id == f.clipId } ?: return@mapNotNull null
+            val moment = clip.trimStartMs + f.positionMs
+            val start = (moment - lengthMs * 6 / 10).coerceIn(clip.trimStartMs, (clip.trimEndMs - MIN_CLIP_MS).coerceAtLeast(clip.trimStartMs))
+            val end = (start + lengthMs).coerceAtMost(clip.trimEndMs)
+            clip.copy(id = nextClipId(), trimStartMs = start, trimEndMs = end, transitionMs = 0L)
+        }
+        if (reel.isEmpty()) return
+        scopeFrame = null
+        _state.update {
+            it.copy(
+                projectName = uniqueProjectName("${it.projectName} – highlights"),
+                clips = reel,
+                selectedClip = 0,
+                highlights = null,
+                cine = null,
+                compareGrade = null,
+                scope = null,
+            )
+        }
         refreshPreview()
     }
 
