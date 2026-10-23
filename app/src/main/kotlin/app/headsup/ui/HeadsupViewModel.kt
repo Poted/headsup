@@ -122,6 +122,8 @@ data class ClipState(
     /** Fade from black at the start and to black at the end (picture and sound), timeline time. */
     val fadeInMs: Long = 0L,
     val fadeOutMs: Long = 0L,
+    /** Level of this clip's own sound, on top of the level for all clips. */
+    val soundLevel: Float = 1f,
 ) {
     val look: ClipLook get() = ClipLook(grade, effects, lutName, masks)
 
@@ -487,7 +489,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
             SavedClip(
                 it.meta.uri, it.trimStartMs, it.trimEndMs, it.manualOffsetMs, it.colorGrade, it.lutName,
                 it.manualStart, it.grade, it.effects, it.masks, it.groupId, it.transitionMs, it.reframe, it.speed, it.muteChangedSpeed,
-                it.fadeInMs, it.fadeOutMs,
+                it.fadeInMs, it.fadeOutMs, it.soundLevel,
             )
         },
         groups = groups.map { SavedGroup(it.id, it.name, it.grade, it.lutName) },
@@ -548,6 +550,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                     muteChangedSpeed = c.muteChangedSpeed,
                     fadeInMs = c.fadeInMs,
                     fadeOutMs = c.fadeOutMs,
+                    soundLevel = c.soundLevel,
                     groupId = c.groupId,
                 )
             }
@@ -816,6 +819,8 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
         _state.update { st -> st.copy(audioClips = st.audioClips.map { if (it.id == id) first else it } + second, selectedAudio = newId) }
     }
 
+    fun setSoundLevel(index: Int, level: Float) = updateClip(index) { it.copy(soundLevel = level.coerceIn(0f, 1f)) }
+
     fun setClipSound(level: Float) = _state.update { it.copy(clipSound = level.coerceIn(0f, 1f)) }
 
     private suspend fun durationOf(uri: Uri): Long = withContext(Dispatchers.IO) {
@@ -892,6 +897,16 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
             // The selection moves to the neighbouring clip, so the editor stays on the timeline.
             val selected = s.selectedClip?.let { sel -> if (sel >= index) (sel - 1).coerceAtLeast(0) else sel } ?: 0
             s.copy(clips = clips, selectedClip = selected.takeIf { clips.isNotEmpty() }?.coerceAtMost(clips.size - 1))
+        }
+        refreshPreview()
+    }
+
+    /** Removes a file from the project: every clip cut from it. */
+    fun removeClipsOf(uri: Uri) {
+        _state.update { s ->
+            val clips = s.clips.filter { it.meta.uri != uri }
+            val selected = s.selected?.takeIf { it.meta.uri != uri }?.let { c -> clips.indexOfFirst { it.id == c.id } } ?: 0
+            s.copy(clips = clips, selectedClip = selected.takeIf { clips.isNotEmpty() }?.coerceIn(0, clips.size - 1))
         }
         refreshPreview()
     }
@@ -1689,6 +1704,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                     muteChangedSpeed = clip.muteChangedSpeed,
                     fadeInMs = clip.fadeInMs,
                     fadeOutMs = clip.fadeOutMs,
+                    soundLevel = clip.soundLevel,
                 )
             }
             if (requests.isEmpty()) {

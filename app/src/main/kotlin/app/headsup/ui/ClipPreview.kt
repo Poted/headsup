@@ -55,6 +55,8 @@ import android.graphics.Bitmap
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.width
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.key
+import androidx.compose.ui.draw.alpha
 import app.headsup.core.color.LutBaker
 import app.headsup.render.EffectSettings
 import kotlinx.coroutines.Dispatchers
@@ -169,23 +171,32 @@ fun ClipPreview(
     /** Playback started or stopped. */
     onPlaying: (Boolean) -> Unit = {},
     /**
-     * All clips of the timeline and the index of [clip] among them: with only videos they are given
-     * to the player as one playlist, so the next clip is loaded ahead and plays on without a pause;
-     * [onAdvance] reports when the player moved on to another clip by itself.
+     * All clips of the timeline and the index of [clip] among them: the next video clip is loaded
+     * ahead in a second player, with its first frame ready, and playback switches to it at the cut
+     * without a pause; [onAdvance] reports the switch.
      */
     playlist: List<ClipState> = emptyList(),
     playlistIndex: Int = 0,
     onAdvance: (Int) -> Unit = {},
 ) {
     val context = LocalContext.current
-    val exoPlayer = remember { ExoPlayer.Builder(context).build() }
-    DisposableEffect(exoPlayer) { onDispose { exoPlayer.release() } }
+    // Two players: one shows the clip, the other holds the next one ready (a different shape or
+    // file needs a new decoder, which in a single player shows as a pause at the cut).
+    val players = remember { List(2) { ExoPlayer.Builder(context).build() } }
+    DisposableEffect(players) { onDispose { players.forEach { it.release() } } }
+    var active by remember { mutableIntStateOf(0) }
+    val exoPlayer = players[active]
+    val standby = players[1 - active]
+    // What each player holds: the clip's file and cut, or null.
+    val holds = remember { arrayOfNulls<Any>(2) }
+    val textureViews = remember { arrayOfNulls<TextureView>(2) }
     // Android 13+: colours are applied by a GPU shader on the displayed picture, so slider changes
     // are immediate. Older versions fall back to a Media3 effect inside the player.
     val shaderPreview = Build.VERSION.SDK_INT >= 33
     val liveLut = remember { LiveColorLut() }
     val scope = rememberCoroutineScope()
-    val scrubber = remember { Scrubber(exoPlayer, scope) }
+    // Seeks go to whichever player is showing at the time (a switch may happen in the same frame).
+    val scrubber = remember { Scrubber({ players[active] }, scope) }
     val scrubMs = cutScrub.value
     val scrubbing = scrubMs != null
     // Photos are shown as a picture with their own clock; the player only plays videos.
@@ -196,47 +207,71 @@ fun ClipPreview(
     val photoBitmap by produceState<ImageBitmap?>(null, clip.meta.uri, photo) {
         value = if (photo) withContext(Dispatchers.IO) { decodePhoto(context, clip.meta.uri) } else null
     }
-    val gapless = !photo && playlist.size > 1 && playlist.none { it.meta.isPhoto } && playlistIndex in playlist.indices
+    fun keyOf(c: ClipState): Any = Triple(c.meta.uri, c.trimStartMs, c.trimEndMs)
     fun clipped(c: ClipState) = MediaItem.Builder()
         .setUri(c.meta.uri)
         .setClippingConfiguration(MediaItem.ClippingConfiguration.Builder().setStartPositionMs(c.trimStartMs).setEndPositionMs(c.trimEndMs).build())
         .build()
-    val mediaKey: Any = if (gapless) playlist.map { Triple(it.meta.uri, it.trimStartMs, it.trimEndMs) } else Triple(clip.meta.uri, clip.trimStartMs, clip.trimEndMs)
-    LaunchedEffect(mediaKey, scrubbing) {
+    LaunchedEffect(players) { if (!shaderPreview) players.forEach { it.setVideoEffects(listOf<Effect>(liveLut)) } }
+    LaunchedEffect(keyOf(clip), scrubbing) {
         if (photo) {
             exoPlayer.stop()
             exoPlayer.clearMediaItems()
+            holds[active] = null
             photoPlaying = autoPlay
             if (autoPlay) onAutoPlayStarted()
             return@LaunchedEffect
         }
         photoPlaying = false
-        if (!shaderPreview) exoPlayer.setVideoEffects(listOf<Effect>(liveLut))
+        val key = keyOf(clip)
         if (scrubbing) {
             exoPlayer.pause()
             exoPlayer.setMediaItem(MediaItem.fromUri(clip.meta.uri), cutScrub.value ?: 0L)
-        } else if (gapless) {
-            // The whole timeline as one playlist, each clip its used part; positions count from each cut.
-            exoPlayer.setMediaItems(playlist.map(::clipped), playlistIndex, 0L)
-        } else {
-            // Only the used part of the file plays; positions count from the cut.
-            exoPlayer.setMediaItem(clipped(clip))
+            exoPlayer.prepare()
+            holds[active] = null
+        } else if (holds[active] != key) {
+            if (holds[1 - active] == key) {
+                // The other player already has it (the clip after the one shown): just switch.
+                exoPlayer.pause()
+                active = 1 - active
+                players[active].seekTo(0L)
+                players[active].videoSize.takeIf { it.width > 0 && it.height > 0 }?.let { renderedAspect = it.width * it.pixelWidthHeightRatio / it.height }
+            } else {
+                // Only the used part of the file plays; positions count from the cut.
+                exoPlayer.setMediaItem(clipped(clip))
+                exoPlayer.prepare()
+                holds[active] = key
+            }
         }
-        exoPlayer.prepare()
         if (autoPlay && !scrubbing) {
-            exoPlayer.play()
+            players[active].play()
             onAutoPlayStarted()
         }
     }
-    // Another clip chosen (not reached by playing on): go to it in the playlist.
-    LaunchedEffect(playlistIndex, gapless) {
-        if (gapless && !scrubbing && exoPlayer.mediaItemCount > playlistIndex && exoPlayer.currentMediaItemIndex != playlistIndex) {
-            exoPlayer.seekTo(playlistIndex, 0L)
+    // The clip after this one, ready in the other player with its first frame decoded.
+    val next = playlist.getOrNull(playlistIndex + 1)?.takeIf { !it.meta.isPhoto && !photo && playlist.getOrNull(playlistIndex)?.id == clip.id }
+    val nextKey = next?.let(::keyOf)
+    LaunchedEffect(nextKey, active, scrubbing) {
+        if (scrubbing) return@LaunchedEffect
+        if (next == null) {
+            if (holds[1 - active] != null) {
+                standby.stop()
+                standby.clearMediaItems()
+                holds[1 - active] = null
+            }
+            return@LaunchedEffect
         }
+        if (holds[1 - active] == nextKey) return@LaunchedEffect
+        standby.playWhenReady = false
+        standby.volume = 0f
+        standby.setMediaItem(clipped(next))
+        standby.setPlaybackSpeed(next.speed)
+        standby.prepare()
+        holds[1 - active] = nextKey
     }
     // Slow motion plays slowed down in the preview too; the dashboard follows the picture's own time.
     LaunchedEffect(clip.speed) { exoPlayer.setPlaybackSpeed(clip.speed) }
-    val clipVolume = if (clip.speed != 1f && clip.muteChangedSpeed) 0f else clipSound
+    val clipVolume = if (clip.speed != 1f && clip.muteChangedSpeed) 0f else clipSound * clip.soundLevel
     // One player per audio clip, kept while the clip exists.
     val audioPlayers = remember { HashMap<Long, Pair<android.net.Uri, ExoPlayer>>() }
     DisposableEffect(Unit) { onDispose { audioPlayers.values.forEach { it.second.release() }; audioPlayers.clear() } }
@@ -254,32 +289,45 @@ fun ClipPreview(
     }
     val ended by rememberUpdatedState(onEnded)
     val advance by rememberUpdatedState(onAdvance)
-    DisposableEffect(exoPlayer) {
-        val listener = object : Player.Listener {
-            override fun onPlaybackStateChanged(state: Int) {
-                if (state == Player.STATE_ENDED && exoPlayer.playWhenReady) ended()
-            }
+    val nextKeyNow by rememberUpdatedState(nextKey)
+    val indexNow by rememberUpdatedState(playlistIndex)
+    DisposableEffect(players) {
+        val listeners = players.mapIndexed { i, player ->
+            object : Player.Listener {
+                override fun onPlaybackStateChanged(state: Int) {
+                    if (state != Player.STATE_ENDED || i != active || !player.playWhenReady) return
+                    val other = players[1 - i]
+                    if (nextKeyNow != null && holds[1 - i] == nextKeyNow && other.playbackState != Player.STATE_IDLE) {
+                        // The next clip is ready in the other player: show it and play on at once.
+                        active = 1 - i
+                        other.videoSize.takeIf { it.width > 0 && it.height > 0 }?.let { renderedAspect = it.width * it.pixelWidthHeightRatio / it.height }
+                        other.play()
+                        player.pause()
+                        advance(indexNow + 1)
+                    } else {
+                        ended()
+                    }
+                }
 
-            override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
-                if (reason == Player.MEDIA_ITEM_TRANSITION_REASON_AUTO) advance(exoPlayer.currentMediaItemIndex)
-            }
-
-            // The picture is laid out by the frames actually shown, so a clip of another shape is
-            // never drawn in the previous clip's layout while the switch is under way.
-            override fun onVideoSizeChanged(videoSize: androidx.media3.common.VideoSize) {
-                if (videoSize.width > 0 && videoSize.height > 0) renderedAspect = videoSize.width * videoSize.pixelWidthHeightRatio / videoSize.height
-            }
+                // The picture is laid out by the frames actually shown, so a clip of another shape is
+                // never drawn in the previous clip's layout while the switch is under way.
+                override fun onVideoSizeChanged(videoSize: androidx.media3.common.VideoSize) {
+                    if (i == active && videoSize.width > 0 && videoSize.height > 0) {
+                        renderedAspect = videoSize.width * videoSize.pixelWidthHeightRatio / videoSize.height
+                    }
+                }
+            }.also(player::addListener)
         }
-        exoPlayer.addListener(listener)
-        onDispose { exoPlayer.removeListener(listener) }
+        onDispose { players.forEachIndexed { i, p -> p.removeListener(listeners[i]) } }
     }
     LaunchedEffect(scrubMs) { scrubMs?.let(scrubber::seek) }
     // Declared after the media item is set, so it runs after it for a newly selected clip.
     LaunchedEffect(seekRequest, clip.id) {
         val target = seekRequest ?: return@LaunchedEffect
         photoPlaying = false
-        exoPlayer.pause()
-        if (gapless) exoPlayer.seekTo(playlistIndex, target.coerceIn(0L, clip.durationMs)) else exoPlayer.seekTo(target.coerceIn(0L, clip.durationMs))
+        val player = players[active]
+        player.pause()
+        player.seekTo(target.coerceIn(0L, clip.durationMs))
         onSeekDone()
     }
     var nudge by remember { mutableStateOf(1L) }
@@ -304,6 +352,7 @@ fun ClipPreview(
         tableVersion++
     }
     var textureView by remember { mutableStateOf<TextureView?>(null) }
+    LaunchedEffect(active) { textureView = textureViews[active] }
     val sample by rememberUpdatedState(onSample)
     val maskMover by rememberUpdatedState(onMoveMask)
     val reframer by rememberUpdatedState(onReframe)
@@ -375,7 +424,7 @@ fun ClipPreview(
             playerMs = target.coerceIn(0L, clip.durationMs)
             onPosition(playerMs)
         } else {
-            if (exoPlayer.isPlaying) exoPlayer.pause()
+            players[active].let { if (it.isPlaying) it.pause() }
             scrubber.seek(target.coerceIn(0L, clip.durationMs))
         }
     }
@@ -459,11 +508,22 @@ fun ClipPreview(
                 val bitmap = photoBitmap
                 if (photo) {
                     if (bitmap != null) Image(bitmap, contentDescription = clip.meta.name, contentScale = ContentScale.FillBounds, modifier = pictureLayer)
-                } else {
-                    AndroidView(
-                        factory = { TextureView(it).also { tv -> exoPlayer.setVideoTextureView(tv); textureView = tv } },
-                        modifier = pictureLayer,
-                    )
+                }
+                // Both players' pictures stay in place; only the one playing is shown (and coloured).
+                for (i in 0..1) {
+                    key(i) {
+                        val shown = i == active && !photo
+                        AndroidView(
+                            factory = { ctx ->
+                                TextureView(ctx).also { tv ->
+                                    players[i].setVideoTextureView(tv)
+                                    textureViews[i] = tv
+                                    if (i == active) textureView = tv
+                                }
+                            },
+                            modifier = if (shown) pictureLayer else Modifier.requiredSize(with(density) { pictureW.toDp() }, with(density) { pictureH.toDp() }).alpha(0f),
+                        )
+                    }
                 }
                 Canvas(
                     Modifier
@@ -718,7 +778,7 @@ private val NO_SCRUB: State<Long?> = mutableStateOf(null)
  * Seeking for a dragged finger: one seek at a time, always to the latest position, so the
  * picture keeps up instead of the player working through a queue of stale seeks.
  */
-private class Scrubber(private val player: ExoPlayer, private val scope: CoroutineScope) {
+private class Scrubber(private val player: () -> ExoPlayer, private val scope: CoroutineScope) {
     private var target = 0L
     private var running = false
 
@@ -731,10 +791,11 @@ private class Scrubber(private val player: ExoPlayer, private val scope: Corouti
                 var done = -1L
                 while (target != done) {
                     done = target
-                    player.seekTo(done)
+                    val p = player()
+                    p.seekTo(done)
                     // Until the frame at the new position is ready (bounded, in case it never is).
                     withTimeoutOrNull(400) {
-                        while (player.playbackState == Player.STATE_BUFFERING) delay(8)
+                        while (p.playbackState == Player.STATE_BUFFERING) delay(8)
                     }
                 }
             } finally {

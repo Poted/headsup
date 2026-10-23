@@ -61,6 +61,8 @@ data class ExportRequest(
     /** Fades from and to black (picture and sound), in timeline time. */
     val fadeInMs: Long = 0L,
     val fadeOutMs: Long = 0L,
+    /** Level of the clip's own sound (times the level for all clips). */
+    val soundLevel: Float = 1f,
     /** A still photo shown for [durationMs]; its dashboard stays at the moment it was taken. */
     val isPhoto: Boolean = false,
 ) {

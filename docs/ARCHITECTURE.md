@@ -268,6 +268,9 @@ does: a selected clip's handles (outside its ends) trim it, its start committed 
 following clips ripple once; a selected sound moves (also between tracks), trims, fades or slips.
 Scrubbing sends clip positions to the preview, which seeks with the latest-target `Scrubber`;
 crossing a cut selects the next clip, since the preview shows the clip under the playhead.
+The preview has two players: one shows the clip, the other holds the next video clip prepared
+(first frame decoded), and at the cut the picture and playback switch to it; a single player
+would need a new decoder at a cut between files of different shape, which shows as a pause.
 
 The timeline has one frame shape (`UiState.frameAspect`, or the first clip's) and frame rate.
 Each clip's `Reframe` is applied in that shape (`UiState.framing`): filling it (cropped) or

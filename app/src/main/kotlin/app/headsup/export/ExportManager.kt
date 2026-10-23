@@ -300,7 +300,7 @@ class ExportManager(private val context: Context) {
     private fun runVideo(job: ExportJob) {
         val spec = job.spec
         val out = requireNotNull(spec.output)
-        val items = spec.parts.map { editedItem(it, out, soundGain = spec.clipSound) }
+        val items = spec.parts.map { editedItem(it, out, soundGain = spec.clipSound * it.soundLevel) }
         val totalMs = spec.parts.sumOf { if (it.isPhoto) it.durationMs else (it.durationMs / it.speed).toLong() }
         val tracks = audioTracks(spec.audio, totalMs)
         // Clips without sound (drones) or muted slow motion get silence, so the parts join cleanly.

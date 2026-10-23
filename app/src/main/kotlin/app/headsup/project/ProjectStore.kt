@@ -35,6 +35,7 @@ data class SavedClip(
     val muteChangedSpeed: Boolean = false,
     val fadeInMs: Long = 0L,
     val fadeOutMs: Long = 0L,
+    val soundLevel: Float = 1f,
 )
 
 data class SavedGroup(val id: Long, val name: String, val grade: ColorGrade, val lutName: String?)
@@ -163,6 +164,7 @@ internal object Json {
         volume = o.optDouble("volume", 0.8).toFloat(),
         fadeInMs = o.optLong("fadeInMs", 0L),
         fadeOutMs = o.optLong("fadeOutMs", 0L),
+        soundLevel = o.optDouble("soundLevel", 1.0).toFloat(),
     )
 
     /** Version 2's single music track becomes one clip on the first audio track. */
@@ -196,6 +198,7 @@ internal object Json {
         .put("muteChangedSpeed", c.muteChangedSpeed)
         .put("fadeInMs", c.fadeInMs)
         .put("fadeOutMs", c.fadeOutMs)
+        .put("soundLevel", c.soundLevel)
         .put("reframe", JSONObject().put("zoom", c.reframe.zoom).put("centerX", c.reframe.centerX).put("centerY", c.reframe.centerY).put("angleDegrees", c.reframe.angleDegrees).put("fit", c.reframe.fit))
 
     private fun clip(o: JSONObject) = SavedClip(

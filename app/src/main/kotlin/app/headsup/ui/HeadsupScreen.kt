@@ -167,7 +167,8 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
     val fitPicker = rememberLauncherForActivityResult(OpenDocumentsIn(DOWNLOADS_FOLDER)) { vm.addActivities(it) }
     val videoPicker = rememberLauncherForActivityResult(ActivityResultContracts.PickMultipleVisualMedia()) { vm.addClips(it) }
     val lutPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri -> uri?.let(vm::importLut) }
-    val soundPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { vm.addAudioFiles(it) }
+    // Sound files usually come from Downloads (the picker can go to Music from there).
+    val soundPicker = rememberLauncherForActivityResult(OpenDocumentsIn(DOWNLOADS_FOLDER)) { vm.addAudioFiles(it) }
     val addFit = { fitPicker.launch(arrayOf("*/*")) }
     val addVideos = { videoPicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageAndVideo)) }
 
@@ -340,7 +341,6 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
                         vm.selectAudio(null)
                         // The preview shows the clip being edited.
                         if (i != state.selectedClip) jumpTo(clipStarts[i])
-                        if (tool == Tool.AUDIO) tool = Tool.EDIT
                     },
                     onSelectAudio = { id ->
                         videoSelected = false
@@ -408,7 +408,10 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
             ) {
                 if (state.messages.isNotEmpty()) Messages(state.messages, vm::dismissMessages)
                 when (tool) {
-                    Tool.FILES -> FilesPanel(state, vm, onAddVideos = addVideos, onAddFit = addFit, onAddSound = { soundPicker.launch(arrayOf("audio/*")) })
+                    Tool.FILES -> FilesPanel(
+                        state, vm, onAddVideos = addVideos, onAddFit = addFit, onAddSound = { soundPicker.launch(arrayOf("audio/*")) },
+                        onShowClip = { i -> jumpTo(clipStarts[i]) },
+                    )
                     Tool.EDIT -> EditPanel(state, vm, playhead, editTab, { editTab = it }, onCutScrub = { cutScrub.value = it }) { f ->
                         val index = state.clips.indexOfFirst { it.id == f.clipId }
                         if (index >= 0) {
@@ -416,7 +419,7 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
                             seekRequest = f.positionMs
                         }
                     }
-                    Tool.AUDIO -> AudioPanel(state, vm, onAddSound = { addingSound = true })
+                    Tool.AUDIO -> AudioPanel(state, vm, videoSelected, onAddSound = { addingSound = true })
                     Tool.COLOUR -> ColourPage(
                         state, vm, adjustment, { adjustment = it }, onAddLut = { lutPicker.launch(arrayOf("*/*")) }, frameSource.value,
                         playhead, onSeek = { seekRequest = it },
@@ -551,41 +554,49 @@ private fun FilesPanel(
     onAddVideos: () -> Unit,
     onAddFit: () -> Unit,
     onAddSound: () -> Unit,
+    onShowClip: (Int) -> Unit,
 ) {
     ProjectRow(state, vm)
+    // Everything the project uses is copied in here, then used on the other pages.
     Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-        AddTile(HeadsupIcons.Video, "Media", onAddVideos, Modifier.weight(1f))
+        AddTile(HeadsupIcons.Video, "Video · photo", onAddVideos, Modifier.weight(1f))
+        AddTile(HeadsupIcons.Music, "Sound", onAddSound, Modifier.weight(1f))
         AddTile(HeadsupIcons.Watch, "FIT", onAddFit, Modifier.weight(1f))
     }
-    val index = state.selectedClip
-    val clip = state.selected
-    if (index != null && clip != null) {
-        val m = clip.meta
-        Group {
-            Row(verticalAlignment = Alignment.CenterVertically) {
+    Group {
+        Label("Video and photos")
+        if (state.clips.isEmpty()) Hint("From the gallery or the cloud; copied into the project.")
+        // One row per file, however many times it is cut on the timeline.
+        val files = state.clips.withIndex().groupBy { it.value.meta.uri }
+        for ((uri, uses) in files) {
+            val first = uses.first()
+            val m = first.value.meta
+            Row(
+                Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).clickable { onShowClip(first.index) }.padding(vertical = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
                 Column(Modifier.weight(1f)) {
-                    Text(m.name, style = MaterialTheme.typography.titleSmall)
+                    Text(m.name, style = MaterialTheme.typography.bodyMedium, maxLines = 1)
                     Hint(
                         listOfNotNull(
+                            if (m.isPhoto) "photo" else Formats.duration(m.durationMs),
                             "${m.width}×${m.height}",
-                            m.frameRate?.let { String.format(Locale.US, "%.4g fps", it) },
-                            frameCount(clip.durationMs, m.frameRate)?.let { "$it frames" },
-                            m.bitrate?.let { "${it / 1_000_000} Mb/s" },
+                            m.frameRate?.takeIf { !m.isPhoto }?.let { String.format(Locale.US, "%.4g fps", it) },
                             m.format?.toString(),
+                            if (uses.size > 1) "on the timeline ${uses.size}×" else null,
                         ).joinToString(" · "),
                     )
                 }
-                SmallAction("Remove", { vm.removeClip(index) })
+                SmallAction("Remove", { vm.removeClipsOf(uri) })
             }
-            SyncSummary(clip, clip.sync?.let { state.activities.getOrNull(it.trackIndex) })
         }
     }
+    Group { SoundLibrary(state, vm) }
     Group {
         Label("Activities")
-        if (state.activities.isEmpty()) Hint("Add the .FIT file(s) from your watch.")
+        if (state.activities.isEmpty()) Hint("The .FIT file(s) from your watch, for the dashboard.")
         state.activities.forEachIndexed { i, a -> ActivityRow(a, onRemove = { vm.removeActivity(i) }) }
     }
-    Group { SoundLibrary(state, vm, onAddSound) }
 }
 
 private enum class EditTab(val label: String) { CLIP("Clip"), FRAME("Frame"), MOMENTS("Moments") }
@@ -705,13 +716,9 @@ private fun WatchSyncControls(state: UiState, vm: HeadsupViewModel, playhead: Lo
 
 /** The project's sound files: music, ambience, effects. Placed on the audio tracks on the Audio page. */
 @Composable
-private fun SoundLibrary(state: UiState, vm: HeadsupViewModel, onAdd: () -> Unit) {
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        Label("Sound")
-        Spacer(Modifier.weight(1f))
-        SmallAction("+ Add", onAdd, enabled = !state.busy)
-    }
-    if (state.audioFiles.isEmpty()) Hint("Music, ambience, effects: copied into the project, then placed on the Audio page.")
+private fun SoundLibrary(state: UiState, vm: HeadsupViewModel) {
+    Label("Sound")
+    if (state.audioFiles.isEmpty()) Hint("Music, ambience, effects (from Downloads or Music): copied into the project, then placed on the Audio page.")
     for (f in state.audioFiles) {
         val uses = state.audioClips.count { it.uri == f.uri }
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -729,14 +736,14 @@ private fun SoundLibrary(state: UiState, vm: HeadsupViewModel, onAdd: () -> Unit
  * library, and the level of the video clips' own sound. The tracks themselves are on the timeline.
  */
 @Composable
-private fun AudioPanel(state: UiState, vm: HeadsupViewModel, onAddSound: () -> Unit) {
+private fun AudioPanel(state: UiState, vm: HeadsupViewModel, videoSelected: Boolean, onAddSound: () -> Unit) {
     Group {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Label("Sound")
             Spacer(Modifier.weight(1f))
             SmallAction("+ Add sound", onAddSound)
         }
-        Hint("Sounds sit on the audio tracks of the timeline. Tap one to select it; drag it to move it (also to another track), its white handles to trim, the dots on top to fade. Split and Slip are above the timeline.")
+        Hint("Sounds sit on the audio tracks under the clips. Tap one to select it; drag it to move it (also to another track), its white handles to trim, the dots on top to fade. Split and Slip are above the timeline.")
     }
     val clip = state.audioClips.firstOrNull { it.id == state.selectedAudio }
     if (clip != null) Group {
@@ -763,9 +770,31 @@ private fun AudioPanel(state: UiState, vm: HeadsupViewModel, onAddSound: () -> U
         ValueHeader("Fade out", fadeLabel(p.fadeOut))
         RulerSlider(p.fadeOut / 1000f, 0f..maxFade, 0.1f, { v -> vm.updateAudio(clip.id) { it.copy(fadeOutMs = (v * 1000).toLong().coerceAtMost(p.lengthMs - p.fadeIn)) } }, onReset = { vm.updateAudio(clip.id) { it.copy(fadeOutMs = 0L) } })
     }
-    Group {
-        ValueHeader("Clips' own sound", String.format(Locale.US, "%.0f %%", state.clipSound * 100))
+    // A video clip selected on the timeline: its own sound.
+    val index = state.selectedClip
+    val video = state.selected
+    if (clip == null && videoSelected && index != null && video != null) Group {
+        Text(video.meta.name, style = MaterialTheme.typography.titleSmall, maxLines = 1)
+        Hint("This clip's own sound.")
+        ValueHeader("Level", String.format(Locale.US, "%.0f %%", video.soundLevel * 100))
+        RulerSlider(video.soundLevel, 0f..1f, 0.02f, { v -> vm.setSoundLevel(index, v) }, onReset = { vm.setSoundLevel(index, 1f) })
+        val maxS = (video.timelineDurationMs / 1000f).coerceIn(0.5f, 10f)
+        ValueHeader("Fade in", fadeLabel(video.fadeInMs))
+        RulerSlider(video.fadeInMs / 1000f, 0f..maxS, 0.1f, { v -> vm.setFades(index, (v * 1000).toLong(), video.fadeOutMs) }, onReset = { vm.setFades(index, 0L, video.fadeOutMs) })
+        ValueHeader("Fade out", fadeLabel(video.fadeOutMs))
+        RulerSlider(video.fadeOutMs / 1000f, 0f..maxS, 0.1f, { v -> vm.setFades(index, video.fadeInMs, (v * 1000).toLong()) }, onReset = { vm.setFades(index, video.fadeInMs, 0L) })
+        Hint("A clip's fades also take its picture to and from black.")
+        if (video.speed != 1f) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("Mute while slowed or sped up", Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
+                Switch(checked = video.muteChangedSpeed, onCheckedChange = { vm.setMuteChangedSpeed(index, it) })
+            }
+        }
+    }
+    if (clip == null && !videoSelected) Group {
+        ValueHeader("All clips' own sound", String.format(Locale.US, "%.0f %%", state.clipSound * 100))
         RulerSlider(state.clipSound, 0f..1f, 0.02f, vm::setClipSound, onReset = { vm.setClipSound(1f) })
+        Hint("Tap a clip or a sound on the timeline for its own level and fades.")
     }
 }
 
