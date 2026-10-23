@@ -15,6 +15,13 @@ import androidx.media3.effect.OverlayEffect
 import androidx.media3.effect.SingleColorLut
 import androidx.media3.effect.MatrixTransformation
 import androidx.media3.effect.Presentation
+import androidx.media3.effect.SpeedChangeEffect
+import androidx.media3.effect.FrameDropEffect
+import androidx.media3.common.C
+import androidx.media3.common.audio.AudioProcessor
+import androidx.media3.common.audio.SpeedChangingAudioProcessor
+import androidx.media3.common.audio.SpeedProvider
+import androidx.media3.transformer.EditedMediaItemSequence
 import android.graphics.Matrix
 import app.headsup.core.frame.Reframe
 import app.headsup.core.color.ColorGrade
@@ -51,7 +58,7 @@ enum class JobStatus { QUEUED, RUNNING, DONE, FAILED, CANCELLED }
 
 data class ExportJob(
     val id: Int,
-    val request: ExportRequest,
+    val spec: JobSpec,
     val status: JobStatus = JobStatus.QUEUED,
     val progress: Int = 0,
     /** Result or error, shown under the job. */
@@ -76,9 +83,9 @@ class ExportManager(private val context: Context) {
 
     val isBusy: Boolean get() = _jobs.value.any { it.status == JobStatus.QUEUED || it.status == JobStatus.RUNNING }
 
-    fun enqueue(requests: List<ExportRequest>) {
-        if (requests.isEmpty()) return
-        _jobs.update { jobs -> jobs.filter { it.status == JobStatus.QUEUED || it.status == JobStatus.RUNNING } + requests.map { ExportJob(nextId++, it) } }
+    fun enqueue(specs: List<JobSpec>) {
+        if (specs.isEmpty()) return
+        _jobs.update { jobs -> jobs.filter { it.status == JobStatus.QUEUED || it.status == JobStatus.RUNNING } + specs.map { ExportJob(nextId++, it) } }
         // Without the service the export still runs, it just may stop if the app goes to the background.
         runCatching { context.startForegroundService(Intent(context, ExportService::class.java)) }
         startNextIfIdle()
@@ -101,7 +108,7 @@ class ExportManager(private val context: Context) {
         val job = _jobs.value.firstOrNull { it.status == JobStatus.QUEUED } ?: return
         setJob(job.id) { it.copy(status = JobStatus.RUNNING, progress = 0) }
         try {
-            when (job.request.kind) {
+            when (job.spec.kind) {
                 ExportKind.PNG_SEQUENCE -> runPng(job)
                 ExportKind.VIDEO, ExportKind.TEN_BIT_TEST -> runVideo(job)
             }
@@ -125,7 +132,7 @@ class ExportManager(private val context: Context) {
         worker = scope.launch {
             try {
                 val name = withContext(Dispatchers.Default) {
-                    PngSequenceExporter.export(context, job.request) { p -> setJob(job.id) { it.copy(progress = p) } }
+                    PngSequenceExporter.export(context, job.spec.parts.single()) { p -> setJob(job.id) { it.copy(progress = p) } }
                 }
                 finish(job.id, JobStatus.DONE, "Saved ${MediaStoreOutput.OVERLAY_FOLDER}/$name")
             } catch (e: CancellationException) {
@@ -160,12 +167,21 @@ class ExportManager(private val context: Context) {
         return MatrixTransformation { matrix }
     }
 
-    private fun runVideo(job: ExportJob) {
-        val request = job.request
-        val test = request.kind == ExportKind.TEN_BIT_TEST
+    /** A constant speed for Media3's speed effects. */
+    private class ConstantSpeed(private val speed: Float) : SpeedProvider {
+        override fun getSpeed(timeUs: Long) = speed
+        override fun getNextSpeedChangeTimeUs(timeUs: Long) = C.TIME_UNSET
+    }
+
+    /**
+     * One clip as Media3 should render it into a [out]-sized frame: colour, texture, framing,
+     * scaling to the output, dashboard, then speed and frame rate. The dashboard comes before the
+     * speed change so it reads the clip's own time and slows down with the picture.
+     */
+    private fun editedItem(request: ExportRequest, out: OutputSpec, test: Boolean): EditedMediaItem {
         val sampler = request.telemetry?.let { TelemetrySampler(it.track) }
         val overlay = TelemetryOverlay(
-            DashboardRenderer(context.assets), request.style, request.effects, request.grade?.vignette ?: 0f, request.frameWidth, request.frameHeight,
+            DashboardRenderer(context.assets), request.style, request.effects, request.grade?.vignette ?: 0f, out.width, out.height,
         ) { positionMs -> request.dataAt(positionMs, sampler) }
 
         val effects = mutableListOf<Effect>()
@@ -180,9 +196,18 @@ class ExportManager(private val context: Context) {
         if (request.effects.changesPixels) effects += FinishEffect(request.effects)
         // Reframing comes after colour and texture (as in the preview) and before the dashboard.
         reframeEffect(request.reframe, request.width, request.height)?.let { effects += it }
-        // A different output shape: crop the (moved) picture to it around the centre.
-        request.reframe.aspect?.let { effects += Presentation.createForAspectRatio(it, Presentation.LAYOUT_SCALE_TO_FIT_WITH_CROP) }
+        // The output frame: the clip's shape cropped around the centre and scaled to the output size,
+        // so every clip of a joined export has the same frame.
+        effects += Presentation.createForWidthAndHeight(out.width, out.height, Presentation.LAYOUT_SCALE_TO_FIT_WITH_CROP)
         effects += OverlayEffect(ImmutableList.of<TextureOverlay>(overlay))
+        val speed = request.speed
+        if (speed != 1f) effects += SpeedChangeEffect(speed)
+        // Fewer frames when the clip (after the speed change) has more than the timeline.
+        out.frameRate?.let { target ->
+            val clipFps = (request.frameRate ?: target) * speed
+            if (clipFps > target + 0.5f) effects += FrameDropEffect.createDefaultFrameDropEffect(target)
+        }
+        val audio = if (speed != 1f && !request.muteChangedSpeed) listOf<AudioProcessor>(SpeedChangingAudioProcessor(ConstantSpeed(speed))) else emptyList()
 
         val endMs = if (test) minOf(request.trimStartMs + TEST_LENGTH_MS, request.trimEndMs) else request.trimEndMs
         val mediaItem = MediaItem.Builder()
@@ -191,18 +216,30 @@ class ExportManager(private val context: Context) {
                 MediaItem.ClippingConfiguration.Builder().setStartPositionMs(request.trimStartMs).setEndPositionMs(endMs).build(),
             )
             .build()
-        val edited = EditedMediaItem.Builder(mediaItem)
-            .setEffects(Effects(emptyList(), effects))
+        return EditedMediaItem.Builder(mediaItem)
+            .setEffects(Effects(audio, effects))
+            .setRemoveAudio(speed != 1f && request.muteChangedSpeed)
             .build()
+    }
+
+    private fun runVideo(job: ExportJob) {
+        val spec = job.spec
+        val out = requireNotNull(spec.output)
+        val test = spec.kind == ExportKind.TEN_BIT_TEST
+        val items = spec.parts.map { editedItem(it, out, test) }
+        // Clips without sound (drones) or muted slow motion get silence, so the parts join cleanly.
+        val composition = Composition.Builder(
+            EditedMediaItemSequence.Builder(items).experimentalSetForceAudioTrack(items.size > 1).build(),
+        ).build()
 
         val encoderFactory = DefaultEncoderFactory.Builder(context)
-            .setRequestedVideoEncoderSettings(VideoEncoderSettings.Builder().setBitrate(request.targetBitrate()).build())
+            .setRequestedVideoEncoderSettings(VideoEncoderSettings.Builder().setBitrate(out.bitrate).build())
             .setEnableFallback(true)
             .build()
         val output = File(workDir, "job-${job.id}.mp4").apply { delete() }
 
         val t = Transformer.Builder(context)
-            .setVideoMimeType(MimeTypes.VIDEO_H265)
+            .setVideoMimeType(out.codec.mimeType)
             .setEncoderFactory(encoderFactory)
             .addListener(object : Transformer.Listener {
                 override fun onCompleted(composition: Composition, exportResult: ExportResult) {
@@ -217,7 +254,7 @@ class ExportManager(private val context: Context) {
             })
             .build()
         transformer = t
-        t.start(edited, output.absolutePath)
+        t.start(composition, output.absolutePath)
 
         worker = scope.launch {
             val holder = ProgressHolder()
@@ -229,17 +266,18 @@ class ExportManager(private val context: Context) {
     }
 
     private suspend fun completeVideo(job: ExportJob, output: File) {
-        val request = job.request
+        val spec = job.spec
+        val first = spec.parts.first()
         try {
             val result = withContext(Dispatchers.IO) { VideoFormatInfo.read(context, Uri.fromFile(output)) }
-            val message = if (request.kind == ExportKind.TEN_BIT_TEST) {
+            val message = if (spec.kind == ExportKind.TEN_BIT_TEST) {
                 output.delete()
-                tenBitReport(request.sourceFormat, result)
+                tenBitReport(first.sourceFormat, result)
             } else {
-                val name = "${request.baseName}_headsup.mp4"
+                val name = requireNotNull(spec.output).fileName
                 withContext(Dispatchers.IO) { MediaStoreOutput.saveVideo(context, output, name) }
                 output.delete()
-                val warning = if (request.sourceFormat?.tenBit == true && result?.tenBit == false) {
+                val warning = if (spec.parts.any { it.sourceFormat?.tenBit == true } && result?.tenBit == false) {
                     "\nWarning: the source is 10-bit but this device produced 8-bit output."
                 } else ""
                 "Saved ${MediaStoreOutput.VIDEO_FOLDER}/$name ($result)$warning"

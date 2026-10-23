@@ -39,6 +39,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.systemBarsPadding
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
@@ -104,6 +105,9 @@ import app.headsup.core.sync.ZoneReason
 import app.headsup.export.ExportJob
 import app.headsup.export.ExportKind
 import app.headsup.export.JobStatus
+import app.headsup.export.ExportSettings
+import app.headsup.export.OutputSpec
+import app.headsup.export.VideoCodec
 import app.headsup.render.DashboardFont
 import app.headsup.render.EffectSettings
 import app.headsup.render.GraphMetric
@@ -283,18 +287,12 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
                     Tool.EFFECTS -> EffectsPanel(state, vm, effectKind) { effectKind = it }
                     Tool.FRAME -> FramePanel(state, vm)
                     Tool.EXPORT -> ExportControls(
-                        bitrateFactor = state.bitrateFactor,
-                        sourceBitrate = state.selected?.meta?.bitrate,
-                        onBitrateFactor = vm::setBitrateFactor,
-                        canExportVideo = state.clips.isNotEmpty(),
-                        canExportOverlay = state.clips.any { it.sync != null },
-                        canTest = state.selected != null,
+                        state = state,
+                        vm = vm,
                         jobs = jobs,
                         onExportVideos = { startExport(vm::exportVideos) },
                         onExportOverlays = { startExport(vm::exportOverlays) },
                         onTenBitTest = { startExport(vm::runTenBitTest) },
-                        onCancel = vm::cancelExports,
-                        onClear = vm::clearFinishedExports,
                     )
                 }
             }
@@ -457,6 +455,7 @@ private fun FilesPanel(
                 onScrub = onCutScrub,
             )
         }
+        Group { SpeedControls(clip, state.effectiveTimelineFps, onSpeed = { vm.setSpeed(index, it) }, onMute = { vm.setMuteChangedSpeed(index, it) }) }
         Group { StartTimeControls(clip, state.activities) { vm.setManualStart(index, it) } }
         val activity = clip.sync?.let { state.activities.getOrNull(it.trackIndex) }
         if (activity != null) {
@@ -579,8 +578,9 @@ private fun ProjectRow(state: UiState, vm: HeadsupViewModel) {
     var renamingOther by remember { mutableStateOf<String?>(null) }
     Row(verticalAlignment = Alignment.CenterVertically) {
         Column(Modifier.weight(1f)) {
-            val total = state.clips.sumOf { it.durationMs }
-            val frames = state.clips.sumOf { frameCount(it.durationMs, it.meta.frameRate) ?: 0L }
+            // On the timeline: after speed changes, at the timeline's frame rate.
+            val total = state.clips.sumOf { it.timelineDurationMs }
+            val frames = frameCount(total, state.effectiveTimelineFps) ?: 0L
             Text(
                 "Project · saved automatically" +
                     if (state.clips.isEmpty()) "" else " · ${state.clips.size} clips, ${Formats.duration(total)}, $frames frames",
@@ -632,6 +632,46 @@ private fun ProjectRow(state: UiState, vm: HeadsupViewModel) {
             confirmButton = { TextButton(onClick = { listOpen = false; vm.newProject() }) { Text("New project") } },
             dismissButton = { TextButton(onClick = { listOpen = false }) { Text("Close") } },
         )
+    }
+}
+
+private val SPEEDS = listOf(0.25f, 0.5f, 0.75f, 1f, 1.5f, 2f)
+
+/**
+ * Speed of a clip. Real slow motion needs footage shot at a high frame rate: the clip's frames,
+ * spread out by the speed, should still cover the timeline's frame rate.
+ */
+@Composable
+private fun SpeedControls(clip: ClipState, timelineFps: Float, onSpeed: (Float) -> Unit, onMute: (Boolean) -> Unit) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Text("Speed", Modifier.weight(1f), style = MaterialTheme.typography.labelLarge)
+        Hint("${Formats.duration(clip.timelineDurationMs)} on the timeline")
+    }
+    Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        for (speed in SPEEDS) {
+            val label = if (speed % 1f == 0f) "${speed.toInt()}×" else "$speed×".replace("0.", ".")
+            FilterChip(selected = clip.speed == speed, onClick = { onSpeed(speed) }, label = { Text(label) })
+        }
+    }
+    if (clip.speed == 1f) return
+    val sourceFps = clip.meta.frameRate
+    if (sourceFps != null && clip.speed < 1f) {
+        val effective = sourceFps * clip.speed
+        Hint(
+            if (effective + 0.5f >= timelineFps) {
+                String.format(Locale.US, "Smooth: %s fps footage at %s× still gives %s fps (timeline %s).",
+                    OutputSpec.formatFps(sourceFps), clip.speed, OutputSpec.formatFps(effective), OutputSpec.formatFps(timelineFps))
+            } else {
+                String.format(Locale.US, "Will stutter: only %s fps at %s× for a %s fps timeline. Shoot at %s fps for this speed.",
+                    OutputSpec.formatFps(effective), clip.speed, OutputSpec.formatFps(timelineFps), OutputSpec.formatFps(timelineFps / clip.speed))
+            },
+        )
+    }
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Text("Sound", Modifier.weight(1f), style = MaterialTheme.typography.labelMedium, color = HeadsupColors.TextMuted)
+        FilterChip(selected = !clip.muteChangedSpeed, onClick = { onMute(false) }, label = { Text("Stretched") })
+        Spacer(Modifier.width(8.dp))
+        FilterChip(selected = clip.muteChangedSpeed, onClick = { onMute(true) }, label = { Text("Mute") })
     }
 }
 
@@ -1628,63 +1668,102 @@ private fun ColorRow(title: String, selected: Int, onPick: (Int) -> Unit) {
 
 // Export page
 
+/**
+ * Export: the video (whole timeline as one file by default, or one per clip) with resolution,
+ * frame rate, quality and codec, like other editors; the dashboard as PNGs for DaVinci is
+ * separate, as it is only one of the effects.
+ */
 @Composable
 private fun ExportControls(
-    bitrateFactor: Float,
-    sourceBitrate: Int?,
-    onBitrateFactor: (Float) -> Unit,
-    canExportVideo: Boolean,
-    canExportOverlay: Boolean,
-    canTest: Boolean,
+    state: UiState,
+    vm: HeadsupViewModel,
     jobs: List<ExportJob>,
     onExportVideos: () -> Unit,
     onExportOverlays: () -> Unit,
     onTenBitTest: () -> Unit,
-    onCancel: () -> Unit,
-    onClear: () -> Unit,
 ) {
-    Label("Video bit rate")
-    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        for ((factor, name) in listOf(1f to "Same as source", 1.5f to "1.5×", 2f to "2×")) {
-            // Mirrors ExportRequest.targetBitrate for the selected clip.
-            val mbps = sourceBitrate?.let { (it * factor / 1_000_000).toInt().coerceIn(10, 200) }
-            FilterChip(
-                selected = bitrateFactor == factor,
-                onClick = { onBitrateFactor(factor) },
-                label = { Text(if (mbps != null) "$name · $mbps Mb/s" else name) },
-            )
+    val settings = state.exportSettings
+    val first = state.clips.firstOrNull()
+    Label("Video")
+    SettingRow("Export") {
+        FilterChip(selected = settings.wholeTimeline, onClick = { vm.updateExportSettings { it.copy(wholeTimeline = true) } }, label = { Text("Whole timeline") })
+        FilterChip(selected = !settings.wholeTimeline, onClick = { vm.updateExportSettings { it.copy(wholeTimeline = false) } }, label = { Text("Each clip") })
+    }
+    SettingRow("Resolution") {
+        for ((height, label) in ExportSettings.HEIGHTS) {
+            FilterChip(selected = settings.height == height, onClick = { vm.updateExportSettings { it.copy(height = height) } }, label = { Text(label) })
         }
     }
-    Button(onClick = onExportVideos, enabled = canExportVideo, modifier = Modifier.fillMaxWidth()) { Text("Export videos") }
-    Hint("Colour, effects and framing; the dashboard where there is watch data. HEVC → DCIM/TelemetryOverlay")
-    OutlinedButton(onClick = onExportOverlays, enabled = canExportOverlay, modifier = Modifier.fillMaxWidth()) { Text("Export dashboard only (PNG)") }
+    SettingRow("Frame rate") {
+        val auto = first?.meta?.frameRate
+        FilterChip(
+            selected = state.timelineFps == null,
+            onClick = { vm.setTimelineFps(null) },
+            label = { Text("Auto" + (auto?.let { " (${OutputSpec.formatFps(it)})" } ?: "")) },
+        )
+        for (fps in ExportSettings.FRAME_RATES) {
+            FilterChip(selected = state.timelineFps == fps, onClick = { vm.setTimelineFps(fps) }, label = { Text(OutputSpec.formatFps(fps)) })
+        }
+    }
+    SettingRow("Quality") {
+        for ((factor, label) in ExportSettings.QUALITIES) {
+            FilterChip(selected = settings.bitrateFactor == factor, onClick = { vm.updateExportSettings { it.copy(bitrateFactor = factor) } }, label = { Text(label) })
+        }
+    }
+    SettingRow("Codec") {
+        for (codec in VideoCodec.entries) {
+            FilterChip(selected = settings.codec == codec, onClick = { vm.updateExportSettings { it.copy(codec = codec) } }, label = { Text(codec.label) })
+        }
+    }
     Hint(
-        if (canExportOverlay) "Transparent PNG frames (ZIP) for DaVinci → Download/TelemetryOverlay"
+        "Frame rate is the timeline's: clips with more frames are thinned out, none are invented. " +
+            if (settings.codec == VideoCodec.HEVC) "HEVC: smaller files." else "H.264: plays everywhere, larger files.",
+    )
+    Button(onClick = onExportVideos, enabled = state.clips.isNotEmpty(), modifier = Modifier.fillMaxWidth()) {
+        Text(if (settings.wholeTimeline) "Export timeline" else "Export ${state.clips.size} clips")
+    }
+    Hint("Colour, effects, framing, speed; the dashboard where there is watch data. → DCIM/TelemetryOverlay")
+
+    Label("Dashboard")
+    val canOverlay = state.clips.any { it.sync != null }
+    OutlinedButton(onClick = onExportOverlays, enabled = canOverlay, modifier = Modifier.fillMaxWidth()) { Text("Export dashboard only (PNG)") }
+    Hint(
+        if (canOverlay) "Transparent PNG frames (ZIP) per clip, for DaVinci → Download/TelemetryOverlay"
         else "Needs a FIT file matched to the clips.",
     )
-    OutlinedButton(onClick = onTenBitTest, enabled = canTest, modifier = Modifier.fillMaxWidth()) { Text("Test 10-bit export") }
-    Hint("First 3 s of the selected clip; nothing is saved.")
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Hint("10-bit check: first 3 s of the selected clip, nothing saved.", Modifier.weight(1f))
+        SmallAction("Test", onTenBitTest, enabled = state.selected != null)
+    }
 
     if (jobs.isNotEmpty()) {
         jobs.forEach { JobRow(it) }
         if (jobs.any { it.status == JobStatus.QUEUED || it.status == JobStatus.RUNNING }) {
-            SmallAction("Cancel all", onCancel)
+            SmallAction("Cancel all", vm::cancelExports)
         } else {
-            SmallAction("Clear list", onClear)
+            SmallAction("Clear list", vm::clearFinishedExports)
         }
     }
 }
 
+/** A label and a scrolling row of choices. */
+@Composable
+private fun SettingRow(label: String, content: @Composable androidx.compose.foundation.layout.RowScope.() -> Unit) {
+    Text(label, style = MaterialTheme.typography.labelMedium, color = HeadsupColors.TextMuted)
+    Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp), content = content)
+}
+
 @Composable
 private fun JobRow(job: ExportJob) {
-    val kind = when (job.request.kind) {
+    val kind = when (job.spec.kind) {
         ExportKind.VIDEO -> "Video"
         ExportKind.PNG_SEQUENCE -> "PNG"
         ExportKind.TEN_BIT_TEST -> "10-bit test"
     }
     Card(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            Text("$kind · ${job.request.name}", style = MaterialTheme.typography.titleSmall)
+            Text("$kind · ${job.spec.title}", style = MaterialTheme.typography.titleSmall)
+            job.spec.output?.takeIf { job.spec.kind == ExportKind.VIDEO }?.let { Hint("$it" + if (job.spec.parts.size > 1) " · ${job.spec.parts.size} clips joined" else "") }
             when (job.status) {
                 JobStatus.QUEUED -> Hint("Waiting")
                 JobStatus.RUNNING -> {
@@ -1705,7 +1784,7 @@ private fun JobRow(job: ExportJob) {
 private fun TenBitResultDialog(jobs: List<ExportJob>) {
     var seen by rememberSaveable { mutableStateOf(listOf<Int>()) }
     val job = jobs.lastOrNull {
-        it.request.kind == ExportKind.TEN_BIT_TEST && (it.status == JobStatus.DONE || it.status == JobStatus.FAILED) && it.id !in seen
+        it.spec.kind == ExportKind.TEN_BIT_TEST && (it.status == JobStatus.DONE || it.status == JobStatus.FAILED) && it.id !in seen
     } ?: return
     val clipboard = LocalClipboardManager.current
     val report = job.message ?: "No details."

@@ -150,7 +150,8 @@ private fun ClipThumb(clip: ClipState, groupName: String?, selected: Boolean, on
             )
         }
         Text(
-            Formats.duration(clip.durationMs) + if (clip.isTrimmed) " ✂" else "",
+            Formats.duration(clip.timelineDurationMs) + (if (clip.isTrimmed) " ✂" else "") +
+                if (clip.speed != 1f) " ${if (clip.speed % 1f == 0f) clip.speed.toInt() else clip.speed}×" else "",
             Modifier
                 .align(Alignment.BottomStart)
                 .padding(4.dp)

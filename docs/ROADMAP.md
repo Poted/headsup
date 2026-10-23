@@ -12,6 +12,8 @@ continuous playback across clips, highlights from the watch data, shot match.
 
 ## Ideas
 
+- **Music track** under the whole timeline (better than stretched sound for slow motion).
+
 - **Sharing and platform presets** – share an export straight to Instagram/TikTok/YouTube, with
   presets for each platform's resolution, frame rate and bit rate.
 

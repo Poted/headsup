@@ -183,6 +183,11 @@ fun ClipPreview(
             onAutoPlayStarted()
         }
     }
+    // Slow motion plays slowed down in the preview too; the dashboard follows the picture's own time.
+    LaunchedEffect(clip.speed, clip.muteChangedSpeed) {
+        exoPlayer.setPlaybackSpeed(clip.speed)
+        exoPlayer.volume = if (clip.speed != 1f && clip.muteChangedSpeed) 0f else 1f
+    }
     val ended by rememberUpdatedState(onEnded)
     DisposableEffect(exoPlayer) {
         val listener = object : Player.Listener {

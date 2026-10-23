@@ -48,7 +48,7 @@ class ExportService : Service() {
                     }
                     val running = jobs.firstOrNull { it.status == JobStatus.RUNNING }
                     val remaining = jobs.count { it.status == JobStatus.QUEUED }
-                    val title = running?.request?.name ?: "Export"
+                    val title = running?.spec?.title ?: "Export"
                     val text = if (remaining > 0) "$title · $remaining more queued" else title
                     notifications.notify(NOTIFICATION_ID, notification(text, running?.progress ?: 0))
                 }

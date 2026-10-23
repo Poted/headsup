@@ -52,9 +52,12 @@ data class ExportRequest(
     val style: DashboardStyle,
     val effects: EffectSettings,
     val grade: GradeSetup?,
-    val bitrateFactor: Float,
     /** Zoom, position, straightening and output shape of the picture. */
     val reframe: Reframe = Reframe(),
+    /** Playback speed (0.5 = half speed); the dashboard follows the picture. */
+    val speed: Float = 1f,
+    /** Silence the sound when the speed is changed (otherwise it is stretched, keeping its pitch). */
+    val muteChangedSpeed: Boolean = false,
 ) {
     /** Size of the exported frame: the source's, or the largest frame of the reframe's shape inside it (even numbers for encoders). */
     val frameWidth: Int get() = (reframe.outputSize(width.toFloat(), height.toFloat()).first.toInt() / 2 * 2).coerceAtLeast(2)
@@ -73,9 +76,4 @@ data class ExportRequest(
         return DashboardData(t.track, s.frameAt(utc), utc, zone)
     }
 
-    /** Close to the source by default; never below 10 Mb/s or above what encoders accept. */
-    fun targetBitrate(): Int {
-        val base = (sourceBitrate ?: 60_000_000).toLong()
-        return (base * bitrateFactor).toLong().coerceIn(10_000_000L, 200_000_000L).toInt()
-    }
 }

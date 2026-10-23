@@ -28,6 +28,8 @@ data class SavedClip(
     val groupId: Long?,
     val transitionMs: Long,
     val reframe: Reframe = Reframe(),
+    val speed: Float = 1f,
+    val muteChangedSpeed: Boolean = false,
 )
 
 data class SavedGroup(val id: Long, val name: String, val grade: ColorGrade, val lutName: String?)
@@ -42,6 +44,8 @@ data class ProjectData(
     val clips: List<SavedClip>,
     val groups: List<SavedGroup>,
     val globalGrade: ColorGrade,
+    /** Timeline frame rate, or null for the first clip's. */
+    val timelineFps: Float? = null,
 )
 
 data class ProjectInfo(val name: String, val modifiedMs: Long)
@@ -101,6 +105,7 @@ internal object Json {
         .put("clips", JSONArray(p.clips.map(::clip)))
         .put("groups", JSONArray(p.groups.map(::group)))
         .put("globalGrade", grade(p.globalGrade))
+        .putOpt("timelineFps", p.timelineFps)
 
     fun project(o: JSONObject) = ProjectData(
         name = o.optString("name", "Project"),
@@ -108,6 +113,7 @@ internal object Json {
         clips = o.optJSONArray("clips").objects().map(::clip),
         groups = o.optJSONArray("groups").objects().map(::group),
         globalGrade = grade(o.optJSONObject("globalGrade")),
+        timelineFps = if (o.has("timelineFps")) o.getDouble("timelineFps").toFloat() else null,
     )
 
     private fun clip(c: SavedClip) = JSONObject()
@@ -123,6 +129,8 @@ internal object Json {
         .put("masks", JSONArray(c.masks.map(::mask)))
         .putOpt("groupId", c.groupId)
         .put("transitionMs", c.transitionMs)
+        .put("speed", c.speed)
+        .put("muteChangedSpeed", c.muteChangedSpeed)
         .put("reframe", JSONObject().put("zoom", c.reframe.zoom).put("centerX", c.reframe.centerX).put("centerY", c.reframe.centerY).put("angleDegrees", c.reframe.angleDegrees))
 
     private fun clip(o: JSONObject) = SavedClip(
@@ -139,6 +147,8 @@ internal object Json {
         masks = o.optJSONArray("masks").objects().map(::mask) + listOfNotNull(o.optJSONObject("mask")?.let(::mask)),
         groupId = if (o.has("groupId")) o.getLong("groupId") else null,
         transitionMs = o.optLong("transitionMs", 0L),
+        speed = o.optDouble("speed", 1.0).toFloat(),
+        muteChangedSpeed = o.optBoolean("muteChangedSpeed", false),
         reframe = o.optJSONObject("reframe")?.let { r ->
             Reframe(
                 zoom = r.optDouble("zoom", 1.0).toFloat(),

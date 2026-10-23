@@ -193,3 +193,16 @@ framing, dashboard; not selection or playback). A step is recorded half a second
 settles, so one slider drag is one step; a step pending when undo is pressed is recorded first,
 so redo can bring it back. Opening another project starts a new history. The arrows sit quietly
 in the corner of the preview and only appear once there is something to undo.
+
+## Export settings, timeline and speed
+
+The project has a timeline frame rate (Auto = the first clip's). Video export defaults to the
+whole timeline as one file: one Media3 `EditedMediaItemSequence` of all clips (silence is added
+where a clip has no sound), each scaled and cropped to the same frame (`Presentation`, size from
+the chosen resolution and the first clip's shape). Per clip the effects run: colour, texture,
+framing, output frame, dashboard, then speed (`SpeedChangeEffect`, sound via
+`SpeedChangingAudioProcessor`, pitch kept, or removed) and frame rate (`FrameDropEffect` when the
+clip has more frames than the timeline; frames are never invented). The dashboard comes before
+the speed change, so it reads the clip's own time and slows down with the picture. Bit rate
+follows the source's per pixel times the chosen quality; HEVC or H.264. The PNG dashboard export
+is separate and per clip.

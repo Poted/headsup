@@ -33,6 +33,9 @@ import app.headsup.export.ExportKind
 import app.headsup.export.ExportRequest
 import app.headsup.export.GradeSetup
 import app.headsup.export.Telemetry
+import app.headsup.export.ExportSettings
+import app.headsup.export.JobSpec
+import app.headsup.export.OutputSpec
 import app.headsup.media.ClipMetadata
 import app.headsup.media.ClipMetadataReader
 import app.headsup.render.DashboardStyle
@@ -100,6 +103,10 @@ data class ClipState(
     val reframe: Reframe = Reframe(),
     /** Group whose corrections (and LUT, if the clip has none) apply too; at most one. */
     val groupId: Long? = null,
+    /** Playback speed: 0.5 = half speed (slow motion), 2 = double. */
+    val speed: Float = 1f,
+    /** Silence the sound while the speed is changed; otherwise it is stretched, keeping its pitch. */
+    val muteChangedSpeed: Boolean = false,
 ) {
     val look: ClipLook get() = ClipLook(grade, effects, lutName, masks)
 
@@ -110,6 +117,9 @@ data class ClipState(
         } ?: meta.info
 
     val durationMs: Long get() = trimEndMs - trimStartMs
+
+    /** Length on the timeline, after the speed change. */
+    val timelineDurationMs: Long get() = (durationMs / speed).toLong()
     val isTrimmed: Boolean get() = trimStartMs > 0 || trimEndMs < meta.durationMs
 
     /** UTC time of the telemetry shown at [positionMs] into the (trimmed) clip. */
@@ -218,13 +228,18 @@ data class UiState(
     val matching: Boolean = false,
     val canUndo: Boolean = false,
     val canRedo: Boolean = false,
-    val bitrateFactor: Float = 1f,
+    val exportSettings: ExportSettings = ExportSettings(),
+    /** Frame rate of the timeline (exports and slow-motion maths); null = the first clip's. */
+    val timelineFps: Float? = null,
     /** Vectorscope and skin measurement of the last frame tapped in the preview. */
     val scope: ScopeResult? = null,
     /** Look copied with "Copy", waiting to be pasted. */
     val copiedLook: ClipLook? = null,
 ) {
     val selected: ClipState? get() = selectedClip?.let { clips.getOrNull(it) }
+
+    /** The timeline's frame rate: chosen, or the first clip's, or 30. */
+    val effectiveTimelineFps: Float get() = timelineFps ?: clips.firstOrNull()?.meta?.frameRate ?: 30f
 
     /** Corrections the colour page edits: the selected clip's, its mask's, or the global node's. */
     val grade: ColorGrade
@@ -408,11 +423,12 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
         clips = clips.map {
             SavedClip(
                 it.meta.uri, it.trimStartMs, it.trimEndMs, it.manualOffsetMs, it.colorGrade, it.lutName,
-                it.manualStart, it.grade, it.effects, it.masks, it.groupId, it.transitionMs, it.reframe,
+                it.manualStart, it.grade, it.effects, it.masks, it.groupId, it.transitionMs, it.reframe, it.speed, it.muteChangedSpeed,
             )
         },
         groups = groups.map { SavedGroup(it.id, it.name, it.grade, it.lutName) },
         globalGrade = globalGrade,
+        timelineFps = timelineFps,
     )
 
     fun refreshProjects() = _state.update { it.copy(projects = projectStore.list()) }
@@ -453,6 +469,8 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                     masks = c.masks,
                     transitionMs = c.transitionMs,
                     reframe = c.reframe,
+                    speed = c.speed,
+                    muteChangedSpeed = c.muteChangedSpeed,
                     groupId = c.groupId,
                 )
             }
@@ -465,6 +483,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                         clips = clips,
                         groups = project.groups.map { ClipGroup(it.id, it.name, it.grade, it.lutName) },
                         globalGrade = project.globalGrade,
+                        timelineFps = project.timelineFps,
                         selectedClip = clips.indices.firstOrNull(),
                         highlights = null,
                         defaultGrade = ColorGrade(),
@@ -498,6 +517,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                 clips = emptyList(),
                 groups = emptyList(),
                 globalGrade = ColorGrade(),
+                timelineFps = null,
                 selectedClip = null,
                 highlights = null,
                 defaultGrade = ColorGrade(),
@@ -1136,7 +1156,14 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
 
     // Export
 
-    fun setBitrateFactor(factor: Float) = _state.update { it.copy(bitrateFactor = factor) }
+    fun updateExportSettings(transform: (ExportSettings) -> ExportSettings) = _state.update { it.copy(exportSettings = transform(it.exportSettings)) }
+
+    fun setTimelineFps(fps: Float?) = _state.update { it.copy(timelineFps = fps) }
+
+    /** Slow motion (or fast): the sound is muted by default below half speed, where stretching sounds metallic. */
+    fun setSpeed(index: Int, speed: Float) = updateClip(index) { it.copy(speed = speed, muteChangedSpeed = speed < 0.5f) }
+
+    fun setMuteChangedSpeed(index: Int, mute: Boolean) = updateClip(index) { it.copy(muteChangedSpeed = mute) }
 
     fun exportVideos() = enqueue(ExportKind.VIDEO, state.value.clips.indices.toList())
 
@@ -1182,16 +1209,46 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                     style = s.style,
                     effects = clip.effects,
                     grade = if (graded) GradeSetup(cube, applied.vignette, masks, maskCubes, fromCube, clip.transitionMs) else null,
-                    bitrateFactor = s.bitrateFactor,
                     reframe = clip.reframe,
+                    speed = clip.speed,
+                    muteChangedSpeed = clip.muteChangedSpeed,
                 )
             }
             if (requests.isEmpty()) {
                 val why = if (kind == ExportKind.PNG_SEQUENCE) "the dashboard needs watch data, and no clip is matched to an activity." else "no clips."
                 _state.update { it.copy(messages = it.messages + "Nothing to export: $why") }
             } else {
-                exportManager.enqueue(requests)
+                exportManager.enqueue(jobsFor(kind, requests, s))
             }
+        }
+    }
+
+    /**
+     * Turns clips into export jobs: the whole timeline as one file (frame size and shape from the
+     * first clip), or one file per clip; PNG overlays always per clip.
+     */
+    private fun jobsFor(kind: ExportKind, requests: List<ExportRequest>, s: UiState): List<JobSpec> {
+        val settings = s.exportSettings
+        val fps = s.effectiveTimelineFps
+        fun spec(parts: List<ExportRequest>, fileName: String): OutputSpec {
+            val first = parts.first()
+            val sourceH = first.frameHeight.toFloat()
+            val aspect = first.frameWidth.toFloat() / sourceH
+            val h = settings.height?.toFloat() ?: sourceH
+            val w = h * aspect
+            // Bit rate follows the source's per pixel, times the chosen quality.
+            val sourceRate = (first.sourceBitrate ?: 60_000_000).toDouble()
+            val pixels = (w * h) / (first.width.toDouble() * first.height).coerceAtLeast(1.0)
+            val bitrate = (sourceRate * pixels * settings.bitrateFactor).toLong().coerceIn(8_000_000L, 200_000_000L).toInt()
+            return OutputSpec(OutputSpec.even(w), OutputSpec.even(h), fps, settings.codec, bitrate, fileName)
+        }
+        return when {
+            kind == ExportKind.PNG_SEQUENCE -> requests.map { JobSpec(kind, it.name, listOf(it), null) }
+            kind == ExportKind.VIDEO && settings.wholeTimeline -> {
+                val name = s.projectName.replace(Regex("[^\\p{L}\\p{N} ._-]"), "_")
+                listOf(JobSpec(kind, s.projectName, requests, spec(requests, "${name}_sweetspot.mp4")))
+            }
+            else -> requests.map { JobSpec(kind, it.name, listOf(it), spec(listOf(it), "${it.baseName}_sweetspot.mp4")) }
         }
     }
 
