@@ -3,15 +3,18 @@ package app.headsup.core.frame
 import kotlin.math.abs
 import kotlin.math.cos
 import kotlin.math.max
+import kotlin.math.min
 import kotlin.math.sin
 
 /**
- * Reframing of a clip: an output shape ([aspect], e.g. 9:16 for a reel), zoom into the picture,
- * which part fills the frame, and straightening. Zoom never drops below what keeps the frame
- * filled after straightening.
+ * Reframing of a clip in the timeline's frame: the output shape ([aspect], e.g. 9:16 for a reel,
+ * the timeline's), whether the picture fills the frame (cropped) or [fit]s inside it (bars),
+ * zoom, which part is at the centre, and straightening. When filling, zoom never drops below
+ * what keeps the frame filled after straightening.
  *
  * Sizes: "source" is the clip's picture, "output" the frame shown/exported. Without [aspect] they
- * are the same; with it the output is the largest frame of that shape inside the source.
+ * are the same; with it the output is the largest frame of that shape inside the source (fill)
+ * or the smallest around it (fit).
  */
 data class Reframe(
     /** 1 = the output frame shows as much of the picture as fits. */
@@ -23,13 +26,20 @@ data class Reframe(
     val angleDegrees: Float = 0f,
     /** Output width / height, or null to keep the clip's own shape. */
     val aspect: Float? = null,
+    /** The whole picture inside the frame, with bars where the shapes differ (instead of cropping). */
+    val fit: Boolean = false,
 ) {
     val isIdentity: Boolean get() = zoom == 1f && centerX == 0.5f && centerY == 0.5f && angleDegrees == 0f && aspect == null
 
-    /** Output frame size for a [srcW]×[srcH] clip. */
+    /** Output frame size for a [srcW]×[srcH] clip, in its pixels: inside the picture (fill) or around it (fit). */
     fun outputSize(srcW: Float, srcH: Float): Pair<Float, Float> {
         val a = aspect ?: return srcW to srcH
-        return if (a < srcW / srcH) srcH * a to srcH else srcW to srcW / a
+        val wider = a > srcW / srcH
+        return if (fit) {
+            if (wider) srcH * a to srcH else srcW to srcW / a
+        } else {
+            if (wider) srcW to srcW / a else srcH * a to srcH
+        }
     }
 
     /**
@@ -40,6 +50,11 @@ data class Reframe(
     fun effectiveZoom(outW: Float, outH: Float, srcW: Float, srcH: Float): Float {
         val s0 = baseScale(outW, outH, srcW, srcH)
         val (c, s) = cosSin()
+        if (fit) {
+            // The (turned) picture just inside the frame at zoom 1; zooming in from there is free.
+            val inside = min(outW / (srcW * c + srcH * s), outH / (srcW * s + srcH * c)) / s0
+            return zoom * inside
+        }
         val cover = max((outW * c + outH * s) / (s0 * srcW), (outW * s + outH * c) / (s0 * srcH))
         return max(zoom, cover)
     }

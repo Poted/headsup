@@ -56,4 +56,21 @@ class ReframeTest {
         val left = r.copy(centerX = 0f).clamped(ow, oh, w, h)
         assertEquals(0f, left.sourceOf(0f, 0f, ow, oh, w, h).first, 1e-2f)
     }
+
+    @Test
+    fun `fill crops a vertical clip to a horizontal frame, fit puts it inside with bars`() {
+        val fill = Reframe(aspect = 16f / 9f)
+        val (fw, fh) = fill.outputSize(1080f, 1920f)
+        assertEquals(1080f, fw, 0.5f)
+        assertEquals(607.5f, fh, 0.5f)
+        val fit = Reframe(aspect = 16f / 9f, fit = true)
+        val (ow, oh) = fit.outputSize(1080f, 1920f)
+        assertEquals(3413.3f, ow, 0.5f)
+        assertEquals(1920f, oh, 0.5f)
+        // At zoom 1 the picture is shown at its own size, centred: its edges are its edges.
+        val scale = Reframe.baseScale(ow, oh, 1080f, 1920f) * fit.effectiveZoom(ow, oh, 1080f, 1920f)
+        assertEquals(1f, scale, 1e-3f)
+        val (x, _) = fit.sourceOf(ow / 2f - 540f, oh / 2f, ow, oh, 1080f, 1920f)
+        assertEquals(0f, x, 0.5f)
+    }
 }

@@ -51,6 +51,8 @@ data class ProjectData(
     val globalGrade: ColorGrade,
     /** Timeline frame rate, or null for the first clip's. */
     val timelineFps: Float? = null,
+    /** Timeline frame shape (width / height), or null for the first clip's. */
+    val frameAspect: Float? = null,
     /** The project's sound files and the clips placed from them on the audio tracks. */
     val audioFiles: List<AudioFile> = emptyList(),
     val audioClips: List<AudioClip> = emptyList(),
@@ -123,6 +125,7 @@ internal object Json {
         .put("groups", JSONArray(p.groups.map(::group)))
         .put("globalGrade", grade(p.globalGrade))
         .putOpt("timelineFps", p.timelineFps)
+        .putOpt("frameAspect", p.frameAspect)
         .put("audioFiles", JSONArray(p.audioFiles.map { JSONObject().put("uri", it.uri.toString()).put("name", it.name).put("durationMs", it.durationMs) }))
         .put("audioClips", JSONArray(p.audioClips.map(::audioClip)))
         .put("clipSound", p.clipSound)
@@ -134,6 +137,7 @@ internal object Json {
         groups = o.optJSONArray("groups").objects().map(::group),
         globalGrade = grade(o.optJSONObject("globalGrade")),
         timelineFps = if (o.has("timelineFps")) o.getDouble("timelineFps").toFloat() else null,
+        frameAspect = if (o.has("frameAspect")) o.getDouble("frameAspect").toFloat() else null,
         audioFiles = o.optJSONArray("audioFiles").objects().map {
             AudioFile(Uri.parse(it.getString("uri")), it.optString("name", "Sound"), it.optLong("durationMs", 0L))
         } + listOfNotNull(o.optJSONObject("music")?.let { m -> AudioFile(Uri.parse(m.getString("uri")), m.optString("name", "Music"), m.optLong("durationMs", 0L)) }),
@@ -192,7 +196,7 @@ internal object Json {
         .put("muteChangedSpeed", c.muteChangedSpeed)
         .put("fadeInMs", c.fadeInMs)
         .put("fadeOutMs", c.fadeOutMs)
-        .put("reframe", JSONObject().put("zoom", c.reframe.zoom).put("centerX", c.reframe.centerX).put("centerY", c.reframe.centerY).put("angleDegrees", c.reframe.angleDegrees))
+        .put("reframe", JSONObject().put("zoom", c.reframe.zoom).put("centerX", c.reframe.centerX).put("centerY", c.reframe.centerY).put("angleDegrees", c.reframe.angleDegrees).put("fit", c.reframe.fit))
 
     private fun clip(o: JSONObject) = SavedClip(
         uri = Uri.parse(o.getString("uri")),
@@ -218,6 +222,7 @@ internal object Json {
                 centerX = r.optDouble("centerX", 0.5).toFloat(),
                 centerY = r.optDouble("centerY", 0.5).toFloat(),
                 angleDegrees = r.optDouble("angleDegrees", 0.0).toFloat(),
+                fit = r.optBoolean("fit", false),
             )
         } ?: Reframe(),
     )

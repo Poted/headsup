@@ -13,6 +13,9 @@ import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -100,6 +103,8 @@ fun Timeline(
     val lengths = clips.map { it.timelineDurationMs }
     val starts = lengths.runningFold(0L) { a, b -> a + b }
     val videoEnd = starts.last()
+    // Sounds may run past the video's end; zooming out reaches them.
+    val contentEnd = maxOf(videoEnd, audio.maxOfOrNull { it.piece.endOnTimelineMs } ?: 0L)
     val lanes = (audio.maxOfOrNull { it.lane } ?: -1) + 2
 
     val context = LocalContext.current
@@ -113,7 +118,7 @@ fun Timeline(
     var widthPx by remember { mutableFloatStateOf(0f) }
     // Zoom in pixels per millisecond; 0 until the width is known, then the project fits.
     var zoom by remember { mutableFloatStateOf(0f) }
-    fun fitZoom(spanMs: Long, share: Float) = (widthPx * share / spanMs.coerceAtLeast(500L)).coerceIn(minZoom(widthPx, videoEnd), MAX_ZOOM_DP * localDensity.density)
+    fun fitZoom(spanMs: Long, share: Float) = (widthPx * share / spanMs.coerceAtLeast(500L)).coerceIn(minZoom(widthPx, contentEnd), MAX_ZOOM_DP * localDensity.density)
     // While a clip's start is trimmed, it is drawn moved by this much; the rest ripples on release.
     var ghost by remember { mutableStateOf<Pair<Int, Long>?>(null) }
     var menu by remember { mutableStateOf<Pair<Int, Float>?>(null) }
@@ -135,6 +140,7 @@ fun Timeline(
     val add by rememberUpdatedState(onAdd)
     val lanesNow by rememberUpdatedState(lanes)
     val videoEndNow by rememberUpdatedState(videoEnd)
+    val contentEndNow by rememberUpdatedState(contentEnd)
 
     val accent = HeadsupColors.Accent
     val muted = HeadsupColors.TextMuted
@@ -142,14 +148,15 @@ fun Timeline(
     val clipColour = HeadsupColors.SurfaceHigh
 
     Column {
-        Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+        // Scrolls sideways when the selection has many actions.
+        Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
             // Fit the whole project, or the clip under the playhead (for masks, colour and cuts).
             SmallAction("Project", { if (widthPx > 0) zoom = fitZoom(videoEnd, 0.9f) })
             SmallAction("Clip", {
                 val i = state.selectedClip ?: return@SmallAction
                 if (widthPx > 0) zoom = fitZoom(lengths.getOrElse(i) { 1000L }, 0.8f)
             })
-            Spacer(Modifier.weight(1f))
+            Spacer(Modifier.width(16.dp))
             actions()
         }
         Box {
@@ -220,7 +227,7 @@ fun Timeline(
                                     val pressed = event.changes.filter { it.pressed }
                                     if (pressed.size < 2) break
                                     val d = (pressed[0].position - pressed[1].position).getDistance()
-                                    if (previous > 0f && d > 0f) zoom = (zoom * d / previous).coerceIn(minZoom(g.width, videoEndNow), MAX_ZOOM_DP * density)
+                                    if (previous > 0f && d > 0f) zoom = (zoom * d / previous).coerceIn(minZoom(g.width, contentEndNow), MAX_ZOOM_DP * density)
                                     previous = d
                                     event.changes.forEach { it.consume() }
                                 }
@@ -425,7 +432,7 @@ private val HANDLE = 14.dp
 private const val MIN_MS = 300L
 private const val MAX_ZOOM_DP = 0.4f
 
-/** Zoomed out at most to half the project across the width. */
+/** Zoomed out at most to the whole content across half the width (the playhead can be at its end). */
 private fun minZoom(width: Float, videoEnd: Long) = (width * 0.5f / videoEnd.coerceAtLeast(1000L)).coerceAtMost(0.002f)
 
 private enum class Mode { SCROLL, NONE, TRIM_CLIP_START, TRIM_CLIP_END, MOVE, SLIP, TRIM_SOUND_START, TRIM_SOUND_END, FADE_IN, FADE_OUT }

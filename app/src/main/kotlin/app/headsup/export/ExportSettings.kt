@@ -13,7 +13,7 @@ enum class ExportPreset(val label: String) { VERTICAL("Reels · TikTok · Shorts
 data class ExportSettings(
     /** One file for the whole timeline, or one per clip. */
     val wholeTimeline: Boolean = true,
-    /** Output height in pixels (width follows the shape), or null for the source's. */
+    /** Short side of the output in pixels (1080 = 1920×1080 or 1080×1920), or null for the source's. */
     val height: Int? = null,
     /** Bit rate relative to the source's, scaled to the output size. */
     val bitrateFactor: Float = 1f,

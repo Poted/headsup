@@ -20,6 +20,7 @@ import androidx.media3.common.audio.SpeedChangingAudioProcessor
 import androidx.media3.common.audio.SpeedProvider
 import androidx.media3.transformer.EditedMediaItemSequence
 import android.graphics.Matrix
+import androidx.media3.common.util.Size
 import app.headsup.core.frame.Reframe
 import app.headsup.core.color.ColorGrade
 import app.headsup.core.color.LutBaker
@@ -146,24 +147,34 @@ class ExportManager(private val context: Context) {
      * The reframe as a Media3 matrix on normalised device coordinates (y up, −1..1 on both axes):
      * aspect-corrected so rotation does not shear the picture.
      */
+    /**
+     * The clip in the timeline's frame: an output of the frame's shape at the clip's own pixel
+     * scale ([Reframe.outputSize]: inside the picture when filling, around it when fitting), with
+     * the picture zoomed, moved and turned into it; bars stay black. The Presentation after it only
+     * scales to the export size.
+     */
     private fun reframeEffect(reframe: Reframe, width: Int, height: Int): MatrixTransformation? {
         if (reframe.isIdentity || width <= 0 || height <= 0) return null
         val w = width.toFloat()
         val h = height.toFloat()
-        // Output frame inside the source; a later Presentation crops to it around the centre.
-        val (ow, oh) = reframe.outputSize(w, h)
-        val r = reframe.clamped(ow, oh, w, h)
-        val zoom = r.effectiveZoom(ow, oh, w, h)
-        val aspect = w / h
+        val (fw, fh) = reframe.outputSize(w, h)
+        val outW = OutputSpec.even(fw)
+        val outH = OutputSpec.even(fh)
+        val r = reframe.clamped(fw, fh, w, h)
+        val scale = Reframe.baseScale(fw, fh, w, h) * r.effectiveZoom(fw, fh, w, h)
         val matrix = Matrix().apply {
+            // Source NDC → source pixels around the chosen centre (y up) → turned and scaled → frame NDC.
             postTranslate(-(2f * r.centerX - 1f), -(1f - 2f * r.centerY))
-            postScale(aspect, 1f)
+            postScale(w / 2f, h / 2f)
             // Clockwise on screen is a negative angle with y pointing up.
             postRotate(-r.angleDegrees)
-            postScale(zoom, zoom)
-            postScale(1f / aspect, 1f)
+            postScale(scale, scale)
+            postScale(2f / outW, 2f / outH)
         }
-        return MatrixTransformation { matrix }
+        return object : MatrixTransformation {
+            override fun configure(inputWidth: Int, inputHeight: Int) = Size(outW, outH)
+            override fun getMatrix(presentationTimeUs: Long) = matrix
+        }
     }
 
     /** A constant speed for Media3's speed effects. */
@@ -200,8 +211,8 @@ class ExportManager(private val context: Context) {
         if (request.effects.changesPixels) effects += FinishEffect(request.effects)
         // Reframing comes after colour and texture (as in the preview) and before the dashboard.
         reframeEffect(request.reframe, request.width, request.height)?.let { effects += it }
-        // The output frame: the clip's shape cropped around the centre and scaled to the output size,
-        // so every clip of a joined export has the same frame.
+        // The timeline's frame scaled to the output size (the same shape), so every clip of a joined
+        // export has the same frame.
         effects += Presentation.createForWidthAndHeight(out.width, out.height, Presentation.LAYOUT_SCALE_TO_FIT_WITH_CROP)
         val speed = request.speed
         val timelineMs = if (request.isPhoto) request.durationMs else (request.durationMs / speed).toLong()

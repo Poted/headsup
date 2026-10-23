@@ -199,6 +199,7 @@ private data class EditSnapshot(
     val globalGrade: ColorGrade,
     val style: DashboardStyle,
     val timelineFps: Float?,
+    val frameAspect: Float?,
     val exportSettings: ExportSettings,
     val audioFiles: List<AudioFile>,
     val audioClips: List<AudioClip>,
@@ -266,6 +267,8 @@ data class UiState(
     val exportSettings: ExportSettings = ExportSettings(),
     /** Frame rate of the timeline (exports and slow-motion maths); null = the first clip's. */
     val timelineFps: Float? = null,
+    /** Shape of the timeline's frame (width / height); null = the first clip's own. */
+    val frameAspect: Float? = null,
     /** The project's sound files (Files page) and the clips placed from them on the audio tracks. */
     val audioFiles: List<AudioFile> = emptyList(),
     val audioClips: List<AudioClip> = emptyList(),
@@ -284,6 +287,13 @@ data class UiState(
 
     /** The timeline's frame rate: chosen, or the first clip's, or 30. */
     val effectiveTimelineFps: Float get() = timelineFps ?: clips.firstOrNull()?.meta?.frameRate ?: 30f
+
+    /** The timeline frame's shape: chosen, or the first clip's. */
+    val timelineAspect: Float
+        get() = frameAspect ?: clips.firstOrNull()?.meta?.takeIf { it.width > 0 && it.height > 0 }?.let { it.width.toFloat() / it.height } ?: (16f / 9f)
+
+    /** [c]'s framing in the timeline's frame (preview and export). */
+    fun framing(c: ClipState): Reframe = c.reframe.copy(aspect = timelineAspect)
 
     /** Corrections the colour page edits: the selected clip's, its mask's, or the global node's. */
     val grade: ColorGrade
@@ -373,7 +383,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
     private val history = ArrayList<EditSnapshot>()
     private var historyIndex = -1
 
-    private fun UiState.snapshot() = EditSnapshot(projectName, activities, clips, groups, globalGrade, style, timelineFps, exportSettings, audioFiles, audioClips, clipSound)
+    private fun UiState.snapshot() = EditSnapshot(projectName, activities, clips, groups, globalGrade, style, timelineFps, frameAspect, exportSettings, audioFiles, audioClips, clipSound)
 
     /**
      * Records a step a moment after the edit settles, so a slider drag or a widget move is one
@@ -431,6 +441,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                 globalGrade = snapshot.globalGrade,
                 style = snapshot.style,
                 timelineFps = snapshot.timelineFps,
+                frameAspect = snapshot.frameAspect,
                 exportSettings = snapshot.exportSettings,
                 audioFiles = snapshot.audioFiles,
                 audioClips = snapshot.audioClips,
@@ -482,6 +493,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
         groups = groups.map { SavedGroup(it.id, it.name, it.grade, it.lutName) },
         globalGrade = globalGrade,
         timelineFps = timelineFps,
+        frameAspect = frameAspect,
         audioFiles = audioFiles,
         audioClips = audioClips,
         clipSound = clipSound,
@@ -549,6 +561,8 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                         groups = project.groups.map { ClipGroup(it.id, it.name, it.grade, it.lutName) },
                         globalGrade = project.globalGrade,
                         timelineFps = project.timelineFps,
+                        // Older projects kept the shape per clip: one shared by all becomes the frame's.
+                        frameAspect = project.frameAspect ?: clips.map { it.reframe.aspect }.distinct().singleOrNull(),
                         audioFiles = project.audioFiles.distinctBy { it.uri },
                         audioClips = project.audioClips,
                         clipSound = project.clipSound,
@@ -589,6 +603,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                 groups = emptyList(),
                 globalGrade = ColorGrade(),
                 timelineFps = null,
+                frameAspect = null,
                 audioFiles = emptyList(),
                 audioClips = emptyList(),
                 clipSound = 1f,
@@ -1284,9 +1299,9 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
         val tenBitSource = _state.value.clips.any { it.meta.format?.tenBit == true }
         when (preset) {
             ExportPreset.VERTICAL -> {
-                setAspectForAll(9f / 16f)
+                setFrameAspect(9f / 16f)
                 _state.update {
-                    it.copy(timelineFps = 30f, exportSettings = it.exportSettings.copy(wholeTimeline = true, height = 1920, bitrateFactor = 1.5f, codec = VideoCodec.HEVC, tenBit = false))
+                    it.copy(timelineFps = 30f, exportSettings = it.exportSettings.copy(wholeTimeline = true, height = 1080, bitrateFactor = 1.5f, codec = VideoCodec.HEVC, tenBit = false))
                 }
             }
             ExportPreset.YOUTUBE -> _state.update {
@@ -1299,7 +1314,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
     fun activePreset(s: UiState): ExportPreset? {
         val e = s.exportSettings
         return when {
-            s.clips.isNotEmpty() && s.clips.all { it.reframe.aspect == 9f / 16f } && e.height == 1920 && s.timelineFps == 30f &&
+            s.clips.isNotEmpty() && s.frameAspect == 9f / 16f && e.height == 1080 && s.timelineFps == 30f &&
                 e.codec == VideoCodec.HEVC && !e.tenBit && e.bitrateFactor == 1.5f -> ExportPreset.VERTICAL
             e.height == null && e.bitrateFactor == 2f && e.codec == VideoCodec.HEVC && !e.hlg -> ExportPreset.YOUTUBE
             else -> null
@@ -1316,25 +1331,37 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
         _state.update { it.copy(cine = null) }
     }
 
-    /** Gives every clip the same output shape (e.g. 9:16 for a reel), keeping each clip's own position. */
-    fun setAspectForAll(aspect: Float?) {
+    /**
+     * The timeline's frame shape (e.g. 9:16 for a reel; null = the first clip's): every clip is
+     * shown and exported in it, filling it or fitting inside it, each keeping its own position.
+     */
+    fun setFrameAspect(aspect: Float?) {
         _state.update { s ->
-            s.copy(clips = s.clips.map { c -> c.copy(reframe = c.reframe.copy(aspect = aspect).clampedFor(c)) })
+            val next = s.copy(frameAspect = aspect)
+            next.copy(clips = next.clips.map { c -> c.copy(reframe = c.reframe.clampedFor(c, next.timelineAspect)) })
         }
         refreshPreview()
     }
 
-    private fun Reframe.clampedFor(c: ClipState): Reframe {
+    private fun Reframe.clampedFor(c: ClipState, aspect: Float): Reframe {
         val w = c.meta.width.toFloat().coerceAtLeast(1f)
         val h = c.meta.height.toFloat().coerceAtLeast(1f)
-        val (ow, oh) = outputSize(w, h)
-        return copy(zoom = zoom.coerceIn(1f, 4f)).clamped(ow, oh, w, h)
+        val framed = copy(aspect = aspect)
+        val (ow, oh) = framed.outputSize(w, h)
+        return framed.copy(zoom = zoom.coerceIn(1f, 4f)).clamped(ow, oh, w, h)
     }
 
     /** Changes the selected clip's framing; kept inside the picture. */
     fun updateReframe(transform: (Reframe) -> Reframe) {
         val index = _state.value.selectedClip ?: return
-        updateClip(index) { c -> c.copy(reframe = transform(c.reframe).clampedFor(c)) }
+        val aspect = _state.value.timelineAspect
+        updateClip(index) { c -> c.copy(reframe = transform(c.reframe).clampedFor(c, aspect)) }
+    }
+
+    /** Fill or fit for every clip, e.g. after changing the frame's shape. */
+    fun setFitForAll(fit: Boolean) {
+        _state.update { s -> s.copy(clips = s.clips.map { c -> c.copy(reframe = c.reframe.copy(fit = fit).clampedFor(c, s.timelineAspect)) }) }
+        refreshPreview()
     }
 
     // Masks and transitions
@@ -1648,7 +1675,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                     effects = clip.effects,
                     grade = if (graded) GradeSetup(cube, applied.vignette, masks, maskCubes, fromCube, clip.transitionMs)
                         else cube?.let { GradeSetup(it, 0f) },
-                    reframe = clip.reframe,
+                    reframe = s.framing(clip),
                     speed = clip.speed,
                     isPhoto = clip.meta.isPhoto,
                     muteChangedSpeed = clip.muteChangedSpeed,
@@ -1672,9 +1699,9 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
     /** Output size, bit rate and format for a frame of [frameW]×[frameH] cut from a [srcW]×[srcH] source. */
     private fun outputSpec(s: UiState, frameW: Int, frameH: Int, srcW: Int, srcH: Int, srcBitrate: Int?, fileName: String): OutputSpec {
         val settings = s.exportSettings
-        val sourceH = frameH.toFloat()
-        val h = settings.height?.toFloat() ?: sourceH
-        val w = h * frameW / sourceH
+        // The chosen resolution is the frame's short side (1080p: 1920×1080 or 1080×1920).
+        val short = settings.height?.toFloat() ?: minOf(frameW, frameH).toFloat()
+        val (w, h) = if (frameW >= frameH) short * frameW / frameH to short else short to short * frameH / frameW
         // Bit rate follows the source's per pixel, times the chosen quality.
         val sourceRate = (srcBitrate ?: 60_000_000).toDouble()
         val pixels = (w * h) / (srcW.toDouble() * srcH).coerceAtLeast(1.0)
@@ -1688,7 +1715,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
     /** What the export would produce now (from the first clip), shown at the top of the export panel. */
     fun outputPreview(s: UiState): OutputSpec? {
         val c = s.clips.firstOrNull() ?: return null
-        val (fw, fh) = c.reframe.outputSize(c.meta.width.toFloat(), c.meta.height.toFloat())
+        val (fw, fh) = s.framing(c).outputSize(c.meta.width.toFloat(), c.meta.height.toFloat())
         return outputSpec(s, fw.toInt() / 2 * 2, fh.toInt() / 2 * 2, c.meta.width, c.meta.height, c.meta.bitrate, "")
     }
 

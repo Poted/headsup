@@ -282,7 +282,7 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
                         onPlaying = { if (it) scrubT.value = null },
                         cutScrub = cutScrub,
                         onFrameSource = { frameSource.value = it },
-                        reframe = selected.reframe,
+                        reframe = state.framing(selected),
                         onReframe = if (framing) { r -> vm.updateReframe { r } } else null,
                         showGrid = framing,
                         autoPlay = continuePlaying,
@@ -351,6 +351,10 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
                     val t = scrubT.value ?: timelineOf(playhead.longValue)
                     when {
                         selectedSound != null -> {
+                            val videoEnd = clipStarts.last()
+                            if (selectedSound.piece.endOnTimelineMs > videoEnd + 50) {
+                                SmallAction("Cut at end", { vm.updateAudio(selectedSound.id) { it.with(it.piece.trimEnd(videoEnd - it.piece.endOnTimelineMs)) } })
+                            }
                             SmallAction("Split", { vm.splitAudio(selectedSound.id, t) })
                             SmallAction(if (slip) "Slip ✓" else "Slip", { slip = !slip })
                             SmallAction("Delete", { vm.removeAudio(selectedSound.id) })
@@ -1837,18 +1841,30 @@ private fun FramePanel(state: UiState, vm: HeadsupViewModel) {
         Hint("Select a clip first.")
         return
     }
-    val r = clip.reframe
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        Hint("Drag the picture to move it, pinch to zoom. The grid shows the thirds.", Modifier.weight(1f))
-        if (!r.isIdentity) SmallAction("Reset", { vm.updateReframe { Reframe() } })
-    }
+    // The timeline's frame: one shape for the whole project, like a DaVinci timeline's resolution.
+    Label("Timeline frame")
+    val first = state.clips.firstOrNull()?.meta
     FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         for ((aspect, label) in Reframe.PRESETS) {
-            FilterChip(selected = r.aspect == aspect, onClick = { vm.updateReframe { it.copy(aspect = aspect) } }, label = { Text(label) })
+            val text = if (aspect == null) "First clip" + (first?.let { " (${it.width}×${it.height})" } ?: "") else label
+            FilterChip(selected = state.frameAspect == aspect, onClick = { vm.setFrameAspect(aspect) }, label = { Text(text) })
         }
     }
-    val (w, h) = r.outputSize(clip.meta.width.toFloat(), clip.meta.height.toFloat())
-    if (r.aspect != null) Hint("Exported at ${w.toInt() / 2 * 2}×${h.toInt() / 2 * 2}.")
+    vm.outputPreview(state)?.let { Hint("Exported at ${it.width}×${it.height}.") }
+
+    Label("This clip in the frame")
+    val r = state.framing(clip)
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        FilterChip(selected = !r.fit, onClick = { vm.updateReframe { it.copy(fit = false) } }, label = { Text("Fill") })
+        Spacer(Modifier.width(8.dp))
+        FilterChip(selected = r.fit, onClick = { vm.updateReframe { it.copy(fit = true) } }, label = { Text("Fit") })
+        Spacer(Modifier.weight(1f))
+        if (clip.reframe != Reframe(aspect = clip.reframe.aspect, fit = r.fit)) SmallAction("Reset", { vm.updateReframe { Reframe(fit = it.fit) } })
+    }
+    Hint(
+        if (r.fit) "The whole picture inside the frame, black bars where the shapes differ; zoom in to fill more."
+        else "The picture fills the frame; drag it to choose what stays, pinch to zoom. The grid shows the thirds.",
+    )
     ValueHeader("Zoom", String.format(Locale.US, "%.2f×", r.zoom))
     RulerSlider(r.zoom, 1f..4f, 0.02f, { v -> vm.updateReframe { it.copy(zoom = v) } }, onReset = { vm.updateReframe { it.copy(zoom = 1f) } })
     ValueHeader("Straighten", String.format(Locale.US, "%+.1f°", r.angleDegrees))
@@ -1859,7 +1875,7 @@ private fun FramePanel(state: UiState, vm: HeadsupViewModel) {
     if (state.clips.size > 1) {
         Row {
             Spacer(Modifier.weight(1f))
-            SmallAction("Same shape for all clips", { vm.setAspectForAll(r.aspect) })
+            SmallAction(if (r.fit) "Fit all clips" else "Fill all clips", { vm.setFitForAll(r.fit) })
         }
     }
 }

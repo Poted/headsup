@@ -256,3 +256,23 @@ included) and `FadeAudioProcessor` on the sound, both in timeline time.
 Pages: Files (the project's media, FIT and sound files), Edit (timeline frame rate, cut, speed,
 fades, framing, moments), Colour, Effects (dashboard incl. watch sync, film effects), Audio
 (tracks, levels), Export.
+
+## Timeline and frame
+
+`ui/Timeline` is the project timeline under the preview, as in mobile editors: the playhead stays
+in the middle and the timeline moves under it (drag to scrub with a decaying glide, pinch to zoom,
+Project/Clip to fit). The video track draws each clip as frames (`ui/Filmstrip`: small frames
+loaded in the background, newest request first, the nearest loaded frame standing in); audio
+tracks draw sounds as waveforms with their beat grid and accents. Selection decides what a drag
+does: a selected clip's handles (outside its ends) trim it, its start committed on release so the
+following clips ripple once; a selected sound moves (also between tracks), trims, fades or slips.
+Scrubbing sends clip positions to the preview, which seeks with the latest-target `Scrubber`;
+crossing a cut selects the next clip, since the preview shows the clip under the playhead.
+
+The timeline has one frame shape (`UiState.frameAspect`, or the first clip's) and frame rate.
+Each clip's `Reframe` is applied in that shape (`UiState.framing`): filling it (cropped) or
+fitting inside it (`Reframe.fit`, black bars), plus zoom, position and straightening. The export
+places each clip into a frame of that shape at the clip's own pixel scale (a `MatrixTransformation`
+with its own output size), so nothing is scaled down before the final `Presentation`; the
+resolution setting is the frame's short side.
+
