@@ -39,6 +39,7 @@ import app.headsup.export.OutputSpec
 import app.headsup.export.VideoCodec
 import app.headsup.media.ClipMetadata
 import app.headsup.media.ClipMetadataReader
+import app.headsup.media.MediaLibrary
 import app.headsup.render.DashboardStyle
 import app.headsup.render.EffectPrefs
 import app.headsup.render.EffectSettings
@@ -232,6 +233,8 @@ data class UiState(
     val compareEffects: EffectSettings? = null,
     /** What is being loaded, shown with the progress bar. */
     val loadingMessage: String? = null,
+    /** 0..1 while copying files in, null when the length is unknown or nothing is copied. */
+    val loadingProgress: Float? = null,
     val canRedo: Boolean = false,
     val exportSettings: ExportSettings = ExportSettings(),
     /** Frame rate of the timeline (exports and slow-motion maths); null = the first clip's. */
@@ -298,6 +301,8 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
     private val gradeStore = GradeStore(app)
     private val effectPrefs = EffectPrefs(app)
     private val projectStore = ProjectStore(app)
+    private val library = MediaLibrary(app)
+    private var loadJob: kotlinx.coroutines.Job? = null
     private val _state = MutableStateFlow(
         UiState(
             style = stylePrefs.load(),
@@ -436,7 +441,14 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
         timelineFps = timelineFps,
     )
 
-    fun refreshProjects() = _state.update { it.copy(projects = projectStore.list()) }
+    fun refreshProjects() = _state.update {
+        it.copy(
+            projects = projectStore.list().map { info ->
+                val p = runCatching { projectStore.load(info.name) }.getOrNull()
+                info.copy(bytes = p?.let { d -> library.sizeOf(d.activities + d.clips.map { c -> c.uri }) } ?: 0L)
+            },
+        )
+    }
 
     /** Opens a saved project; its files are read again, missing ones are reported. */
     fun openProject(name: String) {
@@ -555,9 +567,18 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    /**
+     * Deletes the project, and the app's copies of its media that no other project uses. Files in
+     * the gallery are never touched.
+     */
     fun deleteProject(name: String) {
         projectStore.delete(name)
         if (name == _state.value.projectName) newProject()
+        if (!_state.value.busy) {
+            val current = _state.value.toProject()
+            val inUse = (projectStore.all() + current).flatMap { p -> p.activities + p.clips.map { it.uri } }.toSet()
+            runCatching { library.deleteUnused(inUse) }
+        }
         refreshProjects()
     }
 
@@ -567,25 +588,28 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
     private fun uniqueProjectName(base: String): String =
         generateSequence(1) { it + 1 }.map { if (it == 1) base else "$base ($it)" }.first { !projectStore.exists(it) }
 
-    /** Keeps access to a picked file after restarts, so projects can open it again. */
-    private fun keepAccess(uri: Uri) {
-        runCatching {
-            getApplication<Application>().contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
-        }
-    }
-
-    fun addActivities(uris: List<Uri>) = load(uris, "Reading ${uris.size} FIT file${if (uris.size == 1) "" else "s"}…") { uri ->
-        keepAccess(uri)
+    /** FIT files are copied into the app too, so the project keeps them whatever happens to the originals. */
+    fun addActivities(uris: List<Uri>) = load(uris) { uri, progress ->
+        val local = library.import(uri, progress)
         val context = getApplication<Application>()
-        val name = ClipMetadataReader.displayName(context, uri) ?: uri.lastPathSegment.orEmpty()
-        val track = context.contentResolver.openInputStream(uri)?.use { FitActivityReader.read(it) }
+        val name = local.lastPathSegment.orEmpty()
+        val track = context.contentResolver.openInputStream(local)?.use { FitActivityReader.read(it) }
             ?: error("Cannot open $name")
-        Loaded.Activity(LoadedActivity(name, track, uri))
+        Loaded.Activity(LoadedActivity(name, track, local))
     }
 
-    fun addClips(uris: List<Uri>) = load(uris, "Adding ${uris.size} video${if (uris.size == 1) "" else "s"}…") { uri ->
-        keepAccess(uri)
-        Loaded.Clip(ClipMetadataReader.read(getApplication<Application>(), uri))
+    /**
+     * Videos are copied into the app's own storage first (with progress), so moving or deleting
+     * the original in the gallery or the cloud never breaks the project.
+     */
+    fun addClips(uris: List<Uri>) = load(uris) { uri, progress ->
+        Loaded.Clip(ClipMetadataReader.read(getApplication<Application>(), library.import(uri, progress)))
+    }
+
+    /** Stops copying files in; what was not finished is removed. */
+    fun cancelLoading() {
+        loadJob?.cancel()
+        _state.update { it.copy(busy = false, loadingMessage = null, loadingProgress = null) }
     }
 
     fun selectClip(index: Int) {
@@ -1297,12 +1321,41 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
         data class Clip(val meta: ClipMetadata) : Loaded
     }
 
-    private fun load(uris: List<Uri>, message: String, read: (Uri) -> Loaded) {
+    private fun load(uris: List<Uri>, read: suspend (Uri, (Long, Long) -> Unit) -> Loaded) {
         if (uris.isEmpty()) return
-        _state.update { it.copy(busy = true, loadingMessage = message) }
-        viewModelScope.launch {
+        val context = getApplication<Application>()
+        // A file already in the project (same name) is not copied again.
+        val known = _state.value.let { s -> s.clips.map { it.meta.name } + s.activities.map { it.name } }.toSet()
+        val skipped = uris.filter { (ClipMetadataReader.displayName(context, it) ?: it.lastPathSegment) in known }
+        val todo = uris - skipped.toSet()
+        if (skipped.isNotEmpty()) {
+            _state.update { it.copy(messages = it.messages + "Already in the project: ${skipped.joinToString { u -> ClipMetadataReader.displayName(context, u) ?: "file" }}") }
+        }
+        if (todo.isEmpty()) return
+        _state.update { it.copy(busy = true, loadingMessage = "Copying…", loadingProgress = null) }
+        loadJob = viewModelScope.launch {
             val results = withContext(Dispatchers.IO) {
-                uris.map { uri -> runCatching { read(uri) }.onFailure { it.printStackTrace() } }
+                todo.mapIndexed { i, uri ->
+                    val name = ClipMetadataReader.displayName(context, uri) ?: "file"
+                    val count = if (todo.size > 1) " (${i + 1}/${todo.size})" else ""
+                    var lastShown = -1L
+                    runCatching {
+                        read(uri) { copied, total ->
+                            // A few updates a second are plenty.
+                            val now = System.currentTimeMillis()
+                            if (now - lastShown > 150 || copied == total) {
+                                lastShown = now
+                                val mb = if (total > 0) " · ${copied / 1_000_000} / ${total / 1_000_000} MB" else " · ${copied / 1_000_000} MB"
+                                _state.update {
+                                    it.copy(
+                                        loadingMessage = "Copying $name$count$mb",
+                                        loadingProgress = if (total > 0) copied.toFloat() / total else null,
+                                    )
+                                }
+                            }
+                        }
+                    }.onFailure { if (it is kotlinx.coroutines.CancellationException) throw it else it.printStackTrace() }
+                }
             }
             val errors = results.mapNotNull { r -> r.exceptionOrNull()?.let { "Could not read file: ${it.message ?: it.javaClass.simpleName}" } }
             val loaded = results.mapNotNull { it.getOrNull() }
@@ -1321,6 +1374,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                         selectedClip = s.selectedClip ?: clips.indices.firstOrNull(),
                         busy = false,
                         loadingMessage = null,
+                        loadingProgress = null,
                         messages = s.messages + errors,
                     ),
                 )

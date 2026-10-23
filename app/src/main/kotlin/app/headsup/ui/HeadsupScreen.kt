@@ -200,7 +200,13 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
     Box(Modifier.fillMaxSize().background(HeadsupColors.BackgroundGradient)) {
         // No title bar: the picture starts at the top, adding files lives in the Files tool.
         Column(Modifier.fillMaxSize().systemBarsPadding().padding(top = 8.dp)) {
-            if (state.busy) CineLoader(state.loadingMessage ?: "Working…", Modifier.padding(horizontal = 16.dp, vertical = 4.dp))
+            if (state.busy) {
+                CineLoader(
+                    state.loadingMessage ?: "Working…", Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+                    progress = state.loadingProgress,
+                    onCancel = if (state.loadingMessage?.startsWith("Copying") == true) vm::cancelLoading else null,
+                )
+            }
 
             // The picture stays on screen while any tool below is being used.
             val selected = state.selected
@@ -570,6 +576,9 @@ private fun highlightValue(f: FoundHighlight): String {
 /** Frames in [durationMs] at [frameRate], or null when the rate is unknown. */
 private fun frameCount(durationMs: Long, frameRate: Float?): Long? = frameRate?.let { kotlin.math.round(durationMs / 1000.0 * it).toLong() }
 
+private fun formatBytes(bytes: Long): String =
+    if (bytes >= 1_000_000_000) String.format(Locale.US, "%.1f GB", bytes / 1e9) else String.format(Locale.US, "%.0f MB", bytes / 1e6)
+
 /** The open project (saved automatically) and the list of saved ones. */
 @Composable
 private fun ProjectRow(state: UiState, vm: HeadsupViewModel) {
@@ -606,6 +615,7 @@ private fun ProjectRow(state: UiState, vm: HeadsupViewModel) {
             text = {
                 Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     if (state.projects.isEmpty()) Hint("No saved projects yet. A project is saved once it has files.")
+                    else Hint("Projects keep their own copies of their videos. Deleting a project frees that space; the gallery is never touched.")
                     for (p in state.projects) {
                         val current = p.name == state.projectName
                         Row(
@@ -621,7 +631,8 @@ private fun ProjectRow(state: UiState, vm: HeadsupViewModel) {
                                 Text(p.name, style = MaterialTheme.typography.bodyMedium, maxLines = 1)
                                 Hint(
                                     Instant.ofEpochMilli(p.modifiedMs).atZone(ZoneId.systemDefault()).toLocalDateTime()
-                                        .withNano(0).toString().replace('T', ' '),
+                                        .withNano(0).toString().replace('T', ' ') +
+                                        if (p.bytes > 0) " · " + formatBytes(p.bytes) else "",
                                 )
                             }
                             SmallAction("Rename", { renamingOther = p.name })

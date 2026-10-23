@@ -48,7 +48,8 @@ data class ProjectData(
     val timelineFps: Float? = null,
 )
 
-data class ProjectInfo(val name: String, val modifiedMs: Long)
+/** A saved project as listed; [bytes] is the space its copied media take (shared copies counted in each). */
+data class ProjectInfo(val name: String, val modifiedMs: Long, val bytes: Long = 0L)
 
 /** Projects as JSON files in the app's private storage; the last one used reopens on start. */
 class ProjectStore(context: Context) {
@@ -64,6 +65,9 @@ class ProjectStore(context: Context) {
         .sortedByDescending { it.modifiedMs }
 
     fun exists(name: String) = fileFor(name).exists()
+
+    /** Every saved project, e.g. to see which media copies are still used. */
+    fun all(): List<ProjectData> = list().mapNotNull { runCatching { load(it.name) }.getOrNull() }
 
     fun save(project: ProjectData) {
         val tmp = File(dir, "${safe(project.name)}.json.tmp")

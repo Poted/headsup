@@ -206,3 +206,13 @@ clip has more frames than the timeline; frames are never invented). The dashboar
 the speed change, so it reads the clip's own time and slows down with the picture. Bit rate
 follows the source's per pixel times the chosen quality; HEVC or H.264. The PNG dashboard export
 is separate and per clip.
+
+## Media copies
+
+Added videos and FIT files are copied into the app's private storage (`MediaLibrary`,
+`Android/data/<app>/files/media`, not shown in the gallery) with progress and cancel, and the
+project uses only the copy, so moving, renaming or deleting the original (or it living only in
+Google Photos / the cloud) never breaks a project. Each copy keeps its original file name in its
+own folder, because the name carries the recording time used for matching. Deleting a project
+removes the copies no other saved project (or the open one) uses; the app never deletes anything
+outside its own storage. The project list shows how much space each project's copies take.

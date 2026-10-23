@@ -255,10 +255,11 @@ fun SmallAction(text: String, onClick: () -> Unit, modifier: Modifier = Modifier
 
 /**
  * Loading indicator in the spirit of a camera: lens aperture blades turning and opening, a
- * blinking REC dot and a running timecode, with [message] beside it.
+ * blinking REC dot and a running timecode, with [message] beside it. With [progress] (0..1) the
+ * percentage and a thin bar show instead of the timecode.
  */
 @Composable
-fun CineLoader(message: String, modifier: Modifier = Modifier) {
+fun CineLoader(message: String, modifier: Modifier = Modifier, progress: Float? = null, onCancel: (() -> Unit)? = null) {
     val transition = rememberInfiniteTransition(label = "loader")
     val turn by transition.animateFloat(
         0f, 360f,
@@ -311,16 +312,27 @@ fun CineLoader(message: String, modifier: Modifier = Modifier) {
         }
         androidx.compose.foundation.layout.Spacer(Modifier.width(12.dp))
         Column(Modifier.weight(1f)) {
-            Text(message, style = MaterialTheme.typography.bodyMedium)
+            Text(message, style = MaterialTheme.typography.bodyMedium, maxLines = 2)
             val total = nowMs / 40
             Text(
-                String.format(java.util.Locale.US, "%02d:%02d:%02d:%02d", total / 90000, total / 1500 % 60, total / 25 % 60, total % 25),
+                if (progress != null) String.format(java.util.Locale.US, "%.0f %%", progress * 100)
+                else String.format(java.util.Locale.US, "%02d:%02d:%02d:%02d", total / 90000, total / 1500 % 60, total / 25 % 60, total % 25),
                 style = MaterialTheme.typography.labelSmall.copy(fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace),
                 color = HeadsupColors.TextMuted,
             )
+            if (progress != null) {
+                Box(Modifier.padding(top = 4.dp).fillMaxWidth().height(3.dp).clip(CircleShape).background(HeadsupColors.Outline)) {
+                    Box(Modifier.fillMaxWidth(progress.coerceIn(0f, 1f)).height(3.dp).clip(CircleShape).background(HeadsupColors.Accent))
+                }
+            }
         }
+        androidx.compose.foundation.layout.Spacer(Modifier.width(10.dp))
         Box(Modifier.size(10.dp).clip(CircleShape).background(Color(0xFFFF3B30).copy(alpha = if (blink < 0.6f) 1f else 0.15f)))
         androidx.compose.foundation.layout.Spacer(Modifier.width(6.dp))
         Text("REC", style = MaterialTheme.typography.labelSmall, color = HeadsupColors.TextMuted)
+        if (onCancel != null) {
+            androidx.compose.foundation.layout.Spacer(Modifier.width(4.dp))
+            SmallAction("Cancel", onCancel)
+        }
     }
 }
