@@ -1,6 +1,7 @@
 package app.headsup.export
 
 import android.net.Uri
+import app.headsup.core.color.GradientMask
 import app.headsup.core.track.ActivityTrack
 import app.headsup.core.track.TelemetrySampler
 import app.headsup.media.VideoFormatInfo
@@ -12,8 +13,16 @@ import java.time.ZoneId
 
 enum class ExportKind { VIDEO, PNG_SEQUENCE, TEN_BIT_TEST }
 
-/** Colour transform for one clip: baked LUT cube (null = untouched colours) and vignette strength. */
-class GradeSetup(val cube: Array<Array<IntArray>>?, val vignette: Float)
+/**
+ * Colour transform for one clip: baked LUT cube (null = untouched colours), vignette strength,
+ * and an optional graduated mask with the cube used inside it.
+ */
+class GradeSetup(
+    val cube: Array<Array<IntArray>>?,
+    val vignette: Float,
+    val mask: GradientMask? = null,
+    val maskCube: Array<Array<IntArray>>? = null,
+)
 
 data class ExportRequest(
     val kind: ExportKind,

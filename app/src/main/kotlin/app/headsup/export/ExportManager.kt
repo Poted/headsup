@@ -13,6 +13,8 @@ import androidx.media3.common.MimeTypes
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.effect.OverlayEffect
 import androidx.media3.effect.SingleColorLut
+import app.headsup.core.color.ColorGrade
+import app.headsup.core.color.LutBaker
 import androidx.media3.effect.TextureOverlay
 import androidx.media3.transformer.Composition
 import androidx.media3.transformer.DefaultEncoderFactory
@@ -139,7 +141,12 @@ class ExportManager(private val context: Context) {
         ) { positionMs -> request.dataAt(positionMs, sampler) }
 
         val effects = mutableListOf<Effect>()
-        request.grade?.cube?.let { effects += SingleColorLut.createFromCube(it) }
+        val grade = request.grade
+        if (grade?.mask != null && grade.maskCube != null) {
+            effects += MaskGradeEffect(grade.cube ?: LutBaker.bake(null, ColorGrade()), grade.maskCube, grade.mask)
+        } else {
+            grade?.cube?.let { effects += SingleColorLut.createFromCube(it) }
+        }
         if (request.effects.changesPixels) effects += FinishEffect(request.effects)
         effects += OverlayEffect(ImmutableList.of<TextureOverlay>(overlay))
 

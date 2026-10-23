@@ -11,6 +11,7 @@ import app.headsup.color.ScopeResult
 import app.headsup.color.Vectorscope
 import app.headsup.core.color.SkinTone
 import app.headsup.core.color.ColorGrade
+import app.headsup.core.color.GradientMask
 import app.headsup.core.color.CubeLut
 import app.headsup.core.color.LutBaker
 import app.headsup.core.fit.FitActivityReader
@@ -68,8 +69,10 @@ data class ClipState(
     val grade: ColorGrade = ColorGrade(),
     /** Picture effects of this clip. */
     val effects: EffectSettings = EffectSettings(),
+    /** Graduated mask with its own corrections, or null for none. */
+    val mask: GradientMask? = null,
 ) {
-    val look: ClipLook get() = ClipLook(grade, effects, lutName)
+    val look: ClipLook get() = ClipLook(grade, effects, lutName, mask)
 
     /** Time evidence used for matching: the manual start if set, otherwise the file's own. */
     val timeInfo: ClipInfo
@@ -85,7 +88,10 @@ data class ClipState(
 }
 
 /** What "Copy" takes from a clip and "Paste" gives to another: corrections, effects and LUT. */
-data class ClipLook(val grade: ColorGrade, val effects: EffectSettings, val lutName: String?)
+data class ClipLook(val grade: ColorGrade, val effects: EffectSettings, val lutName: String?, val mask: GradientMask? = null)
+
+/** What the colour page edits. */
+enum class GradeTarget { CLIP, MASK, GLOBAL }
 
 private var lastClipId = 0L
 private fun nextClipId() = ++lastClipId
@@ -106,13 +112,15 @@ data class UiState(
     val defaultGrade: ColorGrade = ColorGrade(),
     /** Global node: corrections applied on top of every clip's own (e.g. one vignette for all). */
     val globalGrade: ColorGrade = ColorGrade(),
-    /** Whether the colour page edits [globalGrade] instead of the selected clip's grade. */
-    val editingGlobal: Boolean = false,
+    /** Which corrections the colour page edits. */
+    val target: GradeTarget = GradeTarget.CLIP,
     val luts: List<String> = emptyList(),
     /** Grade shown in the preview instead of [grade] while comparing (one correction held off). */
     val compareGrade: ColorGrade? = null,
     /** Colour table for the selected clip's preview; null when its colours stay untouched. */
     val previewCube: Array<Array<IntArray>>? = null,
+    /** Colour table inside the selected clip's mask; null without a mask. */
+    val previewMaskCube: Array<Array<IntArray>>? = null,
     val bitrateFactor: Float = 1f,
     /** Vectorscope and skin measurement of the last frame tapped in the preview. */
     val scope: ScopeResult? = null,
@@ -121,15 +129,25 @@ data class UiState(
 ) {
     val selected: ClipState? get() = selectedClip?.let { clips.getOrNull(it) }
 
-    /** Corrections the colour page edits: the selected clip's, or the global node's. */
-    val grade: ColorGrade get() = if (editingGlobal) globalGrade else selected?.grade ?: defaultGrade
+    /** Corrections the colour page edits: the selected clip's, its mask's, or the global node's. */
+    val grade: ColorGrade
+        get() = when (target) {
+            GradeTarget.GLOBAL -> globalGrade
+            GradeTarget.MASK -> selected?.mask?.grade ?: ColorGrade()
+            GradeTarget.CLIP -> selected?.grade ?: defaultGrade
+        }
 
-    /** What is applied to [clip]: its own corrections plus the global node (with [compareGrade] in place of the edited one). */
-    fun appliedGrade(clip: ClipState): ColorGrade = when {
-        editingGlobal -> clip.grade + (compareGrade ?: globalGrade)
-        clip === selected -> (compareGrade ?: clip.grade) + globalGrade
-        else -> clip.grade + globalGrade
-    }
+    /** [edited] unless it is the grade being compared (held ruler), then [compareGrade]. */
+    private fun shown(edited: ColorGrade, which: GradeTarget, clip: ClipState) =
+        if (target == which && (which == GradeTarget.GLOBAL || clip === selected)) compareGrade ?: edited else edited
+
+    /** What is applied to [clip] outside its mask: its own corrections plus the global node. */
+    fun appliedGrade(clip: ClipState): ColorGrade =
+        shown(clip.grade, GradeTarget.CLIP, clip) + shown(globalGrade, GradeTarget.GLOBAL, clip)
+
+    /** What is applied inside [clip]'s mask, or null without one. */
+    fun maskedGrade(clip: ClipState): ColorGrade? =
+        clip.mask?.let { appliedGrade(clip) + shown(it.grade, GradeTarget.MASK, clip) }
 
     /** Effects of the selected clip (what the effects page edits). */
     val effects: EffectSettings get() = selected?.effects ?: defaultEffects
@@ -265,7 +283,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
         refreshPreview()
     }
 
-    private fun ClipState.withLook(look: ClipLook) = copy(grade = look.grade, effects = look.effects, lutName = look.lutName)
+    private fun ClipState.withLook(look: ClipLook) = copy(grade = look.grade, effects = look.effects, lutName = look.lutName, mask = look.mask)
 
     fun dismissMessages() = _state.update { it.copy(messages = emptyList()) }
 
@@ -341,9 +359,15 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
 
     fun setClipGrade(index: Int, enabled: Boolean) = updateClip(index) { it.copy(colorGrade = enabled) }
 
-    fun setEditingGlobal(global: Boolean) {
-        _state.update { it.copy(editingGlobal = global, compareGrade = null) }
+    fun setTarget(target: GradeTarget) {
+        _state.update { it.copy(target = target, compareGrade = null) }
         refreshPreview()
+    }
+
+    /** Adds (null removes) or reshapes the selected clip's mask. */
+    fun updateMask(transform: (GradientMask?) -> GradientMask?) {
+        val index = _state.value.selectedClip ?: return
+        updateClip(index) { it.copy(mask = transform(it.mask)) }
     }
 
     /**
@@ -351,11 +375,18 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
      * later), or the global node's.
      */
     fun updateGrade(transform: (ColorGrade) -> ColorGrade) {
-        if (_state.value.editingGlobal) {
-            _state.update { it.copy(globalGrade = transform(it.globalGrade)) }
-            gradeStore.saveGrade(_state.value.globalGrade, GLOBAL)
-            refreshPreview()
-            return
+        when (_state.value.target) {
+            GradeTarget.GLOBAL -> {
+                _state.update { it.copy(globalGrade = transform(it.globalGrade)) }
+                gradeStore.saveGrade(_state.value.globalGrade, GLOBAL)
+                refreshPreview()
+                return
+            }
+            GradeTarget.MASK -> {
+                updateMask { m -> (m ?: GradientMask()).let { it.copy(grade = transform(it.grade)) } }
+                return
+            }
+            GradeTarget.CLIP -> Unit
         }
         _state.update { s ->
             val grade = transform(s.grade)
@@ -385,8 +416,10 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                     previewDirty = false
                     val s = _state.value
                     val clip = s.selected
-                    val cube = if (clip == null || !clip.colorGrade) null else bake(clip.lutName, s.appliedGrade(clip))
-                    _state.update { it.copy(previewCube = cube) }
+                    val graded = clip?.takeIf { it.colorGrade }
+                    val cube = graded?.let { bake(it.lutName, s.appliedGrade(it)) }
+                    val maskCube = graded?.let { c -> s.maskedGrade(c)?.let { bakeAlways(c.lutName, it) } }
+                    _state.update { it.copy(previewCube = cube, previewMaskCube = maskCube) }
                     analyseScope()
                 }
             } finally {
@@ -397,11 +430,18 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
 
     /** Null when nothing would change the colours. */
     private suspend fun bake(lutName: String?, grade: ColorGrade): Array<Array<IntArray>>? {
-        val lut = lutName?.let { name ->
-            lutCache[name] ?: withContext(Dispatchers.IO) { gradeStore.load(name) }?.also { lutCache[name] = it }
-        }
+        val lut = loadLut(lutName)
         if (lut == null && grade.isNeutralColour) return null
         return withContext(Dispatchers.Default) { LutBaker.bake(lut, grade) }
+    }
+
+    private suspend fun bakeAlways(lutName: String?, grade: ColorGrade): Array<Array<IntArray>> {
+        val lut = loadLut(lutName)
+        return withContext(Dispatchers.Default) { LutBaker.bake(lut, grade) }
+    }
+
+    private suspend fun loadLut(lutName: String?): CubeLut? = lutName?.let { name ->
+        lutCache[name] ?: withContext(Dispatchers.IO) { gradeStore.load(name) }?.also { lutCache[name] = it }
     }
 
     // Export
@@ -429,6 +469,8 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                 val graded = kind != ExportKind.PNG_SEQUENCE && clip.colorGrade
                 val applied = clip.grade + s.globalGrade
                 val cube = if (graded) cubes.getOrPut(ClipLook(applied, EffectSettings(), clip.lutName)) { bake(clip.lutName, applied) } else null
+                val mask = clip.mask?.takeIf { graded }
+                val maskCube = mask?.let { bakeAlways(clip.lutName, applied + it.grade) }
                 ExportRequest(
                     kind = kind,
                     uri = clip.meta.uri,
@@ -445,7 +487,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                     telemetryStartUtcMs = sync.startUtcMs + clip.trimStartMs + clip.manualOffsetMs,
                     style = s.style,
                     effects = clip.effects,
-                    grade = if (graded) GradeSetup(cube, applied.vignette) else null,
+                    grade = if (graded) GradeSetup(cube, applied.vignette, mask, maskCube) else null,
                     bitrateFactor = s.bitrateFactor,
                 )
             }

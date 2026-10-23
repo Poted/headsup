@@ -107,6 +107,11 @@ A global node (Colour → All clips) holds corrections added on top of every cli
 one vignette for the whole project; the values are offsets, so the two simply add up
 (`ColorGrade.plus`).
 
+A graduated mask (Colour → Sky mask) gives the part above a soft, tiltable line its own
+corrections, like an ND grad filter. Inside the mask a second table is baked (clip + global +
+mask corrections) and the two are blended by `GradientMask.weight`: in the preview shader and,
+for export, in `MaskGradeEffect`, which then replaces Media3's single colour table.
+
 ## Export (stage 3)
 
 - Media3 Transformer, HEVC, source resolution and frame rate, bitrate near the source.

@@ -86,6 +86,7 @@ import androidx.compose.ui.unit.IntSize
 import app.headsup.color.ScopeResult
 import app.headsup.color.Vectorscope
 import app.headsup.core.color.ColorGrade
+import app.headsup.core.color.GradientMask
 import app.headsup.core.color.SkinTone
 import kotlin.math.cos
 import kotlin.math.sin
@@ -191,6 +192,9 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
                     activity = selected.sync?.let { state.activities.getOrNull(it.trackIndex) },
                     style = state.style,
                     gradeCube = state.previewCube,
+                    mask = selected.mask?.takeIf { selected.colorGrade },
+                    maskCube = state.previewMaskCube,
+                    maskGuide = tool == Tool.COLOUR && state.target == GradeTarget.MASK,
                     vignette = if (selected.colorGrade) state.appliedGrade(selected).vignette else 0f,
                     effects = state.effects,
                     onSample = if (measuring) vm::sampleFrame else null,
@@ -713,32 +717,69 @@ private fun ColourPage(
         Hint("Select a clip first.")
         return
     }
-    val global = state.editingGlobal
-    PillTabs(listOf("This clip", "All clips"), if (global) 1 else 0) { vm.setEditingGlobal(it == 1) }
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        if (global) {
-            Hint("Added on top of every clip's own corrections.", Modifier.weight(1f))
-        } else {
+    val target = state.target
+    PillTabs(listOf("This clip", "Sky mask", "All clips"), target.ordinal) { vm.setTarget(GradeTarget.entries[it]) }
+    when (target) {
+        GradeTarget.CLIP -> Row(verticalAlignment = Alignment.CenterVertically) {
             if (clip.colorGrade) LookActions(state, vm)
             Spacer(Modifier.weight(1f))
+            if (clip.colorGrade && state.grade != ColorGrade()) SmallAction("Reset", { vm.updateGrade { ColorGrade() } })
+            Switch(checked = clip.colorGrade, onCheckedChange = { vm.setClipGrade(index, it) })
         }
-        if (state.grade != ColorGrade() && (global || clip.colorGrade)) SmallAction("Reset", { vm.updateGrade { ColorGrade() } })
-        if (!global) Switch(checked = clip.colorGrade, onCheckedChange = { vm.setClipGrade(index, it) })
+        GradeTarget.MASK -> Row(verticalAlignment = Alignment.CenterVertically) {
+            Hint("Graduated filter: own corrections above the line.", Modifier.weight(1f))
+            if (clip.mask != null) SmallAction("Remove", { vm.updateMask { null } })
+        }
+        GradeTarget.GLOBAL -> Row(verticalAlignment = Alignment.CenterVertically) {
+            Hint("Added on top of every clip's own corrections.", Modifier.weight(1f))
+            if (state.grade != ColorGrade()) SmallAction("Reset", { vm.updateGrade { ColorGrade() } })
+        }
     }
-    if (!global && !clip.colorGrade) {
+    if (target != GradeTarget.GLOBAL && !clip.colorGrade) {
         Hint("Colour off: the clip keeps its own colours (for already graded files, e.g. Mimo exports).")
+        return
+    }
+    if (target == GradeTarget.MASK && clip.mask == null) {
+        Button(onClick = { vm.updateMask { GradientMask() } }, modifier = Modifier.fillMaxWidth()) { Text("Add graduated mask") }
         return
     }
 
     // The ruler sits right under the correction picker, so nothing needs scrolling.
-    // The LUT belongs to the clip (it depends on how the clip was shot), so the global node has none.
-    val options = if (global) Adjustment.entries - Adjustment.LUT else Adjustment.entries
+    // The LUT belongs to the clip (it depends on how the clip was shot); the mask has only tonal
+    // and colour corrections, with its shape in front.
+    val options = when (target) {
+        GradeTarget.CLIP -> Adjustment.entries
+        GradeTarget.GLOBAL -> Adjustment.entries - Adjustment.LUT
+        GradeTarget.MASK -> Adjustment.entries - Adjustment.LUT - Adjustment.SKIN - Adjustment.VIGNETTE
+    }
     val adjustment = if (adjustment in options) adjustment else Adjustment.EXPOSURE
+    var shape by rememberSaveable { mutableStateOf<MaskShape?>(MaskShape.POSITION) }
+    val mask = clip.mask
+    val editingShape = if (target == GradeTarget.MASK && mask != null) shape else null
     LazyRow(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+        if (target == GradeTarget.MASK) {
+            items(MaskShape.entries) { m ->
+                CircleOption(m.symbol, m.label, selected = m == editingShape, modified = false) { shape = m }
+            }
+        }
         items(options) { a ->
             val modified = if (a == Adjustment.LUT) clip.lutName != null else a.get(state.grade) != 0f
-            CircleOption(a.symbol, a.label, selected = a == adjustment, modified = modified) { onAdjustment(a) }
+            CircleOption(a.symbol, a.label, selected = editingShape == null && a == adjustment, modified = modified) {
+                shape = null
+                onAdjustment(a)
+            }
         }
+    }
+    if (editingShape != null && mask != null) {
+        ValueHeader(editingShape.label, String.format(Locale.US, editingShape.format, editingShape.shown(mask)))
+        RulerSlider(
+            value = editingShape.get(mask),
+            range = editingShape.range,
+            step = editingShape.step,
+            onChange = { v -> vm.updateMask { m -> m?.let { editingShape.set(it, v) } } },
+            onReset = { vm.updateMask { m -> m?.let { editingShape.set(it, editingShape.get(GradientMask())) } } },
+        )
+        return
     }
     if (adjustment == Adjustment.LUT) {
         LutControls(state, clip, index, vm, onAddLut)
@@ -755,6 +796,25 @@ private fun ColourPage(
         onReset = { vm.updateGrade { adjustment.set(it, 0f) } },
         onHold = { held -> vm.setCompareGrade(if (held) adjustment.set(state.grade, 0f) else null) },
     )
+}
+
+/** Shape controls of the graduated mask, edited with the same ruler as the corrections. */
+private enum class MaskShape(
+    val symbol: String,
+    val label: String,
+    val range: ClosedFloatingPointRange<Float>,
+    val step: Float,
+    val format: String,
+    val get: (GradientMask) -> Float,
+    val set: (GradientMask, Float) -> GradientMask,
+) {
+    POSITION("↕", "Position", 0f..1f, 0.01f, "%.0f %%", { it.position }, { m, v -> m.copy(position = v) }),
+    SOFTNESS("◐", "Softness", 0.02f..1f, 0.02f, "%.0f %%", { it.softness }, { m, v -> m.copy(softness = v) }),
+    ANGLE("∠", "Angle", -45f..45f, 0.5f, "%+.1f°", { it.angleDegrees }, { m, v -> m.copy(angleDegrees = v) }),
+    ;
+
+    /** Value as shown above the ruler (fractions as percent). */
+    fun shown(mask: GradientMask): Float = if (this == ANGLE) get(mask) else get(mask) * 100f
 }
 
 /** LUT library: the camera LUT is the last step, after all corrections. */
