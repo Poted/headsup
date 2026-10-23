@@ -50,10 +50,14 @@ import androidx.media3.transformer.DefaultDecoderFactory
  */
 @OptIn(UnstableApi::class)
 object HdrRoute {
-    /** Scene-linear value Media3 encodes as 75 % HLG: where SDR white goes. */
+    /** Scene-linear value Media3 encodes as 75 % HLG: where SDR white sits in HLG footage (BT.2408). */
     val SDR_WHITE: Float = hlgEotf(0.75f)
 
-    private fun hlgEotf(x: Float): Float {
+    /** HLG signal levels offered for the export's white: the standard, and brighter as phones' SDR views show. */
+    val WHITE_LEVELS: List<Pair<Float, String>> = listOf(0.75f to "Standard (75 %)", 0.85f to "Brighter (85 %)", 0.95f to "Brightest (95 %)")
+
+    /** Scene-linear light for an HLG signal level [x] (Media3's HLG EOTF). */
+    fun hlgEotf(x: Float): Float {
         val a = 0.17883277f
         val b = 0.28466892f
         val c = 0.55991073f
@@ -160,12 +164,12 @@ object HdrRoute {
  */
 enum class HdrInput { RELABELLED_BT709, RELABELLED_BT2020, HLG }
 
-/** The finished SDR picture (display BT.709) as linear BT.2020 light for an HLG signal, SDR white at 75 % HLG. */
+/** The finished SDR picture (display BT.709) as linear BT.2020 light for an HLG signal, its white at [whiteSignal] HLG (75 % = BT.2408). */
 @OptIn(UnstableApi::class)
-class HdrOutputEffect : GlEffect {
-    override fun toGlShaderProgram(context: Context, useHdr: Boolean): GlShaderProgram = Program(useHdr)
+class HdrOutputEffect(private val whiteSignal: Float) : GlEffect {
+    override fun toGlShaderProgram(context: Context, useHdr: Boolean): GlShaderProgram = Program(useHdr, HdrRoute.hlgEotf(whiteSignal))
 
-    private class Program(useHdr: Boolean) : BaseGlShaderProgram(useHdr, 1) {
+    private class Program(useHdr: Boolean, private val white: Float) : BaseGlShaderProgram(useHdr, 1) {
         private val program = try {
             GlProgram(VERTEX, FRAGMENT)
         } catch (e: GlUtil.GlException) {
@@ -182,7 +186,7 @@ class HdrOutputEffect : GlEffect {
             try {
                 program.use()
                 program.setSamplerTexIdUniform("uTexSampler", inputTexId, 0)
-                program.setFloatUniform("uWhite", HdrRoute.SDR_WHITE)
+                program.setFloatUniform("uWhite", white)
                 program.bindAttributesAndUniforms()
                 GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4)
             } catch (e: GlUtil.GlException) {
@@ -235,8 +239,8 @@ class HdrOutputEffect : GlEffect {
  * [inner] is drawn under that label with SDR white at 75 % HLG, like the picture.
  */
 @OptIn(UnstableApi::class)
-class HdrOverlay(private val inner: BitmapOverlay) : TextOverlay() {
-    private val settings = StaticOverlaySettings.Builder().setHdrLuminanceMultiplier(HdrRoute.SDR_WHITE).build()
+class HdrOverlay(private val inner: BitmapOverlay, whiteSignal: Float) : TextOverlay() {
+    private val settings = StaticOverlaySettings.Builder().setHdrLuminanceMultiplier(HdrRoute.hlgEotf(whiteSignal)).build()
 
     override fun configure(videoSize: Size) {
         super.configure(videoSize)

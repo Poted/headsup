@@ -207,8 +207,8 @@ class ExportManager(private val context: Context) {
         effects += Presentation.createForWidthAndHeight(out.width, out.height, Presentation.LAYOUT_SCALE_TO_FIT_WITH_CROP)
         if (hdr) {
             // From here on the frame is linear HLG light; the dashboard is placed to match.
-            effects += HdrOutputEffect()
-            effects += OverlayEffect(ImmutableList.of<TextureOverlay>(HdrOverlay(overlay)))
+            effects += HdrOutputEffect(out.hdrWhite)
+            effects += OverlayEffect(ImmutableList.of<TextureOverlay>(HdrOverlay(overlay, out.hdrWhite)))
         } else {
             effects += OverlayEffect(ImmutableList.of<TextureOverlay>(overlay))
         }

@@ -112,6 +112,7 @@ import app.headsup.export.ExportSettings
 import app.headsup.export.OutputSpec
 import app.headsup.export.VideoCodec
 import app.headsup.export.MusicTrack
+import app.headsup.export.HdrRoute
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.geometry.CornerRadius
 import app.headsup.render.DashboardFont
@@ -1906,6 +1907,14 @@ private fun ExportControls(
             enabled = tenBitBlocker == null,
             label = { Text("10-bit HDR (HLG) · experimental") },
         )
+    }
+    if (tenBit) {
+        SettingRow("White in HDR") {
+            for ((level, label) in HdrRoute.WHITE_LEVELS) {
+                FilterChip(selected = settings.hdrWhite == level, onClick = { vm.updateExportSettings { it.copy(hdrWhite = level) } }, label = { Text(label) })
+            }
+        }
+        Hint("Where the picture's white sits in the HLG signal. 75 % is the broadcast standard and looks right on HDR screens; gallery thumbnails and SDR players show it darker. Brighter levels look closer to the 8-bit export there, with less room for highlights.")
     }
     Hint(
         "Frame rate is the timeline's: clips with more frames are thinned out, none are invented. " +

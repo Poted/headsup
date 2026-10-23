@@ -18,6 +18,8 @@ data class ExportSettings(
     val codec: VideoCodec = VideoCodec.HEVC,
     /** HEVC Main10 HLG through [HdrRoute] (experimental). */
     val tenBit: Boolean = false,
+    /** HLG signal level where the picture's white goes in a 10-bit export. */
+    val hdrWhite: Float = 0.75f,
 ) {
     companion object {
         val HEIGHTS: List<Pair<Int?, String>> = listOf(null to "Source", 2160 to "4K", 1440 to "1440p", 1080 to "1080p", 720 to "720p")
@@ -36,6 +38,7 @@ data class OutputSpec(
     val fileName: String,
     /** 10-bit HLG through [HdrRoute]; always HEVC. */
     val tenBit: Boolean = false,
+    val hdrWhite: Float = 0.75f,
 ) {
     override fun toString() = "${width}×$height" + (frameRate?.let { " · ${formatFps(it)} fps" } ?: "") +
         " · ${bitrate / 1_000_000} Mb/s · ${codec.label}" + (if (tenBit) " · 10-bit HLG" else "")

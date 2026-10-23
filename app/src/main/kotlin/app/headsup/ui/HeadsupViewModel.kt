@@ -1444,7 +1444,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
             val sourceRate = (first.sourceBitrate ?: 60_000_000).toDouble()
             val pixels = (w * h) / (first.width.toDouble() * first.height).coerceAtLeast(1.0)
             val bitrate = (sourceRate * pixels * settings.bitrateFactor).toLong().coerceIn(8_000_000L, 200_000_000L).toInt()
-            return OutputSpec(OutputSpec.even(w), OutputSpec.even(h), fps, settings.codec, bitrate, fileName, tenBit)
+            return OutputSpec(OutputSpec.even(w), OutputSpec.even(h), fps, settings.codec, bitrate, fileName, tenBit, settings.hdrWhite)
         }
         return when {
             kind == ExportKind.PNG_SEQUENCE -> requests.map { JobSpec(kind, it.name, listOf(it), null) }
