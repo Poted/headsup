@@ -91,6 +91,7 @@ import app.headsup.core.color.MaskKind
 import app.headsup.core.frame.Reframe
 import app.headsup.core.highlight.HighlightFinder
 import app.headsup.core.highlight.HighlightKind
+import app.headsup.core.track.Metric
 import app.headsup.core.color.CineStyle
 import android.graphics.Bitmap
 import app.headsup.core.color.SkinTone
@@ -140,6 +141,7 @@ private enum class Tool(val label: String, val icon: ImageVector) {
     FILES("Files", HeadsupIcons.Video),
     COLOUR("Colour", HeadsupIcons.Colour),
     EFFECTS("Effects", HeadsupIcons.Dashboard),
+    FRAME("Frame", HeadsupIcons.Frame),
     EXPORT("Export", HeadsupIcons.Export),
 }
 
@@ -173,7 +175,7 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
     var tool by rememberSaveable { mutableStateOf(Tool.FILES) }
     var adjustment by rememberSaveable { mutableStateOf(Adjustment.EXPOSURE) }
     var effectKind by rememberSaveable { mutableStateOf(EffectKind.DASHBOARD) }
-    val framing = tool == Tool.EFFECTS && effectKind == EffectKind.FRAME
+    val framing = tool == Tool.FRAME
     // Set when a clip ended during playback, so the next one starts playing on its own.
     var continuePlaying by remember { mutableStateOf(false) }
     // Where to jump in the selected clip, e.g. after tapping a highlight.
@@ -275,6 +277,7 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
                     )
                     Tool.COLOUR -> ColourPage(state, vm, adjustment, { adjustment = it }, onAddLut = { lutPicker.launch(arrayOf("*/*")) }, frameSource.value)
                     Tool.EFFECTS -> EffectsPanel(state, vm, effectKind) { effectKind = it }
+                    Tool.FRAME -> FramePanel(state, vm)
                     Tool.EXPORT -> ExportControls(
                         bitrateFactor = state.bitrateFactor,
                         sourceBitrate = state.selected?.meta?.bitrate,
@@ -405,6 +408,7 @@ private fun FilesPanel(
                         listOfNotNull(
                             "${m.width}×${m.height}",
                             m.frameRate?.let { String.format(Locale.US, "%.4g fps", it) },
+                            frameCount(clip.durationMs, m.frameRate)?.let { "$it frames" },
                             m.bitrate?.let { "${it / 1_000_000} Mb/s" },
                             m.format?.toString(),
                         ).joinToString(" · "),
@@ -448,10 +452,22 @@ private fun HighlightControls(state: UiState, vm: HeadsupViewModel, onShow: (Fou
     val found = state.highlights
     var picked by remember(found) { mutableStateOf(found.orEmpty().take(6).toSet()) }
     var lengthMs by rememberSaveable { mutableStateOf(8_000L) }
+    // Search by one metric (e.g. only heart-rate peaks) or all of them.
+    var metric by rememberSaveable { mutableStateOf<Metric?>(null) }
+    val metrics = HighlightKind.entries.map { it.metric }.distinct().filter { m -> state.activities.any { it.track.has(m) } }
     Row(verticalAlignment = Alignment.CenterVertically) {
         Label("Highlights")
         Spacer(Modifier.weight(1f))
-        SmallAction(if (found == null) "Find" else "Search again", vm::findHighlights, enabled = state.clips.any { it.sync != null } && !state.busy)
+        SmallAction(
+            if (found == null) "Find" else "Search again", { vm.findHighlights(metric) },
+            enabled = state.clips.any { it.sync != null } && !state.busy,
+        )
+    }
+    LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        item { FilterChip(selected = metric == null, onClick = { metric = null; vm.findHighlights(null) }, label = { Text("All") }) }
+        items(metrics) { m ->
+            FilterChip(selected = metric == m, onClick = { metric = m; vm.findHighlights(m) }, label = { Text(metricLabel(m)) })
+        }
     }
     if (found == null) {
         Hint("Finds the best moments from your watch data (speed, descents, climbs, peaks) in the clips.")
@@ -500,6 +516,14 @@ private fun HighlightControls(state: UiState, vm: HeadsupViewModel, onShow: (Fou
     Hint("Creates a new project with these moments as clips, ready to export; this project stays saved.")
 }
 
+private fun metricLabel(m: Metric) = when (m) {
+    Metric.SPEED -> "Speed"
+    Metric.HEART_RATE -> "Heart rate"
+    Metric.ALTITUDE -> "Altitude"
+    Metric.POWER -> "Power"
+    else -> m.name.lowercase().replaceFirstChar { it.uppercase() }
+}
+
 private fun highlightValue(f: FoundHighlight): String {
     val h = f.highlight
     fun Reading.text() = "$value $unit"
@@ -513,6 +537,9 @@ private fun highlightValue(f: FoundHighlight): String {
     }
 }
 
+/** Frames in [durationMs] at [frameRate], or null when the rate is unknown. */
+private fun frameCount(durationMs: Long, frameRate: Float?): Long? = frameRate?.let { kotlin.math.round(durationMs / 1000.0 * it).toLong() }
+
 /** The open project (saved automatically) and the list of saved ones. */
 @Composable
 private fun ProjectRow(state: UiState, vm: HeadsupViewModel) {
@@ -522,7 +549,14 @@ private fun ProjectRow(state: UiState, vm: HeadsupViewModel) {
     var renamingOther by remember { mutableStateOf<String?>(null) }
     Row(verticalAlignment = Alignment.CenterVertically) {
         Column(Modifier.weight(1f)) {
-            Text("Project · saved automatically", style = MaterialTheme.typography.labelSmall, color = HeadsupColors.TextMuted)
+            val total = state.clips.sumOf { it.durationMs }
+            val frames = state.clips.sumOf { frameCount(it.durationMs, it.meta.frameRate) ?: 0L }
+            Text(
+                "Project · saved automatically" +
+                    if (state.clips.isEmpty()) "" else " · ${state.clips.size} clips, ${Formats.duration(total)}, $frames frames",
+                style = MaterialTheme.typography.labelSmall,
+                color = HeadsupColors.TextMuted,
+            )
             Text(state.projectName, style = MaterialTheme.typography.titleSmall, maxLines = 1)
         }
         SmallAction("Rename", { renaming = true })
@@ -860,6 +894,35 @@ private fun LookActions(state: UiState, vm: HeadsupViewModel) {
     if (state.clips.size > 1) SmallAction("Copy to all", vm::applyLookToAll)
 }
 
+/** Sections of the colour corrections, so the picker row stays short. */
+private enum class ColourSection(val label: String) { LIGHT("Light"), COLOUR("Colour"), FILM("Film"), TOOLS("Tools") }
+
+private val Adjustment.section: ColourSection
+    get() = when (this) {
+        Adjustment.EXPOSURE, Adjustment.BRIGHTNESS, Adjustment.CONTRAST, Adjustment.HIGHLIGHTS, Adjustment.SHADOWS,
+        Adjustment.WHITES, Adjustment.BLACKS, Adjustment.ROLLOFF -> ColourSection.LIGHT
+        Adjustment.TEMPERATURE, Adjustment.TINT, Adjustment.SATURATION, Adjustment.VIBRANCE, Adjustment.SKIN -> ColourSection.COLOUR
+        Adjustment.SPLIT, Adjustment.SHADOW_HUE, Adjustment.HIGHLIGHT_HUE, Adjustment.TAME, Adjustment.VIGNETTE -> ColourSection.FILM
+        Adjustment.CINE, Adjustment.LUT, Adjustment.MATCH, Adjustment.BLEND -> ColourSection.TOOLS
+    }
+
+/** A row of text tabs: the selected one white and underlined, the others muted. */
+@Composable
+private fun SectionTabs(labels: List<String>, selected: Int, onSelect: (Int) -> Unit) {
+    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+        labels.forEachIndexed { i, label ->
+            val on = i == selected
+            Column(
+                Modifier.clip(RoundedCornerShape(8.dp)).clickable { onSelect(i) }.padding(horizontal = 10.dp, vertical = 4.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+                Text(label, style = MaterialTheme.typography.labelLarge, color = if (on) HeadsupColors.Highlight else HeadsupColors.TextMuted)
+                Box(Modifier.padding(top = 3.dp).width(18.dp).height(2.dp).background(if (on) HeadsupColors.Highlight else Color.Transparent))
+            }
+        }
+    }
+}
+
 internal enum class Adjustment(
     val symbol: String,
     val label: String,
@@ -965,13 +1028,24 @@ private fun ColourPage(
     var onShapes by rememberSaveable { mutableStateOf(true) }
     val shapes = mask?.let { m -> MaskShape.entries.filter { m.kind in it.kinds } }.orEmpty()
     val editingShape = if (target == GradeTarget.MASK && onShapes) shape?.takeIf { it in shapes } ?: shapes.firstOrNull() else null
+    // Corrections are grouped into short sections (plus the mask's shape), so each row stays short.
+    val sections = listOfNotNull("Shape".takeIf { shapes.isNotEmpty() }) + ColourSection.entries.filter { s -> options.any { it.section == s } }.map { it.label }
+    val section = if (editingShape != null) "Shape" else adjustment.section.label
+    SectionTabs(sections, sections.indexOf(section).coerceAtLeast(0)) { i ->
+        if (sections[i] == "Shape") {
+            onShapes = true
+        } else {
+            onShapes = false
+            options.firstOrNull { it.section.label == sections[i] }?.let(onAdjustment)
+        }
+    }
     LazyRow(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
-        if (target == GradeTarget.MASK) {
+        if (editingShape != null) {
             items(shapes) { m ->
                 CircleOption(m.symbol, m.label, selected = m == editingShape, modified = false) { shape = m; onShapes = true }
             }
         }
-        items(options) { a ->
+        items(if (editingShape != null) emptyList() else options.filter { it.section == adjustment.section }) { a ->
             val lut = if (target == GradeTarget.GROUP) group?.lutName else clip.lutName
             val modified = when (a) {
                 Adjustment.LUT -> lut != null
@@ -1126,18 +1200,20 @@ private fun ShotMatchPanel(state: UiState, clip: ClipState, vm: HeadsupViewModel
             },
         )
     }
-    val undo = state.matchUndo
-    if (undo != null && (undo.clipId == clip.id || (undo.groupId != null && undo.groupId == clip.groupId))) {
+    val session = state.matchSession
+    if (session != null && (session.clipId == clip.id || (session.groupId != null && session.groupId == clip.groupId))) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Hint(
                 when {
-                    undo.groupId != null -> "Matched the group: temperature, tint and saturation"
+                    session.groupId != null -> "Matched the group: temperature, tint and saturation"
                     else -> "Matched: exposure, contrast, temperature, tint and saturation"
                 } + if (state.matchedSkin) ", and skin hue." else ".",
                 Modifier.weight(1f),
             )
             SmallAction("Undo", vm::undoMatch)
         }
+        ValueHeader("Match strength", String.format(Locale.US, "%.0f %%", session.strength * 100))
+        RulerSlider(session.strength, 0f..1f, 0.02f, vm::setMatchStrength, onReset = { vm.setMatchStrength(MATCH_STRENGTH) })
     }
 }
 
@@ -1301,11 +1377,47 @@ private fun VectorscopeView(scope: ScopeResult?, modifier: Modifier) {
     }
 }
 
+// Frame page
+
+/** Framing of the selected clip: output shape, zoom, position (drag on the picture) and straightening. */
+@Composable
+private fun FramePanel(state: UiState, vm: HeadsupViewModel) {
+    val clip = state.selected
+    if (clip == null) {
+        Hint("Select a clip first.")
+        return
+    }
+    val r = clip.reframe
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Hint("Drag the picture to move it, pinch to zoom. The grid shows the thirds.", Modifier.weight(1f))
+        if (!r.isIdentity) SmallAction("Reset", { vm.updateReframe { Reframe() } })
+    }
+    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        for ((aspect, label) in Reframe.PRESETS) {
+            FilterChip(selected = r.aspect == aspect, onClick = { vm.updateReframe { it.copy(aspect = aspect) } }, label = { Text(label) })
+        }
+    }
+    val (w, h) = r.outputSize(clip.meta.width.toFloat(), clip.meta.height.toFloat())
+    if (r.aspect != null) Hint("Exported at ${w.toInt() / 2 * 2}×${h.toInt() / 2 * 2}.")
+    ValueHeader("Zoom", String.format(Locale.US, "%.2f×", r.zoom))
+    RulerSlider(r.zoom, 1f..4f, 0.02f, { v -> vm.updateReframe { it.copy(zoom = v) } }, onReset = { vm.updateReframe { it.copy(zoom = 1f) } })
+    ValueHeader("Straighten", String.format(Locale.US, "%+.1f°", r.angleDegrees))
+    RulerSlider(
+        r.angleDegrees, -15f..15f, 0.1f, { v -> vm.updateReframe { it.copy(angleDegrees = v) } },
+        onReset = { vm.updateReframe { it.copy(angleDegrees = 0f) } },
+    )
+    if (state.clips.size > 1) {
+        Row {
+            Spacer(Modifier.weight(1f))
+            SmallAction("Same shape for all clips", { vm.setAspectForAll(r.aspect) })
+        }
+    }
+}
+
 // Effects page
 
 private enum class EffectKind(val symbol: String, val label: String) {
     DASHBOARD("HUD", "Dashboard"),
-    FRAME("▣", "Frame"),
     GRAPH("Gr", "Graph"),
     GRAIN("Gn", "Grain"),
     GLOW("Gl", "Glow"),
@@ -1331,7 +1443,6 @@ private fun EffectsPanel(state: UiState, vm: HeadsupViewModel, kind: EffectKind,
         items(EffectKind.entries) { e ->
             val active = when (e) {
                 EffectKind.DASHBOARD -> style.enabled
-                EffectKind.FRAME -> state.selected?.reframe?.isIdentity == false
                 EffectKind.GRAPH -> effects.graph != null
                 EffectKind.GRAIN -> effects.grain > 0f
                 EffectKind.GLOW -> effects.glow > 0f
@@ -1378,20 +1489,6 @@ private fun EffectsPanel(state: UiState, vm: HeadsupViewModel, kind: EffectKind,
             RulerSlider(effects.glow, 0f..1f, 0.02f, { v -> updateEffects { it.copy(glow = v) } }, onReset = { updateEffects { it.copy(glow = 0f) } })
             ValueHeader("Threshold", String.format(Locale.US, "%.0f %%", effects.glowThreshold * 100))
             RulerSlider(effects.glowThreshold, 0.4f..0.98f, 0.02f, { v -> updateEffects { it.copy(glowThreshold = v) } }, onReset = { updateEffects { it.copy(glowThreshold = 0.75f) } })
-        }
-        EffectKind.FRAME -> {
-            val r = state.selected?.reframe ?: Reframe()
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Hint("Drag the picture to move it, pinch to zoom.", Modifier.weight(1f))
-                if (!r.isIdentity) SmallAction("Reset", { vm.updateReframe { Reframe() } })
-            }
-            ValueHeader("Zoom", String.format(Locale.US, "%.2f×", r.zoom))
-            RulerSlider(r.zoom, 1f..4f, 0.02f, { v -> vm.updateReframe { it.copy(zoom = v) } }, onReset = { vm.updateReframe { it.copy(zoom = 1f) } })
-            ValueHeader("Straighten", String.format(Locale.US, "%+.1f°", r.angleDegrees))
-            RulerSlider(
-                r.angleDegrees, -15f..15f, 0.1f, { v -> vm.updateReframe { it.copy(angleDegrees = v) } },
-                onReset = { vm.updateReframe { it.copy(angleDegrees = 0f) } },
-            )
         }
         EffectKind.HALATION -> {
             ValueHeader("Halation", String.format(Locale.US, "%.0f %%", effects.halation * 100))

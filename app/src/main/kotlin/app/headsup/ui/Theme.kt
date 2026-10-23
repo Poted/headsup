@@ -140,6 +140,14 @@ object HeadsupIcons {
         }
     }
 
+    /** Crop corners: framing. */
+    val Frame = icon("frame") {
+        stroke {
+            moveTo(7f, 3f); lineTo(7f, 17f); lineTo(21f, 17f)
+            moveTo(3f, 7f); lineTo(17f, 7f); lineTo(17f, 21f)
+        }
+    }
+
     /** Film frame: videos. */
     val Video = icon("video") {
         stroke {

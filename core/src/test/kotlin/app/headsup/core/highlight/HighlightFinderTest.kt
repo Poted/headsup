@@ -51,4 +51,11 @@ class HighlightFinderTest {
         val found = HighlightFinder.find(track, firstFiveMinutes)
         assertTrue(found.none { it.kind == HighlightKind.TOP_SPEED || it.kind == HighlightKind.FAST_DESCENT })
     }
+
+    @Test
+    fun `a chosen metric gives only its moments`() {
+        val found = HighlightFinder.find(track, listOf(track.range), metric = Metric.ALTITUDE)
+        assertTrue(found.isNotEmpty())
+        assertTrue(found.all { it.kind.metric == Metric.ALTITUDE })
+    }
 }

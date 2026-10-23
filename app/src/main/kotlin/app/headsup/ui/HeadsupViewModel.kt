@@ -17,6 +17,7 @@ import app.headsup.core.frame.Reframe
 import app.headsup.core.highlight.Highlight
 import app.headsup.core.highlight.HighlightFinder
 import app.headsup.core.track.TimeRange
+import app.headsup.core.track.Metric
 import app.headsup.core.color.CineAssistant
 import app.headsup.core.color.CineStyle
 import app.headsup.core.color.FrameStats
@@ -140,10 +141,13 @@ data class CineSession(
 data class MatchReference(val clipId: Long, val clipName: String, val stats: MatchStats)
 
 /**
- * State before a shot match, for undo: the clip's corrections, or (matching a whole group) the
- * group's.
+ * The last shot match: what it was applied to (the clip, or its whole group), the corrections
+ * before it, the change it found and how much of that is applied.
  */
-data class MatchUndo(val clipId: Long, val groupId: Long?, val grade: ColorGrade)
+data class MatchSession(val clipId: Long, val groupId: Long?, val base: ColorGrade, val delta: ColorGrade, val strength: Float)
+
+/** A full match often overshoots between different scenes, so it starts at this share. */
+const val MATCH_STRENGTH = 0.6f
 
 /** A highlight found in the watch data, placed in the clip that shows it. */
 data class FoundHighlight(val highlight: Highlight, val clipId: Long, val clipName: String, val positionMs: Long)
@@ -192,7 +196,7 @@ data class UiState(
     /** Result of the last highlight search; null until searched. */
     val highlights: List<FoundHighlight>? = null,
     val matchReference: MatchReference? = null,
-    val matchUndo: MatchUndo? = null,
+    val matchSession: MatchSession? = null,
     /** Whether the last match also turned skin (both frames showed skin). */
     val matchedSkin: Boolean = false,
     val matching: Boolean = false,
@@ -698,14 +702,12 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /**
-     * Changes the selected clip's exposure, contrast, white balance and saturation so [frame]
-     * looks like the reference; solved through the clip's whole colour path (its corrections,
-     * group, global node and LUT), the difference lands in the clip's own corrections.
-     */
-    /**
-     * With [wholeGroup], only the camera's character (white balance, tint, saturation, skin) is
-     * matched and written to the clip's group, so every shot of that camera follows and keeps its
-     * own brightness; exposure and contrast are still solved, but only to compare like with like.
+     * Matches the selected clip to the reference: solved through the clip's whole colour path
+     * (its corrections, group, global node and LUT); the difference goes into the clip's own
+     * corrections. With [wholeGroup], only the camera's character (white balance, tint,
+     * saturation, skin) is kept and written to the clip's group, so every shot of that camera
+     * follows and keeps its own brightness. The result starts at [MATCH_STRENGTH] and can be
+     * scaled with [setMatchStrength].
      */
     fun matchToReference(frame: Bitmap, wholeGroup: Boolean = false) {
         val s = _state.value
@@ -718,47 +720,52 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             val lut = loadLut(s.lutFor(clip))
             val matched = withContext(Dispatchers.Default) { ShotMatch.match(pixels, lut, applied, reference.stats) }
-            val undo = if (group != null) MatchUndo(clip.id, group.id, group.grade) else MatchUndo(clip.id, null, clip.grade)
-            _state.update { it.copy(matching = false, matchUndo = undo, matchedSkin = matched.skinHue != applied.skinHue) }
-            if (group != null) {
-                updateGroup(group.id) { g ->
-                    g.copy(
-                        grade = g.grade.copy(
-                            temperature = (g.grade.temperature + matched.temperature - applied.temperature).coerceIn(-1f, 1f),
-                            tint = (g.grade.tint + matched.tint - applied.tint).coerceIn(-1f, 1f),
-                            saturation = (g.grade.saturation + matched.saturation - applied.saturation).coerceIn(-1f, 1f),
-                            skinHue = (g.grade.skinHue + matched.skinHue - applied.skinHue).coerceIn(-30f, 30f),
-                        ),
-                    )
-                }
-                return@launch
-            }
-            val index = _state.value.clips.indexOfFirst { it.id == clip.id }
-            if (index < 0) return@launch
-            updateClip(index) { c ->
-                c.copy(
-                    grade = c.grade.copy(
-                        exposure = c.grade.exposure + matched.exposure - applied.exposure,
-                        contrast = (c.grade.contrast + matched.contrast - applied.contrast).coerceIn(-1f, 1f),
-                        temperature = (c.grade.temperature + matched.temperature - applied.temperature).coerceIn(-1f, 1f),
-                        tint = (c.grade.tint + matched.tint - applied.tint).coerceIn(-1f, 1f),
-                        saturation = (c.grade.saturation + matched.saturation - applied.saturation).coerceIn(-1f, 1f),
-                        skinHue = (c.grade.skinHue + matched.skinHue - applied.skinHue).coerceIn(-30f, 30f),
-                    ),
-                )
-            }
+            // Only the change, and for a group only the camera's character.
+            val delta = ColorGrade(
+                exposure = if (group == null) matched.exposure - applied.exposure else 0f,
+                contrast = if (group == null) matched.contrast - applied.contrast else 0f,
+                temperature = matched.temperature - applied.temperature,
+                tint = matched.tint - applied.tint,
+                saturation = matched.saturation - applied.saturation,
+                skinHue = matched.skinHue - applied.skinHue,
+            )
+            val session = MatchSession(clip.id, group?.id, group?.grade ?: clip.grade, delta, MATCH_STRENGTH)
+            _state.update { it.copy(matching = false, matchSession = session, matchedSkin = delta.skinHue != 0f) }
+            applyMatch(session)
+        }
+    }
+
+    /** Scales the last match: 0 = as before, 1 = full match. */
+    fun setMatchStrength(strength: Float) {
+        val session = _state.value.matchSession?.copy(strength = strength.coerceIn(0f, 1f)) ?: return
+        _state.update { it.copy(matchSession = session) }
+        applyMatch(session)
+    }
+
+    private fun applyMatch(m: MatchSession) {
+        val k = m.strength
+        val b = m.base
+        val d = m.delta
+        val grade = b.copy(
+            exposure = (b.exposure + d.exposure * k).coerceIn(-3f, 3f),
+            contrast = (b.contrast + d.contrast * k).coerceIn(-1f, 1f),
+            temperature = (b.temperature + d.temperature * k).coerceIn(-1f, 1f),
+            tint = (b.tint + d.tint * k).coerceIn(-1f, 1f),
+            saturation = (b.saturation + d.saturation * k).coerceIn(-1f, 1f),
+            skinHue = (b.skinHue + d.skinHue * k).coerceIn(-30f, 30f),
+        )
+        if (m.groupId != null) {
+            updateGroup(m.groupId) { it.copy(grade = grade) }
+        } else {
+            val index = _state.value.clips.indexOfFirst { it.id == m.clipId }
+            if (index >= 0) updateClip(index) { it.copy(grade = grade) }
         }
     }
 
     fun undoMatch() {
-        val undo = _state.value.matchUndo ?: return
-        if (undo.groupId != null) {
-            updateGroup(undo.groupId) { it.copy(grade = undo.grade) }
-        } else {
-            val index = _state.value.clips.indexOfFirst { it.id == undo.clipId }
-            if (index >= 0) updateClip(index) { it.copy(grade = undo.grade) }
-        }
-        _state.update { it.copy(matchUndo = null) }
+        val m = _state.value.matchSession ?: return
+        applyMatch(m.copy(strength = 0f))
+        _state.update { it.copy(matchSession = null) }
     }
 
     private fun pixelsOf(frame: Bitmap): IntArray {
@@ -771,7 +778,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
     // Highlights
 
     /** Looks for the best moments in the watch data, only where there is video. */
-    fun findHighlights() {
+    fun findHighlights(metric: Metric? = null) {
         val s = _state.value
         _state.update { it.copy(busy = true) }
         viewModelScope.launch {
@@ -782,7 +789,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                         val start = c.telemetryUtc(0) ?: return@mapNotNull null
                         TimeRange(start, start + c.durationMs)
                     }
-                    HighlightFinder.find(s.activities[trackIndex].track, covered).mapNotNull { h ->
+                    HighlightFinder.find(s.activities[trackIndex].track, covered, metric).mapNotNull { h ->
                         // The first clip on the timeline that shows the moment.
                         clips.firstNotNullOfOrNull { c ->
                             val start = c.telemetryUtc(0) ?: return@firstNotNullOfOrNull null
@@ -881,14 +888,25 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
         _state.update { it.copy(cine = null) }
     }
 
+    /** Gives every clip the same output shape (e.g. 9:16 for a reel), keeping each clip's own position. */
+    fun setAspectForAll(aspect: Float?) {
+        _state.update { s ->
+            s.copy(clips = s.clips.map { c -> c.copy(reframe = c.reframe.copy(aspect = aspect).clampedFor(c)) })
+        }
+        refreshPreview()
+    }
+
+    private fun Reframe.clampedFor(c: ClipState): Reframe {
+        val w = c.meta.width.toFloat().coerceAtLeast(1f)
+        val h = c.meta.height.toFloat().coerceAtLeast(1f)
+        val (ow, oh) = outputSize(w, h)
+        return copy(zoom = zoom.coerceIn(1f, 4f)).clamped(ow, oh, w, h)
+    }
+
     /** Changes the selected clip's framing; kept inside the picture. */
     fun updateReframe(transform: (Reframe) -> Reframe) {
         val index = _state.value.selectedClip ?: return
-        updateClip(index) { c ->
-            val w = c.meta.width.toFloat().coerceAtLeast(1f)
-            val h = c.meta.height.toFloat().coerceAtLeast(1f)
-            c.copy(reframe = transform(c.reframe).let { it.copy(zoom = it.zoom.coerceIn(1f, 4f)) }.clamped(w, h))
-        }
+        updateClip(index) { c -> c.copy(reframe = transform(c.reframe).clampedFor(c)) }
     }
 
     // Masks and transitions

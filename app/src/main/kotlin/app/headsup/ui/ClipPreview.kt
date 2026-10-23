@@ -42,6 +42,7 @@ import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -80,6 +81,8 @@ import app.headsup.core.color.ColourMask
 import app.headsup.core.color.ColourTransition
 import app.headsup.core.color.MaskKind
 import app.headsup.core.frame.Reframe
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.requiredSize
 import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.drawscope.withTransform
@@ -224,6 +227,8 @@ fun ClipPreview(
     val maskMover by rememberUpdatedState(onMoveMask)
     val reframer by rememberUpdatedState(onReframe)
     val currentReframe by rememberUpdatedState(reframe)
+    // Sizes of the frame and the picture under it, for gestures (read when they happen).
+    val geometryRef = remember { GeometryRef(FrameGeometry(1f, 1f, 1f, 1f)) }
     LaunchedEffect(textureView) {
         val tv = textureView ?: return@LaunchedEffect
         onFrameSource?.invoke {
@@ -261,26 +266,38 @@ fun ClipPreview(
     val sampler = remember(activity) { activity?.let { TelemetrySampler(it.track) } }
     val renderer = remember { DashboardRenderer(context.assets) }
     val currentStyle by rememberUpdatedState(style)
-    val aspect = if (clip.meta.width > 0 && clip.meta.height > 0) clip.meta.width.toFloat() / clip.meta.height else 16f / 9f
+    val sourceAspect = if (clip.meta.width > 0 && clip.meta.height > 0) clip.meta.width.toFloat() / clip.meta.height else 16f / 9f
+    // The frame takes the reframe's shape; the picture is laid out under it, just covering it.
+    val frameAspect = reframe.aspect ?: sourceAspect
 
     Column(Modifier.padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Box(
             Modifier.fillMaxWidth().clip(RoundedCornerShape(20.dp)).background(Color.Black),
             contentAlignment = Alignment.Center,
         ) {
-            Box(Modifier.heightIn(max = maxHeight).aspectRatio(aspect, matchHeightConstraintsFirst = true).clipToBounds()) {
+            BoxWithConstraints(
+                Modifier.heightIn(max = maxHeight).aspectRatio(frameAspect, matchHeightConstraintsFirst = true).clipToBounds(),
+                contentAlignment = Alignment.Center,
+            ) {
+                val boxW = constraints.maxWidth.toFloat()
+                val boxH = constraints.maxHeight.toFloat()
+                val pictureW = if (sourceAspect > boxW / boxH) boxH * sourceAspect else boxW
+                val pictureH = if (sourceAspect > boxW / boxH) boxH else boxW / sourceAspect
+                val geometry = FrameGeometry(boxW, boxH, pictureW, pictureH)
+                geometryRef.value = geometry
+                val density = LocalDensity.current
                 // A TextureView (unlike PlayerView's default SurfaceView) is drawn by the UI, so the
                 // colour shader can be applied to it.
                 AndroidView(
                     factory = { TextureView(it).also { tv -> exoPlayer.setVideoTextureView(tv); textureView = tv } },
-                    modifier = Modifier.matchParentSize().graphicsLayer {
+                    modifier = Modifier.requiredSize(with(density) { pictureW.toDp() }, with(density) { pictureH.toDp() }).graphicsLayer {
                         // Reading these here re-applies the shader when they change, without recomposing.
                         tableVersion
                         val frame = if (effects.grain > 0f) (positionMs / 33).toFloat() else 0f
                         val fromWeight = if (fromCube != null) ColourTransition.fromWeight(positionMs, transitionMs) else 0f
                         renderEffect = previewShader?.effect(effects, zebra, frame, size.width, size.height, masks, fromWeight)
                         // Reframing moves the graded picture, as in the export (colour first, then framing).
-                        val t = reframeTransform(reframe, size.width, size.height)
+                        val t = reframeTransform(reframe, geometry)
                         scaleX = t.zoom
                         scaleY = t.zoom
                         rotationZ = reframe.angleDegrees
@@ -298,9 +315,10 @@ fun ClipPreview(
                                 Modifier.pointerInput(Unit) {
                                     detectTransformGestures { _, pan, zoomChange, _ ->
                                         val r = currentReframe
-                                        val w = size.width.toFloat()
-                                        val h = size.height.toFloat()
-                                        val z = r.clamped(w, h).effectiveZoom(w, h)
+                                        val g = geometryRef.value
+                                        val w = g.pictureW
+                                        val h = g.pictureH
+                                        val z = r.clamped(g.boxW, g.boxH, w, h).effectiveZoom(g.boxW, g.boxH, w, h)
                                         // A finger moving right shows more of the left: undo rotation and zoom.
                                         val a = Math.toRadians(r.angleDegrees.toDouble())
                                         val dx = (pan.x * kotlin.math.cos(a) + pan.y * kotlin.math.sin(a)).toFloat() / z
@@ -321,10 +339,9 @@ fun ClipPreview(
                                 if (moveMask != null) {
                                     // Masks live in the picture, so map the finger back through the framing.
                                     fun move(p: Offset) {
-                                        val w = size.width.toFloat()
-                                        val h = size.height.toFloat()
-                                        val (sx, sy) = currentReframe.sourceOf(p.x, p.y, w, h)
-                                        moveMask(sx / w, sy / h)
+                                        val g = geometryRef.value
+                                        val (sx, sy) = currentReframe.sourceOf(p.x, p.y, g.boxW, g.boxH, g.pictureW, g.pictureH)
+                                        moveMask(sx / g.pictureW, sy / g.pictureH)
                                     }
                                     down.consume()
                                     move(down.position)
@@ -369,13 +386,14 @@ fun ClipPreview(
                 ) {
                     drawIntoCanvas { renderer.drawVignette(it.nativeCanvas, size.width, size.height, vignette) }
                     guideMask?.let { m ->
-                        val t = reframeTransform(reframe, size.width, size.height)
-                        val o = Offset(size.width / 2f, size.height / 2f)
+                        // Drawn in picture coordinates, moved like the picture.
+                        val t = reframeTransform(reframe, geometry)
+                        val o = Offset(geometry.pictureW / 2f, geometry.pictureH / 2f)
                         withTransform({
-                            translate(t.translation.x, t.translation.y)
+                            translate((geometry.boxW - geometry.pictureW) / 2f + t.translation.x, (geometry.boxH - geometry.pictureH) / 2f + t.translation.y)
                             rotate(reframe.angleDegrees, o)
                             scale(t.zoom, t.zoom, o)
-                        }) { drawMaskGuide(m) }
+                        }) { drawMaskGuide(m, geometry.pictureW, geometry.pictureH) }
                     }
                     marker?.let { m ->
                         val c = Offset(m.x * size.width, m.y * size.height)
@@ -443,16 +461,23 @@ private const val SAMPLE_WIDTH = 192
 
 private class ReframeTransform(val zoom: Float, val translation: Offset)
 
+/** The preview frame ([boxW]×[boxH], the output shape) and the picture laid out centred under it, just covering it. */
+private class GeometryRef(var value: FrameGeometry)
+
+private data class FrameGeometry(val boxW: Float, val boxH: Float, val pictureW: Float, val pictureH: Float)
+
 /**
- * Layer transform (around the centre) that shows the picture as [reframe] describes: the source
- * point at the reframe centre lands in the middle of the frame.
+ * Layer transform (around the picture's centre) that shows the picture as [reframe] describes:
+ * the source point at the reframe centre lands in the middle of the frame.
  */
-private fun reframeTransform(reframe: Reframe, width: Float, height: Float): ReframeTransform {
+private fun reframeTransform(reframe: Reframe, g: FrameGeometry): ReframeTransform {
+    val width = g.pictureW
+    val height = g.pictureH
     if (reframe.isIdentity || width <= 0f || height <= 0f) return ReframeTransform(1f, Offset.Zero)
-    val r = reframe.clamped(width, height)
-    val z = r.effectiveZoom(width, height)
+    val r = reframe.clamped(g.boxW, g.boxH, width, height)
+    val z = r.effectiveZoom(g.boxW, g.boxH, width, height)
     val a = Math.toRadians(r.angleDegrees.toDouble())
-    // T = z·R(θ)·(O − C), clockwise rotation with y down.
+    // T = z·R(θ)·(O − C), clockwise rotation with y down; the picture is already centred in the frame.
     val vx = width / 2f - r.centerX * width
     val vy = height / 2f - r.centerY * height
     val tx = z * (vx * kotlin.math.cos(a) - vy * kotlin.math.sin(a)).toFloat()
@@ -474,17 +499,17 @@ private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawThirds() {
 private const val ANALYSIS_WIDTH = 256
 
 /** The mask's edge (solid) and the ends of its soft blend (dashed), as in DaVinci's window controls. */
-private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawMaskGuide(mask: ColourMask) {
-    val centre = Offset(mask.centerX * size.width, mask.centerY * size.height)
+private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawMaskGuide(mask: ColourMask, width: Float, height: Float) {
+    val centre = Offset(mask.centerX * width, mask.centerY * height)
     val dash = PathEffect.dashPathEffect(floatArrayOf(8f * density, 6f * density))
     val solid = Color.White.copy(alpha = 0.9f)
     val faint = Color.White.copy(alpha = 0.6f)
     rotate(mask.angleDegrees, pivot = centre) {
         when (mask.kind) {
             MaskKind.LINEAR -> {
-                val reach = size.width + size.height
+                val reach = width + height
                 for ((offset, dashed) in listOf(0f to false, -mask.softness / 2f to true, mask.softness / 2f to true)) {
-                    val y = centre.y + offset * size.height
+                    val y = centre.y + offset * height
                     drawLine(
                         if (dashed) faint else solid, Offset(centre.x - reach, y), Offset(centre.x + reach, y),
                         strokeWidth = (if (dashed) 1f else 1.5f) * density, pathEffect = if (dashed) dash else null,
@@ -494,8 +519,8 @@ private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawMaskGuide(mask:
             MaskKind.ELLIPSE -> {
                 for ((scale, dashed) in listOf(1f to false, 1f - mask.softness / 2f to true, 1f + mask.softness / 2f to true)) {
                     if (scale <= 0f) continue
-                    val rx = mask.sizeX / 2f * size.height * scale
-                    val ry = mask.sizeY / 2f * size.height * scale
+                    val rx = mask.sizeX / 2f * height * scale
+                    val ry = mask.sizeY / 2f * height * scale
                     drawOval(
                         if (dashed) faint else solid, topLeft = Offset(centre.x - rx, centre.y - ry), size = Size(2 * rx, 2 * ry),
                         style = Stroke((if (dashed) 1f else 1.5f) * density, pathEffect = if (dashed) dash else null),

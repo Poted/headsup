@@ -43,4 +43,17 @@ class ReframeTest {
             assertTrue(sx in -0.5f..w + 0.5f && sy in -0.5f..h + 0.5f, "corner ($x, $y) -> ($sx, $sy)")
         }
     }
+
+    @Test
+    fun `a 9 by 16 reel from landscape is full height, centred, and can be moved sideways`() {
+        val r = Reframe(aspect = 9f / 16f)
+        val (ow, oh) = r.outputSize(w, h)
+        assertEquals(h, oh, 1e-3f)
+        assertEquals(h * 9f / 16f, ow, 1e-3f)
+        // Output centre shows the picture centre; its left edge is ow/2 left of it.
+        assertEquals(w / 2 - ow / 2, r.sourceOf(0f, oh / 2, ow, oh, w, h).first, 1e-2f)
+        // Moved fully left, the output starts at the picture's left edge.
+        val left = r.copy(centerX = 0f).clamped(ow, oh, w, h)
+        assertEquals(0f, left.sourceOf(0f, 0f, ow, oh, w, h).first, 1e-2f)
+    }
 }

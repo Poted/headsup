@@ -32,7 +32,18 @@ object HighlightFinder {
     private const val VERTICAL_WINDOW_S = 10
     private const val SMOOTH_S = 5
 
-    fun find(track: ActivityTrack, covered: List<TimeRange>, maxCount: Int = 10, minGapMs: Long = 20_000L): List<Highlight> {
+    /**
+     * [metric] limits the search to moments of that metric (e.g. only heart-rate peaks); then more
+     * moments of each kind are kept.
+     */
+    fun find(
+        track: ActivityTrack,
+        covered: List<TimeRange>,
+        metric: Metric? = null,
+        maxCount: Int = if (metric == null) 10 else 15,
+        minGapMs: Long = 20_000L,
+    ): List<Highlight> {
+        val perKind = if (metric == null) 3 else 8
         val sampler = TelemetrySampler(track)
         val ranges = covered.mapNotNull { r ->
             val start = maxOf(r.startMs, track.startMs)
@@ -43,13 +54,13 @@ object HighlightFinder {
 
         val candidates = mutableListOf<Highlight>()
         for (kind in HighlightKind.entries) {
-            if (!track.has(kind.metric)) continue
+            if (!track.has(kind.metric) || (metric != null && kind.metric != metric)) continue
             // The whole activity sets the scale, so a quiet stretch does not look exciting.
             val reference = signal(sampler, kind, listOf(track.range))
             val scale = Scale.of(reference.map { it.second }) ?: continue
             val points = signal(sampler, kind, ranges)
-            val peaks = if (kind == HighlightKind.SUMMIT) listOfNotNull(points.maxByOrNull { it.second }) else localPeaks(points, minGapMs)
-            peaks.take(3).forEach { (t, v) ->
+            val peaks = if (kind == HighlightKind.SUMMIT) listOfNotNull(points.maxByOrNull { it.second }) else localPeaks(points, minGapMs, perKind)
+            peaks.forEach { (t, v) ->
                 val score = scale.score(v) * kind.weight
                 if (score > 0.15) candidates += Highlight(kind, t, v, score)
             }
@@ -116,11 +127,11 @@ object HighlightFinder {
     }
 
     /** Highest points first, each the maximum within [gapMs] around it. */
-    private fun localPeaks(points: List<Pair<Long, Double>>, gapMs: Long): List<Pair<Long, Double>> {
+    private fun localPeaks(points: List<Pair<Long, Double>>, gapMs: Long, count: Int): List<Pair<Long, Double>> {
         val peaks = mutableListOf<Pair<Long, Double>>()
         for (p in points.sortedByDescending { it.second }) {
             if (peaks.none { kotlin.math.abs(it.first - p.first) < gapMs }) peaks += p
-            if (peaks.size >= 3) break
+            if (peaks.size >= count) break
         }
         return peaks
     }

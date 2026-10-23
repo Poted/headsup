@@ -10,6 +10,11 @@ continuous playback across clips, highlights from the watch data, shot match.
 1. **Photos** with EXIF time, matched like clips.
 2. **10-bit pipeline** – see `TEN_BIT_PIPELINE.md`.
 
+## Ideas
+
+- **Sharing and platform presets** – share an export straight to Instagram/TikTok/YouTube, with
+  presets for each platform's resolution, frame rate and bit rate.
+
 ## Later: more from DaVinci's windows
 
 - a rectangle shape; keyframes so a window can move during the clip;

@@ -51,9 +51,13 @@ data class ExportRequest(
     val effects: EffectSettings,
     val grade: GradeSetup?,
     val bitrateFactor: Float,
-    /** Zoom, position and straightening of the picture. */
+    /** Zoom, position, straightening and output shape of the picture. */
     val reframe: Reframe = Reframe(),
 ) {
+    /** Size of the exported frame: the source's, or the largest frame of the reframe's shape inside it (even numbers for encoders). */
+    val frameWidth: Int get() = (reframe.outputSize(width.toFloat(), height.toFloat()).first.toInt() / 2 * 2).coerceAtLeast(2)
+    val frameHeight: Int get() = (reframe.outputSize(width.toFloat(), height.toFloat()).second.toInt() / 2 * 2).coerceAtLeast(2)
+
     /** File name without extension; trimmed parts get their start second so names stay distinct. */
     val baseName: String
         get() = name.substringBeforeLast('.') + if (trimStartMs > 0) "_from${trimStartMs / 1000}s" else ""

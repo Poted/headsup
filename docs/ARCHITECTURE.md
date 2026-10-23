@@ -131,7 +131,9 @@ the glow pass of the preview shader and `FinishEffect`).
 
 ### Reframing
 
-`Reframe` (zoom, centre, straightening angle) is per clip; zoom never drops below what keeps the
+`Reframe` (output shape, zoom, centre, straightening angle) is per clip (Frame tool); with a
+shape such as 9:16 the output is the largest frame of that shape inside the picture, and export
+crops to it with a Media3 `Presentation` after the matrix; zoom never drops below what keeps the
 corners filled after rotation. Colour and texture are applied to the whole picture first and
 the framing afterwards, then the dashboard: in the preview as a transform of the graded layer,
 in export as a Media3 `MatrixTransformation` (aspect-corrected in NDC) before the overlay.

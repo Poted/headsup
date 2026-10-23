@@ -14,6 +14,7 @@ import androidx.media3.common.util.UnstableApi
 import androidx.media3.effect.OverlayEffect
 import androidx.media3.effect.SingleColorLut
 import androidx.media3.effect.MatrixTransformation
+import androidx.media3.effect.Presentation
 import android.graphics.Matrix
 import app.headsup.core.frame.Reframe
 import app.headsup.core.color.ColorGrade
@@ -143,8 +144,10 @@ class ExportManager(private val context: Context) {
         if (reframe.isIdentity || width <= 0 || height <= 0) return null
         val w = width.toFloat()
         val h = height.toFloat()
-        val r = reframe.clamped(w, h)
-        val zoom = r.effectiveZoom(w, h)
+        // Output frame inside the source; a later Presentation crops to it around the centre.
+        val (ow, oh) = reframe.outputSize(w, h)
+        val r = reframe.clamped(ow, oh, w, h)
+        val zoom = r.effectiveZoom(ow, oh, w, h)
         val aspect = w / h
         val matrix = Matrix().apply {
             postTranslate(-(2f * r.centerX - 1f), -(1f - 2f * r.centerY))
@@ -162,7 +165,7 @@ class ExportManager(private val context: Context) {
         val test = request.kind == ExportKind.TEN_BIT_TEST
         val sampler = TelemetrySampler(request.track)
         val overlay = TelemetryOverlay(
-            DashboardRenderer(context.assets), request.style, request.effects, request.grade?.vignette ?: 0f, request.width, request.height,
+            DashboardRenderer(context.assets), request.style, request.effects, request.grade?.vignette ?: 0f, request.frameWidth, request.frameHeight,
         ) { positionMs -> request.dataAt(positionMs, sampler) }
 
         val effects = mutableListOf<Effect>()
@@ -177,6 +180,8 @@ class ExportManager(private val context: Context) {
         if (request.effects.changesPixels) effects += FinishEffect(request.effects)
         // Reframing comes after colour and texture (as in the preview) and before the dashboard.
         reframeEffect(request.reframe, request.width, request.height)?.let { effects += it }
+        // A different output shape: crop the (moved) picture to it around the centre.
+        request.reframe.aspect?.let { effects += Presentation.createForAspectRatio(it, Presentation.LAYOUT_SCALE_TO_FIT_WITH_CROP) }
         effects += OverlayEffect(ImmutableList.of<TextureOverlay>(overlay))
 
         val endMs = if (test) minOf(request.trimStartMs + TEST_LENGTH_MS, request.trimEndMs) else request.trimEndMs

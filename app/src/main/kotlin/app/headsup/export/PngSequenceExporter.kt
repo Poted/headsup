@@ -26,8 +26,9 @@ object PngSequenceExporter {
     suspend fun export(context: Context, request: ExportRequest, onProgress: (Int) -> Unit): String {
         val fps = request.frameRate ?: 30f
         val frames = ceil(request.durationMs * fps / 1000.0).toLong().coerceAtLeast(1)
-        val width = request.width
-        val height = request.height
+        // The overlay matches the exported frame, including a changed shape (e.g. 9:16).
+        val width = request.frameWidth
+        val height = request.frameHeight
         val renderer = DashboardRenderer(context.assets)
         val sampler = TelemetrySampler(request.track)
         val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
