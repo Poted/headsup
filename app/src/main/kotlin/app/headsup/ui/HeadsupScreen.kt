@@ -1037,6 +1037,15 @@ private fun SpeedControls(clip: ClipState, timelineFps: Float, onSpeed: (Float) 
         Hint("${Formats.duration(clip.timelineDurationMs)} on the timeline")
     }
     Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        // Every frame of high-frame-rate footage at the timeline's rate (e.g. 120 fps on a 24 fps timeline: 0.2×).
+        val conform = clip.meta.frameRate?.takeIf { !clip.meta.isPhoto && it > timelineFps + 0.5f }?.let { timelineFps / it }
+        if (conform != null) {
+            FilterChip(
+                selected = kotlin.math.abs(clip.speed - conform) < 0.0005f,
+                onClick = { onSpeed(conform) },
+                label = { Text("All frames · ${String.format(Locale.US, "%.3g", conform)}×") },
+            )
+        }
         for (speed in SPEEDS) {
             val label = if (speed % 1f == 0f) "${speed.toInt()}×" else "$speed×".replace("0.", ".")
             FilterChip(selected = clip.speed == speed, onClick = { onSpeed(speed) }, label = { Text(label) })
