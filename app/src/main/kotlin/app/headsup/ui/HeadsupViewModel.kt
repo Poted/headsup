@@ -20,6 +20,8 @@ import app.headsup.core.track.TimeRange
 import app.headsup.core.color.CineAssistant
 import app.headsup.core.color.CineStyle
 import app.headsup.core.color.FrameStats
+import app.headsup.core.color.MatchStats
+import app.headsup.core.color.ShotMatch
 import app.headsup.core.color.CubeLut
 import app.headsup.core.color.LutBaker
 import app.headsup.core.fit.FitActivityReader
@@ -134,6 +136,9 @@ data class CineSession(
     val strength: Float = 1f,
 )
 
+/** The frame other clips are matched to: how it looks on screen, and where it is from. */
+data class MatchReference(val clipId: Long, val clipName: String, val stats: MatchStats)
+
 /** A highlight found in the watch data, placed in the clip that shows it. */
 data class FoundHighlight(val highlight: Highlight, val clipId: Long, val clipName: String, val positionMs: Long)
 
@@ -180,6 +185,10 @@ data class UiState(
     val cine: CineSession? = null,
     /** Result of the last highlight search; null until searched. */
     val highlights: List<FoundHighlight>? = null,
+    val matchReference: MatchReference? = null,
+    /** Clip and its corrections before the last shot match, for undo. */
+    val matchUndo: Pair<Long, ColorGrade>? = null,
+    val matching: Boolean = false,
     val bitrateFactor: Float = 1f,
     /** Vectorscope and skin measurement of the last frame tapped in the preview. */
     val scope: ScopeResult? = null,
@@ -651,6 +660,80 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
     private fun updateGroup(id: Long, transform: (ClipGroup) -> ClipGroup) {
         _state.update { s -> s.copy(groups = s.groups.map { if (it.id == id) transform(it) else it }) }
         refreshPreview()
+    }
+
+    // Shot match
+
+    /** Remembers how [frame] of the selected clip looks now (through its colour) as the match reference. */
+    fun setMatchReference(frame: Bitmap) {
+        val s = _state.value
+        val clip = s.selected ?: return frame.recycle()
+        val pixels = pixelsOf(frame)
+        val cube = s.previewCube
+        viewModelScope.launch {
+            val stats = withContext(Dispatchers.Default) {
+                val rgb = FloatArray(pixels.size * 3)
+                val c = FloatArray(3)
+                for (i in pixels.indices) {
+                    val p = pixels[i]
+                    c[0] = ((p shr 16) and 0xFF) / 255f
+                    c[1] = ((p shr 8) and 0xFF) / 255f
+                    c[2] = (p and 0xFF) / 255f
+                    if (cube != null) LutBaker.sampleBaked(cube, c[0], c[1], c[2], c)
+                    rgb[3 * i] = c[0]
+                    rgb[3 * i + 1] = c[1]
+                    rgb[3 * i + 2] = c[2]
+                }
+                MatchStats.of(rgb)
+            }
+            _state.update { it.copy(matchReference = MatchReference(clip.id, clip.meta.name, stats)) }
+        }
+    }
+
+    /**
+     * Changes the selected clip's exposure, contrast, white balance and saturation so [frame]
+     * looks like the reference; solved through the clip's whole colour path (its corrections,
+     * group, global node and LUT), the difference lands in the clip's own corrections.
+     */
+    fun matchToReference(frame: Bitmap) {
+        val s = _state.value
+        val clip = s.selected ?: return frame.recycle()
+        val reference = s.matchReference ?: return frame.recycle()
+        val pixels = pixelsOf(frame)
+        val applied = s.appliedGrade(clip)
+        _state.update { it.copy(matching = true) }
+        viewModelScope.launch {
+            val lut = loadLut(s.lutFor(clip))
+            val matched = withContext(Dispatchers.Default) { ShotMatch.match(pixels, lut, applied, reference.stats) }
+            val index = _state.value.clips.indexOfFirst { it.id == clip.id }
+            _state.update { it.copy(matching = false, matchUndo = clip.id to clip.grade) }
+            if (index < 0) return@launch
+            updateClip(index) { c ->
+                c.copy(
+                    grade = c.grade.copy(
+                        exposure = c.grade.exposure + matched.exposure - applied.exposure,
+                        contrast = (c.grade.contrast + matched.contrast - applied.contrast).coerceIn(-1f, 1f),
+                        temperature = (c.grade.temperature + matched.temperature - applied.temperature).coerceIn(-1f, 1f),
+                        tint = (c.grade.tint + matched.tint - applied.tint).coerceIn(-1f, 1f),
+                        saturation = (c.grade.saturation + matched.saturation - applied.saturation).coerceIn(-1f, 1f),
+                    ),
+                )
+            }
+        }
+    }
+
+    fun undoMatch() {
+        val (clipId, grade) = _state.value.matchUndo ?: return
+        val index = _state.value.clips.indexOfFirst { it.id == clipId }
+        if (index >= 0) updateClip(index) { it.copy(grade = grade) }
+        _state.update { it.copy(matchUndo = null) }
+    }
+
+    private fun pixelsOf(frame: Bitmap): IntArray {
+        val pixels = IntArray(frame.width * frame.height)
+        frame.getPixels(pixels, 0, frame.width, 0, 0, frame.width, frame.height)
+        frame.recycle()
+        return pixels
     }
 
     // Highlights

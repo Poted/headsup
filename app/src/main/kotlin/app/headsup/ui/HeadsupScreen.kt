@@ -899,6 +899,9 @@ internal enum class Adjustment(
     /** Not a ruler value: opens the LUT library (the LUT is applied last, after all corrections). */
     LUT("LUT", "LUT", 0f..1f, 1f, "", { 0f }, { g, _ -> g }),
 
+    /** Not a ruler value: matches the clip's colour to a reference frame from another clip. */
+    MATCH("≈", "Shot match", 0f..1f, 1f, "", { 0f }, { g, _ -> g }),
+
     /** Not a ruler value: how the clip blends in from the previous clip's look. */
     BLEND("⇢", "Blend in", 0f..1f, 1f, "", { 0f }, { g, _ -> g }),
 }
@@ -951,9 +954,10 @@ private fun ColourPage(
     // Blending in from the previous clip is a property of the clip, so it is only on its own tab.
     val options = when (target) {
         GradeTarget.CLIP -> if (index > 0) Adjustment.entries else Adjustment.entries - Adjustment.BLEND
-        GradeTarget.GROUP -> Adjustment.entries - Adjustment.BLEND - Adjustment.CINE
-        GradeTarget.GLOBAL -> Adjustment.entries - Adjustment.LUT - Adjustment.BLEND - Adjustment.CINE
-        GradeTarget.MASK -> Adjustment.entries - Adjustment.LUT - Adjustment.SKIN - Adjustment.VIGNETTE - Adjustment.BLEND - Adjustment.CINE
+        GradeTarget.GROUP -> Adjustment.entries - Adjustment.BLEND - Adjustment.CINE - Adjustment.MATCH
+        GradeTarget.GLOBAL -> Adjustment.entries - Adjustment.LUT - Adjustment.BLEND - Adjustment.CINE - Adjustment.MATCH
+        GradeTarget.MASK -> Adjustment.entries - Adjustment.LUT - Adjustment.SKIN - Adjustment.VIGNETTE - Adjustment.BLEND -
+            Adjustment.CINE - Adjustment.MATCH
     }
     val adjustment = if (adjustment in options) adjustment else Adjustment.EXPOSURE
     // On the Masks tab the ruler edits either a shape control or a correction.
@@ -973,6 +977,7 @@ private fun ColourPage(
                 Adjustment.LUT -> lut != null
                 Adjustment.BLEND -> clip.transitionMs > 0
                 Adjustment.CINE -> state.cine != null
+                Adjustment.MATCH -> state.matchReference?.clipId == clip.id
                 else -> a.get(state.grade) != a.neutral
             }
             CircleOption(a.symbol, a.label, selected = editingShape == null && a == adjustment, modified = modified) {
@@ -994,6 +999,10 @@ private fun ColourPage(
     }
     if (adjustment == Adjustment.CINE) {
         CinePanel(state, vm, frameSource)
+        return
+    }
+    if (adjustment == Adjustment.MATCH) {
+        ShotMatchPanel(state, clip, vm, frameSource)
         return
     }
     if (adjustment == Adjustment.BLEND) {
@@ -1071,6 +1080,41 @@ private fun CinePanel(state: UiState, vm: HeadsupViewModel, frameSource: (() -> 
         SmallAction("Done", { vm.closeCine(undo = false) }, enabled = style != null)
     }
     if (style != null) Hint("Done keeps it as normal corrections: roll-off, split tone, tame colours and the rest stay adjustable.")
+}
+
+/**
+ * Shot match: pick a reference frame in one clip (e.g. the Osmo), then on another clip (drone,
+ * phone) pause on a similar frame and match: exposure, contrast, white balance and saturation are
+ * set so both look alike. The result is ordinary corrections.
+ */
+@Composable
+private fun ShotMatchPanel(state: UiState, clip: ClipState, vm: HeadsupViewModel, frameSource: (() -> Bitmap?)?) {
+    val reference = state.matchReference
+    Hint(
+        when {
+            reference == null -> "1. Pause on a good frame of the clip whose colours you like and set it as the reference."
+            reference.clipId == clip.id -> "Reference set. Now select another clip, pause on a similar frame and match."
+            else -> "Reference: ${reference.clipName}. Pause on a similar frame and match this clip to it."
+        },
+    )
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        OutlinedButton(
+            onClick = { frameSource?.invoke()?.let(vm::setMatchReference) },
+            enabled = frameSource != null,
+            modifier = Modifier.weight(1f),
+        ) { Text(if (reference?.clipId == clip.id) "Reference ✓" else "Set as reference", maxLines = 1) }
+        Button(
+            onClick = { frameSource?.invoke()?.let(vm::matchToReference) },
+            enabled = frameSource != null && reference != null && reference.clipId != clip.id && !state.matching,
+            modifier = Modifier.weight(1f),
+        ) { Text(if (state.matching) "Matching…" else "Match", maxLines = 1) }
+    }
+    if (state.matchUndo?.first == clip.id) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Hint("Matched: exposure, contrast, temperature, tint and saturation changed.", Modifier.weight(1f))
+            SmallAction("Undo", vm::undoMatch)
+        }
+    }
 }
 
 /** Shape controls of a mask, edited with the same ruler as the corrections. */

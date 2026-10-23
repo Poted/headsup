@@ -170,3 +170,11 @@ top speed, sprints (speed gained in 5 s), fastest descent and steepest climb (ve
 activity (median → best = 0 → 1), weighted (speed and descents first), and moments closer than
 20 s merge. A highlight reel is a new project of short clips around the chosen moments, cut
 from the clips that show them with their colour and effects.
+
+## Shot match
+
+A reference frame's on-screen statistics (luminance at 10/50/90 %, mid-tone colour cast in
+Cb/Cr, mean colourfulness) are stored. To match another clip, `ShotMatch` runs samples of its
+paused frame through the clip's whole colour path (corrections, group, global, LUT) and adjusts
+exposure, contrast, temperature, tint and saturation with damped Gauss–Newton steps until the
+statistics agree; the change is added to the clip's own corrections and can be undone.
