@@ -685,26 +685,12 @@ private fun TimelineRate(state: UiState, vm: HeadsupViewModel) {
     RateNotes(state, fps)
 }
 
-/** The export's frame rate: the timeline's unless changed here. */
+/** The export's frame rate, the timeline's (set on the Edit page), and how each clip fits it. */
 @Composable
-private fun ExportRate(state: UiState, vm: HeadsupViewModel) {
-    val timeline = state.effectiveTimelineFps
-    val chosen = state.exportSettings.frameRate
-    val fps = chosen ?: timeline
+private fun ExportRate(state: UiState) {
+    val fps = state.effectiveTimelineFps
     ValueHeader("Frame rate", "${OutputSpec.formatFps(fps)} fps")
-    Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        FilterChip(
-            selected = chosen == null,
-            onClick = { vm.updateExportSettings { it.copy(frameRate = null) } },
-            label = { Text("Timeline (${OutputSpec.formatFps(timeline)})") },
-        )
-        for (f in ExportSettings.FRAME_RATES) {
-            FilterChip(selected = chosen == f, onClick = { vm.updateExportSettings { it.copy(frameRate = f) } }, label = { Text(OutputSpec.formatFps(f)) })
-        }
-    }
-    if (chosen != null && kotlin.math.abs(chosen - timeline) > 0.01f) {
-        Hint("Differs from the timeline's ${OutputSpec.formatFps(timeline)} fps (Edit page).")
-    }
+    Hint("The timeline's, set on the Edit page.")
     RateNotes(state, fps)
 }
 
@@ -2256,7 +2242,7 @@ private fun ExportControls(
         }
         Hint("For HDR screens. Phone galleries and editors show HLG darker than the 8-bit export, less so at higher white levels; while it plays the phone may brighten the screen.")
     }
-    Group { ExportRate(state, vm) }
+    Group { ExportRate(state) }
     Hint(
         when {
                 tenBit && settings.hlg -> "10-bit HLG: HEVC Main10, shown as HDR on HDR screens."

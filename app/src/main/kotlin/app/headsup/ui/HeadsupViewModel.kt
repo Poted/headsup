@@ -1776,7 +1776,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
         val pixels = (w * h) / (srcW.toDouble() * srcH).coerceAtLeast(1.0)
         val bitrate = (sourceRate * pixels * settings.bitrateFactor).toLong().coerceIn(8_000_000L, 200_000_000L).toInt()
         return OutputSpec(
-            OutputSpec.even(w), OutputSpec.even(h), settings.frameRate ?: s.effectiveTimelineFps, settings.codec, bitrate, fileName,
+            OutputSpec.even(w), OutputSpec.even(h), s.effectiveTimelineFps, settings.codec, bitrate, fileName,
             exportsTenBit(s), settings.hlg, settings.hdrWhite,
         )
     }
