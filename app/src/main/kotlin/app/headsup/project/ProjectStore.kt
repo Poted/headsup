@@ -31,6 +31,8 @@ data class SavedClip(
     val reframe: Reframe = Reframe(),
     val speed: Float = 1f,
     val muteChangedSpeed: Boolean = false,
+    val fadeInMs: Long = 0L,
+    val fadeOutMs: Long = 0L,
 )
 
 data class SavedGroup(val id: Long, val name: String, val grade: ColorGrade, val lutName: String?)
@@ -117,7 +119,11 @@ internal object Json {
         .putOpt("timelineFps", p.timelineFps)
         .putOpt(
             "music",
-            p.music?.let { JSONObject().put("uri", it.uri.toString()).put("name", it.name).put("volume", it.volume).put("originalVolume", it.originalVolume) },
+            p.music?.let {
+                JSONObject().put("uri", it.uri.toString()).put("name", it.name).put("volume", it.volume).put("originalVolume", it.originalVolume)
+                    .put("durationMs", it.durationMs).put("startOnTimelineMs", it.startOnTimelineMs).put("songStartMs", it.songStartMs)
+                    .put("loop", it.loop).put("fadeInMs", it.fadeInMs).put("fadeOutMs", it.fadeOutMs)
+            },
         )
 
     fun project(o: JSONObject) = ProjectData(
@@ -133,6 +139,12 @@ internal object Json {
                 it.optString("name", "Music"),
                 it.optDouble("volume", 0.8).toFloat(),
                 it.optDouble("originalVolume", 0.4).toFloat(),
+                durationMs = it.optLong("durationMs", 0L),
+                startOnTimelineMs = it.optLong("startOnTimelineMs", 0L),
+                songStartMs = it.optLong("songStartMs", 0L),
+                loop = it.optBoolean("loop", true),
+                fadeInMs = it.optLong("fadeInMs", 0L),
+                fadeOutMs = it.optLong("fadeOutMs", 0L),
             )
         },
     )
@@ -152,6 +164,8 @@ internal object Json {
         .put("transitionMs", c.transitionMs)
         .put("speed", c.speed)
         .put("muteChangedSpeed", c.muteChangedSpeed)
+        .put("fadeInMs", c.fadeInMs)
+        .put("fadeOutMs", c.fadeOutMs)
         .put("reframe", JSONObject().put("zoom", c.reframe.zoom).put("centerX", c.reframe.centerX).put("centerY", c.reframe.centerY).put("angleDegrees", c.reframe.angleDegrees))
 
     private fun clip(o: JSONObject) = SavedClip(
@@ -170,6 +184,8 @@ internal object Json {
         transitionMs = o.optLong("transitionMs", 0L),
         speed = o.optDouble("speed", 1.0).toFloat(),
         muteChangedSpeed = o.optBoolean("muteChangedSpeed", false),
+        fadeInMs = o.optLong("fadeInMs", 0L),
+        fadeOutMs = o.optLong("fadeOutMs", 0L),
         reframe = o.optJSONObject("reframe")?.let { r ->
             Reframe(
                 zoom = r.optDouble("zoom", 1.0).toFloat(),

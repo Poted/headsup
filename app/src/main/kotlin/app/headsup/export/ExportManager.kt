@@ -193,7 +193,8 @@ class ExportManager(private val context: Context) {
             // The HDR route always needs it: it undoes Media3's HLG conversion before the colour.
             effects += GradeEffect(
                 grade?.cube ?: LutBaker.bake(null, ColorGrade()), grade?.masks.orEmpty(), grade?.maskCubes.orEmpty(),
-                grade?.fromCube, grade?.transitionMs ?: 0L, hdrInput = hdr,
+                grade?.fromCube, grade?.transitionMs ?: 0L,
+                hdrInput = if (hdr) HdrRoute.inputOf(request.sourceFormat?.transfer, request.sourceFormat?.primaries) else null,
             )
         } else {
             grade?.cube?.let { effects += SingleColorLut.createFromCube(it) }
@@ -212,6 +213,10 @@ class ExportManager(private val context: Context) {
             effects += OverlayEffect(ImmutableList.of<TextureOverlay>(overlay))
         }
         val speed = request.speed
+        val timelineMs = if (request.isPhoto) request.durationMs else (request.durationMs / speed).toLong()
+        if (request.fadeInMs > 0 || request.fadeOutMs > 0) {
+            effects += FadeEffect(timelineMs, request.fadeInMs, request.fadeOutMs, if (request.isPhoto) 1f else speed)
+        }
         if (speed != 1f) effects += SpeedChangeEffect(speed)
         // Fewer frames when the clip (after the speed change) has more than the timeline.
         out.frameRate?.let { target ->
@@ -222,6 +227,8 @@ class ExportManager(private val context: Context) {
             if (speed != 1f && !request.muteChangedSpeed) add(SpeedChangingAudioProcessor(ConstantSpeed(speed)))
             // Under a music track the clips' own sound is lowered.
             if (soundGain != 1f) add(AudioMix.gain(soundGain))
+            // After the speed change, so the sound fades in timeline time like the picture.
+            if (request.fadeInMs > 0 || request.fadeOutMs > 0) add(FadeAudioProcessor(timelineMs * 1000L, request.fadeInMs * 1000L, request.fadeOutMs * 1000L))
         }
 
         if (request.isPhoto) {
@@ -256,13 +263,34 @@ class ExportManager(private val context: Context) {
         val composition = if (music == null) {
             Composition.Builder(video).build()
         } else {
-            // Music loops if shorter than the timeline, is cut where it ends, and fades in and out.
-            val totalUs = spec.parts.sumOf { if (it.isPhoto) it.durationMs else (it.durationMs / it.speed).toLong() } * 1000L
-            val track = EditedMediaItem.Builder(MediaItem.fromUri(music.uri))
-                .setRemoveVideo(true)
-                .setEffects(Effects(listOf(AudioMix.gain(music.volume), FadeAudioProcessor(totalUs, 500_000L, 2_000_000L)), emptyList()))
-                .build()
-            Composition.Builder(video, EditedMediaItemSequence.Builder(track).setIsLooping(true).build()).build()
+            // Music where it was placed: song pieces back to back (repeats if looped), cut where the
+            // timeline ends; fades only where they were asked for.
+            val totalMs = spec.parts.sumOf { if (it.isPhoto) it.durationMs else (it.durationMs / it.speed).toLong() }
+            val endMs = if (test) minOf(totalMs, TEST_LENGTH_MS) else totalMs
+            val placement = music.placement
+            val segments = placement.segments(endMs)
+            val musicEndMs = placement.endMs(endMs)
+            val track = EditedMediaItemSequence.Builder(emptyList<EditedMediaItem>()).experimentalSetForceAudioTrack(true)
+            segments.firstOrNull()?.let { if (it.timelineStartMs > 0) track.addGap(it.timelineStartMs * 1000L) }
+            segments.forEachIndexed { i, seg ->
+                val fadeIn = if (i == 0) placement.fadeInMs else 0L
+                // Time from this piece's start to where the music stops; the fade-out may begin in an earlier piece.
+                val untilEndMs = musicEndMs - seg.timelineStartMs
+                val fadesOut = placement.fadeOutMs > 0 && untilEndMs - seg.lengthMs < placement.fadeOutMs
+                val item = MediaItem.Builder()
+                    .setUri(music.uri)
+                    .setClippingConfiguration(
+                        MediaItem.ClippingConfiguration.Builder().setStartPositionMs(seg.songFromMs).setEndPositionMs(seg.songToMs).build(),
+                    )
+                    .build()
+                val audio = buildList<AudioProcessor> {
+                    add(AudioMix.gain(music.volume))
+                    if (fadeIn > 0 || fadesOut) add(FadeAudioProcessor(untilEndMs * 1000L, fadeIn * 1000L, placement.fadeOutMs * 1000L))
+                }
+                track.addItem(EditedMediaItem.Builder(item).setRemoveVideo(true).setEffects(Effects(audio, emptyList())).build())
+            }
+            if (segments.isEmpty()) Composition.Builder(video).build()
+            else Composition.Builder(video, track.build()).build()
         }
 
         val encoderFactory = DefaultEncoderFactory.Builder(context)

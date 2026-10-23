@@ -8,10 +8,11 @@ import androidx.media3.common.audio.BaseAudioProcessor
 import androidx.media3.common.audio.ChannelMixingAudioProcessor
 import androidx.media3.common.audio.ChannelMixingMatrix
 import androidx.media3.common.util.UnstableApi
+import app.headsup.core.edit.MusicPlacement
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 
-/** A music track under the whole timeline, mixed with the clips' own sound. */
+/** A music track on the timeline, mixed with the clips' own sound; timing in [placement]. */
 data class MusicTrack(
     val uri: Uri,
     val name: String,
@@ -19,7 +20,16 @@ data class MusicTrack(
     val volume: Float = 0.8f,
     /** Level of the clips' own sound under the music, 0..1. */
     val originalVolume: Float = 0.4f,
-)
+    /** The song's length (0 = not known yet). */
+    val durationMs: Long = 0L,
+    val startOnTimelineMs: Long = 0L,
+    val songStartMs: Long = 0L,
+    val loop: Boolean = true,
+    val fadeInMs: Long = 0L,
+    val fadeOutMs: Long = 0L,
+) {
+    val placement: MusicPlacement get() = MusicPlacement(durationMs, startOnTimelineMs, songStartMs, loop, fadeInMs, fadeOutMs)
+}
 
 @OptIn(UnstableApi::class)
 object AudioMix {
@@ -30,8 +40,8 @@ object AudioMix {
 }
 
 /**
- * Fades 16-bit PCM in over [fadeInUs] and out over the last [fadeOutUs] of [totalUs], e.g. music
- * that would otherwise stop abruptly where the timeline ends.
+ * Fades 16-bit PCM in over [fadeInUs] and out over the last [fadeOutUs] of [totalUs], where the
+ * user asked for a fade (music, or a clip fading in or out).
  */
 @OptIn(UnstableApi::class)
 class FadeAudioProcessor(private val totalUs: Long, private val fadeInUs: Long, private val fadeOutUs: Long) : BaseAudioProcessor() {

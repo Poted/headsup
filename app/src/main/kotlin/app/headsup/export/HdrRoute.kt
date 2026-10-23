@@ -98,7 +98,16 @@ object HdrRoute {
             }
     }
 
-    /** Asset loading that reads every video track as HLG/BT.2020. */
+    val IDENTITY = floatArrayOf(1f, 0f, 0f, 0f, 1f, 0f, 0f, 0f, 1f)
+
+    /** How a clip enters the route, from its own colour tags. */
+    fun inputOf(transfer: String?, primaries: String?): HdrInput = when {
+        transfer == "HLG" -> HdrInput.HLG
+        primaries == "BT.2020" -> HdrInput.RELABELLED_BT2020
+        else -> HdrInput.RELABELLED_BT709
+    }
+
+    /** Asset loading that reads every SDR/log video track as HLG/BT.2020 (HLG stays as it is). */
     fun assetLoaderFactory(context: Context): AssetLoader.Factory {
         val extractors = ExtractorsFactory { DefaultExtractorsFactory().createExtractors().map { HlgLabelling(it) }.toTypedArray() }
         return DefaultAssetLoaderFactory(
@@ -128,7 +137,7 @@ object HdrRoute {
 
     private class LabellingTrack(private val inner: TrackOutput) : TrackOutput {
         override fun format(format: Format) {
-            if (!MimeTypes.isVideo(format.sampleMimeType)) return inner.format(format)
+            if (!MimeTypes.isVideo(format.sampleMimeType) || format.colorInfo?.colorTransfer == C.COLOR_TRANSFER_HLG) return inner.format(format)
             val color = ColorInfo.Builder()
                 .setColorSpace(C.COLOR_SPACE_BT2020)
                 .setColorRange(format.colorInfo?.colorRange?.takeIf { it != Format.NO_VALUE } ?: C.COLOR_RANGE_LIMITED)
@@ -144,6 +153,12 @@ object HdrRoute {
         override fun durationUs(durationUs: Long) = inner.durationUs(durationUs)
     }
 }
+
+/**
+ * What a clip is on the HDR route: SDR or log footage labelled HLG (its Y'CbCr matrix BT.709, or
+ * BT.2020 as in Samsung Log), or real HLG, which is brought to SDR white with a highlight roll-off.
+ */
+enum class HdrInput { RELABELLED_BT709, RELABELLED_BT2020, HLG }
 
 /** The finished SDR picture (display BT.709) as linear BT.2020 light for an HLG signal, SDR white at 75 % HLG. */
 @OptIn(UnstableApi::class)

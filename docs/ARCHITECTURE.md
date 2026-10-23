@@ -234,3 +234,13 @@ the "Clip sound" level (`ChannelMixingAudioProcessor`); the music fades in over 
 over the last 2 s (`FadeAudioProcessor`; when the track is shorter and loops, each loop fades
 in again). The preview plays it with a second player, started at the timeline position of the
 playhead whenever playback starts. Per-clip export has no music.
+
+## Sound and fades
+
+Music is placed on the timeline (`core/edit/MusicPlacement`): a start on the timeline, a start in
+the song, repeat or stop at the song's end, and fades only where set. The export lays the song out
+as pieces in a second Media3 sequence (a gap first when it starts later), cut where the timeline
+ends; the preview's music player follows the same placement. Clips can fade in from and out to
+black (`Fade`): `FadeEffect` on the picture (dashboard included) and `FadeAudioProcessor` on the
+sound, both in timeline time. Pages: Files (media, FIT, music file), Audio (music placement,
+fades, levels), Colour, Effects (incl. clip fades), Frame, Moments (highlights), Export.

@@ -29,8 +29,8 @@ class GradeEffect(
     private val maskTables: List<Array<Array<IntArray>>>,
     private val from: Array<Array<IntArray>>?,
     private val transitionMs: Long,
-    /** Input arrives through [HdrRoute] (relabelled HLG): undo Media3's conversion first. */
-    private val hdrInput: Boolean = false,
+    /** Input arrives through [HdrRoute]: how to get back to the values the colour tables expect. */
+    private val hdrInput: HdrInput? = null,
 ) : GlEffect {
     override fun toGlShaderProgram(context: Context, useHdr: Boolean): GlShaderProgram = Program(useHdr)
 
@@ -91,8 +91,9 @@ class GradeEffect(
                 }
                 val fromWeight = if (from != null) ColourTransition.fromWeight(positionMs, transitionMs) else 0f
                 program.setFloatUniform("uFromWeight", fromWeight)
-                program.setIntUniform("uHdrIn", if (hdrInput) 1 else 0)
-                program.setFloatsUniform("uHlgFix", HdrRoute.HLG_FIX)
+                program.setIntUniform("uHdrIn", if (hdrInput == HdrInput.HLG) 2 else if (hdrInput != null) 1 else 0)
+                program.setFloatsUniform("uHlgFix", if (hdrInput == HdrInput.RELABELLED_BT709) HdrRoute.HLG_FIX else HdrRoute.IDENTITY)
+                program.setFloatUniform("uSdrWhite", HdrRoute.SDR_WHITE)
                 program.bindAttributesAndUniforms()
                 GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4)
             } catch (e: GlUtil.GlException) {
@@ -135,6 +136,11 @@ class GradeEffect(
             uniform float uFromWeight;
             uniform int uHdrIn;
             uniform mat3 uHlgFix;
+            uniform float uSdrWhite;
+            const mat3 BT2020_TO_BT709 = mat3(
+                1.6605, -0.1246, -0.0182,
+                -0.5876, 1.1329, -0.1006,
+                -0.0728, -0.0083, 1.1187);
             varying vec2 vTexSamplingCoord;
 
             vec3 cell(sampler2D t, float r, float g, float b) {
@@ -183,8 +189,15 @@ class GradeEffect(
                 vec4 src = texture2D(uTexSampler, vTexSamplingCoord);
                 vec3 srcRgb = src.rgb;
                 if (uHdrIn == 1) {
+                    // Relabelled SDR/log: back to the file's own code values.
                     vec3 lin = max(src.rgb, 0.0);
                     srcRgb = clamp(uHlgFix * vec3(hlgOetf(lin.r), hlgOetf(lin.g), hlgOetf(lin.b)), 0.0, 1.0);
+                } else if (uHdrIn == 2) {
+                    // Real HLG: SDR white (75 % HLG) to 1.0, BT.709, highlights rolled off, display gamma.
+                    vec3 x = max(BT2020_TO_BT709 * (src.rgb / uSdrWhite), 0.0);
+                    vec3 knee = vec3(0.7);
+                    vec3 rolled = mix(x, knee + 0.3 * (1.0 - exp(-(x - knee) / 0.3)), step(knee, x));
+                    srcRgb = pow(clamp(rolled, 0.0, 1.0), vec3(1.0 / 2.4));
                 }
                 vec2 px = vec2(vTexSamplingCoord.x, 1.0 - vTexSamplingCoord.y) * uSize;
                 vec3 c = grade(uLut, srcRgb);

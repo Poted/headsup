@@ -172,6 +172,23 @@ object HeadsupIcons {
         }
     }
 
+    /** Note: music and sound. */
+    val Music = icon("music") {
+        stroke {
+            moveTo(9f, 18f); lineTo(9f, 5f); lineTo(19f, 3f); lineTo(19f, 16f)
+            moveTo(9f, 18f); arcTo(2.5f, 2.5f, 0f, true, true, 4f, 18f); arcTo(2.5f, 2.5f, 0f, true, true, 9f, 18f)
+            moveTo(19f, 16f); arcTo(2.5f, 2.5f, 0f, true, true, 14f, 16f); arcTo(2.5f, 2.5f, 0f, true, true, 19f, 16f)
+        }
+    }
+
+    /** Star: the best moments. */
+    val Star = icon("star") {
+        stroke {
+            moveTo(12f, 3.5f); lineTo(14.6f, 9f); lineTo(20.5f, 9.6f); lineTo(16f, 13.6f); lineTo(17.3f, 19.5f)
+            lineTo(12f, 16.5f); lineTo(6.7f, 19.5f); lineTo(8f, 13.6f); lineTo(3.5f, 9.6f); lineTo(9.4f, 9f); close()
+        }
+    }
+
     /** Watch: activity files. */
     val Watch = icon("watch") {
         stroke {

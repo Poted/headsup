@@ -111,6 +111,9 @@ data class ClipState(
     val speed: Float = 1f,
     /** Silence the sound while the speed is changed; otherwise it is stretched, keeping its pitch. */
     val muteChangedSpeed: Boolean = false,
+    /** Fade from black at the start and to black at the end (picture and sound), timeline time. */
+    val fadeInMs: Long = 0L,
+    val fadeOutMs: Long = 0L,
 ) {
     val look: ClipLook get() = ClipLook(grade, effects, lutName, masks)
 
@@ -447,6 +450,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
             SavedClip(
                 it.meta.uri, it.trimStartMs, it.trimEndMs, it.manualOffsetMs, it.colorGrade, it.lutName,
                 it.manualStart, it.grade, it.effects, it.masks, it.groupId, it.transitionMs, it.reframe, it.speed, it.muteChangedSpeed,
+                it.fadeInMs, it.fadeOutMs,
             )
         },
         groups = groups.map { SavedGroup(it.id, it.name, it.grade, it.lutName) },
@@ -502,6 +506,8 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                     reframe = c.reframe,
                     speed = c.speed,
                     muteChangedSpeed = c.muteChangedSpeed,
+                    fadeInMs = c.fadeInMs,
+                    fadeOutMs = c.fadeOutMs,
                     groupId = c.groupId,
                 )
             }
@@ -536,6 +542,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                 )
             }
             projectStore.lastProject = project.name
+            measureMusicIfNeeded()
             refreshPreview()
         }
     }
@@ -684,15 +691,38 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                     }
                 }
             }.onFailure { if (it is kotlinx.coroutines.CancellationException) throw it }.getOrNull()
+            val songMs = local?.let { durationOf(it) } ?: 0L
             _state.update { s ->
                 s.copy(
-                    music = local?.let { MusicTrack(it, name, s.music?.volume ?: 0.8f, s.music?.originalVolume ?: 0.4f) } ?: s.music,
+                    music = local?.let { MusicTrack(it, name, s.music?.volume ?: 0.8f, s.music?.originalVolume ?: 0.4f, durationMs = songMs) } ?: s.music,
                     busy = false,
                     loadingMessage = null,
                     loadingProgress = null,
                     messages = if (local == null) s.messages + "Could not add $name" else s.messages,
                 )
             }
+        }
+    }
+
+    private suspend fun durationOf(uri: Uri): Long = withContext(Dispatchers.IO) {
+        runCatching {
+            val r = android.media.MediaMetadataRetriever()
+            try {
+                r.setDataSource(getApplication<Application>(), uri)
+                r.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull() ?: 0L
+            } finally {
+                r.release()
+            }
+        }.getOrDefault(0L)
+    }
+
+    /** Projects saved before the song's length was stored get it measured once. */
+    private fun measureMusicIfNeeded() {
+        val music = _state.value.music ?: return
+        if (music.durationMs > 0) return
+        viewModelScope.launch {
+            val d = durationOf(music.uri)
+            if (d > 0) _state.update { s -> s.copy(music = s.music?.takeIf { it.uri == music.uri }?.copy(durationMs = d) ?: s.music) }
         }
     }
 
@@ -1321,6 +1351,12 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
 
     fun setMuteChangedSpeed(index: Int, mute: Boolean) = updateClip(index) { it.copy(muteChangedSpeed = mute) }
 
+    /** Fades, kept within the clip's length on the timeline. */
+    fun setFades(index: Int, fadeInMs: Long, fadeOutMs: Long) = updateClip(index) {
+        val max = it.timelineDurationMs
+        it.copy(fadeInMs = fadeInMs.coerceIn(0L, max), fadeOutMs = fadeOutMs.coerceIn(0L, max))
+    }
+
     fun exportVideos() = enqueue(ExportKind.VIDEO, state.value.clips.indices.toList())
 
     fun exportOverlays() = enqueue(ExportKind.PNG_SEQUENCE, state.value.clips.indices.toList())
@@ -1329,7 +1365,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
     fun tenBitBlocker(s: UiState = state.value): String? = when {
         !HdrRoute.deviceSupported -> "This phone's encoder can't do 10-bit HDR editing."
         s.clips.any { it.meta.isPhoto } -> "Photos can't go into a 10-bit export yet."
-        s.clips.any { it.meta.format?.isHdr == true } -> "Clips already in HDR (HLG/PQ) aren't supported yet."
+        s.clips.any { it.meta.format?.transfer == "PQ" } -> "HDR10/HDR10+ (PQ) clips aren't supported yet; HLG and log are."
         else -> null
     }
 
@@ -1377,6 +1413,8 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                     speed = clip.speed,
                     isPhoto = clip.meta.isPhoto,
                     muteChangedSpeed = clip.muteChangedSpeed,
+                    fadeInMs = clip.fadeInMs,
+                    fadeOutMs = clip.fadeOutMs,
                 )
             }
             if (requests.isEmpty()) {

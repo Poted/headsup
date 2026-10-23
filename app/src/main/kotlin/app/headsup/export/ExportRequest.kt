@@ -58,6 +58,9 @@ data class ExportRequest(
     val speed: Float = 1f,
     /** Silence the sound when the speed is changed (otherwise it is stretched, keeping its pitch). */
     val muteChangedSpeed: Boolean = false,
+    /** Fades from and to black (picture and sound), in timeline time. */
+    val fadeInMs: Long = 0L,
+    val fadeOutMs: Long = 0L,
     /** A still photo shown for [durationMs]; its dashboard stays at the moment it was taken. */
     val isPhoto: Boolean = false,
 ) {

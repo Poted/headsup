@@ -30,7 +30,11 @@ fed 8-bit frames. The baked colour table (`SingleColorLut`, ARGB_8888) is 8-bit 
 - `HdrOutputEffect` maps the finished SDR picture (BT.1886, BT.709) into linear BT.2020 light with
   SDR white at 75 % HLG (BT.2408); the dashboard goes in after it as a "text" overlay with the
   same luminance multiplier (`HdrOverlay`).
-- Not covered: photos, clips already in HLG/PQ. The result looks like the SDR export on SDR
+- Inputs (`HdrInput`): SDR/log with the BT.709 matrix; log with the BT.2020 matrix (Samsung Log:
+  10-bit, BT.2020, transfer untagged), where only the HLG curve is undone; real HLG (Samsung
+  HDR video), which is brought to SDR white with a highlight roll-off above it, graded, and
+  written back at 75 % HLG, so its brightest highlights are compressed like in the preview.
+- Not covered: photos, PQ (HDR10/HDR10+) clips. The result looks like the SDR export on SDR
   screens and is shown as HDR on HDR screens, like DJI Mimo's 10-bit files.
 
 If this route fails on devices, the own pipeline below remains the plan.
