@@ -22,7 +22,7 @@ object TrackingFrames {
         fromMs: Long,
         toMs: Long,
         stepMs: Long,
-        longSide: Int = 320,
+        longSide: Int = 400,
         onProgress: (Float) -> Unit = {},
     ): List<Pair<Long, GrayFrame>> {
         val extractor = MediaExtractor()

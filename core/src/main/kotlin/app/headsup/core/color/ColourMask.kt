@@ -110,6 +110,43 @@ data class MaskKey(
         fun upsert(keys: List<MaskKey>, key: MaskKey): List<MaskKey> =
             (keys.filter { kotlin.math.abs(it.timeMs - key.timeMs) > SAME_MS } + key).sortedBy { it.timeMs }
 
+        /**
+         * Drops keys the others already describe: a key stays only where leaving it out would move
+         * the mask more than [tolerance] (of the frame; angle in degrees × 0.01) from its path
+         * (Douglas–Peucker). A dense track becomes a few keys that are easy to adjust.
+         */
+        fun simplify(keys: List<MaskKey>, tolerance: Float = 0.004f): List<MaskKey> {
+            if (keys.size <= 2) return keys
+            val keep = BooleanArray(keys.size)
+            keep[0] = true
+            keep[keys.lastIndex] = true
+            fun error(k: MaskKey, a: MaskKey, b: MaskKey): Float {
+                val i = interpolate(listOf(a, b), k.timeMs)
+                return maxOf(
+                    kotlin.math.abs(i.centerX - k.centerX), kotlin.math.abs(i.centerY - k.centerY),
+                    kotlin.math.abs(i.angleDegrees - k.angleDegrees) * 0.01f,
+                    kotlin.math.abs(i.sizeX - k.sizeX), kotlin.math.abs(i.sizeY - k.sizeY),
+                )
+            }
+            val stack = ArrayDeque(listOf(0 to keys.lastIndex))
+            while (stack.isNotEmpty()) {
+                val (a, b) = stack.removeLast()
+                if (b - a < 2) continue
+                var worst = -1
+                var worstError = tolerance
+                for (i in a + 1 until b) {
+                    val e = error(keys[i], keys[a], keys[b])
+                    if (e > worstError) { worstError = e; worst = i }
+                }
+                if (worst >= 0) {
+                    keep[worst] = true
+                    stack += a to worst
+                    stack += worst to b
+                }
+            }
+            return keys.filterIndexed { i, _ -> keep[i] }
+        }
+
         /** Linear between the neighbouring keys (sorted by time); the first or last outside them. */
         fun interpolate(keys: List<MaskKey>, timeMs: Long): MaskKey {
             if (timeMs <= keys.first().timeMs) return keys.first()

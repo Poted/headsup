@@ -1331,12 +1331,11 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
     /** A key at the playhead with the mask where it is now; the first one makes the mask move. */
     fun addMaskKey() = editSelectedMask { m -> m.copy(keys = MaskKey.upsert(m.keys, MaskKey.of(m.at(playheadFileMs), playheadFileMs))) }
 
-    /** Removes the key nearest the playhead (within a few frames); the last one leaves the mask where it was. */
-    fun removeMaskKey() = editSelectedMask { m ->
-        val near = m.keys.minByOrNull { kotlin.math.abs(it.timeMs - playheadFileMs) }?.takeIf { kotlin.math.abs(it.timeMs - playheadFileMs) <= 150 }
-            ?: return@editSelectedMask m
-        val rest = m.keys - near
-        if (rest.isEmpty()) m.at(playheadFileMs).copy(keys = emptyList()) else m.copy(keys = rest)
+    /** Removes the key at [timeMs] (file time); the last one leaves the mask where it was. */
+    fun removeMaskKey(timeMs: Long) = editSelectedMask { m ->
+        val key = m.keys.firstOrNull { it.timeMs == timeMs } ?: return@editSelectedMask m
+        val rest = m.keys - key
+        if (rest.isEmpty()) m.at(timeMs).copy(keys = emptyList()) else m.copy(keys = rest)
     }
 
     /** Stops the mask moving; it stays where it is at the playhead. */
@@ -1381,7 +1380,8 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                     val (ahead, lostAhead) = follow(first + 1 until frames.size)
                     _state.update { it.copy(loadingProgress = 0.85f) }
                     val (behind, lostBehind) = follow(first - 1 downTo 0)
-                    Triple(behind.reversed() + MaskKey.of(start, frames[first].first) + ahead, lostAhead, lostBehind)
+                    // Only the keys the path needs, so they can be adjusted one by one.
+                    Triple(MaskKey.simplify(behind.reversed() + MaskKey.of(start, frames[first].first) + ahead), lostAhead, lostBehind)
                 }
                 if (result == null) {
                     _state.update { it.copy(messages = it.messages + "Could not read the clip's frames for tracking.") }

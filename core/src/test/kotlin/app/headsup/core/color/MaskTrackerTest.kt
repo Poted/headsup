@@ -63,4 +63,13 @@ class MaskTrackerTest {
         assertEquals(0.3f, m.centerX, 1e-4f)
         assertEquals(2.5f, m.angleDegrees, 1e-4f)
     }
+
+    @Test
+    fun `a steady track simplifies to its ends, a turn keeps its corner`() {
+        val straight = (0..20).map { MaskKey(it * 100L, 0.2f + it * 0.01f, 0.5f, 0f, 0.5f, 0.6f) }
+        assertEquals(2, MaskKey.simplify(straight).size)
+        val corner = (0..20).map { MaskKey(it * 100L, if (it <= 10) 0.2f + it * 0.02f else 0.4f, 0.5f, 0f, 0.5f, 0.6f) }
+        val kept = MaskKey.simplify(corner)
+        assertEquals(listOf(0L, 1000L, 2000L), kept.map { it.timeMs })
+    }
 }

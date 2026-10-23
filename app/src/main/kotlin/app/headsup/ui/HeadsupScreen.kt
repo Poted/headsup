@@ -325,7 +325,10 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
                             }
                         },
                     )
-                    Tool.COLOUR -> ColourPage(state, vm, adjustment, { adjustment = it }, onAddLut = { lutPicker.launch(arrayOf("*/*")) }, frameSource.value)
+                    Tool.COLOUR -> ColourPage(
+                        state, vm, adjustment, { adjustment = it }, onAddLut = { lutPicker.launch(arrayOf("*/*")) }, frameSource.value,
+                        playhead, onSeek = { seekRequest = it },
+                    )
                     Tool.EFFECTS -> EffectsPanel(state, vm, effectKind, playhead) { effectKind = it }
                     Tool.EXPORT -> ExportControls(
                         state = state,
@@ -1267,6 +1270,8 @@ private fun ColourPage(
     onAdjustment: (Adjustment) -> Unit,
     onAddLut: () -> Unit,
     frameSource: (() -> Bitmap?)?,
+    playhead: LongState,
+    onSeek: (clipMs: Long) -> Unit,
 ) {
     val index = state.selectedClip
     val clip = state.selected
@@ -1285,7 +1290,7 @@ private fun ColourPage(
             Switch(checked = clip.colorGrade, onCheckedChange = { vm.setClipGrade(index, it) })
         }
         GradeTarget.GROUP -> GroupControls(state, clip, index, group, vm)
-        GradeTarget.MASK -> MaskList(state, clip, vm)
+        GradeTarget.MASK -> MaskList(state, clip, vm, playhead, onSeek)
         GradeTarget.GLOBAL -> Row(verticalAlignment = Alignment.CenterVertically) {
             Hint("Added on top of every clip's own corrections.", Modifier.weight(1f))
             if (state.grade != ColorGrade()) SmallAction("Reset", { vm.updateGrade { ColorGrade() } })
@@ -1540,7 +1545,7 @@ private enum class MaskShape(
 
 /** The selected clip's masks: pick one to edit, add a line or an oval, invert or remove. */
 @Composable
-private fun MaskList(state: UiState, clip: ClipState, vm: HeadsupViewModel) {
+private fun MaskList(state: UiState, clip: ClipState, vm: HeadsupViewModel, playhead: LongState, onSeek: (Long) -> Unit) {
     if (clip.masks.isEmpty()) Hint("Windows with their own corrections: a line for the sky, an oval for a face. Drag on the picture to move one.")
     FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         clip.masks.forEachIndexed { i, m ->
@@ -1565,21 +1570,28 @@ private fun MaskList(state: UiState, clip: ClipState, vm: HeadsupViewModel) {
     // Following movement in the shot: keys at moments of the clip, or tracked automatically.
     Row(verticalAlignment = Alignment.CenterVertically) {
         Text(
-            if (mask.keys.isEmpty()) "Stays put" else "Moves · ${mask.keys.size} keys",
+            if (mask.keys.isEmpty()) "Stays put" else "Moves with the shot",
             Modifier.weight(1f),
             style = MaterialTheme.typography.labelMedium,
             color = HeadsupColors.TextMuted,
         )
         if (!clip.meta.isPhoto) SmallAction("Track", vm::trackMask, enabled = !state.busy)
-        SmallAction("+ Key", vm::addMaskKey)
-        if (mask.keys.isNotEmpty()) {
-            SmallAction("− Key", vm::removeMaskKey)
-            SmallAction("Clear", vm::clearMaskKeys)
-        }
+    }
+    if (!clip.meta.isPhoto) {
+        MaskKeyStrip(
+            keys = mask.keys,
+            cutStartMs = clip.trimStartMs,
+            cutEndMs = clip.trimEndMs,
+            playhead = playhead,
+            onSeek = onSeek,
+            onAdd = vm::addMaskKey,
+            onDelete = vm::removeMaskKey,
+            onClear = vm::clearMaskKeys,
+        )
     }
     Hint(
-        if (mask.keys.isEmpty()) "To follow movement: place the mask, then Track (it follows the picture both ways from here), or add keys at a few moments and move it there."
-        else "Moving the mask sets a key at the playhead; between keys it glides. Where tracking was lost, place it by hand and Track again from there.",
+        if (mask.keys.isEmpty()) "To follow movement: place the mask, then Track (it follows the picture both ways from here), or pause, + Key, and move the mask at a few moments."
+        else "Pause on a key (or tap its diamond) and move the mask to change it; between keys it glides. Where tracking was lost, place it by hand and Track again from there.",
     )
 }
 

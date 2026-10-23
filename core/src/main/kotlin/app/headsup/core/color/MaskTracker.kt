@@ -18,7 +18,7 @@ class GrayFrame(val width: Int, val height: Int, val pixels: FloatArray) {
  * scales it. Tracking stops where a patch can no longer be found with confidence.
  */
 class MaskTracker(start: ColourMask, first: GrayFrame, private val startMs: Long) {
-    private val radius = (first.height / 24).coerceAtLeast(6)
+    private val radius = (first.height / 20).coerceAtLeast(6)
     private val search = radius * 2
     private val base = start
     private val p1: Point
