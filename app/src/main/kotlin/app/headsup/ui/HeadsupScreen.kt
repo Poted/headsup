@@ -1929,7 +1929,9 @@ private fun ExportControls(
                 tenBit -> "10-bit: HEVC Main10 Rec.709 like DJI Mimo's 10-bit export; looks like 8-bit, smoother gradients, more room for later grading."
                 settings.codec == VideoCodec.HEVC -> "HEVC: smaller files."
                 else -> "H.264: plays everywhere, larger files."
-            } + (tenBitBlocker?.let { " 10-bit: $it" } ?: ""),
+            } + (tenBitBlocker?.let { " 10-bit: $it" } ?: "") +
+            (if (!tenBit && tenBitBlocker == null && state.clips.any { it.meta.format?.tenBit == true }) " Your clips are 10-bit: the 10-bit export keeps that." else "") +
+            (if (!tenBit && tenBitBlocker == null && state.clips.any { it.meta.format?.transfer == "HLG" }) " HDR (HLG) clips are always exported in 10-bit." else ""),
     )
     Button(onClick = onExportVideos, enabled = state.clips.isNotEmpty(), modifier = Modifier.fillMaxWidth()) {
         Text(if (settings.wholeTimeline) "Export timeline" else "Export ${state.clips.size} clips")

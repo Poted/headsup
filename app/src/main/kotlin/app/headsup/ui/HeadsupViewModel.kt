@@ -1443,7 +1443,10 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
     private fun jobsFor(kind: ExportKind, requests: List<ExportRequest>, s: UiState): List<JobSpec> {
         val settings = s.exportSettings
         val fps = s.effectiveTimelineFps
-        val tenBit = (kind == ExportKind.TEN_BIT_TEST || settings.tenBit) && tenBitBlocker(s) == null
+        // HLG clips always take the 10-bit route: it is where they are brought to SDR like the rest
+        // (Media3's 8-bit path would keep them HDR).
+        val hasHlg = requests.any { it.sourceFormat?.transfer == "HLG" }
+        val tenBit = (kind == ExportKind.TEN_BIT_TEST || settings.tenBit || hasHlg) && tenBitBlocker(s) == null
         fun spec(parts: List<ExportRequest>, fileName: String): OutputSpec {
             val first = parts.first()
             val sourceH = first.frameHeight.toFloat()
