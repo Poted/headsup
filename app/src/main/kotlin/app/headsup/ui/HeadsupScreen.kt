@@ -213,6 +213,8 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
     // Timeline position shown while dragged (and until the picture has caught up), and the clip position sent to the preview.
     val scrubT = remember { mutableStateOf<Long?>(null) }
     val scrubTo = remember { mutableStateOf<Long?>(null) }
+    // The preview plays (or was just asked to); read by the timeline while it glides.
+    val previewPlaying = remember { mutableStateOf(false) }
     val clipStarts = state.clips.runningFold(0L) { a, c -> a + c.timelineDurationMs }
     fun timelineOf(clipMs: Long): Long {
         val i = state.selectedClip ?: return 0L
@@ -281,7 +283,10 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
                             if (target != null && scrubTo.value == null && abs(timelineOf(it) - target) < 80) scrubT.value = null
                         },
                         scrubTo = scrubTo,
-                        onPlaying = { if (it) scrubT.value = null },
+                        onPlaying = {
+                            previewPlaying.value = it
+                            if (it) scrubT.value = null
+                        },
                         playlist = state.clips,
                         playlistIndex = state.selectedClip ?: 0,
                         // Played on into the next clip: it becomes the clip shown and edited.
@@ -353,6 +358,7 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
                     },
                     onAdd = addVideos,
                     showAudio = tool == Tool.AUDIO,
+                    playing = { previewPlaying.value },
                 ) {
                     val t = scrubT.value ?: timelineOf(playhead.longValue)
                     when {

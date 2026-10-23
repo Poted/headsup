@@ -271,6 +271,11 @@ crossing a cut selects the next clip, since the preview shows the clip under the
 The preview has two players: one shows the clip, the other holds the next video clip prepared
 (first frame decoded), and at the cut the picture and playback switch to it; a single player
 would need a new decoder at a cut between files of different shape, which shows as a pause.
+The next clip starts hidden and silent about 120 ms before the cut, so it is already moving when
+the picture switches to it (a player takes a moment to start, and its end is reported late). If
+a player fails (e.g. no decoder free for two large files), the other one is emptied and the
+shown one loads again. While the preview plays, the timeline's thumbnails wait (their decoding
+competes with the player), and pressing play stops a glide left from a flick.
 
 The timeline has one frame shape (`UiState.frameAspect`, or the first clip's) and frame rate.
 Each clip's `Reframe` is applied in that shape (`UiState.framing`): filling it (cropped) or

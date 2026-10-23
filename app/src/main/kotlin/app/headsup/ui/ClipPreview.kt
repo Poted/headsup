@@ -102,6 +102,7 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.runtime.State
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
@@ -291,21 +292,56 @@ fun ClipPreview(
     val advance by rememberUpdatedState(onAdvance)
     val nextKeyNow by rememberUpdatedState(nextKey)
     val indexNow by rememberUpdatedState(playlistIndex)
+    // Set while the next clip has been started (hidden) just before the cut.
+    val handover = remember { BooleanArray(1) }
+    // Why the shown player stopped, if it failed (e.g. no decoder free), until it plays again.
+    var playerError by remember { mutableStateOf<String?>(null) }
+    val retried = remember { BooleanArray(2) }
+    /** Empties the other player, which frees its decoder (large clips may not get two at once). */
+    fun freeStandby() {
+        val i = 1 - active
+        if (holds[i] == null && players[i].playbackState == Player.STATE_IDLE) return
+        players[i].stop()
+        players[i].clearMediaItems()
+        holds[i] = null
+    }
+    /** Shows the next clip, already in the other player, and plays on; false if it is not ready. */
+    fun switchToNext(from: Int): Boolean {
+        val other = players[1 - from]
+        if (from != active || nextKeyNow == null || holds[1 - from] != nextKeyNow || other.playbackState == Player.STATE_IDLE) return false
+        active = 1 - from
+        other.videoSize.takeIf { it.width > 0 && it.height > 0 }?.let { renderedAspect = it.width * it.pixelWidthHeightRatio / it.height }
+        if (!other.isPlaying) other.play()
+        players[from].pause()
+        handover[0] = false
+        advance(indexNow + 1)
+        return true
+    }
     DisposableEffect(players) {
         val listeners = players.mapIndexed { i, player ->
             object : Player.Listener {
                 override fun onPlaybackStateChanged(state: Int) {
+                    if (state == Player.STATE_READY) {
+                        retried[i] = false
+                        if (i == active) playerError = null
+                    }
                     if (state != Player.STATE_ENDED || i != active || !player.playWhenReady) return
-                    val other = players[1 - i]
-                    if (nextKeyNow != null && holds[1 - i] == nextKeyNow && other.playbackState != Player.STATE_IDLE) {
-                        // The next clip is ready in the other player: show it and play on at once.
-                        active = 1 - i
-                        other.videoSize.takeIf { it.width > 0 && it.height > 0 }?.let { renderedAspect = it.width * it.pixelWidthHeightRatio / it.height }
-                        other.play()
-                        player.pause()
-                        advance(indexNow + 1)
-                    } else {
-                        ended()
+                    // Normally the switch has happened just before the end (see the frame loop).
+                    if (!switchToNext(i)) ended()
+                }
+
+                override fun onPlayerError(error: PlaybackException) {
+                    if (i != active) {
+                        // The next clip could not be loaded ahead: it is loaded at the cut instead.
+                        holds[i] = null
+                        return
+                    }
+                    playerError = error.errorCodeName
+                    // Once: free the other player's decoder and try again from the same place.
+                    if (!retried[i]) {
+                        retried[i] = true
+                        freeStandby()
+                        player.prepare()
                     }
                 }
 
@@ -386,8 +422,11 @@ fun ClipPreview(
     val reportPosition by rememberUpdatedState(onPosition)
     val fileTime by rememberUpdatedState(scrubbing)
     var playing by remember { mutableStateOf(false) }
+    // Playing or about to (a player still loading counts): what the play button shows and toggles.
+    var wantsPlay by remember { mutableStateOf(false) }
     val photoNow by rememberUpdatedState(photo)
     val clipLength by rememberUpdatedState(clip.durationMs)
+    val speedNow by rememberUpdatedState(clip.speed)
     LaunchedEffect(exoPlayer) {
         var lastFrame = 0L
         while (true) withFrameMillis { t ->
@@ -404,17 +443,60 @@ fun ClipPreview(
                     }
                 }
                 playing = photoPlaying
+                wantsPlay = photoPlaying
                 return@withFrameMillis
             }
+            // Just switched to the other player: this loop is about to be replaced.
+            if (exoPlayer !== players[active]) return@withFrameMillis
             if (playerMs != exoPlayer.currentPosition) {
                 playerMs = exoPlayer.currentPosition
                 if (!fileTime) reportPosition(playerMs)
             }
             playing = exoPlayer.isPlaying
+            wantsPlay = exoPlayer.playWhenReady && exoPlayer.playbackState.let { it == Player.STATE_READY || it == Player.STATE_BUFFERING }
+            // At a cut: the next clip starts (hidden, silent) a moment before, so it is already moving
+            // when the picture switches to it at the cut; a player needs a little time to start.
+            val other = players[1 - active]
+            val nextReady = nextKeyNow != null && holds[1 - active] == nextKeyNow && other.playbackState == Player.STATE_READY
+            if (exoPlayer.isPlaying && !fileTime && nextReady) {
+                val remaining = ((clipLength - exoPlayer.currentPosition) / speedNow).toLong()
+                if (remaining <= HANDOVER_LEAD_MS && !handover[0]) {
+                    other.volume = 0f
+                    if (other.currentPosition != 0L) other.seekTo(0L)
+                    other.play()
+                    handover[0] = true
+                }
+                if (remaining <= HANDOVER_AT_MS) switchToNext(active)
+            } else if (handover[0] && !exoPlayer.playWhenReady) {
+                // Paused before the cut: the next clip waits at its start again.
+                other.pause()
+                other.seekTo(0L)
+                handover[0] = false
+            }
         }
     }
     val playingChanged by rememberUpdatedState(onPlaying)
-    LaunchedEffect(playing) { playingChanged(playing) }
+    LaunchedEffect(wantsPlay) { playingChanged(wantsPlay) }
+    DisposableEffect(Unit) { onDispose { playingChanged(false) } }
+    fun pause() {
+        players[active].pause()
+        // Reported at once, so a timeline still gliding after a flick stops too.
+        playingChanged(false)
+    }
+    fun play() {
+        val p = players[active]
+        when (p.playbackState) {
+            // At the end of a clip: on into the next one, or this one again from its start.
+            Player.STATE_ENDED -> if (!switchToNext(active)) p.seekTo(0L)
+            // After an error: free a decoder and load again.
+            Player.STATE_IDLE -> {
+                freeStandby()
+                p.prepare()
+            }
+        }
+        players[active].play()
+        playingChanged(true)
+    }
     // The timeline being dragged: declared after the media item is set (above), so a newly reached clip is ready.
     val timelineScrub = scrubTo.value
     LaunchedEffect(timelineScrub, clip.id) {
@@ -424,7 +506,7 @@ fun ClipPreview(
             playerMs = target.coerceIn(0L, clip.durationMs)
             onPosition(playerMs)
         } else {
-            players[active].let { if (it.isPlaying) it.pause() }
+            if (players[active].playWhenReady) pause()
             scrubber.seek(target.coerceIn(0L, clip.durationMs))
         }
     }
@@ -487,6 +569,16 @@ fun ClipPreview(
                 val pictureW = if (sourceAspect > boxW / boxH) boxH * sourceAspect else boxW
                 val pictureH = if (sourceAspect > boxW / boxH) boxH else boxW / sourceAspect
                 val geometry = FrameGeometry(boxW, boxH, pictureW, pictureH)
+                // A paused player keeps its last frame laid out for the old size (a corner of the
+                // picture after changing the frame) until it draws again: make both draw. A seek to
+                // the current position is ignored, so step 1 ms away and back.
+                LaunchedEffect(boxW.toInt(), boxH.toInt(), pictureW.toInt(), pictureH.toInt()) {
+                    for (p in players) if (!p.isPlaying && p.playbackState == Player.STATE_READY) {
+                        val at = p.currentPosition
+                        p.seekTo(at + 1)
+                        p.seekTo(at)
+                    }
+                }
                 geometryRef.value = geometry
                 val density = LocalDensity.current
                 // A TextureView (unlike PlayerView's default SurfaceView) is drawn by the UI, so the
@@ -633,6 +725,14 @@ fun ClipPreview(
                 }
                 if (fadeGain < 1f) Box(Modifier.matchParentSize().background(Color.Black.copy(alpha = 1f - fadeGain)))
                 if (showGrid) Canvas(Modifier.matchParentSize()) { drawThirds() }
+                playerError?.takeIf { !photo }?.let { e ->
+                    Text(
+                        "Playback stopped: $e",
+                        Modifier.align(Alignment.TopStart).padding(10.dp).clip(RoundedCornerShape(8.dp)).background(Color.Black.copy(alpha = 0.6f)).padding(horizontal = 8.dp, vertical = 4.dp),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = Color.White,
+                    )
+                }
                 histogram?.takeIf { histogramOn }?.let { bins ->
                     Histogram(bins, Modifier.align(Alignment.BottomStart).padding(10.dp).size(width = 128.dp, height = 56.dp))
                 }
@@ -654,13 +754,13 @@ fun ClipPreview(
                                 if (!photoPlaying && playerMs >= clip.durationMs) playerMs = 0L
                                 photoPlaying = !photoPlaying
                             }
-                            playing -> exoPlayer.pause()
-                            else -> exoPlayer.play()
+                            wantsPlay -> pause()
+                            else -> play()
                         }
                     },
                 contentAlignment = Alignment.Center,
             ) {
-                Icon(if (playing) HeadsupIcons.Pause else HeadsupIcons.Play, contentDescription = if (playing) "Pause" else "Play", tint = HeadsupColors.OnAccent)
+                Icon(if (wantsPlay) HeadsupIcons.Pause else HeadsupIcons.Play, contentDescription = if (wantsPlay) "Pause" else "Play", tint = HeadsupColors.OnAccent)
             }
             // Timeline time (the timeline below is scrubbed by dragging it); file time while a cut handle moves.
             Text(
@@ -677,6 +777,10 @@ fun ClipPreview(
 }
 
 private const val SAMPLE_WIDTH = 192
+
+/** How long before a cut the next clip starts (hidden), and when the picture switches to it. */
+private const val HANDOVER_LEAD_MS = 120L
+private const val HANDOVER_AT_MS = 20L
 
 /** A photo for the preview: at most about 2048 px, turned upright by its EXIF orientation. */
 private fun decodePhoto(context: android.content.Context, uri: android.net.Uri): ImageBitmap? = runCatching {

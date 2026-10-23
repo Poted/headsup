@@ -28,6 +28,13 @@ class Filmstrip(private val context: Context, private val scope: CoroutineScope)
     private var running = false
     private var count = 0
 
+    /** While set (during playback) frames are only queued: decoding them would slow the player down. */
+    var held = false
+        set(value) {
+            field = value
+            if (!value) start()
+        }
+
     /** The frame of [uri] at [fileMs] (rounded to [stepMs]), or the nearest one loaded so far. */
     fun frame(uri: Uri, fileMs: Long, stepMs: Long, photo: Boolean): ImageBitmap? {
         val key = if (photo) 0L else (fileMs / stepMs) * stepMs
@@ -51,11 +58,15 @@ class Filmstrip(private val context: Context, private val scope: CoroutineScope)
         pending.addLast(item)
         // Only the latest requests matter: the timeline asks again for what stays on screen.
         while (pending.size > 64) queued.remove(pending.removeFirst())
-        if (running) return
+        start()
+    }
+
+    private fun start() {
+        if (running || held || pending.isEmpty()) return
         running = true
         scope.launch {
             try {
-                while (true) {
+                while (!held) {
                     val (u, k) = pending.removeLastOrNull() ?: break
                     queued.remove(u to k)
                     val bitmap = withContext(Dispatchers.IO) { runCatching { load(u, k) }.getOrNull() }

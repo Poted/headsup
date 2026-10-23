@@ -29,6 +29,8 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -97,6 +99,8 @@ fun Timeline(
     onAdd: () -> Unit,
     /** Whether the audio tracks are shown (on the Audio page; elsewhere they only take room). */
     showAudio: Boolean,
+    /** Whether the preview plays (or was just asked to): a glide after a flick stops, thumbnails wait. */
+    playing: () -> Boolean = { false },
     /** Actions for the selection, shown above the tracks. */
     actions: @Composable RowScope.() -> Unit,
 ) {
@@ -115,6 +119,9 @@ fun Timeline(
     val scope = rememberCoroutineScope()
     val filmstrip = remember { Filmstrip(context, scope) }
     DisposableEffect(filmstrip) { onDispose { filmstrip.release() } }
+    val playingNow by rememberUpdatedState(playing)
+    // Decoding thumbnails would compete with the player for the video decoder.
+    LaunchedEffect(filmstrip) { snapshotFlow { playingNow() }.collect { filmstrip.held = it } }
     val text = rememberTextMeasurer()
     val haptics = LocalHapticFeedback.current
     val localDensity = LocalDensity.current
@@ -352,11 +359,15 @@ fun Timeline(
                                         val decay = splineBasedDecay<Float>(this)
                                         val end = videoEndNow
                                         fling = scope.launch {
+                                            val glide = coroutineContext[Job]
                                             val anim = Animatable(0f)
                                             // Pixels the timeline may still move each way before an end.
                                             anim.updateBounds(-from * zoomPx, (end - from) * zoomPx)
                                             try {
-                                                anim.animateDecay(-vx, decay) { scrub((from + value / zoomPx).toLong().coerceIn(0L, end)) }
+                                                anim.animateDecay(-vx, decay) {
+                                                    // Play pressed while still gliding: the glide stops (each step would pause it).
+                                                    if (playingNow()) glide?.cancel() else scrub((from + value / zoomPx).toLong().coerceIn(0L, end))
+                                                }
                                             } finally {
                                                 scrub(null)
                                             }
