@@ -211,6 +211,14 @@ class ExportManager(private val context: Context) {
         }
         val audio = if (speed != 1f && !request.muteChangedSpeed) listOf<AudioProcessor>(SpeedChangingAudioProcessor(ConstantSpeed(speed))) else emptyList()
 
+        if (request.isPhoto) {
+            // A photo becomes video: shown for its time on the timeline at the output frame rate.
+            val photo = MediaItem.Builder().setUri(request.uri).setImageDurationMs(request.durationMs).build()
+            return EditedMediaItem.Builder(photo)
+                .setFrameRate(kotlin.math.round(out.frameRate ?: 30f).toInt().coerceAtLeast(1))
+                .setEffects(Effects(emptyList(), effects))
+                .build()
+        }
         val endMs = if (test) minOf(request.trimStartMs + TEST_LENGTH_MS, request.trimEndMs) else request.trimEndMs
         val mediaItem = MediaItem.Builder()
             .setUri(request.uri)

@@ -21,6 +21,9 @@ enum class TimeSource(val reliability: Double) {
 
     /** Start time typed in by the user, e.g. for an excerpt cut from a long recording. */
     MANUAL(1.0),
+
+    /** A photo's EXIF `DateTimeOriginal`, with `OffsetTimeOriginal` when the camera wrote it. */
+    PHOTO_EXIF(1.0),
 }
 
 /** Which moment of the recording the reading refers to. */

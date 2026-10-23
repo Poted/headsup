@@ -58,6 +58,8 @@ data class ExportRequest(
     val speed: Float = 1f,
     /** Silence the sound when the speed is changed (otherwise it is stretched, keeping its pitch). */
     val muteChangedSpeed: Boolean = false,
+    /** A still photo shown for [durationMs]; its dashboard stays at the moment it was taken. */
+    val isPhoto: Boolean = false,
 ) {
     /** Size of the exported frame: the source's, or the largest frame of the reframe's shape inside it (even numbers for encoders). */
     val frameWidth: Int get() = (reframe.outputSize(width.toFloat(), height.toFloat()).first.toInt() / 2 * 2).coerceAtLeast(2)
@@ -71,7 +73,7 @@ data class ExportRequest(
     fun dataAt(positionMs: Long, sampler: TelemetrySampler?): DashboardData? {
         val t = telemetry ?: return null
         val s = sampler ?: return null
-        val utc = t.startUtcMs + positionMs
+        val utc = t.startUtcMs + if (isPhoto) 0L else positionMs
         val zone = t.track.utcOffsetSeconds ?: ZoneId.systemDefault().rules.getOffset(Instant.ofEpochMilli(utc)).totalSeconds
         return DashboardData(t.track, s.frameAt(utc), utc, zone)
     }

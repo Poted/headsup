@@ -77,6 +77,12 @@ import app.headsup.render.Placement
 import app.headsup.render.Widget
 import java.time.Instant
 import java.time.ZoneId
+import androidx.compose.runtime.produceState
+import androidx.compose.ui.graphics.asAndroidBitmap
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.foundation.Image
 import app.headsup.core.color.ColourMask
 import app.headsup.core.color.ColourTransition
 import app.headsup.core.color.MaskKind
@@ -161,7 +167,21 @@ fun ClipPreview(
     val scrubber = remember { Scrubber(exoPlayer, scope) }
     val scrubMs = cutScrub.value
     val scrubbing = scrubMs != null
+    // Photos are shown as a picture with their own clock; the player only plays videos.
+    val photo = clip.meta.isPhoto
+    var photoPlaying by remember { mutableStateOf(false) }
+    val photoBitmap by produceState<ImageBitmap?>(null, clip.meta.uri, photo) {
+        value = if (photo) withContext(Dispatchers.IO) { decodePhoto(context, clip.meta.uri) } else null
+    }
     LaunchedEffect(clip.meta.uri, clip.trimStartMs, clip.trimEndMs, scrubbing) {
+        if (photo) {
+            exoPlayer.stop()
+            exoPlayer.clearMediaItems()
+            photoPlaying = autoPlay
+            if (autoPlay) onAutoPlayStarted()
+            return@LaunchedEffect
+        }
+        photoPlaying = false
         if (!shaderPreview) exoPlayer.setVideoEffects(listOf<Effect>(liveLut))
         if (scrubbing) {
             exoPlayer.pause()
@@ -202,6 +222,7 @@ fun ClipPreview(
     // Declared after the media item is set, so it runs after it for a newly selected clip.
     LaunchedEffect(seekRequest, clip.id) {
         val target = seekRequest ?: return@LaunchedEffect
+        photoPlaying = false
         exoPlayer.pause()
         exoPlayer.seekTo(target.coerceIn(0L, clip.durationMs))
         onSeekDone()
@@ -234,18 +255,23 @@ fun ClipPreview(
     val currentReframe by rememberUpdatedState(reframe)
     // Sizes of the frame and the picture under it, for gestures (read when they happen).
     val geometryRef = remember { GeometryRef(FrameGeometry(1f, 1f, 1f, 1f)) }
-    LaunchedEffect(textureView) {
-        val tv = textureView ?: return@LaunchedEffect
-        onFrameSource?.invoke {
-            val w = ANALYSIS_WIDTH
-            tv.getBitmap(w, (w * tv.height / tv.width.coerceAtLeast(1)).coerceAtLeast(1))
+    // The picture as decoded (before colour), from the photo or the video's TextureView.
+    val grabFrame: (Int) -> Bitmap? = { w ->
+        val bmp = photoBitmap?.takeIf { photo }?.asAndroidBitmap()
+        if (bmp != null) {
+            Bitmap.createScaledBitmap(bmp, w, (w * bmp.height / bmp.width.coerceAtLeast(1)).coerceAtLeast(1), true)
+        } else {
+            textureView?.let { tv -> tv.getBitmap(w, (w * tv.height / tv.width.coerceAtLeast(1)).coerceAtLeast(1)) }
         }
+    }
+    val grab by rememberUpdatedState(grabFrame)
+    LaunchedEffect(textureView, photoBitmap) {
+        onFrameSource?.invoke { grab(ANALYSIS_WIDTH) }
     }
 
     LaunchedEffect(histogramOn, gradeCube) {
         while (histogramOn) {
-            val tv = textureView
-            val frame = tv?.let { v -> v.getBitmap(160, (160 * v.height / v.width.coerceAtLeast(1)).coerceAtLeast(1)) }
+            val frame = grab(160)
             if (frame != null) histogram = withContext(Dispatchers.Default) { luminanceHistogram(frame, gradeCube) }
             delay(250)
         }
@@ -256,8 +282,26 @@ fun ClipPreview(
     val reportPosition by rememberUpdatedState(onPosition)
     val fileTime by rememberUpdatedState(scrubbing)
     var playing by remember { mutableStateOf(false) }
+    val photoNow by rememberUpdatedState(photo)
+    val clipLength by rememberUpdatedState(clip.durationMs)
     LaunchedEffect(exoPlayer) {
-        while (true) withFrameMillis {
+        var lastFrame = 0L
+        while (true) withFrameMillis { t ->
+            val dt = if (lastFrame > 0) t - lastFrame else 0L
+            lastFrame = t
+            if (photoNow) {
+                // A photo's own clock, so it plays for its time on the timeline like a clip.
+                if (photoPlaying) {
+                    playerMs = (playerMs + dt).coerceAtMost(clipLength)
+                    reportPosition(playerMs)
+                    if (playerMs >= clipLength) {
+                        photoPlaying = false
+                        ended()
+                    }
+                }
+                playing = photoPlaying
+                return@withFrameMillis
+            }
             if (playerMs != exoPlayer.currentPosition) {
                 playerMs = exoPlayer.currentPosition
                 if (!fileTime) reportPosition(playerMs)
@@ -293,9 +337,7 @@ fun ClipPreview(
                 val density = LocalDensity.current
                 // A TextureView (unlike PlayerView's default SurfaceView) is drawn by the UI, so the
                 // colour shader can be applied to it.
-                AndroidView(
-                    factory = { TextureView(it).also { tv -> exoPlayer.setVideoTextureView(tv); textureView = tv } },
-                    modifier = Modifier.requiredSize(with(density) { pictureW.toDp() }, with(density) { pictureH.toDp() }).graphicsLayer {
+                val pictureLayer = Modifier.requiredSize(with(density) { pictureW.toDp() }, with(density) { pictureH.toDp() }).graphicsLayer {
                         // Reading these here re-applies the shader when they change, without recomposing.
                         tableVersion
                         val frame = if (effects.grain > 0f) (positionMs / 33).toFloat() else 0f
@@ -308,8 +350,16 @@ fun ClipPreview(
                         rotationZ = reframe.angleDegrees
                         translationX = t.translation.x
                         translationY = t.translation.y
-                    },
-                )
+                    }
+                val bitmap = photoBitmap
+                if (photo) {
+                    if (bitmap != null) Image(bitmap, contentDescription = clip.meta.name, contentScale = ContentScale.FillBounds, modifier = pictureLayer)
+                } else {
+                    AndroidView(
+                        factory = { TextureView(it).also { tv -> exoPlayer.setVideoTextureView(tv); textureView = tv } },
+                        modifier = pictureLayer,
+                    )
+                }
                 Canvas(
                     Modifier
                         .matchParentSize()
@@ -362,10 +412,7 @@ fun ClipPreview(
                                     val onTap = sample ?: return@awaitEachGesture
                                     val up = waitForUpOrCancellation() ?: return@awaitEachGesture
                                     up.consume()
-                                    val tv = textureView ?: return@awaitEachGesture
-                                    val w = SAMPLE_WIDTH
-                                    val h = (SAMPLE_WIDTH * size.height / size.width.coerceAtLeast(1)).coerceAtLeast(1)
-                                    tv.getBitmap(w, h)?.let { onTap(it, up.position.x / size.width, up.position.y / size.height) }
+                                    grab(SAMPLE_WIDTH)?.let { onTap(it, up.position.x / size.width, up.position.y / size.height) }
                                     return@awaitEachGesture
                                 }
                                 val start = renderer.boxOf(widget) ?: return@awaitEachGesture
@@ -435,7 +482,16 @@ fun ClipPreview(
                     .size(36.dp)
                     .clip(CircleShape)
                     .background(HeadsupColors.Accent)
-                    .clickable { if (playing) exoPlayer.pause() else exoPlayer.play() },
+                    .clickable {
+                        when {
+                            photo -> {
+                                if (!photoPlaying && playerMs >= clip.durationMs) playerMs = 0L
+                                photoPlaying = !photoPlaying
+                            }
+                            playing -> exoPlayer.pause()
+                            else -> exoPlayer.play()
+                        }
+                    },
                 contentAlignment = Alignment.Center,
             ) {
                 Icon(if (playing) HeadsupIcons.Pause else HeadsupIcons.Play, contentDescription = if (playing) "Pause" else "Play", tint = HeadsupColors.OnAccent)
@@ -449,7 +505,7 @@ fun ClipPreview(
             val endMs = clip.durationMs.coerceAtLeast(1L).toFloat()
             Slider(
                 value = (dragMs ?: positionMs.toFloat()).coerceIn(0f, endMs),
-                onValueChange = { dragMs = it; scrubber.seek(it.toLong()) },
+                onValueChange = { dragMs = it; if (photo) playerMs = it.toLong() else scrubber.seek(it.toLong()) },
                 onValueChangeFinished = { dragMs = null },
                 enabled = !scrubbing,
                 valueRange = 0f..endMs,
@@ -463,6 +519,27 @@ fun ClipPreview(
 }
 
 private const val SAMPLE_WIDTH = 192
+
+/** A photo for the preview: at most about 2048 px, turned upright by its EXIF orientation. */
+private fun decodePhoto(context: android.content.Context, uri: android.net.Uri): ImageBitmap? = runCatching {
+    val bounds = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
+    context.contentResolver.openInputStream(uri)?.use { android.graphics.BitmapFactory.decodeStream(it, null, bounds) }
+    var sample = 1
+    while (maxOf(bounds.outWidth, bounds.outHeight) / (sample * 2) >= 2048) sample *= 2
+    val opts = android.graphics.BitmapFactory.Options().apply { inSampleSize = sample }
+    val raw = context.contentResolver.openInputStream(uri)?.use { android.graphics.BitmapFactory.decodeStream(it, null, opts) } ?: return@runCatching null
+    val orientation = context.contentResolver.openInputStream(uri)?.use {
+        android.media.ExifInterface(it).getAttributeInt(android.media.ExifInterface.TAG_ORIENTATION, android.media.ExifInterface.ORIENTATION_NORMAL)
+    } ?: android.media.ExifInterface.ORIENTATION_NORMAL
+    val degrees = when (orientation) {
+        android.media.ExifInterface.ORIENTATION_ROTATE_90 -> 90f
+        android.media.ExifInterface.ORIENTATION_ROTATE_180 -> 180f
+        android.media.ExifInterface.ORIENTATION_ROTATE_270 -> 270f
+        else -> 0f
+    }
+    val upright = if (degrees == 0f) raw else Bitmap.createBitmap(raw, 0, 0, raw.width, raw.height, android.graphics.Matrix().apply { postRotate(degrees) }, true)
+    upright.asImageBitmap()
+}.getOrNull()
 
 private class ReframeTransform(val zoom: Float, val translation: Offset)
 

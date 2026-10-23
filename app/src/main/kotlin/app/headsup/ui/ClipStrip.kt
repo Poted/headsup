@@ -102,6 +102,13 @@ private fun ClipThumb(clip: ClipState, groupName: String?, selected: Boolean, on
     val thumbnail by produceState<ImageBitmap?>(null, clip.meta.uri, clip.trimStartMs) {
         value = withContext(Dispatchers.IO) {
             runCatching {
+                if (clip.meta.isPhoto) {
+                    // Photos: a small decode is enough for the thumbnail.
+                    val opts = android.graphics.BitmapFactory.Options().apply { inSampleSize = 8 }
+                    return@runCatching context.contentResolver.openInputStream(clip.meta.uri)?.use {
+                        android.graphics.BitmapFactory.decodeStream(it, null, opts)
+                    }?.asImageBitmap()
+                }
                 val retriever = MediaMetadataRetriever()
                 try {
                     retriever.setDataSource(context, clip.meta.uri)

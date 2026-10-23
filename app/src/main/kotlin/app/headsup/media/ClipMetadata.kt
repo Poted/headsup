@@ -9,6 +9,7 @@ import android.net.Uri
 import android.provider.OpenableColumns
 import app.headsup.core.sync.ClipInfo
 import app.headsup.core.sync.ClockReading
+import app.headsup.core.sync.ExifTimeParser
 import app.headsup.core.sync.FilenameTimeParser
 import app.headsup.core.sync.Mp4DateParser
 import app.headsup.core.sync.TimeAnchor
@@ -87,13 +88,25 @@ data class ClipMetadata(
     val frameRate: Float?,
     val format: VideoFormatInfo?,
     val info: ClipInfo,
+    /** A still photo: shown for a chosen time on the timeline, exported as video. */
+    val isPhoto: Boolean = false,
 )
 
 object ClipMetadataReader {
     private val STANDARD_RATES = floatArrayOf(23.976f, 24f, 25f, 29.97f, 30f, 48f, 50f, 59.94f, 60f, 100f, 119.88f, 120f)
 
+    private val PHOTO_EXTENSIONS = setOf("jpg", "jpeg", "png", "heic", "heif", "webp", "dng")
+
+    /** Longest a photo can stay on the timeline. */
+    const val PHOTO_MAX_MS = 30_000L
+
+    fun isPhoto(context: Context, uri: Uri, name: String): Boolean =
+        context.contentResolver.getType(uri)?.startsWith("image/") == true ||
+            name.substringAfterLast('.', "").lowercase() in PHOTO_EXTENSIONS
+
     fun read(context: Context, uri: Uri): ClipMetadata {
         val name = displayName(context, uri) ?: uri.lastPathSegment.orEmpty()
+        if (isPhoto(context, uri, name)) return readPhoto(context, uri, name)
         val retriever = MediaMetadataRetriever()
         try {
             retriever.setDataSource(context, uri)
@@ -126,6 +139,35 @@ object ClipMetadataReader {
         } finally {
             retriever.release()
         }
+    }
+
+    /** Size (after EXIF rotation) and the moment it was taken, from EXIF or the file name. */
+    private fun readPhoto(context: Context, uri: Uri, name: String): ClipMetadata {
+        val bounds = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        context.contentResolver.openInputStream(uri)?.use { android.graphics.BitmapFactory.decodeStream(it, null, bounds) }
+        val exif = runCatching { context.contentResolver.openInputStream(uri)?.use { android.media.ExifInterface(it) } }.getOrNull()
+        val orientation = exif?.getAttributeInt(android.media.ExifInterface.TAG_ORIENTATION, android.media.ExifInterface.ORIENTATION_NORMAL)
+        val rotated = orientation == android.media.ExifInterface.ORIENTATION_ROTATE_90 || orientation == android.media.ExifInterface.ORIENTATION_ROTATE_270
+        val evidence = listOfNotNull(
+            ExifTimeParser.parse(
+                exif?.getAttribute(android.media.ExifInterface.TAG_DATETIME_ORIGINAL),
+                exif?.getAttribute(android.media.ExifInterface.TAG_OFFSET_TIME_ORIGINAL),
+            ),
+            FilenameTimeParser.parse(name),
+        )
+        return ClipMetadata(
+            uri = uri,
+            name = name,
+            durationMs = PHOTO_MAX_MS,
+            width = if (rotated) bounds.outHeight else bounds.outWidth,
+            height = if (rotated) bounds.outWidth else bounds.outHeight,
+            bitrate = null,
+            frameRate = null,
+            format = null,
+            // A photo is a moment: matched as a very short clip.
+            info = ClipInfo(1_000L, evidence),
+            isPhoto = true,
+        )
     }
 
     /** Frame counts over a rounded duration give e.g. 29.94; report the nominal rate. */

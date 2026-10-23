@@ -125,7 +125,10 @@ data class ClipState(
     val isTrimmed: Boolean get() = trimStartMs > 0 || trimEndMs < meta.durationMs
 
     /** UTC time of the telemetry shown at [positionMs] into the (trimmed) clip. */
-    fun telemetryUtc(positionMs: Long): Long? = sync?.let { it.startUtcMs + trimStartMs + positionMs + manualOffsetMs }
+    fun telemetryUtc(positionMs: Long): Long? = sync?.let {
+        // A photo is one moment: its dashboard shows the data from when it was taken.
+        if (meta.isPhoto) it.startUtcMs + manualOffsetMs else it.startUtcMs + trimStartMs + positionMs + manualOffsetMs
+    }
 }
 
 /** What "Copy" takes from a clip and "Paste" gives to another: corrections, effects and LUT. */
@@ -992,7 +995,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             val found = withContext(Dispatchers.Default) {
                 s.activities.indices.flatMap { trackIndex ->
-                    val clips = s.clips.filter { it.sync?.trackIndex == trackIndex }
+                    val clips = s.clips.filter { it.sync?.trackIndex == trackIndex && !it.meta.isPhoto }
                     val covered = clips.mapNotNull { c ->
                         val start = c.telemetryUtc(0) ?: return@mapNotNull null
                         TimeRange(start, start + c.durationMs)
@@ -1272,7 +1275,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
     fun setTimelineFps(fps: Float?) = _state.update { it.copy(timelineFps = fps) }
 
     /** Slow motion (or fast): the sound is muted by default below half speed, where stretching sounds metallic. */
-    fun setSpeed(index: Int, speed: Float) = updateClip(index) { it.copy(speed = speed, muteChangedSpeed = speed < 0.5f) }
+    fun setSpeed(index: Int, speed: Float) = updateClip(index) { if (it.meta.isPhoto) it else it.copy(speed = speed, muteChangedSpeed = speed < 0.5f) }
 
     fun setMuteChangedSpeed(index: Int, mute: Boolean) = updateClip(index) { it.copy(muteChangedSpeed = mute) }
 
@@ -1322,6 +1325,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                     grade = if (graded) GradeSetup(cube, applied.vignette, masks, maskCubes, fromCube, clip.transitionMs) else null,
                     reframe = clip.reframe,
                     speed = clip.speed,
+                    isPhoto = clip.meta.isPhoto,
                     muteChangedSpeed = clip.muteChangedSpeed,
                 )
             }
@@ -1412,7 +1416,13 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                 val activities = (s.activities + loaded.filterIsInstance<Loaded.Activity>().map { it.activity })
                     .distinctBy { it.track.startMs to it.track.endMs }
                     .sortedBy { it.track.startMs }
-                val newClips = loaded.filterIsInstance<Loaded.Clip>().map { ClipState(it.meta, sync = null, lutName = s.defaultLut, grade = s.defaultGrade, effects = s.defaultEffects) }
+                val newClips = loaded.filterIsInstance<Loaded.Clip>().map {
+                    ClipState(
+                        it.meta, sync = null, lutName = s.defaultLut, grade = s.defaultGrade, effects = s.defaultEffects,
+                        // Photos stay on screen for a few seconds; the cut range is their length.
+                        trimEndMs = if (it.meta.isPhoto) PHOTO_DEFAULT_MS else it.meta.durationMs,
+                    )
+                }
                 // The same file may already be on the timeline as several (split) clips; only skip re-adds.
                 val known = s.clips.map { it.meta.uri }.toSet()
                 val clips = s.clips + newClips.filter { it.meta.uri !in known }.distinctBy { it.meta.uri }
@@ -1442,6 +1452,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
     companion object {
         /** Large enough to fix a camera clock that is minutes off. */
         const val MAX_OFFSET_MS = 600_000L
+        const val PHOTO_DEFAULT_MS = 4_000L
         private const val MAX_HISTORY = 60
         private const val GLOBAL = "global_"
     }

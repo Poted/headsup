@@ -91,6 +91,7 @@ import app.headsup.core.color.ColorGrade
 import app.headsup.core.color.ColourMask
 import app.headsup.core.color.MaskKind
 import app.headsup.core.frame.Reframe
+import app.headsup.media.ClipMetadataReader
 import app.headsup.core.highlight.HighlightFinder
 import app.headsup.core.highlight.HighlightKind
 import app.headsup.core.track.Metric
@@ -160,7 +161,7 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
     val videoPicker = rememberLauncherForActivityResult(ActivityResultContracts.PickMultipleVisualMedia()) { vm.addClips(it) }
     val lutPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri -> uri?.let(vm::importLut) }
     val addFit = { fitPicker.launch(arrayOf("*/*")) }
-    val addVideos = { videoPicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.VideoOnly)) }
+    val addVideos = { videoPicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageAndVideo)) }
 
     // The progress notification needs this on Android 13+; export works without it.
     var pendingExport by remember { mutableStateOf<(() -> Unit)?>(null) }
@@ -429,7 +430,7 @@ private fun FilesPanel(
 ) {
     ProjectRow(state, vm)
     Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-        AddTile(HeadsupIcons.Video, "Videos", onAddVideos, Modifier.weight(1f))
+        AddTile(HeadsupIcons.Video, "Media", onAddVideos, Modifier.weight(1f))
         AddTile(HeadsupIcons.Watch, "FIT", onAddFit, Modifier.weight(1f))
     }
     val index = state.selectedClip
@@ -454,7 +455,18 @@ private fun FilesPanel(
             }
             SyncSummary(clip, clip.sync?.let { state.activities.getOrNull(it.trackIndex) })
         }
-        Group {
+        if (clip.meta.isPhoto) {
+            Group {
+                // A photo has no cut: its length on the timeline is chosen here.
+                ValueHeader("Photo on screen", String.format(Locale.US, "%.1f s", clip.durationMs / 1000f))
+                RulerSlider(
+                    clip.durationMs / 1000f, 1f..(ClipMetadataReader.PHOTO_MAX_MS / 1000f), 0.5f,
+                    { v -> vm.setTrim(index, 0L, (v * 1000).toLong()) },
+                    onReset = { vm.setTrim(index, 0L, HeadsupViewModel.PHOTO_DEFAULT_MS) },
+                )
+                Hint(if (clip.sync != null) "The dashboard shows the moment it was taken." else "No time found in the photo; set it below to show watch data.")
+            }
+        } else Group {
             CutControls(
                 clip = clip,
                 playhead = playhead,
@@ -463,7 +475,7 @@ private fun FilesPanel(
                 onScrub = onCutScrub,
             )
         }
-        Group { SpeedControls(clip, state.effectiveTimelineFps, onSpeed = { vm.setSpeed(index, it) }, onMute = { vm.setMuteChangedSpeed(index, it) }) }
+        if (!clip.meta.isPhoto) Group { SpeedControls(clip, state.effectiveTimelineFps, onSpeed = { vm.setSpeed(index, it) }, onMute = { vm.setMuteChangedSpeed(index, it) }) }
         Group { StartTimeControls(clip, state.activities) { vm.setManualStart(index, it) } }
         val activity = clip.sync?.let { state.activities.getOrNull(it.trackIndex) }
         if (activity != null) {
@@ -875,6 +887,7 @@ private fun sourceLabel(source: TimeSource) = when (source) {
     TimeSource.MP4_CREATION_TIME -> "MP4 creation time"
     TimeSource.MEDIASTORE_DATE_TAKEN -> "gallery date"
     TimeSource.MANUAL -> "time entered by hand"
+    TimeSource.PHOTO_EXIF -> "photo EXIF"
 }
 
 private fun zoneLabel(reason: ZoneReason, offset: Int) = when (reason) {

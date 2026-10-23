@@ -216,3 +216,12 @@ Google Photos / the cloud) never breaks a project. Each copy keeps its original 
 own folder, because the name carries the recording time used for matching. Deleting a project
 removes the copies no other saved project (or the open one) uses; the app never deletes anything
 outside its own storage. The project list shows how much space each project's copies take.
+
+## Photos
+
+Photos (JPEG, PNG, HEIC, WebP, DNG) can be added with videos. Their time comes from EXIF
+`DateTimeOriginal` (exact with `OffsetTimeOriginal`) or the file name, and they are matched like
+a one-second clip. On the timeline a photo stays for a chosen time (1–30 s, default 4 s; the cut
+range is its length) and its dashboard shows the moment it was taken. The preview shows the
+decoded picture (EXIF-upright) with the same colour shader and framing, on its own clock so the
+timeline plays through it; export turns it into video (Media3 image input at the timeline rate).
