@@ -901,25 +901,6 @@ private fun RenameDialog(initial: String, onDismiss: () -> Unit, onConfirm: (Str
     )
 }
 
-/** Shape controls of the graduated mask, edited with the same ruler as the corrections. */
-private enum class MaskShape(
-    val symbol: String,
-    val label: String,
-    val range: ClosedFloatingPointRange<Float>,
-    val step: Float,
-    val format: String,
-    val get: (GradientMask) -> Float,
-    val set: (GradientMask, Float) -> GradientMask,
-) {
-    POSITION("↕", "Position", 0f..1f, 0.01f, "%.0f %%", { it.position }, { m, v -> m.copy(position = v) }),
-    SOFTNESS("◐", "Softness", 0.02f..1f, 0.02f, "%.0f %%", { it.softness }, { m, v -> m.copy(softness = v) }),
-    ANGLE("∠", "Angle", -45f..45f, 0.5f, "%+.1f°", { it.angleDegrees }, { m, v -> m.copy(angleDegrees = v) }),
-    ;
-
-    /** Value as shown above the ruler (fractions as percent). */
-    fun shown(mask: GradientMask): Float = if (this == ANGLE) get(mask) else get(mask) * 100f
-}
-
 /** Vectorscope with the skin line, as in DaVinci Resolve, and the measurement of the tapped point. */
 @Composable
 private fun SkinToneTool(scope: ScopeResult?, onMatch: () -> Unit) {
