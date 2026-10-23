@@ -172,6 +172,16 @@ object HeadsupIcons {
         }
     }
 
+    /** Scissors: editing. */
+    val Cut = icon("cut") {
+        stroke {
+            moveTo(8f, 6f); arcTo(2.5f, 2.5f, 0f, true, true, 3f, 6f); arcTo(2.5f, 2.5f, 0f, true, true, 8f, 6f)
+            moveTo(8f, 18f); arcTo(2.5f, 2.5f, 0f, true, true, 3f, 18f); arcTo(2.5f, 2.5f, 0f, true, true, 8f, 18f)
+            moveTo(7.5f, 7.5f); lineTo(20f, 17f)
+            moveTo(7.5f, 16.5f); lineTo(20f, 7f)
+        }
+    }
+
     /** Note: music and sound. */
     val Music = icon("music") {
         stroke {

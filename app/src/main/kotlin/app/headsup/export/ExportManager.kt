@@ -2,10 +2,7 @@ package app.headsup.export
 
 import android.content.Context
 import android.content.Intent
-import android.media.MediaCodecInfo
-import android.media.MediaCodecList
 import android.net.Uri
-import android.os.Build
 import androidx.annotation.OptIn
 import androidx.media3.common.Effect
 import androidx.media3.common.MediaItem
@@ -112,7 +109,7 @@ class ExportManager(private val context: Context) {
         try {
             when (job.spec.kind) {
                 ExportKind.PNG_SEQUENCE -> runPng(job)
-                ExportKind.VIDEO, ExportKind.TEN_BIT_TEST -> runVideo(job)
+                ExportKind.VIDEO -> runVideo(job)
             }
         } catch (e: Throwable) {
             finish(job.id, JobStatus.FAILED, "Could not start: ${e.stackTraceToString().take(1500)}")
@@ -180,7 +177,7 @@ class ExportManager(private val context: Context) {
      * scaling to the output, dashboard, then speed and frame rate. The dashboard comes before the
      * speed change so it reads the clip's own time and slows down with the picture.
      */
-    private fun editedItem(request: ExportRequest, out: OutputSpec, test: Boolean, soundGain: Float = 1f): EditedMediaItem {
+    private fun editedItem(request: ExportRequest, out: OutputSpec, soundGain: Float = 1f): EditedMediaItem {
         val sampler = request.telemetry?.let { TelemetrySampler(it.track) }
         val hdr = out.tenBit
         val overlay = TelemetryOverlay(
@@ -241,11 +238,10 @@ class ExportManager(private val context: Context) {
                 .setEffects(Effects(emptyList(), effects))
                 .build()
         }
-        val endMs = if (test) minOf(request.trimStartMs + TEST_LENGTH_MS, request.trimEndMs) else request.trimEndMs
         val mediaItem = MediaItem.Builder()
             .setUri(request.uri)
             .setClippingConfiguration(
-                MediaItem.ClippingConfiguration.Builder().setStartPositionMs(request.trimStartMs).setEndPositionMs(endMs).build(),
+                MediaItem.ClippingConfiguration.Builder().setStartPositionMs(request.trimStartMs).setEndPositionMs(request.trimEndMs).build(),
             )
             .build()
         return EditedMediaItem.Builder(mediaItem)
@@ -257,9 +253,8 @@ class ExportManager(private val context: Context) {
     private fun runVideo(job: ExportJob) {
         val spec = job.spec
         val out = requireNotNull(spec.output)
-        val test = spec.kind == ExportKind.TEN_BIT_TEST
         val music = spec.music
-        val items = spec.parts.map { editedItem(it, out, test, soundGain = music?.originalVolume ?: 1f) }
+        val items = spec.parts.map { editedItem(it, out, soundGain = music?.originalVolume ?: 1f) }
         // Clips without sound (drones) or muted slow motion get silence, so the parts join cleanly.
         val video = EditedMediaItemSequence.Builder(items).experimentalSetForceAudioTrack(items.size > 1 || music != null).build()
         val composition = if (music == null) {
@@ -268,7 +263,7 @@ class ExportManager(private val context: Context) {
             // Music where it was placed: song pieces back to back (repeats if looped), cut where the
             // timeline ends; fades only where they were asked for.
             val totalMs = spec.parts.sumOf { if (it.isPhoto) it.durationMs else (it.durationMs / it.speed).toLong() }
-            val endMs = if (test) minOf(totalMs, TEST_LENGTH_MS) else totalMs
+            val endMs = totalMs
             val placement = music.placement
             val segments = placement.segments(endMs)
             val musicEndMs = placement.endMs(endMs)
@@ -331,22 +326,16 @@ class ExportManager(private val context: Context) {
 
     private suspend fun completeVideo(job: ExportJob, output: File) {
         val spec = job.spec
-        val first = spec.parts.first()
         try {
             val result = withContext(Dispatchers.IO) { VideoFormatInfo.read(context, Uri.fromFile(output)) }
             var saved: Uri? = null
-            val message = if (spec.kind == ExportKind.TEN_BIT_TEST) {
-                output.delete()
-                tenBitReport(first.sourceFormat, result)
-            } else {
-                val name = requireNotNull(spec.output).fileName
-                saved = withContext(Dispatchers.IO) { MediaStoreOutput.saveVideo(context, output, name) }
-                output.delete()
-                val warning = if (spec.parts.any { it.sourceFormat?.tenBit == true } && result?.tenBit == false) {
-                    "\nWarning: the source is 10-bit but this device produced 8-bit output."
-                } else ""
-                "Saved ${MediaStoreOutput.VIDEO_FOLDER}/$name ($result)$warning"
-            }
+            val name = requireNotNull(spec.output).fileName
+            saved = withContext(Dispatchers.IO) { MediaStoreOutput.saveVideo(context, output, name) }
+            output.delete()
+            val warning = if (spec.output.tenBit && result?.tenBit == false) {
+                "\nWarning: 10-bit was chosen but this device produced 8-bit output."
+            } else ""
+            val message = "Saved ${MediaStoreOutput.VIDEO_FOLDER}/$name ($result)$warning"
             finish(job.id, JobStatus.DONE, message, saved)
         } catch (e: Throwable) {
             output.delete()
@@ -354,32 +343,4 @@ class ExportManager(private val context: Context) {
         }
     }
 
-    private fun tenBitReport(input: VideoFormatInfo?, output: VideoFormatInfo?): String = buildString {
-        appendLine("Input:  ${input ?: "unknown"}")
-        appendLine("Output: ${output ?: "unknown"} (first ${TEST_LENGTH_MS / 1000} s, with dashboard and colour)")
-        appendLine(
-            when {
-                output?.tenBit == true -> "Result: 10-bit is preserved."
-                input?.tenBit == true -> "Result: the export dropped to 8-bit."
-                else -> "Result: the source is 8-bit, nothing to preserve."
-            },
-        )
-        appendLine("Device: ${Build.MANUFACTURER} ${Build.MODEL}, Android ${Build.VERSION.RELEASE}")
-        append(hevcEncoders())
-    }
-
-    private fun hevcEncoders(): String = buildString {
-        for (info in MediaCodecList(MediaCodecList.REGULAR_CODECS).codecInfos) {
-            if (!info.isEncoder || MimeTypes.VIDEO_H265 !in info.supportedTypes) continue
-            val caps = info.getCapabilitiesForType(MimeTypes.VIDEO_H265)
-            val main10 = caps.profileLevels.any { it.profile == MediaCodecInfo.CodecProfileLevel.HEVCProfileMain10 }
-            val hdrEditing = Build.VERSION.SDK_INT >= 33 &&
-                caps.isFeatureSupported(MediaCodecInfo.CodecCapabilities.FEATURE_HdrEditing)
-            appendLine("Encoder ${info.name}: Main10=${if (main10) "yes" else "no"}, HDR editing=${if (hdrEditing) "yes" else "no"}")
-        }
-    }
-
-    companion object {
-        const val TEST_LENGTH_MS = 3_000L
-    }
 }

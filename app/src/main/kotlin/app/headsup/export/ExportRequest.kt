@@ -12,7 +12,7 @@ import app.headsup.render.EffectSettings
 import java.time.Instant
 import java.time.ZoneId
 
-enum class ExportKind { VIDEO, PNG_SEQUENCE, TEN_BIT_TEST }
+enum class ExportKind { VIDEO, PNG_SEQUENCE }
 
 /** The activity matched to a clip, and the UTC time shown on its first frame (manual correction included). */
 class Telemetry(val track: ActivityTrack, val startUtcMs: Long)

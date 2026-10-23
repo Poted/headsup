@@ -109,6 +109,7 @@ import app.headsup.export.ExportKind
 import app.headsup.export.JobStatus
 import app.headsup.export.MediaStoreOutput
 import app.headsup.export.ExportSettings
+import app.headsup.export.ExportPreset
 import app.headsup.export.OutputSpec
 import app.headsup.export.VideoCodec
 import app.headsup.export.MusicTrack
@@ -150,11 +151,10 @@ private class OpenDocumentsIn(private val initial: Uri) : ActivityResultContract
 
 private enum class Tool(val label: String, val icon: ImageVector) {
     FILES("Files", HeadsupIcons.Video),
-    AUDIO("Audio", HeadsupIcons.Music),
+    EDIT("Edit", HeadsupIcons.Cut),
     COLOUR("Colour", HeadsupIcons.Colour),
     EFFECTS("Effects", HeadsupIcons.Dashboard),
-    FRAME("Frame", HeadsupIcons.Frame),
-    MOMENTS("Moments", HeadsupIcons.Star),
+    AUDIO("Audio", HeadsupIcons.Music),
     EXPORT("Export", HeadsupIcons.Export),
 }
 
@@ -189,7 +189,8 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
     var tool by rememberSaveable { mutableStateOf(Tool.FILES) }
     var adjustment by rememberSaveable { mutableStateOf(Adjustment.EXPOSURE) }
     var effectKind by rememberSaveable { mutableStateOf(EffectKind.DASHBOARD) }
-    val framing = tool == Tool.FRAME
+    var editTab by rememberSaveable { mutableStateOf(EditTab.CLIP) }
+    val framing = tool == Tool.EDIT && editTab == EditTab.FRAME
     // Set when a clip ended during playback, so the next one starts playing on its own.
     var continuePlaying by remember { mutableStateOf(false) }
     // Where to jump in the selected clip, e.g. after tapping a highlight.
@@ -204,7 +205,6 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
     val frameSource = remember { mutableStateOf<(() -> Bitmap?)?>(null) }
     val exporting = jobs.any { it.status == JobStatus.QUEUED || it.status == JobStatus.RUNNING }
     val previewMaxHeight = (LocalConfiguration.current.screenHeightDp * 0.38f).dp
-    TenBitResultDialog(jobs)
 
     Box(Modifier.fillMaxSize().background(HeadsupColors.BackgroundGradient)) {
         // No title bar: the picture starts at the top, adding files lives in the Files tool.
@@ -292,28 +292,23 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
             ) {
                 if (state.messages.isNotEmpty()) Messages(state.messages, vm::dismissMessages)
                 when (tool) {
-                    Tool.FILES -> FilesPanel(
-                        state, vm, playhead, onCutScrub = { cutScrub.value = it }, onAddVideos = addVideos, onAddFit = addFit,
-                        onAddMusic = { musicPicker.launch(arrayOf("audio/*")) },
-                    )
-                    Tool.AUDIO -> AudioPanel(state, vm, onAddMusic = { musicPicker.launch(arrayOf("audio/*")) })
-                    Tool.MOMENTS -> HighlightControls(state, vm) { f ->
+                    Tool.FILES -> FilesPanel(state, vm, onAddVideos = addVideos, onAddFit = addFit, onAddMusic = { musicPicker.launch(arrayOf("audio/*")) })
+                    Tool.EDIT -> EditPanel(state, vm, playhead, editTab, { editTab = it }, onCutScrub = { cutScrub.value = it }) { f ->
                         val index = state.clips.indexOfFirst { it.id == f.clipId }
                         if (index >= 0) {
                             if (index != state.selectedClip) vm.selectClip(index)
                             seekRequest = f.positionMs
                         }
                     }
+                    Tool.AUDIO -> AudioPanel(state, vm, onAddMusic = { musicPicker.launch(arrayOf("audio/*")) })
                     Tool.COLOUR -> ColourPage(state, vm, adjustment, { adjustment = it }, onAddLut = { lutPicker.launch(arrayOf("*/*")) }, frameSource.value)
-                    Tool.EFFECTS -> EffectsPanel(state, vm, effectKind) { effectKind = it }
-                    Tool.FRAME -> FramePanel(state, vm)
+                    Tool.EFFECTS -> EffectsPanel(state, vm, effectKind, playhead) { effectKind = it }
                     Tool.EXPORT -> ExportControls(
                         state = state,
                         vm = vm,
                         jobs = jobs,
                         onExportVideos = { startExport(vm::exportVideos) },
                         onExportOverlays = { startExport(vm::exportOverlays) },
-                        onTenBitTest = { startExport(vm::runTenBitTest) },
                     )
                 }
             }
@@ -434,8 +429,6 @@ private fun Messages(messages: List<String>, onDismiss: () -> Unit) {
 private fun FilesPanel(
     state: UiState,
     vm: HeadsupViewModel,
-    playhead: LongState,
-    onCutScrub: (Long?) -> Unit,
     onAddVideos: () -> Unit,
     onAddFit: () -> Unit,
     onAddMusic: () -> Unit,
@@ -467,18 +460,94 @@ private fun FilesPanel(
             }
             SyncSummary(clip, clip.sync?.let { state.activities.getOrNull(it.trackIndex) })
         }
-        if (clip.meta.isPhoto) {
-            Group {
-                // A photo has no cut: its length on the timeline is chosen here.
-                ValueHeader("Photo on screen", String.format(Locale.US, "%.1f s", clip.durationMs / 1000f))
-                RulerSlider(
-                    clip.durationMs / 1000f, 1f..(ClipMetadataReader.PHOTO_MAX_MS / 1000f), 0.5f,
-                    { v -> vm.setTrim(index, 0L, (v * 1000).toLong()) },
-                    onReset = { vm.setTrim(index, 0L, HeadsupViewModel.PHOTO_DEFAULT_MS) },
-                )
-                Hint(if (clip.sync != null) "The dashboard shows the moment it was taken." else "No time found in the photo; set it below to show watch data.")
-            }
-        } else Group {
+    }
+    Group {
+        Label("Activities")
+        if (state.activities.isEmpty()) Hint("Add the .FIT file(s) from your watch.")
+        state.activities.forEachIndexed { i, a -> ActivityRow(a, onRemove = { vm.removeActivity(i) }) }
+    }
+    Group { MusicFile(state, vm, onAddMusic) }
+}
+
+private enum class EditTab(val label: String) { CLIP("Clip"), FRAME("Frame"), MOMENTS("Moments") }
+
+/**
+ * Editing on the timeline: its frame rate, then the selected clip (cut, speed, fades), framing,
+ * and moments found in the watch data.
+ */
+@Composable
+private fun EditPanel(
+    state: UiState,
+    vm: HeadsupViewModel,
+    playhead: LongState,
+    tab: EditTab,
+    onTab: (EditTab) -> Unit,
+    onCutScrub: (Long?) -> Unit,
+    onShowHighlight: (FoundHighlight) -> Unit,
+) {
+    Group { TimelineRate(state, vm) }
+    PillTabs(EditTab.entries.map { it.label }, tab.ordinal) { onTab(EditTab.entries[it]) }
+    when (tab) {
+        EditTab.CLIP -> ClipEditing(state, vm, playhead, onCutScrub)
+        EditTab.FRAME -> FramePanel(state, vm)
+        EditTab.MOMENTS -> HighlightControls(state, vm, onShowHighlight)
+    }
+}
+
+/**
+ * The timeline's frame rate, like a project setting in DaVinci: every clip is exported at it.
+ * Clips with more frames are thinned out (or played slower); clips with fewer keep their own.
+ */
+@Composable
+private fun TimelineRate(state: UiState, vm: HeadsupViewModel) {
+    val fps = state.effectiveTimelineFps
+    ValueHeader("Timeline frame rate", "${OutputSpec.formatFps(fps)} fps")
+    Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        val auto = state.clips.firstOrNull()?.meta?.frameRate
+        FilterChip(
+            selected = state.timelineFps == null,
+            onClick = { vm.setTimelineFps(null) },
+            label = { Text("Auto" + (auto?.let { " (${OutputSpec.formatFps(it)})" } ?: "")) },
+        )
+        for (f in ExportSettings.FRAME_RATES) {
+            FilterChip(selected = state.timelineFps == f, onClick = { vm.setTimelineFps(f) }, label = { Text(OutputSpec.formatFps(f)) })
+        }
+    }
+    // How each frame rate in the project fits the timeline.
+    val rates = state.clips.filter { !it.meta.isPhoto }.mapNotNull { it.meta.frameRate }.groupingBy { kotlin.math.round(it * 100) / 100 }.eachCount()
+    val notes = rates.entries.sortedBy { it.key }.map { (rate, count) ->
+        val clips = if (count == 1) "1 clip" else "$count clips"
+        val r = rate / fps
+        when {
+            kotlin.math.abs(r - 1f) < 0.02f -> "$clips at ${OutputSpec.formatFps(rate)} fps: as recorded"
+            r > 1f -> "$clips at ${OutputSpec.formatFps(rate)} fps: every ${String.format(Locale.US, "%.3g", r)}th frame kept, or ${String.format(Locale.US, "%.3g", 1 / r)}× slow motion"
+            else -> "$clips at ${OutputSpec.formatFps(rate)} fps: fewer frames than the timeline, shown as recorded"
+        }
+    }
+    if (notes.isNotEmpty()) Hint(notes.joinToString("\n"))
+}
+
+/** The selected clip's cut (or a photo's time on screen), speed and fades. */
+@Composable
+private fun ClipEditing(state: UiState, vm: HeadsupViewModel, playhead: LongState, onCutScrub: (Long?) -> Unit) {
+    val index = state.selectedClip
+    val clip = state.selected
+    if (index == null || clip == null) {
+        Hint("Select a clip.")
+        return
+    }
+    if (clip.meta.isPhoto) {
+        Group {
+            // A photo has no cut: its length on the timeline is chosen here.
+            ValueHeader("Photo on screen", String.format(Locale.US, "%.1f s", clip.durationMs / 1000f))
+            RulerSlider(
+                clip.durationMs / 1000f, 1f..(ClipMetadataReader.PHOTO_MAX_MS / 1000f), 0.5f,
+                { v -> vm.setTrim(index, 0L, (v * 1000).toLong()) },
+                onReset = { vm.setTrim(index, 0L, HeadsupViewModel.PHOTO_DEFAULT_MS) },
+            )
+        }
+    } else {
+        Group {
             CutControls(
                 clip = clip,
                 playhead = playhead,
@@ -487,20 +556,32 @@ private fun FilesPanel(
                 onScrub = onCutScrub,
             )
         }
-        if (!clip.meta.isPhoto) Group { SpeedControls(clip, state.effectiveTimelineFps, onSpeed = { vm.setSpeed(index, it) }, onMute = { vm.setMuteChangedSpeed(index, it) }) }
-        Group { StartTimeControls(clip, state.activities) { vm.setManualStart(index, it) } }
-        val activity = clip.sync?.let { state.activities.getOrNull(it.trackIndex) }
-        if (activity != null) {
-            Group { SyncGraph(clip, activity.track, playhead) { vm.setManualOffset(index, clip.manualOffsetMs + it) } }
-        }
-        Group { OffsetControls(clip.manualOffsetMs) { vm.setManualOffset(index, it) } }
+        Group { SpeedControls(clip, state.effectiveTimelineFps, onSpeed = { vm.setSpeed(index, it) }, onMute = { vm.setMuteChangedSpeed(index, it) }) }
     }
     Group {
-        Label("Activities")
-        if (state.activities.isEmpty()) Hint("Add the .FIT file(s) from your watch.")
-        state.activities.forEachIndexed { i, a -> ActivityRow(a, onRemove = { vm.removeActivity(i) }) }
+        val maxS = (clip.timelineDurationMs / 1000f).coerceIn(0.5f, 10f)
+        ValueHeader("Fade in from black", fadeLabel(clip.fadeInMs))
+        RulerSlider(clip.fadeInMs / 1000f, 0f..maxS, 0.1f, { v -> vm.setFades(index, (v * 1000).toLong(), clip.fadeOutMs) }, onReset = { vm.setFades(index, 0L, clip.fadeOutMs) })
+        ValueHeader("Fade out to black", fadeLabel(clip.fadeOutMs))
+        RulerSlider(clip.fadeOutMs / 1000f, 0f..maxS, 0.1f, { v -> vm.setFades(index, clip.fadeInMs, (v * 1000).toLong()) }, onReset = { vm.setFades(index, clip.fadeInMs, 0L) })
+        Hint("Picture, dashboard and sound fade together. Music has its own fades on the Audio page.")
     }
-    Group { MusicFile(state, vm, onAddMusic) }
+}
+
+/** Watch data for the selected clip: its start time, the match graph and a fine offset. */
+@Composable
+private fun WatchSyncControls(state: UiState, vm: HeadsupViewModel, playhead: LongState) {
+    val index = state.selectedClip
+    val clip = state.selected
+    if (index == null || clip == null) {
+        Hint("Select a clip.")
+        return
+    }
+    SyncSummary(clip, clip.sync?.let { state.activities.getOrNull(it.trackIndex) })
+    StartTimeControls(clip, state.activities) { vm.setManualStart(index, it) }
+    val activity = clip.sync?.let { state.activities.getOrNull(it.trackIndex) }
+    if (activity != null) SyncGraph(clip, activity.track, playhead) { vm.setManualOffset(index, clip.manualOffsetMs + it) }
+    OffsetControls(clip.manualOffsetMs) { vm.setManualOffset(index, it) }
 }
 
 /** The music file itself: added, changed or removed here; what it does is on the Audio page. */
@@ -1650,12 +1731,11 @@ private enum class EffectKind(val symbol: String, val label: String) {
     GLOW("Gl", "Glow"),
     HALATION("Ha", "Halation"),
     BARS("Cin", "Bars"),
-    FADE("Fd", "Fade"),
 }
 
 /** Effects over the picture, picked from round options like the colour corrections. */
 @Composable
-private fun EffectsPanel(state: UiState, vm: HeadsupViewModel, kind: EffectKind, onKind: (EffectKind) -> Unit) {
+private fun EffectsPanel(state: UiState, vm: HeadsupViewModel, kind: EffectKind, playhead: LongState, onKind: (EffectKind) -> Unit) {
     val style = state.style
     val effects = state.effects
     val activities = state.activities
@@ -1676,7 +1756,6 @@ private fun EffectsPanel(state: UiState, vm: HeadsupViewModel, kind: EffectKind,
                 EffectKind.GLOW -> effects.glow > 0f
                 EffectKind.HALATION -> effects.halation > 0f
                 EffectKind.BARS -> effects.barsRatio != null
-                EffectKind.FADE -> state.selected?.let { it.fadeInMs > 0 || it.fadeOutMs > 0 } == true
             }
             CircleOption(e.symbol, e.label, selected = e == kind, modified = active) { onKind(e) }
         }
@@ -1689,11 +1768,12 @@ private fun EffectsPanel(state: UiState, vm: HeadsupViewModel, kind: EffectKind,
             }
             if (style.enabled) {
                 var tab by rememberSaveable { mutableStateOf(0) }
-                PillTabs(listOf("Widgets", "Layout", "Text"), tab) { tab = it }
+                PillTabs(listOf("Widgets", "Layout", "Text", "Sync"), tab) { tab = it }
                 when (tab) {
                     0 -> WidgetControls(style, activities, updateStyle)
                     1 -> LayoutControls(style, updateStyle)
-                    else -> TextControls(style, updateStyle)
+                    2 -> TextControls(style, updateStyle)
+                    else -> WatchSyncControls(state, vm, playhead)
                 }
             }
         }
@@ -1732,20 +1812,6 @@ private fun EffectsPanel(state: UiState, vm: HeadsupViewModel, kind: EffectKind,
                 items(listOf(2.39f to "2.39:1", 2.0f to "2:1", 1.85f to "1.85:1")) { (ratio, label) ->
                     FilterChip(selected = effects.barsRatio == ratio, onClick = { updateEffects { it.copy(barsRatio = ratio) } }, label = { Text(label) })
                 }
-            }
-        }
-        EffectKind.FADE -> {
-            val index = state.selectedClip
-            val clip = state.selected
-            if (index == null || clip == null) {
-                Hint("Select a clip.")
-            } else {
-                val maxS = (clip.timelineDurationMs / 1000f).coerceIn(0.5f, 10f)
-                ValueHeader("Fade in from black", fadeLabel(clip.fadeInMs))
-                RulerSlider(clip.fadeInMs / 1000f, 0f..maxS, 0.1f, { v -> vm.setFades(index, (v * 1000).toLong(), clip.fadeOutMs) }, onReset = { vm.setFades(index, 0L, clip.fadeOutMs) })
-                ValueHeader("Fade out to black", fadeLabel(clip.fadeOutMs))
-                RulerSlider(clip.fadeOutMs / 1000f, 0f..maxS, 0.1f, { v -> vm.setFades(index, clip.fadeInMs, (v * 1000).toLong()) }, onReset = { vm.setFades(index, clip.fadeInMs, 0L) })
-                Hint("This clip's picture, dashboard and sound fade together. Music has its own fades on the Audio page.")
             }
         }
     }
@@ -1853,14 +1919,22 @@ private fun ExportControls(
     jobs: List<ExportJob>,
     onExportVideos: () -> Unit,
     onExportOverlays: () -> Unit,
-    onTenBitTest: () -> Unit,
 ) {
     val settings = state.exportSettings
-    val first = state.clips.firstOrNull()
     Label("Video")
+    val active = vm.activePreset(state)
     SettingRow("Quick presets") {
-        AssistChip(onClick = { vm.applyPreset(vertical = true) }, label = { Text("Reels · TikTok · Shorts") })
-        AssistChip(onClick = { vm.applyPreset(vertical = false) }, label = { Text("YouTube") })
+        for (p in ExportPreset.entries) {
+            FilterChip(selected = active == p, onClick = { vm.applyPreset(p) }, label = { Text(p.label) })
+        }
+    }
+    // What will come out, so a preset's effect shows without scrolling through the options.
+    vm.outputPreview(state)?.let { out ->
+        Text(
+            out.toString() + (if (state.exportSettings.wholeTimeline) "" else " · each clip"),
+            style = MaterialTheme.typography.titleSmall,
+            color = HeadsupColors.Accent,
+        )
     }
     SettingRow("Export") {
         FilterChip(selected = settings.wholeTimeline, onClick = { vm.updateExportSettings { it.copy(wholeTimeline = true) } }, label = { Text("Whole timeline") })
@@ -1869,17 +1943,6 @@ private fun ExportControls(
     SettingRow("Resolution") {
         for ((height, label) in ExportSettings.HEIGHTS) {
             FilterChip(selected = settings.height == height, onClick = { vm.updateExportSettings { it.copy(height = height) } }, label = { Text(label) })
-        }
-    }
-    SettingRow("Frame rate") {
-        val auto = first?.meta?.frameRate
-        FilterChip(
-            selected = state.timelineFps == null,
-            onClick = { vm.setTimelineFps(null) },
-            label = { Text("Auto" + (auto?.let { " (${OutputSpec.formatFps(it)})" } ?: "")) },
-        )
-        for (fps in ExportSettings.FRAME_RATES) {
-            FilterChip(selected = state.timelineFps == fps, onClick = { vm.setTimelineFps(fps) }, label = { Text(OutputSpec.formatFps(fps)) })
         }
     }
     SettingRow("Quality") {
@@ -1923,7 +1986,7 @@ private fun ExportControls(
         Hint("For HDR screens. Phone galleries and editors show HLG darker than the 8-bit export, less so at higher white levels; while it plays the phone may brighten the screen.")
     }
     Hint(
-        "Frame rate is the timeline's: clips with more frames are thinned out, none are invented. " +
+        "Frame rate: the timeline's (${OutputSpec.formatFps(state.effectiveTimelineFps)} fps, set on the Edit page). " +
             when {
                 tenBit && settings.hlg -> "10-bit HLG: HEVC Main10, shown as HDR on HDR screens."
                 tenBit -> "10-bit: HEVC Main10 Rec.709 like DJI Mimo's 10-bit export; looks like 8-bit, smoother gradients, more room for later grading."
@@ -1945,10 +2008,6 @@ private fun ExportControls(
         if (canOverlay) "Transparent PNG frames (ZIP) per clip, for DaVinci → ${MediaStoreOutput.OVERLAY_FOLDER}"
         else "Needs a FIT file matched to the clips.",
     )
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        Hint("10-bit check: first 3 s of the selected clip through the HDR route, nothing saved.", Modifier.weight(1f))
-        SmallAction("Test", onTenBitTest, enabled = state.selected != null)
-    }
 
     if (jobs.isNotEmpty()) {
         jobs.forEach { JobRow(it) }
@@ -1973,7 +2032,6 @@ private fun JobRow(job: ExportJob) {
     val kind = when (job.spec.kind) {
         ExportKind.VIDEO -> "Video"
         ExportKind.PNG_SEQUENCE -> "PNG"
-        ExportKind.TEN_BIT_TEST -> "10-bit test"
     }
     Card(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -2006,20 +2064,3 @@ private fun shareVideo(context: Context, uri: Uri) {
     context.startActivity(Intent.createChooser(send, "Share video").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
 }
 
-/** Shows each finished 10-bit test once, with a button to copy the report. */
-@Composable
-private fun TenBitResultDialog(jobs: List<ExportJob>) {
-    var seen by rememberSaveable { mutableStateOf(listOf<Int>()) }
-    val job = jobs.lastOrNull {
-        it.spec.kind == ExportKind.TEN_BIT_TEST && (it.status == JobStatus.DONE || it.status == JobStatus.FAILED) && it.id !in seen
-    } ?: return
-    val clipboard = LocalClipboardManager.current
-    val report = job.message ?: "No details."
-    AlertDialog(
-        onDismissRequest = { seen = seen + job.id },
-        title = { Text(if (job.status == JobStatus.DONE) "10-bit test" else "10-bit test failed") },
-        text = { SelectionContainer { Text(report, style = MaterialTheme.typography.bodySmall) } },
-        confirmButton = { TextButton(onClick = { seen = seen + job.id }) { Text("OK") } },
-        dismissButton = { TextButton(onClick = { clipboard.setText(AnnotatedString(report)) }) { Text("Copy") } },
-    )
-}

@@ -34,6 +34,7 @@ import app.headsup.export.ExportRequest
 import app.headsup.export.GradeSetup
 import app.headsup.export.Telemetry
 import app.headsup.export.ExportSettings
+import app.headsup.export.ExportPreset
 import app.headsup.export.HdrRoute
 import app.headsup.export.JobSpec
 import app.headsup.export.OutputSpec
@@ -774,7 +775,9 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
     fun removeClip(index: Int) {
         _state.update { s ->
             val clips = s.clips.filterIndexed { i, _ -> i != index }
-            s.copy(clips = clips, selectedClip = s.selectedClip?.let { sel -> if (sel == index) null else if (sel > index) sel - 1 else sel })
+            // The selection moves to the neighbouring clip, so the editor stays on the timeline.
+            val selected = s.selectedClip?.let { sel -> if (sel >= index) (sel - 1).coerceAtLeast(0) else sel } ?: 0
+            s.copy(clips = clips, selectedClip = selected.takeIf { clips.isNotEmpty() }?.coerceAtMost(clips.size - 1))
         }
         refreshPreview()
     }
@@ -1182,17 +1185,33 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
      * Quick settings for where the video goes: vertical for Reels/TikTok/Shorts (9:16 for every
      * clip, 1080×1920, 30 fps, H.264), or YouTube (source size and shape, best quality, HEVC).
      */
-    fun applyPreset(vertical: Boolean) {
-        if (vertical) {
-            setAspectForAll(9f / 16f)
-            _state.update {
-                it.copy(
-                    timelineFps = 30f,
-                    exportSettings = ExportSettings(wholeTimeline = true, height = 1920, bitrateFactor = 1.5f, codec = VideoCodec.H264),
-                )
+    /**
+     * Social presets. Vertical: 9:16 at 1080×1920, 30 fps, HEVC 8-bit (platforms re-encode anyway;
+     * all of them take HEVC). YouTube: the clips' own size, best quality, 10-bit when the clips are.
+     */
+    fun applyPreset(preset: ExportPreset) {
+        val tenBitSource = _state.value.clips.any { it.meta.format?.tenBit == true }
+        when (preset) {
+            ExportPreset.VERTICAL -> {
+                setAspectForAll(9f / 16f)
+                _state.update {
+                    it.copy(timelineFps = 30f, exportSettings = it.exportSettings.copy(wholeTimeline = true, height = 1920, bitrateFactor = 1.5f, codec = VideoCodec.HEVC, tenBit = false))
+                }
             }
-        } else {
-            _state.update { it.copy(exportSettings = ExportSettings(wholeTimeline = true, height = null, bitrateFactor = 2f, codec = VideoCodec.HEVC)) }
+            ExportPreset.YOUTUBE -> _state.update {
+                it.copy(exportSettings = it.exportSettings.copy(wholeTimeline = true, height = null, bitrateFactor = 2f, codec = VideoCodec.HEVC, tenBit = tenBitSource, hlg = false))
+            }
+        }
+    }
+
+    /** The preset the current settings match, if any. */
+    fun activePreset(s: UiState): ExportPreset? {
+        val e = s.exportSettings
+        return when {
+            s.clips.isNotEmpty() && s.clips.all { it.reframe.aspect == 9f / 16f } && e.height == 1920 && s.timelineFps == 30f &&
+                e.codec == VideoCodec.HEVC && !e.tenBit && e.bitrateFactor == 1.5f -> ExportPreset.VERTICAL
+            e.height == null && e.bitrateFactor == 2f && e.codec == VideoCodec.HEVC && !e.hlg -> ExportPreset.YOUTUBE
+            else -> null
         }
     }
 
@@ -1373,7 +1392,6 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
         else -> null
     }
 
-    fun runTenBitTest() = enqueue(ExportKind.TEN_BIT_TEST, listOfNotNull(state.value.selectedClip))
 
     fun cancelExports() = exportManager.cancelAll()
 
@@ -1436,28 +1454,42 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    /** Whether the export will be 10-bit: chosen, or forced by HLG clips (where they are brought to SDR). */
+    private fun exportsTenBit(s: UiState): Boolean =
+        (s.exportSettings.tenBit || s.clips.any { it.meta.format?.transfer == "HLG" }) && tenBitBlocker(s) == null
+
+    /** Output size, bit rate and format for a frame of [frameW]×[frameH] cut from a [srcW]×[srcH] source. */
+    private fun outputSpec(s: UiState, frameW: Int, frameH: Int, srcW: Int, srcH: Int, srcBitrate: Int?, fileName: String): OutputSpec {
+        val settings = s.exportSettings
+        val sourceH = frameH.toFloat()
+        val h = settings.height?.toFloat() ?: sourceH
+        val w = h * frameW / sourceH
+        // Bit rate follows the source's per pixel, times the chosen quality.
+        val sourceRate = (srcBitrate ?: 60_000_000).toDouble()
+        val pixels = (w * h) / (srcW.toDouble() * srcH).coerceAtLeast(1.0)
+        val bitrate = (sourceRate * pixels * settings.bitrateFactor).toLong().coerceIn(8_000_000L, 200_000_000L).toInt()
+        return OutputSpec(
+            OutputSpec.even(w), OutputSpec.even(h), s.effectiveTimelineFps, settings.codec, bitrate, fileName,
+            exportsTenBit(s), settings.hlg, settings.hdrWhite,
+        )
+    }
+
+    /** What the export would produce now (from the first clip), shown at the top of the export panel. */
+    fun outputPreview(s: UiState): OutputSpec? {
+        val c = s.clips.firstOrNull() ?: return null
+        val (fw, fh) = c.reframe.outputSize(c.meta.width.toFloat(), c.meta.height.toFloat())
+        return outputSpec(s, fw.toInt() / 2 * 2, fh.toInt() / 2 * 2, c.meta.width, c.meta.height, c.meta.bitrate, "")
+    }
+
     /**
      * Turns clips into export jobs: the whole timeline as one file (frame size and shape from the
      * first clip), or one file per clip; PNG overlays always per clip.
      */
     private fun jobsFor(kind: ExportKind, requests: List<ExportRequest>, s: UiState): List<JobSpec> {
         val settings = s.exportSettings
-        val fps = s.effectiveTimelineFps
-        // HLG clips always take the 10-bit route: it is where they are brought to SDR like the rest
-        // (Media3's 8-bit path would keep them HDR).
-        val hasHlg = requests.any { it.sourceFormat?.transfer == "HLG" }
-        val tenBit = (kind == ExportKind.TEN_BIT_TEST || settings.tenBit || hasHlg) && tenBitBlocker(s) == null
         fun spec(parts: List<ExportRequest>, fileName: String): OutputSpec {
             val first = parts.first()
-            val sourceH = first.frameHeight.toFloat()
-            val aspect = first.frameWidth.toFloat() / sourceH
-            val h = settings.height?.toFloat() ?: sourceH
-            val w = h * aspect
-            // Bit rate follows the source's per pixel, times the chosen quality.
-            val sourceRate = (first.sourceBitrate ?: 60_000_000).toDouble()
-            val pixels = (w * h) / (first.width.toDouble() * first.height).coerceAtLeast(1.0)
-            val bitrate = (sourceRate * pixels * settings.bitrateFactor).toLong().coerceIn(8_000_000L, 200_000_000L).toInt()
-            return OutputSpec(OutputSpec.even(w), OutputSpec.even(h), fps, settings.codec, bitrate, fileName, tenBit, settings.hlg, settings.hdrWhite)
+            return outputSpec(s, first.frameWidth, first.frameHeight, first.width, first.height, first.sourceBitrate, fileName)
         }
         return when {
             kind == ExportKind.PNG_SEQUENCE -> requests.map { JobSpec(kind, it.name, listOf(it), null) }

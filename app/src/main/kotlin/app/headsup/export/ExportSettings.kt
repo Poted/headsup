@@ -7,6 +7,8 @@ enum class VideoCodec(val label: String, val mimeType: String) {
     H264("H.264", MimeTypes.VIDEO_H264),
 }
 
+enum class ExportPreset(val label: String) { VERTICAL("Reels · TikTok · Shorts"), YOUTUBE("YouTube") }
+
 /** Video export choices from the export panel. The frame rate is the timeline's (a project setting). */
 data class ExportSettings(
     /** One file for the whole timeline, or one per clip. */
