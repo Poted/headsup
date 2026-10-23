@@ -103,6 +103,9 @@ whose table is swapped in place.
 Corrections, LUT and effects belong to each clip (`ClipState.grade`, `effects`, `lutName`). The
 last edited values become the default for clips added later, and a clip's look can be copied,
 pasted onto another clip or applied to all. The dashboard layout is shared by all clips.
+A global node (Colour → All clips) holds corrections added on top of every clip's own, e.g.
+one vignette for the whole project; the values are offsets, so the two simply add up
+(`ColorGrade.plus`).
 
 ## Export (stage 3)
 

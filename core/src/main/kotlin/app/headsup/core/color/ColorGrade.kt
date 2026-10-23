@@ -31,6 +31,26 @@ data class ColorGrade(
         get() = exposure == 0f && brightness == 0f && contrast == 0f && shadows == 0f &&
             highlights == 0f && saturation == 0f && temperature == 0f &&
             blacks == 0f && whites == 0f && vibrance == 0f && tint == 0f && skinHue == 0f
+
+    /**
+     * This grade with [other] on top, e.g. a clip's corrections plus the global ones. The values
+     * are offsets, so they add up (kept within the ranges the controls allow).
+     */
+    operator fun plus(other: ColorGrade) = ColorGrade(
+        exposure = (exposure + other.exposure).coerceIn(-4f, 4f),
+        brightness = (brightness + other.brightness).coerceIn(-1f, 1f),
+        contrast = (contrast + other.contrast).coerceIn(-1f, 1f),
+        shadows = (shadows + other.shadows).coerceIn(-1f, 1f),
+        highlights = (highlights + other.highlights).coerceIn(-1f, 1f),
+        saturation = (saturation + other.saturation).coerceIn(-1f, 1f),
+        temperature = (temperature + other.temperature).coerceIn(-1f, 1f),
+        vignette = (vignette + other.vignette).coerceIn(0f, 1f),
+        blacks = (blacks + other.blacks).coerceIn(-1f, 1f),
+        whites = (whites + other.whites).coerceIn(-1f, 1f),
+        vibrance = (vibrance + other.vibrance).coerceIn(-1f, 1f),
+        tint = (tint + other.tint).coerceIn(-1f, 1f),
+        skinHue = (skinHue + other.skinHue).coerceIn(-30f, 30f),
+    )
 }
 
 /**

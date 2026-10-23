@@ -156,4 +156,13 @@ class ColorTest {
         val out = applied(ColorGrade(tint = 1f), 0.5f, 0.5f, 0.5f)
         assertTrue(out[1] < 0.5f && out[0] > 0.5f && out[2] > 0.5f)
     }
+
+    @Test
+    fun `global grade adds to the clip's and stays in range`() {
+        val sum = ColorGrade(exposure = 0.5f, vignette = 0.8f, skinHue = 25f) + ColorGrade(exposure = -0.2f, vignette = 0.5f, skinHue = 10f)
+        assertEquals(0.3f, sum.exposure, 1e-6f)
+        assertEquals(1f, sum.vignette)
+        assertEquals(30f, sum.skinHue)
+        assertEquals(ColorGrade(contrast = 0.2f), ColorGrade(contrast = 0.2f) + ColorGrade())
+    }
 }

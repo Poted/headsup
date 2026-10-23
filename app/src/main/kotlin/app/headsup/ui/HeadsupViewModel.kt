@@ -104,6 +104,10 @@ data class UiState(
     val messages: List<String> = emptyList(),
     /** Corrections for new clips: the last ones edited. */
     val defaultGrade: ColorGrade = ColorGrade(),
+    /** Global node: corrections applied on top of every clip's own (e.g. one vignette for all). */
+    val globalGrade: ColorGrade = ColorGrade(),
+    /** Whether the colour page edits [globalGrade] instead of the selected clip's grade. */
+    val editingGlobal: Boolean = false,
     val luts: List<String> = emptyList(),
     /** Grade shown in the preview instead of [grade] while comparing (one correction held off). */
     val compareGrade: ColorGrade? = null,
@@ -117,8 +121,15 @@ data class UiState(
 ) {
     val selected: ClipState? get() = selectedClip?.let { clips.getOrNull(it) }
 
-    /** Corrections of the selected clip (what the colour page edits). */
-    val grade: ColorGrade get() = selected?.grade ?: defaultGrade
+    /** Corrections the colour page edits: the selected clip's, or the global node's. */
+    val grade: ColorGrade get() = if (editingGlobal) globalGrade else selected?.grade ?: defaultGrade
+
+    /** What is applied to [clip]: its own corrections plus the global node (with [compareGrade] in place of the edited one). */
+    fun appliedGrade(clip: ClipState): ColorGrade = when {
+        editingGlobal -> clip.grade + (compareGrade ?: globalGrade)
+        clip === selected -> (compareGrade ?: clip.grade) + globalGrade
+        else -> clip.grade + globalGrade
+    }
 
     /** Effects of the selected clip (what the effects page edits). */
     val effects: EffectSettings get() = selected?.effects ?: defaultEffects
@@ -133,6 +144,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
             style = stylePrefs.load(),
             defaultEffects = effectPrefs.load(),
             defaultGrade = gradeStore.loadGrade(),
+            globalGrade = gradeStore.loadGrade(GLOBAL),
             luts = gradeStore.names(),
             messages = listOfNotNull((app as HeadsupApp).takeCrashReport()),
         ),
@@ -329,8 +341,22 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
 
     fun setClipGrade(index: Int, enabled: Boolean) = updateClip(index) { it.copy(colorGrade = enabled) }
 
-    /** Changes the selected clip's corrections; they also become the default for clips added later. */
+    fun setEditingGlobal(global: Boolean) {
+        _state.update { it.copy(editingGlobal = global, compareGrade = null) }
+        refreshPreview()
+    }
+
+    /**
+     * Changes the selected clip's corrections (they also become the default for clips added
+     * later), or the global node's.
+     */
     fun updateGrade(transform: (ColorGrade) -> ColorGrade) {
+        if (_state.value.editingGlobal) {
+            _state.update { it.copy(globalGrade = transform(it.globalGrade)) }
+            gradeStore.saveGrade(_state.value.globalGrade, GLOBAL)
+            refreshPreview()
+            return
+        }
         _state.update { s ->
             val grade = transform(s.grade)
             s.copy(defaultGrade = grade, clips = s.clips.mapIndexed { i, c -> if (i == s.selectedClip) c.copy(grade = grade) else c })
@@ -359,7 +385,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                     previewDirty = false
                     val s = _state.value
                     val clip = s.selected
-                    val cube = if (clip == null || !clip.colorGrade) null else bake(clip.lutName, s.compareGrade ?: clip.grade)
+                    val cube = if (clip == null || !clip.colorGrade) null else bake(clip.lutName, s.appliedGrade(clip))
                     _state.update { it.copy(previewCube = cube) }
                     analyseScope()
                 }
@@ -401,7 +427,8 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                 val sync = clip.sync ?: return@mapNotNull null
                 val activity = s.activities.getOrNull(sync.trackIndex) ?: return@mapNotNull null
                 val graded = kind != ExportKind.PNG_SEQUENCE && clip.colorGrade
-                val cube = if (graded) cubes.getOrPut(clip.look.copy(effects = EffectSettings())) { bake(clip.lutName, clip.grade) } else null
+                val applied = clip.grade + s.globalGrade
+                val cube = if (graded) cubes.getOrPut(ClipLook(applied, EffectSettings(), clip.lutName)) { bake(clip.lutName, applied) } else null
                 ExportRequest(
                     kind = kind,
                     uri = clip.meta.uri,
@@ -418,7 +445,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                     telemetryStartUtcMs = sync.startUtcMs + clip.trimStartMs + clip.manualOffsetMs,
                     style = s.style,
                     effects = clip.effects,
-                    grade = if (graded) GradeSetup(cube, clip.grade.vignette) else null,
+                    grade = if (graded) GradeSetup(cube, applied.vignette) else null,
                     bitrateFactor = s.bitrateFactor,
                 )
             }
@@ -479,5 +506,6 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
     companion object {
         /** Large enough to fix a camera clock that is minutes off. */
         const val MAX_OFFSET_MS = 600_000L
+        private const val GLOBAL = "global_"
     }
 }

@@ -52,37 +52,38 @@ class GradeStore(private val context: Context) {
 
     private fun fileFor(name: String) = File(dir, "$name.cube")
 
-    fun loadGrade() = ColorGrade(
-        exposure = prefs.getFloat("exposure", 0f),
-        brightness = prefs.getFloat("brightness", 0f),
-        contrast = prefs.getFloat("contrast", 0f),
-        shadows = prefs.getFloat("shadows", 0f),
-        highlights = prefs.getFloat("highlights", 0f),
-        saturation = prefs.getFloat("saturation", 0f),
-        temperature = prefs.getFloat("temperature", 0f),
-        vignette = prefs.getFloat("vignette", 0f),
-        blacks = prefs.getFloat("blacks", 0f),
-        whites = prefs.getFloat("whites", 0f),
-        vibrance = prefs.getFloat("vibrance", 0f),
-        tint = prefs.getFloat("tint", 0f),
-        skinHue = prefs.getFloat("skin_hue", 0f),
+    /** [prefix] "" is the default grade for new clips, "global_" the grade applied to all clips. */
+    fun loadGrade(prefix: String = "") = ColorGrade(
+        exposure = prefs.getFloat(prefix + "exposure", 0f),
+        brightness = prefs.getFloat(prefix + "brightness", 0f),
+        contrast = prefs.getFloat(prefix + "contrast", 0f),
+        shadows = prefs.getFloat(prefix + "shadows", 0f),
+        highlights = prefs.getFloat(prefix + "highlights", 0f),
+        saturation = prefs.getFloat(prefix + "saturation", 0f),
+        temperature = prefs.getFloat(prefix + "temperature", 0f),
+        vignette = prefs.getFloat(prefix + "vignette", 0f),
+        blacks = prefs.getFloat(prefix + "blacks", 0f),
+        whites = prefs.getFloat(prefix + "whites", 0f),
+        vibrance = prefs.getFloat(prefix + "vibrance", 0f),
+        tint = prefs.getFloat(prefix + "tint", 0f),
+        skinHue = prefs.getFloat(prefix + "skin_hue", 0f),
     )
 
-    fun saveGrade(g: ColorGrade) {
+    fun saveGrade(g: ColorGrade, prefix: String = "") {
         prefs.edit()
-            .putFloat("exposure", g.exposure)
-            .putFloat("brightness", g.brightness)
-            .putFloat("contrast", g.contrast)
-            .putFloat("shadows", g.shadows)
-            .putFloat("highlights", g.highlights)
-            .putFloat("saturation", g.saturation)
-            .putFloat("temperature", g.temperature)
-            .putFloat("vignette", g.vignette)
-            .putFloat("blacks", g.blacks)
-            .putFloat("whites", g.whites)
-            .putFloat("vibrance", g.vibrance)
-            .putFloat("tint", g.tint)
-            .putFloat("skin_hue", g.skinHue)
+            .putFloat(prefix + "exposure", g.exposure)
+            .putFloat(prefix + "brightness", g.brightness)
+            .putFloat(prefix + "contrast", g.contrast)
+            .putFloat(prefix + "shadows", g.shadows)
+            .putFloat(prefix + "highlights", g.highlights)
+            .putFloat(prefix + "saturation", g.saturation)
+            .putFloat(prefix + "temperature", g.temperature)
+            .putFloat(prefix + "vignette", g.vignette)
+            .putFloat(prefix + "blacks", g.blacks)
+            .putFloat(prefix + "whites", g.whites)
+            .putFloat(prefix + "vibrance", g.vibrance)
+            .putFloat(prefix + "tint", g.tint)
+            .putFloat(prefix + "skin_hue", g.skinHue)
             .apply()
     }
 

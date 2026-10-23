@@ -44,7 +44,7 @@ class DashboardRenderer(private val assets: AssetManager) {
     private val routePaint = strokePaint(Color.argb(170, 255, 255, 255))
     private val donePaint = strokePaint(Layouts.ACCENT)
     private val dotPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.WHITE }
-    private val vignettePaint = Paint(Paint.ANTI_ALIAS_FLAG)
+    private val vignettePaint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.DITHER_FLAG)
     private val barPaint = Paint().apply { color = Color.BLACK }
     private val fillPath = Path()
     private val graphFill = Paint(Paint.ANTI_ALIAS_FLAG)
@@ -184,16 +184,28 @@ class DashboardRenderer(private val assets: AssetManager) {
         return sb.toString()
     }
 
-    /** Darkens the frame towards its corners; drawn under the dashboard so the numbers stay bright. */
+    /**
+     * Darkens the frame towards its corners; drawn under the dashboard so the numbers stay bright.
+     * The falloff is an oval matching the frame and eases in gradually, so there is no visible
+     * edge around the centre.
+     */
     fun drawVignette(canvas: Canvas, width: Float, height: Float, strength: Float) {
-        if (strength <= 0f) return
-        val radius = kotlin.math.hypot(width, height) / 2f
-        vignettePaint.shader = RadialGradient(
-            width / 2f, height / 2f, radius,
-            intArrayOf(Color.TRANSPARENT, Color.TRANSPARENT, Color.argb((strength.coerceIn(0f, 1f) * 230).toInt(), 0, 0, 0)),
-            floatArrayOf(0f, 0.45f, 1f),
-            Shader.TileMode.CLAMP,
-        )
+        if (strength <= 0f || width <= 0f || height <= 0f) return
+        val cx = width / 2f
+        val cy = height / 2f
+        // Circle reaching the corners in a square of the frame's width, squeezed to the frame's height.
+        val radius = cx * kotlin.math.sqrt(2f)
+        val maxAlpha = strength.coerceIn(0f, 1f) * 200f
+        val stops = FloatArray(VIGNETTE_STOPS) { it / (VIGNETTE_STOPS - 1f) }
+        val colors = IntArray(VIGNETTE_STOPS) { i ->
+            // Smoothstep from 30 % of the way out, then squared: a long, soft shoulder.
+            val t = ((stops[i] - 0.3f) / 0.7f).coerceIn(0f, 1f)
+            val s = t * t * (3f - 2f * t)
+            Color.argb((maxAlpha * s * s).toInt(), 0, 0, 0)
+        }
+        vignettePaint.shader = RadialGradient(cx, cy, radius, colors, stops, Shader.TileMode.CLAMP).apply {
+            setLocalMatrix(android.graphics.Matrix().apply { setScale(1f, height / width, cx, cy) })
+        }
         canvas.drawRect(0f, 0f, width, height, vignettePaint)
     }
 
@@ -433,6 +445,8 @@ class DashboardRenderer(private val assets: AssetManager) {
 
     companion object {
         private val SHADOW = Color.argb(160, 0, 0, 0)
+        private const val VIGNETTE_STOPS = 16
+
 
         /** Pixels per dashboard unit for a frame of this size. */
         fun unit(width: Float, height: Float, style: DashboardStyle) = min(width, height) / 1000f * style.scale

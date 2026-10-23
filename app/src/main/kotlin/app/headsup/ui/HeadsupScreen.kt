@@ -191,7 +191,7 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
                     activity = selected.sync?.let { state.activities.getOrNull(it.trackIndex) },
                     style = state.style,
                     gradeCube = state.previewCube,
-                    vignette = if (selected.colorGrade) (state.compareGrade ?: state.grade).vignette else 0f,
+                    vignette = if (selected.colorGrade) state.appliedGrade(selected).vignette else 0f,
                     effects = state.effects,
                     onSample = if (measuring) vm::sampleFrame else null,
                     marker = if (measuring) state.scope?.let { Offset(it.markerX, it.markerY) } else null,
@@ -663,22 +663,13 @@ private fun OffsetControls(offsetMs: Long, onChange: (Long) -> Unit) {
 
 // Colour page
 
-/** Copy the selected clip's look (corrections, effects, LUT), paste it on another, or use it everywhere. */
+/** Copy the selected clip's look (corrections, LUT, effects), paste it on another, or copy it to every clip. */
 @Composable
-private fun LookDialog(state: UiState, vm: HeadsupViewModel, onDismiss: () -> Unit) {
+private fun LookActions(state: UiState, vm: HeadsupViewModel) {
     val index = state.selectedClip ?: return
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("Look of this clip") },
-        text = { Hint("Corrections, LUT and effects together.") },
-        confirmButton = {
-            Row {
-                SmallAction("Copy", { vm.copyLook(); onDismiss() })
-                if (state.copiedLook != null) SmallAction("Paste", { vm.pasteLook(index); onDismiss() })
-                if (state.clips.size > 1) SmallAction("Apply to all", { vm.applyLookToAll(); onDismiss() })
-            }
-        },
-    )
+    SmallAction("Copy", vm::copyLook)
+    if (state.copiedLook != null) SmallAction("Paste", { vm.pasteLook(index) })
+    if (state.clips.size > 1) SmallAction("Copy to all", vm::applyLookToAll)
 }
 
 internal enum class Adjustment(
@@ -722,24 +713,29 @@ private fun ColourPage(
         Hint("Select a clip first.")
         return
     }
-    var lookMenu by remember { mutableStateOf(false) }
+    val global = state.editingGlobal
+    PillTabs(listOf("This clip", "All clips"), if (global) 1 else 0) { vm.setEditingGlobal(it == 1) }
     Row(verticalAlignment = Alignment.CenterVertically) {
-        Text("Colour", Modifier.weight(1f), style = MaterialTheme.typography.labelLarge)
-        if (clip.colorGrade) {
-            if (state.grade != ColorGrade()) SmallAction("Reset all", { vm.updateGrade { ColorGrade() } })
-            if (state.clips.size > 1 || state.copiedLook != null) SmallAction("Look…", { lookMenu = true })
+        if (global) {
+            Hint("Added on top of every clip's own corrections.", Modifier.weight(1f))
+        } else {
+            if (clip.colorGrade) LookActions(state, vm)
+            Spacer(Modifier.weight(1f))
         }
-        Switch(checked = clip.colorGrade, onCheckedChange = { vm.setClipGrade(index, it) })
+        if (state.grade != ColorGrade() && (global || clip.colorGrade)) SmallAction("Reset", { vm.updateGrade { ColorGrade() } })
+        if (!global) Switch(checked = clip.colorGrade, onCheckedChange = { vm.setClipGrade(index, it) })
     }
-    if (lookMenu) LookDialog(state, vm) { lookMenu = false }
-    if (!clip.colorGrade) {
-        Hint("Off: the clip keeps its own colours (for already graded files, e.g. Mimo exports).")
+    if (!global && !clip.colorGrade) {
+        Hint("Colour off: the clip keeps its own colours (for already graded files, e.g. Mimo exports).")
         return
     }
 
     // The ruler sits right under the correction picker, so nothing needs scrolling.
+    // The LUT belongs to the clip (it depends on how the clip was shot), so the global node has none.
+    val options = if (global) Adjustment.entries - Adjustment.LUT else Adjustment.entries
+    val adjustment = if (adjustment in options) adjustment else Adjustment.EXPOSURE
     LazyRow(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
-        items(Adjustment.entries) { a ->
+        items(options) { a ->
             val modified = if (a == Adjustment.LUT) clip.lutName != null else a.get(state.grade) != 0f
             CircleOption(a.symbol, a.label, selected = a == adjustment, modified = modified) { onAdjustment(a) }
         }
@@ -841,8 +837,12 @@ private fun EffectsPanel(state: UiState, vm: HeadsupViewModel) {
     val updateStyle = vm::updateStyle
     val updateEffects = vm::updateEffects
     var kind by rememberSaveable { mutableStateOf(EffectKind.DASHBOARD) }
-    var lookMenu by remember { mutableStateOf(false) }
-    if (lookMenu) LookDialog(state, vm) { lookMenu = false }
+    if (state.selected != null) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("Effects of this clip", Modifier.weight(1f), style = MaterialTheme.typography.labelLarge, color = HeadsupColors.TextMuted)
+            LookActions(state, vm)
+        }
+    }
     LazyRow(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
         items(EffectKind.entries) { e ->
             val active = when (e) {
@@ -859,7 +859,6 @@ private fun EffectsPanel(state: UiState, vm: HeadsupViewModel) {
         EffectKind.DASHBOARD -> {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text("Dashboard", Modifier.weight(1f), style = MaterialTheme.typography.labelLarge)
-                if (state.selected != null && (state.clips.size > 1 || state.copiedLook != null)) SmallAction("Look…", { lookMenu = true })
                 Switch(checked = style.enabled, onCheckedChange = { v -> updateStyle { it.copy(enabled = v) } })
             }
             if (style.enabled) {
