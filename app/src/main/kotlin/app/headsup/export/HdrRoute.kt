@@ -1,8 +1,10 @@
 package app.headsup.export
 
 import android.content.Context
-import android.graphics.Bitmap
-import android.text.SpannableString
+import android.media.MediaCodecInfo
+import android.media.MediaCodecList
+import android.media.MediaFormat
+import android.media.metrics.LogSessionId
 import android.opengl.GLES20
 import androidx.annotation.OptIn
 import androidx.media3.common.C
@@ -10,7 +12,6 @@ import androidx.media3.common.ColorInfo
 import androidx.media3.common.DataReader
 import androidx.media3.common.Format
 import androidx.media3.common.MimeTypes
-import androidx.media3.common.OverlaySettings
 import androidx.media3.common.VideoFrameProcessingException
 import androidx.media3.common.util.Clock
 import androidx.media3.common.util.GlProgram
@@ -20,9 +21,6 @@ import androidx.media3.common.util.Size
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DataSourceBitmapLoader
 import androidx.media3.effect.BaseGlShaderProgram
-import androidx.media3.effect.BitmapOverlay
-import androidx.media3.effect.StaticOverlaySettings
-import androidx.media3.effect.TextOverlay
 import androidx.media3.effect.GlEffect
 import androidx.media3.effect.GlShaderProgram
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
@@ -35,6 +33,9 @@ import androidx.media3.extractor.PositionHolder
 import androidx.media3.extractor.SeekMap
 import androidx.media3.extractor.TrackOutput
 import androidx.media3.transformer.AssetLoader
+import androidx.media3.transformer.Codec
+import androidx.media3.transformer.DefaultCodec
+import androidx.media3.transformer.ExportException
 import androidx.media3.transformer.DefaultAssetLoaderFactory
 import androidx.media3.transformer.DefaultDecoderFactory
 
@@ -54,12 +55,11 @@ object HdrRoute {
     val SDR_WHITE: Float = hlgEotf(0.75f)
 
     /**
-     * HLG signal levels offered for the export's white. Phone galleries and editors (measured with
-     * DJI Mimo and Samsung's gallery) show HLG about as bright as SDR when white sits near 93 %;
-     * the broadcast level (75 %) looks about a third as bright there.
+     * HLG signal levels offered for the white of an HLG export. 75 % is the broadcast level (right
+     * on HDR screens); phone galleries and DJI Mimo show it much darker than SDR, higher levels less so.
      */
-    const val DEFAULT_WHITE = 0.93f
-    val WHITE_LEVELS: List<Pair<Float, String>> = listOf(DEFAULT_WHITE to "Like SDR (93 %)", 0.85f to "85 %", 0.75f to "HDR standard (75 %)")
+    const val DEFAULT_WHITE = 0.75f
+    val WHITE_LEVELS: List<Pair<Float, String>> = listOf(DEFAULT_WHITE to "Standard (75 %)", 0.85f to "85 %", 0.93f to "93 %")
 
     /** Scene-linear light for an HLG signal level [x] (Media3's HLG EOTF). */
     fun hlgEotf(x: Float): Float {
@@ -116,6 +116,51 @@ object HdrRoute {
         else -> HdrInput.RELABELLED_BT709
     }
 
+    /**
+     * Encoders for the 10-bit SDR mode: Media3 asks for HLG (its 10-bit route), but the HEVC encoder
+     * is configured as Main10 BT.709 SDR, so the file is tagged like DJI Mimo's 10-bit exports. The
+     * encoder reports the requested format back so Media3 keeps its 10-bit pipeline.
+     */
+    fun sdrEncoderFactory(context: Context, bitrate: Int, audio: Codec.EncoderFactory): Codec.EncoderFactory = object : Codec.EncoderFactory {
+        override fun createForAudioEncoding(format: Format, logSessionId: LogSessionId?): Codec =
+            audio.createForAudioEncoding(format, logSessionId)
+
+        override fun createForVideoEncoding(format: Format, logSessionId: LogSessionId?): Codec {
+            val info = hdrEncoder() ?: throw ExportException.createForCodec(
+                IllegalStateException("No HEVC encoder with 10-bit surface input"),
+                ExportException.ERROR_CODE_ENCODING_FORMAT_UNSUPPORTED,
+                ExportException.CodecInfo(format.toString(), true, false, null),
+            )
+            val caps = info.getCapabilitiesForType(MimeTypes.VIDEO_H265)
+            val main10 = MediaCodecInfo.CodecProfileLevel.HEVCProfileMain10
+            val level = caps.profileLevels.filter { it.profile == main10 }.maxOfOrNull { it.level }
+            val media = MediaFormat.createVideoFormat(MimeTypes.VIDEO_H265, format.width, format.height).apply {
+                setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_Format32bitABGR2101010)
+                setInteger(MediaFormat.KEY_PROFILE, main10)
+                level?.let { setInteger(MediaFormat.KEY_LEVEL, it) }
+                setInteger(MediaFormat.KEY_BIT_RATE, caps.videoCapabilities.bitrateRange.clamp(bitrate))
+                setInteger(MediaFormat.KEY_BITRATE_MODE, MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_VBR)
+                setInteger(MediaFormat.KEY_FRAME_RATE, kotlin.math.round(format.frameRate.takeIf { it > 0 } ?: 30f).toInt())
+                setFloat(MediaFormat.KEY_I_FRAME_INTERVAL, 1f)
+                setInteger(MediaFormat.KEY_COLOR_STANDARD, MediaFormat.COLOR_STANDARD_BT709)
+                setInteger(MediaFormat.KEY_COLOR_TRANSFER, MediaFormat.COLOR_TRANSFER_SDR_VIDEO)
+                setInteger(MediaFormat.KEY_COLOR_RANGE, MediaFormat.COLOR_RANGE_LIMITED)
+            }
+            return DefaultCodec(context, format, media, info.name, false, null)
+        }
+
+        override fun videoNeedsEncoding() = true
+    }
+
+    private fun hdrEncoder(): MediaCodecInfo? =
+        MediaCodecList(MediaCodecList.REGULAR_CODECS).codecInfos.filter { info ->
+            info.isEncoder && MimeTypes.VIDEO_H265 in info.supportedTypes &&
+                MediaCodecInfo.CodecCapabilities.COLOR_Format32bitABGR2101010 in info.getCapabilitiesForType(MimeTypes.VIDEO_H265).colorFormats
+        }.sortedByDescending { info ->
+            android.os.Build.VERSION.SDK_INT >= 33 &&
+                info.getCapabilitiesForType(MimeTypes.VIDEO_H265).isFeatureSupported(MediaCodecInfo.CodecCapabilities.FEATURE_HdrEditing)
+        }.firstOrNull()
+
     /** Asset loading that reads every SDR/log video track as HLG/BT.2020 (HLG stays as it is). */
     fun assetLoaderFactory(context: Context): AssetLoader.Factory {
         val extractors = ExtractorsFactory { DefaultExtractorsFactory().createExtractors().map { HlgLabelling(it) }.toTypedArray() }
@@ -169,10 +214,16 @@ object HdrRoute {
  */
 enum class HdrInput { RELABELLED_BT709, RELABELLED_BT2020, HLG }
 
-/** The finished SDR picture (display BT.709) as linear BT.2020 light for an HLG signal, its white at [whiteSignal] HLG (75 % = BT.2408). */
+/**
+ * The finished picture (display BT.709) for Media3's HLG output stage, which applies the HLG OETF.
+ * With [hlgWhite] it becomes linear BT.2020 light with white at that HLG level (75 % = BT.2408).
+ * Without, the values are only pre-distorted so the stage writes them back unchanged: a 10-bit
+ * BT.709 SDR picture, which [HdrRoute.sdrEncoderFactory] encodes and tags as such.
+ */
 @OptIn(UnstableApi::class)
-class HdrOutputEffect(private val whiteSignal: Float) : GlEffect {
-    override fun toGlShaderProgram(context: Context, useHdr: Boolean): GlShaderProgram = Program(useHdr, HdrRoute.hlgEotf(whiteSignal))
+class HdrOutputEffect(private val hlgWhite: Float?) : GlEffect {
+    override fun toGlShaderProgram(context: Context, useHdr: Boolean): GlShaderProgram =
+        Program(useHdr, hlgWhite?.let { HdrRoute.hlgEotf(it) } ?: 0f)
 
     private class Program(useHdr: Boolean, private val white: Float) : BaseGlShaderProgram(useHdr, 1) {
         private val program = try {
@@ -192,6 +243,7 @@ class HdrOutputEffect(private val whiteSignal: Float) : GlEffect {
                 program.use()
                 program.setSamplerTexIdUniform("uTexSampler", inputTexId, 0)
                 program.setFloatUniform("uWhite", white)
+                program.setIntUniform("uSdr", if (white == 0f) 1 else 0)
                 program.bindAttributesAndUniforms()
                 GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4)
             } catch (e: GlUtil.GlException) {
@@ -223,43 +275,25 @@ class HdrOutputEffect(private val whiteSignal: Float) : GlEffect {
                 precision highp float;
                 uniform sampler2D uTexSampler;
                 uniform float uWhite;
+                uniform int uSdr;
                 varying vec2 vTexSamplingCoord;
                 const mat3 BT709_TO_BT2020 = mat3(
                     0.6274, 0.0691, 0.0164,
                     0.3293, 0.9195, 0.0880,
                     0.0433, 0.0114, 0.8956);
+                float hlgEotf(float x) {
+                    return x <= 0.5 ? x * x / 3.0 : (0.28466892 + exp((x - 0.55991073) / 0.17883277)) / 12.0;
+                }
                 void main() {
                     vec4 src = texture2D(uTexSampler, vTexSamplingCoord);
-                    vec3 linear709 = pow(clamp(src.rgb, 0.0, 1.0), vec3(2.4));
-                    gl_FragColor = vec4(BT709_TO_BT2020 * linear709 * uWhite, src.a);
+                    vec3 c = clamp(src.rgb, 0.0, 1.0);
+                    if (uSdr == 1) {
+                        gl_FragColor = vec4(hlgEotf(c.r), hlgEotf(c.g), hlgEotf(c.b), src.a);
+                    } else {
+                        gl_FragColor = vec4(BT709_TO_BT2020 * pow(c, vec3(2.4)) * uWhite, src.a);
+                    }
                 }
             """
         }
-    }
-}
-
-/**
- * The dashboard on an HDR frame. Media3 accepts plain bitmaps there only as text overlays (others
- * must be Ultra HDR), which it turns into linear light and scales by the luminance multiplier; so
- * [inner] is drawn under that label with SDR white at 75 % HLG, like the picture.
- */
-@OptIn(UnstableApi::class)
-class HdrOverlay(private val inner: BitmapOverlay, whiteSignal: Float) : TextOverlay() {
-    private val settings = StaticOverlaySettings.Builder().setHdrLuminanceMultiplier(HdrRoute.hlgEotf(whiteSignal)).build()
-
-    override fun configure(videoSize: Size) {
-        super.configure(videoSize)
-        inner.configure(videoSize)
-    }
-
-    override fun getText(presentationTimeUs: Long) = SpannableString("")
-
-    override fun getBitmap(presentationTimeUs: Long): Bitmap = inner.getBitmap(presentationTimeUs)
-
-    override fun getOverlaySettings(presentationTimeUs: Long): OverlaySettings = settings
-
-    override fun release() {
-        super.release()
-        inner.release()
     }
 }

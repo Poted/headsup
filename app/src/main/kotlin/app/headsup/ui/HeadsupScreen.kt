@@ -1900,26 +1900,33 @@ private fun ExportControls(
         }
     }
     SettingRow("Colour depth") {
-        FilterChip(selected = !tenBit, onClick = { vm.updateExportSettings { it.copy(tenBit = false) } }, label = { Text("8-bit SDR") })
+        FilterChip(selected = !tenBit, onClick = { vm.updateExportSettings { it.copy(tenBit = false) } }, label = { Text("8-bit") })
         FilterChip(
-            selected = tenBit,
-            onClick = { vm.updateExportSettings { it.copy(tenBit = true) } },
+            selected = tenBit && !settings.hlg,
+            onClick = { vm.updateExportSettings { it.copy(tenBit = true, hlg = false) } },
             enabled = tenBitBlocker == null,
-            label = { Text("10-bit HDR (HLG) · experimental") },
+            label = { Text("10-bit") },
+        )
+        FilterChip(
+            selected = tenBit && settings.hlg,
+            onClick = { vm.updateExportSettings { it.copy(tenBit = true, hlg = true) } },
+            enabled = tenBitBlocker == null,
+            label = { Text("10-bit HDR (HLG)") },
         )
     }
-    if (tenBit) {
+    if (tenBit && settings.hlg) {
         SettingRow("White in HDR") {
             for ((level, label) in HdrRoute.WHITE_LEVELS) {
                 FilterChip(selected = settings.hdrWhite == level, onClick = { vm.updateExportSettings { it.copy(hdrWhite = level) } }, label = { Text(label) })
             }
         }
-        Hint("Where the picture's white sits in the HLG signal. At 93 % phone galleries and editors show it like the 8-bit export; 75 % is the broadcast standard, which they show much darker. While HDR plays, the phone may brighten the screen over the first seconds; that is the display, not the file.")
+        Hint("For HDR screens. Phone galleries and editors show HLG darker than the 8-bit export, less so at higher white levels; while it plays the phone may brighten the screen.")
     }
     Hint(
         "Frame rate is the timeline's: clips with more frames are thinned out, none are invented. " +
             when {
-                tenBit -> "10-bit: HEVC Main10 HLG, like DJI Mimo's 10-bit; smoother gradients, shows as HDR on HDR screens."
+                tenBit && settings.hlg -> "10-bit HLG: HEVC Main10, shown as HDR on HDR screens."
+                tenBit -> "10-bit: HEVC Main10 Rec.709 like DJI Mimo's 10-bit export; looks like 8-bit, smoother gradients, more room for later grading."
                 settings.codec == VideoCodec.HEVC -> "HEVC: smaller files."
                 else -> "H.264: plays everywhere, larger files."
             } + (tenBitBlocker?.let { " 10-bit: $it" } ?: ""),

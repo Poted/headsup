@@ -16,9 +16,10 @@ data class ExportSettings(
     /** Bit rate relative to the source's, scaled to the output size. */
     val bitrateFactor: Float = 1f,
     val codec: VideoCodec = VideoCodec.HEVC,
-    /** HEVC Main10 HLG through [HdrRoute] (experimental). */
+    /** HEVC Main10 through [HdrRoute] (experimental): BT.709 SDR like DJI Mimo, or HLG if [hlg]. */
     val tenBit: Boolean = false,
-    /** HLG signal level where the picture's white goes in a 10-bit export. */
+    val hlg: Boolean = false,
+    /** HLG signal level where the picture's white goes in an HLG export. */
     val hdrWhite: Float = HdrRoute.DEFAULT_WHITE,
 ) {
     companion object {
@@ -36,12 +37,13 @@ data class OutputSpec(
     val codec: VideoCodec,
     val bitrate: Int,
     val fileName: String,
-    /** 10-bit HLG through [HdrRoute]; always HEVC. */
+    /** 10-bit through [HdrRoute]; always HEVC. BT.709 SDR, or HLG with white at [hdrWhite] if [hlg]. */
     val tenBit: Boolean = false,
+    val hlg: Boolean = false,
     val hdrWhite: Float = HdrRoute.DEFAULT_WHITE,
 ) {
     override fun toString() = "${width}×$height" + (frameRate?.let { " · ${formatFps(it)} fps" } ?: "") +
-        " · ${bitrate / 1_000_000} Mb/s · ${codec.label}" + (if (tenBit) " · 10-bit HLG" else "")
+        " · ${bitrate / 1_000_000} Mb/s · ${codec.label}" + (if (tenBit) if (hlg) " · 10-bit HLG" else " · 10-bit" else "")
 
     companion object {
         fun formatFps(fps: Float) = if (fps % 1f == 0f) fps.toInt().toString() else String.format(java.util.Locale.US, "%.2f", fps)

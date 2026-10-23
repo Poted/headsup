@@ -17,7 +17,16 @@ The hardware can encode Main10. The 8-bit output comes from Media3: it keeps 10 
 HDR path (HLG/PQ input). D-Log M is tagged SDR, so effects run in 8-bit textures and the encoder is
 fed 8-bit frames. The baked colour table (`SingleColorLut`, ARGB_8888) is 8-bit as well.
 
-## Current experiment: Media3 HDR route (HLG)
+## Current experiment: Media3 HDR route (10-bit SDR or HLG)
+
+DJI Mimo's "10-bit" export of the same Samsung Log clip turned out to be HEVC Main10 tagged
+BT.709 SDR (limited range), transcoded through FFmpeg; HLG renders darker in phone galleries and
+editors. The default 10-bit mode therefore writes the same: Media3 still runs its 10-bit (HLG)
+pipeline, `HdrOutputEffect` pre-distorts the finished BT.709 values so Media3's HLG OETF writes
+them back unchanged, and `HdrRoute.sdrEncoderFactory` configures the HEVC encoder as Main10 BT.709
+SDR (reporting the requested format back to Media3). The dashboard is blended by
+`DashboardEffect` on display colours in both modes. HLG stays available as "10-bit HDR (HLG)".
+
 
 `export/HdrRoute.kt`, behind "Colour depth → 10-bit HDR (HLG) · experimental" in the export panel
 (and always used by the "Test" button):

@@ -205,17 +205,19 @@ class ExportManager(private val context: Context) {
         // The output frame: the clip's shape cropped around the centre and scaled to the output size,
         // so every clip of a joined export has the same frame.
         effects += Presentation.createForWidthAndHeight(out.width, out.height, Presentation.LAYOUT_SCALE_TO_FIT_WITH_CROP)
-        if (hdr) {
-            // From here on the frame is linear HLG light; the dashboard is placed to match.
-            effects += HdrOutputEffect(out.hdrWhite)
-            effects += OverlayEffect(ImmutableList.of<TextureOverlay>(HdrOverlay(overlay, out.hdrWhite)))
-        } else {
-            effects += OverlayEffect(ImmutableList.of<TextureOverlay>(overlay))
-        }
         val speed = request.speed
         val timelineMs = if (request.isPhoto) request.durationMs else (request.durationMs / speed).toLong()
-        if (request.fadeInMs > 0 || request.fadeOutMs > 0) {
-            effects += FadeEffect(timelineMs, request.fadeInMs, request.fadeOutMs, if (request.isPhoto) 1f else speed)
+        val fade = if (request.fadeInMs > 0 || request.fadeOutMs > 0) {
+            FadeEffect(timelineMs, request.fadeInMs, request.fadeOutMs, if (request.isPhoto) 1f else speed)
+        } else null
+        if (hdr) {
+            // Dashboard and fade on display colours, then into the 10-bit signal (SDR or HLG light).
+            effects += DashboardEffect(overlay)
+            fade?.let { effects += it }
+            effects += HdrOutputEffect(if (out.hlg) out.hdrWhite else null)
+        } else {
+            effects += OverlayEffect(ImmutableList.of<TextureOverlay>(overlay))
+            fade?.let { effects += it }
         }
         if (speed != 1f) effects += SpeedChangeEffect(speed)
         // Fewer frames when the clip (after the speed change) has more than the timeline.
@@ -302,7 +304,7 @@ class ExportManager(private val context: Context) {
         val t = Transformer.Builder(context)
             .setVideoMimeType(if (out.tenBit) MimeTypes.VIDEO_H265 else out.codec.mimeType)
             .apply { if (out.tenBit) setAssetLoaderFactory(HdrRoute.assetLoaderFactory(context)) }
-            .setEncoderFactory(encoderFactory)
+            .setEncoderFactory(if (out.tenBit && !out.hlg) HdrRoute.sdrEncoderFactory(context, out.bitrate, encoderFactory) else encoderFactory)
             .addListener(object : Transformer.Listener {
                 override fun onCompleted(composition: Composition, exportResult: ExportResult) {
                     scope.launch { completeVideo(job, output) }
