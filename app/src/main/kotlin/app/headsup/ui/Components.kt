@@ -220,7 +220,12 @@ fun PillTabs(options: List<String>, selected: Int, onSelect: (Int) -> Unit) {
                     .padding(vertical = 8.dp),
                 contentAlignment = Alignment.Center,
             ) {
-                Text(label, style = MaterialTheme.typography.labelLarge, color = if (on) HeadsupColors.OnHighlight else HeadsupColors.TextMuted)
+                Text(
+                    label,
+                    style = if (options.size > 3) MaterialTheme.typography.labelMedium else MaterialTheme.typography.labelLarge,
+                    color = if (on) HeadsupColors.OnHighlight else HeadsupColors.TextMuted,
+                    maxLines = 1,
+                )
             }
         }
     }

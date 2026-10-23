@@ -71,6 +71,8 @@ data class ClipState(
     val effects: EffectSettings = EffectSettings(),
     /** Graduated mask with its own corrections, or null for none. */
     val mask: GradientMask? = null,
+    /** Group whose corrections (and LUT, if the clip has none) apply too; at most one. */
+    val groupId: Long? = null,
 ) {
     val look: ClipLook get() = ClipLook(grade, effects, lutName, mask)
 
@@ -90,8 +92,14 @@ data class ClipState(
 /** What "Copy" takes from a clip and "Paste" gives to another: corrections, effects and LUT. */
 data class ClipLook(val grade: ColorGrade, val effects: EffectSettings, val lutName: String?, val mask: GradientMask? = null)
 
-/** What the colour page edits. */
-enum class GradeTarget { CLIP, MASK, GLOBAL }
+/**
+ * Clips shot the same way (e.g. "Drone"): shared corrections between the clip's and the global
+ * ones, and a LUT for members without their own.
+ */
+data class ClipGroup(val id: Long, val name: String, val grade: ColorGrade = ColorGrade(), val lutName: String? = null)
+
+/** What the colour page edits; the order is that of its tabs. */
+enum class GradeTarget { CLIP, GROUP, MASK, GLOBAL }
 
 private var lastClipId = 0L
 private fun nextClipId() = ++lastClipId
@@ -114,6 +122,7 @@ data class UiState(
     val globalGrade: ColorGrade = ColorGrade(),
     /** Which corrections the colour page edits. */
     val target: GradeTarget = GradeTarget.CLIP,
+    val groups: List<ClipGroup> = emptyList(),
     val luts: List<String> = emptyList(),
     /** Grade shown in the preview instead of [grade] while comparing (one correction held off). */
     val compareGrade: ColorGrade? = null,
@@ -133,17 +142,32 @@ data class UiState(
     val grade: ColorGrade
         get() = when (target) {
             GradeTarget.GLOBAL -> globalGrade
+            GradeTarget.GROUP -> selected?.let(::groupOf)?.grade ?: ColorGrade()
             GradeTarget.MASK -> selected?.mask?.grade ?: ColorGrade()
             GradeTarget.CLIP -> selected?.grade ?: defaultGrade
         }
 
-    /** [edited] unless it is the grade being compared (held ruler), then [compareGrade]. */
-    private fun shown(edited: ColorGrade, which: GradeTarget, clip: ClipState) =
-        if (target == which && (which == GradeTarget.GLOBAL || clip === selected)) compareGrade ?: edited else edited
+    fun groupOf(clip: ClipState): ClipGroup? = clip.groupId?.let { id -> groups.firstOrNull { it.id == id } }
 
-    /** What is applied to [clip] outside its mask: its own corrections plus the global node. */
+    /** The clip's own LUT, or else its group's. */
+    fun lutFor(clip: ClipState): String? = clip.lutName ?: groupOf(clip)?.lutName
+
+    /** [edited] unless it is the grade being compared (held ruler), then [compareGrade]. */
+    private fun shown(edited: ColorGrade, which: GradeTarget, clip: ClipState): ColorGrade {
+        if (target != which || compareGrade == null) return edited
+        val affected = when (which) {
+            GradeTarget.GLOBAL -> true
+            GradeTarget.GROUP -> clip.groupId != null && clip.groupId == selected?.groupId
+            else -> clip === selected
+        }
+        return if (affected) compareGrade else edited
+    }
+
+    /** What is applied to [clip] outside its mask: its own corrections, its group's and the global node. */
     fun appliedGrade(clip: ClipState): ColorGrade =
-        shown(clip.grade, GradeTarget.CLIP, clip) + shown(globalGrade, GradeTarget.GLOBAL, clip)
+        shown(clip.grade, GradeTarget.CLIP, clip) +
+            shown(groupOf(clip)?.grade ?: ColorGrade(), GradeTarget.GROUP, clip) +
+            shown(globalGrade, GradeTarget.GLOBAL, clip)
 
     /** What is applied inside [clip]'s mask, or null without one. */
     fun maskedGrade(clip: ClipState): ColorGrade? =
@@ -308,7 +332,11 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
         gradeStore.delete(name)
         lutCache.remove(name)
         _state.update { s ->
-            s.copy(luts = gradeStore.names(), clips = s.clips.map { if (it.lutName == name) it.copy(lutName = null) else it })
+            s.copy(
+                luts = gradeStore.names(),
+                clips = s.clips.map { if (it.lutName == name) it.copy(lutName = null) else it },
+                groups = s.groups.map { if (it.lutName == name) it.copy(lutName = null) else it },
+            )
         }
         refreshPreview()
     }
@@ -364,6 +392,51 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
         refreshPreview()
     }
 
+    // Groups
+
+    /** Makes a new group (named "Group N") with the clip at [index] in it; the group takes over its LUT. */
+    fun createGroup(index: Int) {
+        _state.update { s ->
+            val clip = s.clips.getOrNull(index) ?: return@update s
+            val id = (s.groups.maxOfOrNull { it.id } ?: 0L) + 1
+            val number = generateSequence(s.groups.size + 1) { it + 1 }.first { n -> s.groups.none { it.name == "Group $n" } }
+            s.copy(
+                groups = s.groups + ClipGroup(id, "Group $number", lutName = clip.lutName),
+                clips = s.clips.mapIndexed { i, c -> if (i == index) c.copy(groupId = id, lutName = null) else c },
+            )
+        }
+        refreshPreview()
+    }
+
+    /**
+     * Puts the clip at [index] in group [groupId] (with null takes it out). A clip joining a group
+     * that has a LUT uses the group's instead of its own.
+     */
+    fun setClipGroup(index: Int, groupId: Long?) {
+        val groupLut = _state.value.groups.firstOrNull { it.id == groupId }?.lutName
+        updateClip(index) { it.copy(groupId = groupId, lutName = if (groupLut != null) null else it.lutName) }
+    }
+
+    fun renameGroup(id: Long, name: String) = updateGroup(id) { it.copy(name = name.trim().ifEmpty { it.name }) }
+
+    fun setGroupLut(id: Long, lutName: String?) {
+        if (lutName != null) gradeStore.defaultLut = lutName
+        updateGroup(id) { it.copy(lutName = lutName) }
+    }
+
+    /** Removes the group; its clips keep their own settings. */
+    fun deleteGroup(id: Long) {
+        _state.update { s ->
+            s.copy(groups = s.groups.filter { it.id != id }, clips = s.clips.map { if (it.groupId == id) it.copy(groupId = null) else it })
+        }
+        refreshPreview()
+    }
+
+    private fun updateGroup(id: Long, transform: (ClipGroup) -> ClipGroup) {
+        _state.update { s -> s.copy(groups = s.groups.map { if (it.id == id) transform(it) else it }) }
+        refreshPreview()
+    }
+
     /** Adds (null removes) or reshapes the selected clip's mask. */
     fun updateMask(transform: (GradientMask?) -> GradientMask?) {
         val index = _state.value.selectedClip ?: return
@@ -384,6 +457,11 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
             }
             GradeTarget.MASK -> {
                 updateMask { m -> (m ?: GradientMask()).let { it.copy(grade = transform(it.grade)) } }
+                return
+            }
+            GradeTarget.GROUP -> {
+                val id = _state.value.selected?.groupId ?: return
+                updateGroup(id) { it.copy(grade = transform(it.grade)) }
                 return
             }
             GradeTarget.CLIP -> Unit
@@ -417,8 +495,8 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                     val s = _state.value
                     val clip = s.selected
                     val graded = clip?.takeIf { it.colorGrade }
-                    val cube = graded?.let { bake(it.lutName, s.appliedGrade(it)) }
-                    val maskCube = graded?.let { c -> s.maskedGrade(c)?.let { bakeAlways(c.lutName, it) } }
+                    val cube = graded?.let { bake(s.lutFor(it), s.appliedGrade(it)) }
+                    val maskCube = graded?.let { c -> s.maskedGrade(c)?.let { bakeAlways(s.lutFor(c), it) } }
                     _state.update { it.copy(previewCube = cube, previewMaskCube = maskCube) }
                     analyseScope()
                 }
@@ -467,10 +545,11 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                 val sync = clip.sync ?: return@mapNotNull null
                 val activity = s.activities.getOrNull(sync.trackIndex) ?: return@mapNotNull null
                 val graded = kind != ExportKind.PNG_SEQUENCE && clip.colorGrade
-                val applied = clip.grade + s.globalGrade
-                val cube = if (graded) cubes.getOrPut(ClipLook(applied, EffectSettings(), clip.lutName)) { bake(clip.lutName, applied) } else null
+                val applied = clip.grade + (s.groupOf(clip)?.grade ?: ColorGrade()) + s.globalGrade
+                val lutName = s.lutFor(clip)
+                val cube = if (graded) cubes.getOrPut(ClipLook(applied, EffectSettings(), lutName)) { bake(lutName, applied) } else null
                 val mask = clip.mask?.takeIf { graded }
-                val maskCube = mask?.let { bakeAlways(clip.lutName, applied + it.grade) }
+                val maskCube = mask?.let { bakeAlways(lutName, applied + it.grade) }
                 ExportRequest(
                     kind = kind,
                     uri = clip.meta.uri,

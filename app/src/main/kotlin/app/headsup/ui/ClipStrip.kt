@@ -6,6 +6,7 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -53,17 +54,31 @@ fun ClipStrip(
     onAdd: () -> Unit,
     onMove: (Int, Int) -> Unit,
     onDelete: (Int) -> Unit,
+    groups: List<ClipGroup> = emptyList(),
+    /** Puts a clip in a group (null takes it out). */
+    onGroup: (Int, Long?) -> Unit = { _, _ -> },
+    onNewGroup: (Int) -> Unit = {},
 ) {
     LazyRow(contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         itemsIndexed(clips, key = { _, c -> c.id }) { i, clip ->
             // Long-press opens the clip menu.
             var menu by remember { mutableStateOf(false) }
             Box {
-                ClipThumb(clip, i == selected, onClick = { onSelect(i) }, onLongClick = { onSelect(i); menu = true })
+                val group = groups.firstOrNull { it.id == clip.groupId }
+                ClipThumb(clip, group?.name, i == selected, onClick = { onSelect(i) }, onLongClick = { onSelect(i); menu = true })
                 DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
                     if (i > 0) DropdownMenuItem(text = { Text("Move left") }, onClick = { menu = false; onMove(i, -1) })
                     if (i < clips.lastIndex) DropdownMenuItem(text = { Text("Move right") }, onClick = { menu = false; onMove(i, 1) })
                     DropdownMenuItem(text = { Text("Delete") }, onClick = { menu = false; onDelete(i) })
+                    HorizontalDivider()
+                    // A clip is in at most one group, so picking another one moves it.
+                    for (g in groups) {
+                        DropdownMenuItem(
+                            text = { Text((if (g.id == clip.groupId) "✓ " else "") + g.name) },
+                            onClick = { menu = false; onGroup(i, if (g.id == clip.groupId) null else g.id) },
+                        )
+                    }
+                    DropdownMenuItem(text = { Text("New group") }, onClick = { menu = false; onNewGroup(i) })
                 }
             }
         }
@@ -82,7 +97,7 @@ fun ClipStrip(
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun ClipThumb(clip: ClipState, selected: Boolean, onClick: () -> Unit, onLongClick: () -> Unit) {
+private fun ClipThumb(clip: ClipState, groupName: String?, selected: Boolean, onClick: () -> Unit, onLongClick: () -> Unit) {
     val context = LocalContext.current
     val thumbnail by produceState<ImageBitmap?>(null, clip.meta.uri, clip.trimStartMs) {
         value = withContext(Dispatchers.IO) {
@@ -121,6 +136,19 @@ private fun ClipThumb(clip: ClipState, selected: Boolean, onClick: () -> Unit, o
                     CircleShape,
                 ),
         )
+        groupName?.let {
+            Text(
+                it,
+                Modifier
+                    .align(Alignment.TopStart)
+                    .padding(4.dp)
+                    .background(HeadsupColors.Highlight.copy(alpha = 0.9f), RoundedCornerShape(6.dp))
+                    .padding(horizontal = 4.dp),
+                style = MaterialTheme.typography.labelSmall,
+                color = HeadsupColors.OnHighlight,
+                maxLines = 1,
+            )
+        }
         Text(
             Formats.duration(clip.durationMs) + if (clip.isTrimmed) " ✂" else "",
             Modifier

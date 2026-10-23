@@ -207,7 +207,11 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
                 )
             }
             if (state.clips.isNotEmpty()) {
-                ClipStrip(state.clips, state.selectedClip, vm::selectClip, addVideos, onMove = vm::moveClip, onDelete = vm::removeClip)
+                ClipStrip(
+                    state.clips, state.selectedClip, vm::selectClip, addVideos,
+                    onMove = vm::moveClip, onDelete = vm::removeClip,
+                    groups = state.groups, onGroup = vm::setClipGroup, onNewGroup = vm::createGroup,
+                )
             }
 
             Column(
@@ -718,7 +722,8 @@ private fun ColourPage(
         return
     }
     val target = state.target
-    PillTabs(listOf("This clip", "Sky mask", "All clips"), target.ordinal) { vm.setTarget(GradeTarget.entries[it]) }
+    PillTabs(listOf("This clip", "Group", "Sky mask", "All clips"), target.ordinal) { vm.setTarget(GradeTarget.entries[it]) }
+    val group = state.groupOf(clip)
     when (target) {
         GradeTarget.CLIP -> Row(verticalAlignment = Alignment.CenterVertically) {
             if (clip.colorGrade) LookActions(state, vm)
@@ -726,6 +731,7 @@ private fun ColourPage(
             if (clip.colorGrade && state.grade != ColorGrade()) SmallAction("Reset", { vm.updateGrade { ColorGrade() } })
             Switch(checked = clip.colorGrade, onCheckedChange = { vm.setClipGrade(index, it) })
         }
+        GradeTarget.GROUP -> GroupControls(state, clip, index, group, vm)
         GradeTarget.MASK -> Row(verticalAlignment = Alignment.CenterVertically) {
             Hint("Graduated filter: own corrections above the line.", Modifier.weight(1f))
             if (clip.mask != null) SmallAction("Remove", { vm.updateMask { null } })
@@ -739,6 +745,7 @@ private fun ColourPage(
         Hint("Colour off: the clip keeps its own colours (for already graded files, e.g. Mimo exports).")
         return
     }
+    if (target == GradeTarget.GROUP && group == null) return
     if (target == GradeTarget.MASK && clip.mask == null) {
         Button(onClick = { vm.updateMask { GradientMask() } }, modifier = Modifier.fillMaxWidth()) { Text("Add graduated mask") }
         return
@@ -748,7 +755,7 @@ private fun ColourPage(
     // The LUT belongs to the clip (it depends on how the clip was shot); the mask has only tonal
     // and colour corrections, with its shape in front.
     val options = when (target) {
-        GradeTarget.CLIP -> Adjustment.entries
+        GradeTarget.CLIP, GradeTarget.GROUP -> Adjustment.entries
         GradeTarget.GLOBAL -> Adjustment.entries - Adjustment.LUT
         GradeTarget.MASK -> Adjustment.entries - Adjustment.LUT - Adjustment.SKIN - Adjustment.VIGNETTE
     }
@@ -763,7 +770,8 @@ private fun ColourPage(
             }
         }
         items(options) { a ->
-            val modified = if (a == Adjustment.LUT) clip.lutName != null else a.get(state.grade) != 0f
+            val lut = if (target == GradeTarget.GROUP) group?.lutName else clip.lutName
+            val modified = if (a == Adjustment.LUT) lut != null else a.get(state.grade) != 0f
             CircleOption(a.symbol, a.label, selected = editingShape == null && a == adjustment, modified = modified) {
                 shape = null
                 onAdjustment(a)
@@ -782,7 +790,15 @@ private fun ColourPage(
         return
     }
     if (adjustment == Adjustment.LUT) {
-        LutControls(state, clip, index, vm, onAddLut)
+        if (target == GradeTarget.GROUP && group != null) {
+            LutControls(state, group.lutName, "None", { vm.setGroupLut(group.id, it) }, null, vm, onAddLut)
+        } else {
+            val inherited = group?.lutName
+            LutControls(
+                state, clip.lutName, if (inherited != null) "Group's ($inherited)" else "None", { vm.setClipLut(index, it) },
+                if (state.clips.size > 1) vm::setLutForAllClips else null, vm, onAddLut,
+            )
+        }
         return
     }
     if (adjustment == Adjustment.SKIN) SkinToneTool(state.scope, onMatch = vm::matchSkinLine)
@@ -819,19 +835,89 @@ private enum class MaskShape(
 
 /** LUT library: the camera LUT is the last step, after all corrections. */
 @Composable
-private fun LutControls(state: UiState, clip: ClipState, index: Int, vm: HeadsupViewModel, onAddLut: () -> Unit) {
+private fun LutControls(
+    state: UiState,
+    current: String?,
+    noneLabel: String,
+    onPick: (String?) -> Unit,
+    onAll: ((String?) -> Unit)?,
+    vm: HeadsupViewModel,
+    onAddLut: () -> Unit,
+) {
     FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        FilterChip(selected = clip.lutName == null, onClick = { vm.setClipLut(index, null) }, label = { Text("None") })
+        FilterChip(selected = current == null, onClick = { onPick(null) }, label = { Text(noneLabel) })
         for (name in state.luts) {
-            FilterChip(selected = clip.lutName == name, onClick = { vm.setClipLut(index, name) }, label = { Text(name) })
+            FilterChip(selected = current == name, onClick = { onPick(name) }, label = { Text(name) })
         }
         FilterChip(selected = false, onClick = onAddLut, label = { Text("+ .cube") })
     }
     Row {
-        if (state.clips.size > 1) SmallAction("Use for all clips", { vm.setLutForAllClips(clip.lutName) })
+        if (onAll != null) SmallAction("Use for all clips", { onAll(current) })
         Spacer(Modifier.weight(1f))
-        clip.lutName?.let { name -> SmallAction("Delete $name", { vm.deleteLut(name) }) }
+        current?.let { name -> SmallAction("Delete $name", { vm.deleteLut(name) }) }
     }
+}
+
+/**
+ * The selected clip's group and the list of groups: tap one to move the clip there. A clip is in
+ * at most one group, so its colours always come from clip → group → all clips.
+ */
+@Composable
+private fun GroupControls(state: UiState, clip: ClipState, index: Int, group: ClipGroup?, vm: HeadsupViewModel) {
+    var renaming by remember { mutableStateOf(false) }
+    if (group == null) Hint("Clips shot the same way (e.g. drone) share a LUT and corrections. Long-press a clip to add it.")
+    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        for (g in state.groups) {
+            val count = state.clips.count { it.groupId == g.id }
+            FilterChip(
+                selected = g.id == clip.groupId,
+                onClick = { vm.setClipGroup(index, if (g.id == clip.groupId) null else g.id) },
+                label = { Text("${g.name} · $count") },
+            )
+        }
+        FilterChip(selected = false, onClick = { vm.createGroup(index) }, label = { Text("+ New group") })
+    }
+    if (group != null) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            SmallAction("Rename", { renaming = true })
+            SmallAction("Leave", { vm.setClipGroup(index, null) })
+            SmallAction("Delete group", { vm.deleteGroup(group.id) })
+            Spacer(Modifier.weight(1f))
+            if (group.grade != ColorGrade()) SmallAction("Reset", { vm.updateGrade { ColorGrade() } })
+        }
+        if (renaming) RenameDialog(group.name, onDismiss = { renaming = false }) { vm.renameGroup(group.id, it); renaming = false }
+    }
+}
+
+@Composable
+private fun RenameDialog(initial: String, onDismiss: () -> Unit, onConfirm: (String) -> Unit) {
+    var name by remember { mutableStateOf(initial) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Group name") },
+        text = { OutlinedTextField(value = name, onValueChange = { name = it }, singleLine = true) },
+        confirmButton = { TextButton(onClick = { onConfirm(name) }, enabled = name.isNotBlank()) { Text("OK") } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+    )
+}
+
+/** Shape controls of the graduated mask, edited with the same ruler as the corrections. */
+private enum class MaskShape(
+    val symbol: String,
+    val label: String,
+    val range: ClosedFloatingPointRange<Float>,
+    val step: Float,
+    val format: String,
+    val get: (GradientMask) -> Float,
+    val set: (GradientMask, Float) -> GradientMask,
+) {
+    POSITION("↕", "Position", 0f..1f, 0.01f, "%.0f %%", { it.position }, { m, v -> m.copy(position = v) }),
+    SOFTNESS("◐", "Softness", 0.02f..1f, 0.02f, "%.0f %%", { it.softness }, { m, v -> m.copy(softness = v) }),
+    ANGLE("∠", "Angle", -45f..45f, 0.5f, "%+.1f°", { it.angleDegrees }, { m, v -> m.copy(angleDegrees = v) }),
+    ;
+
+    /** Value as shown above the ruler (fractions as percent). */
+    fun shown(mask: GradientMask): Float = if (this == ANGLE) get(mask) else get(mask) * 100f
 }
 
 /** Vectorscope with the skin line, as in DaVinci Resolve, and the measurement of the tapped point. */
