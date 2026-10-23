@@ -286,8 +286,9 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
                         bitrateFactor = state.bitrateFactor,
                         sourceBitrate = state.selected?.meta?.bitrate,
                         onBitrateFactor = vm::setBitrateFactor,
-                        canExport = state.clips.any { it.sync != null },
-                        canTest = state.selected?.sync != null,
+                        canExportVideo = state.clips.isNotEmpty(),
+                        canExportOverlay = state.clips.any { it.sync != null },
+                        canTest = state.selected != null,
                         jobs = jobs,
                         onExportVideos = { startExport(vm::exportVideos) },
                         onExportOverlays = { startExport(vm::exportOverlays) },
@@ -1632,7 +1633,8 @@ private fun ExportControls(
     bitrateFactor: Float,
     sourceBitrate: Int?,
     onBitrateFactor: (Float) -> Unit,
-    canExport: Boolean,
+    canExportVideo: Boolean,
+    canExportOverlay: Boolean,
     canTest: Boolean,
     jobs: List<ExportJob>,
     onExportVideos: () -> Unit,
@@ -1653,10 +1655,13 @@ private fun ExportControls(
             )
         }
     }
-    Button(onClick = onExportVideos, enabled = canExport, modifier = Modifier.fillMaxWidth()) { Text("Export videos with dashboard") }
-    Hint("HEVC, source resolution and frame rate → DCIM/TelemetryOverlay")
-    OutlinedButton(onClick = onExportOverlays, enabled = canExport, modifier = Modifier.fillMaxWidth()) { Text("Export dashboard only (PNG)") }
-    Hint("Transparent PNG frames (ZIP) for DaVinci → Download/TelemetryOverlay")
+    Button(onClick = onExportVideos, enabled = canExportVideo, modifier = Modifier.fillMaxWidth()) { Text("Export videos") }
+    Hint("Colour, effects and framing; the dashboard where there is watch data. HEVC → DCIM/TelemetryOverlay")
+    OutlinedButton(onClick = onExportOverlays, enabled = canExportOverlay, modifier = Modifier.fillMaxWidth()) { Text("Export dashboard only (PNG)") }
+    Hint(
+        if (canExportOverlay) "Transparent PNG frames (ZIP) for DaVinci → Download/TelemetryOverlay"
+        else "Needs a FIT file matched to the clips.",
+    )
     OutlinedButton(onClick = onTenBitTest, enabled = canTest, modifier = Modifier.fillMaxWidth()) { Text("Test 10-bit export") }
     Hint("First 3 s of the selected clip; nothing is saved.")
 

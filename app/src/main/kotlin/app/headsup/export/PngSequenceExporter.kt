@@ -30,7 +30,8 @@ object PngSequenceExporter {
         val width = request.frameWidth
         val height = request.frameHeight
         val renderer = DashboardRenderer(context.assets)
-        val sampler = TelemetrySampler(request.track)
+        // Only clips with watch data are sent here; the dashboard is what this export is for.
+        val sampler = TelemetrySampler(requireNotNull(request.telemetry) { "No watch data for ${request.name}" }.track)
         val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
         val canvas = Canvas(bitmap)
         val fpsLabel = if (fps % 1f == 0f) fps.toInt().toString() else String.format(Locale.US, "%.3f", fps).trimEnd('0')

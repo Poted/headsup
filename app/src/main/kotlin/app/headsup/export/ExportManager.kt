@@ -163,7 +163,7 @@ class ExportManager(private val context: Context) {
     private fun runVideo(job: ExportJob) {
         val request = job.request
         val test = request.kind == ExportKind.TEN_BIT_TEST
-        val sampler = TelemetrySampler(request.track)
+        val sampler = request.telemetry?.let { TelemetrySampler(it.track) }
         val overlay = TelemetryOverlay(
             DashboardRenderer(context.assets), request.style, request.effects, request.grade?.vignette ?: 0f, request.frameWidth, request.frameHeight,
         ) { positionMs -> request.dataAt(positionMs, sampler) }

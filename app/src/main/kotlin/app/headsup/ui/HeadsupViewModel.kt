@@ -32,6 +32,7 @@ import app.headsup.core.track.ActivityTrack
 import app.headsup.export.ExportKind
 import app.headsup.export.ExportRequest
 import app.headsup.export.GradeSetup
+import app.headsup.export.Telemetry
 import app.headsup.media.ClipMetadata
 import app.headsup.media.ClipMetadataReader
 import app.headsup.render.DashboardStyle
@@ -187,8 +188,10 @@ data class UiState(
     val defaultEffects: EffectSettings = EffectSettings(),
     val busy: Boolean = false,
     val messages: List<String> = emptyList(),
-    /** Corrections for new clips: the last ones edited. */
+    /** Corrections for new clips: the last ones edited in this project. */
     val defaultGrade: ColorGrade = ColorGrade(),
+    /** LUT for new clips: the last one picked in this project. */
+    val defaultLut: String? = null,
     /** Global node: corrections applied on top of every clip's own (e.g. one vignette for all). */
     val globalGrade: ColorGrade = ColorGrade(),
     /** Which corrections the colour page edits. */
@@ -278,8 +281,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
     private val _state = MutableStateFlow(
         UiState(
             style = stylePrefs.load(),
-            defaultEffects = effectPrefs.load(),
-            defaultGrade = gradeStore.loadGrade(),
+
             globalGrade = gradeStore.loadGrade(GLOBAL),
             luts = gradeStore.names(),
             messages = listOfNotNull((app as HeadsupApp).takeCrashReport()),
@@ -465,10 +467,17 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                         globalGrade = project.globalGrade,
                         selectedClip = clips.indices.firstOrNull(),
                         highlights = null,
+                        defaultGrade = ColorGrade(),
+                        defaultEffects = EffectSettings(),
+                        defaultLut = null,
+                        copiedLook = null,
+                        matchReference = null,
+                        matchSession = null,
+                        cine = null,
+                        selectedMask = 0,
                         target = GradeTarget.CLIP,
                         compareGrade = null,
                         scope = null,
-                        copiedLook = null,
                         busy = false,
                         messages = s.messages + missing.distinct().map { "Missing file: $it" },
                     ),
@@ -491,6 +500,14 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                 globalGrade = ColorGrade(),
                 selectedClip = null,
                 highlights = null,
+                defaultGrade = ColorGrade(),
+                defaultEffects = EffectSettings(),
+                defaultLut = null,
+                copiedLook = null,
+                matchReference = null,
+                matchSession = null,
+                cine = null,
+                selectedMask = 0,
                 target = GradeTarget.CLIP,
                 compareGrade = null,
                 scope = null,
@@ -671,12 +688,12 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun setClipLut(index: Int, name: String?) {
-        if (name != null) gradeStore.defaultLut = name
+        if (name != null) _state.update { it.copy(defaultLut = name) }
         updateClip(index) { it.copy(lutName = name) }
     }
 
     fun setLutForAllClips(name: String?) {
-        if (name != null) gradeStore.defaultLut = name
+        if (name != null) _state.update { it.copy(defaultLut = name) }
         _state.update { s -> s.copy(clips = s.clips.map { it.copy(lutName = name) }) }
         refreshPreview()
     }
@@ -749,7 +766,6 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
     fun renameGroup(id: Long, name: String) = updateGroup(id) { it.copy(name = name.trim().ifEmpty { it.name }) }
 
     fun setGroupLut(id: Long, lutName: String?) {
-        if (lutName != null) gradeStore.defaultLut = lutName
         updateGroup(id) { it.copy(lutName = lutName) }
     }
 
@@ -1138,8 +1154,11 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
             val cubes = HashMap<ClipLook, Array<Array<IntArray>>?>()
             val requests = indices.mapNotNull { i ->
                 val clip = s.clips.getOrNull(i) ?: return@mapNotNull null
-                val sync = clip.sync ?: return@mapNotNull null
-                val activity = s.activities.getOrNull(sync.trackIndex) ?: return@mapNotNull null
+                // The dashboard is one effect among others: without watch data the video still exports.
+                val telemetry = clip.sync?.let { sync ->
+                    s.activities.getOrNull(sync.trackIndex)?.let { Telemetry(it.track, sync.startUtcMs + clip.trimStartMs + clip.manualOffsetMs) }
+                }
+                if (kind == ExportKind.PNG_SEQUENCE && telemetry == null) return@mapNotNull null
                 val graded = kind != ExportKind.PNG_SEQUENCE && clip.colorGrade
                 val applied = s.appliedGrade(clip)
                 val lutName = s.lutFor(clip)
@@ -1159,8 +1178,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                     frameRate = clip.meta.frameRate,
                     sourceBitrate = clip.meta.bitrate,
                     sourceFormat = clip.meta.format,
-                    track = activity.track,
-                    telemetryStartUtcMs = sync.startUtcMs + clip.trimStartMs + clip.manualOffsetMs,
+                    telemetry = telemetry,
                     style = s.style,
                     effects = clip.effects,
                     grade = if (graded) GradeSetup(cube, applied.vignette, masks, maskCubes, fromCube, clip.transitionMs) else null,
@@ -1169,7 +1187,8 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                 )
             }
             if (requests.isEmpty()) {
-                _state.update { it.copy(messages = it.messages + "Nothing to export: no clip is matched to an activity.") }
+                val why = if (kind == ExportKind.PNG_SEQUENCE) "the dashboard needs watch data, and no clip is matched to an activity." else "no clips."
+                _state.update { it.copy(messages = it.messages + "Nothing to export: $why") }
             } else {
                 exportManager.enqueue(requests)
             }
@@ -1192,12 +1211,11 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
             }
             val errors = results.mapNotNull { r -> r.exceptionOrNull()?.let { "Could not read file: ${it.message ?: it.javaClass.simpleName}" } }
             val loaded = results.mapNotNull { it.getOrNull() }
-            val defaultLut = gradeStore.defaultLut
             _state.update { s ->
                 val activities = (s.activities + loaded.filterIsInstance<Loaded.Activity>().map { it.activity })
                     .distinctBy { it.track.startMs to it.track.endMs }
                     .sortedBy { it.track.startMs }
-                val newClips = loaded.filterIsInstance<Loaded.Clip>().map { ClipState(it.meta, sync = null, lutName = defaultLut, grade = s.defaultGrade, effects = s.defaultEffects) }
+                val newClips = loaded.filterIsInstance<Loaded.Clip>().map { ClipState(it.meta, sync = null, lutName = s.defaultLut, grade = s.defaultGrade, effects = s.defaultEffects) }
                 // The same file may already be on the timeline as several (split) clips; only skip re-adds.
                 val known = s.clips.map { it.meta.uri }.toSet()
                 val clips = s.clips + newClips.filter { it.meta.uri !in known }.distinctBy { it.meta.uri }

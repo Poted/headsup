@@ -14,6 +14,9 @@ import java.time.ZoneId
 
 enum class ExportKind { VIDEO, PNG_SEQUENCE, TEN_BIT_TEST }
 
+/** The activity matched to a clip, and the UTC time shown on its first frame (manual correction included). */
+class Telemetry(val track: ActivityTrack, val startUtcMs: Long)
+
 /**
  * Colour transform for one clip: baked LUT cube (null = untouched colours), vignette strength,
  * masks with one cube each, and the previous clip's cube to blend from during [transitionMs].
@@ -44,9 +47,8 @@ data class ExportRequest(
     val frameRate: Float?,
     val sourceBitrate: Int?,
     val sourceFormat: VideoFormatInfo?,
-    val track: ActivityTrack,
-    /** UTC of the telemetry shown on the first frame, including any manual correction. */
-    val telemetryStartUtcMs: Long,
+    /** Watch data for the dashboard; null when the clip has none (the video exports without it). */
+    val telemetry: Telemetry?,
     val style: DashboardStyle,
     val effects: EffectSettings,
     val grade: GradeSetup?,
@@ -62,11 +64,13 @@ data class ExportRequest(
     val baseName: String
         get() = name.substringBeforeLast('.') + if (trimStartMs > 0) "_from${trimStartMs / 1000}s" else ""
 
-    /** Builds what the renderer needs for a position in the clip, using [sampler] over [track]. */
-    fun dataAt(positionMs: Long, sampler: TelemetrySampler): DashboardData {
-        val utc = telemetryStartUtcMs + positionMs
-        val zone = track.utcOffsetSeconds ?: ZoneId.systemDefault().rules.getOffset(Instant.ofEpochMilli(utc)).totalSeconds
-        return DashboardData(track, sampler.frameAt(utc), utc, zone)
+    /** Builds what the renderer needs for a position in the clip, or null without watch data. */
+    fun dataAt(positionMs: Long, sampler: TelemetrySampler?): DashboardData? {
+        val t = telemetry ?: return null
+        val s = sampler ?: return null
+        val utc = t.startUtcMs + positionMs
+        val zone = t.track.utcOffsetSeconds ?: ZoneId.systemDefault().rules.getOffset(Instant.ofEpochMilli(utc)).totalSeconds
+        return DashboardData(t.track, s.frameAt(utc), utc, zone)
     }
 
     /** Close to the source by default; never below 10 Mb/s or above what encoders accept. */
