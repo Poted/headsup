@@ -22,7 +22,6 @@ import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -165,6 +164,10 @@ fun ClipPreview(
     timelineOffsetMs: Long = 0L,
     /** The whole timeline's length, where the audio stops. */
     timelineTotalMs: Long = 0L,
+    /** Position in the clip to show while the timeline is dragged (the picture follows as fast as it can). */
+    scrubTo: State<Long?> = NO_SCRUB,
+    /** Playback started or stopped. */
+    onPlaying: (Boolean) -> Unit = {},
 ) {
     val context = LocalContext.current
     val exoPlayer = remember { ExoPlayer.Builder(context).build() }
@@ -330,6 +333,21 @@ fun ClipPreview(
                 if (!fileTime) reportPosition(playerMs)
             }
             playing = exoPlayer.isPlaying
+        }
+    }
+    val playingChanged by rememberUpdatedState(onPlaying)
+    LaunchedEffect(playing) { playingChanged(playing) }
+    // The timeline being dragged: declared after the media item is set (above), so a newly reached clip is ready.
+    val timelineScrub = scrubTo.value
+    LaunchedEffect(timelineScrub, clip.id) {
+        val target = timelineScrub ?: return@LaunchedEffect
+        if (photo) {
+            photoPlaying = false
+            playerMs = target.coerceIn(0L, clip.durationMs)
+            onPosition(playerMs)
+        } else {
+            if (exoPlayer.isPlaying) exoPlayer.pause()
+            scrubber.seek(target.coerceIn(0L, clip.durationMs))
         }
     }
     // Position within the clip, as the dashboard and timeline count it (negative before the cut).
@@ -554,20 +572,12 @@ fun ClipPreview(
             ) {
                 Icon(if (playing) HeadsupIcons.Pause else HeadsupIcons.Play, contentDescription = if (playing) "Pause" else "Play", tint = HeadsupColors.OnAccent)
             }
+            // Timeline time (the timeline below is scrubbed by dragging it); file time while a cut handle moves.
             Text(
-                "  ${timecode(if (scrubbing) playerMs else positionMs, clip.meta.frameRate)}",
+                "  " + (if (scrubbing) timecode(playerMs, clip.meta.frameRate) else timecode(timelineOffsetMs + clipTimelineMs, clip.meta.frameRate)) +
+                    "  /  " + Formats.duration(timelineTotalMs),
+                Modifier.weight(1f),
                 style = MaterialTheme.typography.labelMedium.copy(fontFamily = FontFamily.Monospace),
-            )
-            // The thumb follows the finger; the picture follows as fast as the decoder can seek.
-            var dragMs by remember { mutableStateOf<Float?>(null) }
-            val endMs = clip.durationMs.coerceAtLeast(1L).toFloat()
-            Slider(
-                value = (dragMs ?: positionMs.toFloat()).coerceIn(0f, endMs),
-                onValueChange = { dragMs = it; if (photo) playerMs = it.toLong() else scrubber.seek(it.toLong()) },
-                onValueChangeFinished = { dragMs = null },
-                enabled = !scrubbing,
-                valueRange = 0f..endMs,
-                modifier = Modifier.weight(1f).padding(horizontal = 8.dp),
             )
             ToggleDot("H", histogramOn) { histogramOn = !histogramOn }
             Spacer(Modifier.width(4.dp))

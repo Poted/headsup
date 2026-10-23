@@ -751,12 +751,16 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
 
     /**
      * Places [file] at [atMs] on the timeline, on the first track that is free there (a new
-     * track if none), and selects it.
+     * track if none), and selects it. A sound longer than the rest of the video is cut where the
+     * video ends.
      */
     fun placeAudio(file: AudioFile, atMs: Long) {
         val s = _state.value
         val id = (s.audioClips.maxOfOrNull { it.id } ?: 0L) + 1
-        val draft = AudioClip(id, file.uri, file.name, sourceDurationMs = file.durationMs, startOnTimelineMs = atMs.coerceAtLeast(0L))
+        val start = atMs.coerceAtLeast(0L)
+        val room = s.clips.sumOf { it.timelineDurationMs } - start
+        val end = if (room >= 1_000L && file.durationMs > room) room else 0L
+        val draft = AudioClip(id, file.uri, file.name, sourceDurationMs = file.durationMs, startOnTimelineMs = start, sourceEndMs = end)
         val lane = freeLane(s.audioClips, draft.piece.startOnTimelineMs, draft.piece.endOnTimelineMs)
         _state.update { it.copy(audioClips = it.audioClips + draft.copy(lane = lane), selectedAudio = id) }
     }
@@ -775,17 +779,18 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
 
     fun removeAudio(id: Long) = _state.update { s -> s.copy(audioClips = s.audioClips.filter { it.id != id }, selectedAudio = null) }
 
-    /** A copy right after the clip (on its track if there is room, else on a free one): repeats a loop or a sound. */
-    fun duplicateAudio(id: Long) {
+    /** Cuts a sound in two at [atMs] on the timeline; the second part is selected. */
+    fun splitAudio(id: Long, atMs: Long) {
         val s = _state.value
         val c = s.audioClips.firstOrNull { it.id == id } ?: return
-        val newId = (s.audioClips.maxOfOrNull { it.id } ?: 0L) + 1
         val p = c.piece
-        val start = p.endOnTimelineMs
-        val copy = c.copy(id = newId, startOnTimelineMs = start)
-        val lane = if (s.audioClips.none { it.lane == c.lane && it.piece.startOnTimelineMs < start + p.lengthMs && it.piece.endOnTimelineMs > start }) c.lane
-        else freeLane(s.audioClips, start, start + p.lengthMs)
-        _state.update { it.copy(audioClips = it.audioClips + copy.copy(lane = lane), selectedAudio = newId) }
+        val at = p.sourceAt(atMs) ?: return
+        if (atMs - p.startOnTimelineMs < 100 || p.endOnTimelineMs - atMs < 100) return
+        val newId = (s.audioClips.maxOfOrNull { it.id } ?: 0L) + 1
+        // The fade-in stays on the first part, the fade-out on the second.
+        val first = c.copy(sourceEndMs = at, fadeOutMs = 0L)
+        val second = c.copy(id = newId, startOnTimelineMs = atMs, sourceStartMs = at, fadeInMs = 0L)
+        _state.update { st -> st.copy(audioClips = st.audioClips.map { if (it.id == id) first else it } + second, selectedAudio = newId) }
     }
 
     fun setClipSound(level: Float) = _state.update { it.copy(clipSound = level.coerceIn(0f, 1f)) }

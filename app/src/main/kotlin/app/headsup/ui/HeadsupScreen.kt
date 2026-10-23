@@ -98,6 +98,7 @@ import app.headsup.core.track.Metric
 import app.headsup.core.color.CineStyle
 import android.graphics.Bitmap
 import app.headsup.core.color.SkinTone
+import kotlin.math.abs
 import kotlin.math.cos
 import kotlin.math.sin
 import app.headsup.core.sync.Confidence
@@ -113,6 +114,7 @@ import app.headsup.export.ExportPreset
 import app.headsup.export.OutputSpec
 import app.headsup.export.VideoCodec
 import app.headsup.export.HdrRoute
+import app.headsup.export.AudioFile
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.geometry.CornerRadius
 import app.headsup.render.DashboardFont
@@ -203,6 +205,32 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
     // Grabs the paused preview frame, for the cine assistant.
     val frameSource = remember { mutableStateOf<(() -> Bitmap?)?>(null) }
     val exporting = jobs.any { it.status == JobStatus.QUEUED || it.status == JobStatus.RUNNING }
+    // The timeline: a clip selected for trimming, slipping sounds, and where it is being dragged to.
+    var videoSelected by remember { mutableStateOf(false) }
+    var slip by remember { mutableStateOf(false) }
+    var addingSound by remember { mutableStateOf(false) }
+    // Timeline position shown while dragged (and until the picture has caught up), and the clip position sent to the preview.
+    val scrubT = remember { mutableStateOf<Long?>(null) }
+    val scrubTo = remember { mutableStateOf<Long?>(null) }
+    val clipStarts = state.clips.runningFold(0L) { a, c -> a + c.timelineDurationMs }
+    fun timelineOf(clipMs: Long): Long {
+        val i = state.selectedClip ?: return 0L
+        val c = state.clips.getOrNull(i) ?: return 0L
+        return clipStarts[i] + if (c.meta.isPhoto) clipMs else (clipMs / c.speed).toLong()
+    }
+    /** The clip under timeline position [t] and the position in it (file time from its cut). */
+    fun locate(t: Long): Pair<Int, Long> {
+        val i = clipStarts.indexOfLast { it <= t }.coerceIn(0, (state.clips.size - 1).coerceAtLeast(0))
+        val c = state.clips.getOrNull(i) ?: return 0 to 0L
+        val local = (t - clipStarts[i]).coerceIn(0L, c.timelineDurationMs)
+        return i to if (c.meta.isPhoto) local else (local * c.speed).toLong()
+    }
+    fun jumpTo(t: Long) {
+        val (i, pos) = locate(t)
+        if (i != state.selectedClip) vm.selectClip(i)
+        scrubT.value = t
+        seekRequest = pos
+    }
     val previewMaxHeight = (LocalConfiguration.current.screenHeightDp * 0.38f).dp
 
     Box(Modifier.fillMaxSize().background(HeadsupColors.BackgroundGradient)) {
@@ -246,7 +274,12 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
                         onPosition = {
                             playhead.longValue = it
                             vm.notePlayhead(it)
+                            // The picture has caught up with where the timeline was left.
+                            val target = scrubT.value
+                            if (target != null && scrubTo.value == null && abs(timelineOf(it) - target) < 80) scrubT.value = null
                         },
+                        scrubTo = scrubTo,
+                        onPlaying = { if (it) scrubT.value = null },
                         cutScrub = cutScrub,
                         onFrameSource = { frameSource.value = it },
                         reframe = selected.reframe,
@@ -274,10 +307,80 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
                 }
             }
             if (state.clips.isNotEmpty()) {
-                ClipStrip(
-                    state.clips, state.selectedClip, vm::selectClip, addVideos,
-                    onMove = vm::moveClip, onDelete = vm::removeClip,
-                    groups = state.groups, onGroup = vm::setClipGroup, onNewGroup = vm::createGroup,
+                val selectedSound = state.audioClips.firstOrNull { it.id == state.selectedAudio }
+                Timeline(
+                    state = state,
+                    vm = vm,
+                    videoSelected = videoSelected,
+                    slip = slip,
+                    playheadMs = { scrubT.value ?: timelineOf(playhead.longValue) },
+                    maskKeys = if (editingMasks) state.selected?.masks?.getOrNull(state.selectedMask)?.keys?.map { it.timeMs }.orEmpty() else emptyList(),
+                    onScrub = { t ->
+                        if (t == null) {
+                            scrubTo.value = null
+                        } else {
+                            scrubT.value = t
+                            val (i, pos) = locate(t)
+                            if (i != state.selectedClip) {
+                                // Crossing into another clip shows it; a clip selected for trimming stays behind.
+                                videoSelected = false
+                                vm.selectClip(i)
+                            }
+                            scrubTo.value = pos
+                        }
+                    },
+                    onTrimPreview = { cutScrub.value = it },
+                    onSelectVideo = { i ->
+                        videoSelected = true
+                        vm.selectAudio(null)
+                        // The preview shows the clip being edited.
+                        if (i != state.selectedClip) jumpTo(clipStarts[i])
+                        if (tool == Tool.AUDIO) tool = Tool.EDIT
+                    },
+                    onSelectAudio = { id ->
+                        videoSelected = false
+                        vm.selectAudio(id)
+                        tool = Tool.AUDIO
+                    },
+                    onDeselect = {
+                        videoSelected = false
+                        vm.selectAudio(null)
+                    },
+                    onAdd = addVideos,
+                ) {
+                    val t = scrubT.value ?: timelineOf(playhead.longValue)
+                    when {
+                        selectedSound != null -> {
+                            SmallAction("Split", { vm.splitAudio(selectedSound.id, t) })
+                            SmallAction(if (slip) "Slip ✓" else "Slip", { slip = !slip })
+                            SmallAction("Delete", { vm.removeAudio(selectedSound.id) })
+                        }
+                        videoSelected && state.selectedClip != null -> {
+                            val i = state.selectedClip ?: 0
+                            SmallAction("Split", { vm.splitClip(i, locate(t).second) })
+                            SmallAction("Delete", {
+                                videoSelected = false
+                                vm.removeClip(i)
+                            })
+                        }
+                        else -> SmallAction("+ Sound", { addingSound = true })
+                    }
+                }
+            }
+            if (addingSound) {
+                AddSoundDialog(
+                    state,
+                    onPick = { f ->
+                        addingSound = false
+                        vm.placeAudio(f, scrubT.value ?: timelineOf(playhead.longValue))
+                        videoSelected = false
+                        tool = Tool.AUDIO
+                    },
+                    onImport = {
+                        addingSound = false
+                        soundPicker.launch(arrayOf("audio/*"))
+                    },
+                    onDismiss = { addingSound = false },
                 )
             }
 
@@ -303,28 +406,7 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
                             seekRequest = f.positionMs
                         }
                     }
-                    Tool.AUDIO -> AudioPanel(
-                        state, vm, onImport = { soundPicker.launch(arrayOf("audio/*")) },
-                        playheadMs = {
-                            val i = state.selectedClip ?: 0
-                            val clip = state.clips.getOrNull(i)
-                            val offset = state.clips.take(i).sumOf { it.timelineDurationMs }
-                            offset + if (clip == null || clip.meta.isPhoto) playhead.longValue else (playhead.longValue / clip.speed).toLong()
-                        },
-                        onSeek = { t ->
-                            // The clip under that moment, and the position in it.
-                            var start = 0L
-                            for ((i, c) in state.clips.withIndex()) {
-                                if (t < start + c.timelineDurationMs || i == state.clips.lastIndex) {
-                                    if (i != state.selectedClip) vm.selectClip(i)
-                                    val local = (t - start).coerceAtLeast(0L)
-                                    seekRequest = if (c.meta.isPhoto) local else (local * c.speed).toLong()
-                                    break
-                                }
-                                start += c.timelineDurationMs
-                            }
-                        },
-                    )
+                    Tool.AUDIO -> AudioPanel(state, vm, onAddSound = { addingSound = true })
                     Tool.COLOUR -> ColourPage(
                         state, vm, adjustment, { adjustment = it }, onAddLut = { lutPicker.launch(arrayOf("*/*")) }, frameSource.value,
                         playhead, onSeek = { seekRequest = it },
@@ -633,29 +715,18 @@ private fun SoundLibrary(state: UiState, vm: HeadsupViewModel, onAdd: () -> Unit
 }
 
 /**
- * Sound: the audio tracks under the video, a sound added from the project's library, the
- * selected sound's level, and the level of the video clips' own sound.
+ * Sound: what is selected on the audio tracks (level, fades), adding a sound from the project's
+ * library, and the level of the video clips' own sound. The tracks themselves are on the timeline.
  */
 @Composable
-private fun AudioPanel(state: UiState, vm: HeadsupViewModel, onImport: () -> Unit, playheadMs: () -> Long, onSeek: (Long) -> Unit) {
-    var picking by remember { mutableStateOf(false) }
+private fun AudioPanel(state: UiState, vm: HeadsupViewModel, onAddSound: () -> Unit) {
     Group {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Label("Tracks")
+            Label("Sound")
             Spacer(Modifier.weight(1f))
-            SmallAction("+ Add sound", { picking = true })
+            SmallAction("+ Add sound", onAddSound)
         }
-        AudioTimeline(
-            clipLengthsMs = state.clips.map { it.timelineDurationMs },
-            clips = state.audioClips,
-            analysis = state.audioAnalysis,
-            selected = state.selectedAudio,
-            playheadMs = playheadMs,
-            onSelect = vm::selectAudio,
-            onChange = { c -> vm.updateAudio(c.id) { c } },
-            onSeek = onSeek,
-        )
-        Hint("Tap a sound to select it. Drag it to move it (also to another track), its edges to trim, the dots on top to fade; hold, then drag, to slide the sound inside. Tap empty space to jump there.")
+        Hint("Sounds sit on the audio tracks of the timeline. Tap one to select it; drag it to move it (also to another track), its white handles to trim, the dots on top to fade. Split and Slip are above the timeline.")
     }
     val clip = state.audioClips.firstOrNull { it.id == state.selectedAudio }
     if (clip != null) Group {
@@ -668,56 +739,53 @@ private fun AudioPanel(state: UiState, vm: HeadsupViewModel, onImport: () -> Uni
                     listOfNotNull(
                         "${Formats.duration(p.startOnTimelineMs)}–${Formats.duration(p.endOnTimelineMs)}",
                         "from ${Formats.duration(p.sourceStartMs)}",
-                        p.fadeIn.takeIf { it > 0 }?.let { "fade in ${fadeLabel(it)}" },
-                        p.fadeOut.takeIf { it > 0 }?.let { "fade out ${fadeLabel(it)}" },
                         rhythm?.bpm?.let { String.format(Locale.US, "≈ %.0f BPM", it) },
                     ).joinToString(" · "),
                 )
             }
-            SmallAction("Duplicate", { vm.duplicateAudio(clip.id) })
             SmallAction("Delete", { vm.removeAudio(clip.id) })
         }
         ValueHeader("Level", String.format(Locale.US, "%.0f %%", clip.volume * 100))
         RulerSlider(clip.volume, 0f..1f, 0.02f, { v -> vm.updateAudio(clip.id) { it.copy(volume = v) } }, onReset = { vm.updateAudio(clip.id) { it.copy(volume = 0.8f) } })
+        val maxFade = (p.lengthMs / 1000f).coerceIn(0.5f, 20f)
+        ValueHeader("Fade in", fadeLabel(p.fadeIn))
+        RulerSlider(p.fadeIn / 1000f, 0f..maxFade, 0.1f, { v -> vm.updateAudio(clip.id) { it.copy(fadeInMs = (v * 1000).toLong().coerceAtMost(p.lengthMs - p.fadeOut)) } }, onReset = { vm.updateAudio(clip.id) { it.copy(fadeInMs = 0L) } })
+        ValueHeader("Fade out", fadeLabel(p.fadeOut))
+        RulerSlider(p.fadeOut / 1000f, 0f..maxFade, 0.1f, { v -> vm.updateAudio(clip.id) { it.copy(fadeOutMs = (v * 1000).toLong().coerceAtMost(p.lengthMs - p.fadeIn)) } }, onReset = { vm.updateAudio(clip.id) { it.copy(fadeOutMs = 0L) } })
     }
     Group {
         ValueHeader("Clips' own sound", String.format(Locale.US, "%.0f %%", state.clipSound * 100))
         RulerSlider(state.clipSound, 0f..1f, 0.02f, vm::setClipSound, onReset = { vm.setClipSound(1f) })
     }
-    if (picking) {
-        AlertDialog(
-            onDismissRequest = { picking = false },
-            title = { Text("Add sound") },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    if (state.audioFiles.isEmpty()) Hint("The project has no sounds yet. Add them on the Files page (or Import here); they are copied into the project.")
-                    for (f in state.audioFiles) {
-                        Row(
-                            Modifier
-                                .fillMaxWidth()
-                                .clip(RoundedCornerShape(10.dp))
-                                .clickable {
-                                    vm.placeAudio(f, playheadMs())
-                                    picking = false
-                                }
-                                .padding(vertical = 8.dp, horizontal = 4.dp),
-                        ) {
-                            Text(f.name, Modifier.weight(1f), maxLines = 1)
-                            Text(if (f.durationMs > 0) Formats.duration(f.durationMs) else "", color = HeadsupColors.TextMuted)
-                        }
+}
+
+/** Picks a sound from the project's library and places it at the playhead, on a free track. */
+@Composable
+private fun AddSoundDialog(state: UiState, onPick: (AudioFile) -> Unit, onImport: () -> Unit, onDismiss: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Add sound") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                if (state.audioFiles.isEmpty()) Hint("The project has no sounds yet. Add them on the Files page (or Import here); they are copied into the project.")
+                for (f in state.audioFiles) {
+                    Row(
+                        Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(10.dp))
+                            .clickable { onPick(f) }
+                            .padding(vertical = 8.dp, horizontal = 4.dp),
+                    ) {
+                        Text(f.name, Modifier.weight(1f), maxLines = 1)
+                        Text(if (f.durationMs > 0) Formats.duration(f.durationMs) else "", color = HeadsupColors.TextMuted)
                     }
-                    Hint("Placed at the playhead, on a free track.")
                 }
-            },
-            confirmButton = { TextButton(onClick = { picking = false }) { Text("Close") } },
-            dismissButton = {
-                TextButton(onClick = {
-                    picking = false
-                    onImport()
-                }) { Text("Import…") }
-            },
-        )
-    }
+                Hint("Placed at the playhead on a free track, cut where the video ends.")
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("Close") } },
+        dismissButton = { TextButton(onClick = onImport) { Text("Import…") } },
+    )
 }
 
 private fun fadeLabel(ms: Long) = if (ms <= 0) "Off" else String.format(Locale.US, "%.1f s", ms / 1000f)
