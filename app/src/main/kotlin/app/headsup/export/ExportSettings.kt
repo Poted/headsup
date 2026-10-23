@@ -44,5 +44,14 @@ data class OutputSpec(
     }
 }
 
-/** One export to run: a video made of [parts] (several = joined into one file), or a PNG sequence of one clip. */
-data class JobSpec(val kind: ExportKind, val title: String, val parts: List<ExportRequest>, val output: OutputSpec?)
+/**
+ * One export to run: a video made of [parts] (several = joined into one file), or a PNG sequence
+ * of one clip. [music] plays under the whole video.
+ */
+data class JobSpec(
+    val kind: ExportKind,
+    val title: String,
+    val parts: List<ExportRequest>,
+    val output: OutputSpec?,
+    val music: MusicTrack? = null,
+)

@@ -37,6 +37,7 @@ import app.headsup.export.ExportSettings
 import app.headsup.export.JobSpec
 import app.headsup.export.OutputSpec
 import app.headsup.export.VideoCodec
+import app.headsup.export.MusicTrack
 import app.headsup.media.ClipMetadata
 import app.headsup.media.ClipMetadataReader
 import app.headsup.media.MediaLibrary
@@ -181,6 +182,7 @@ private data class EditSnapshot(
     val style: DashboardStyle,
     val timelineFps: Float?,
     val exportSettings: ExportSettings,
+    val music: MusicTrack?,
 )
 
 /** What the colour page edits; the order is that of its tabs. */
@@ -244,6 +246,8 @@ data class UiState(
     val exportSettings: ExportSettings = ExportSettings(),
     /** Frame rate of the timeline (exports and slow-motion maths); null = the first clip's. */
     val timelineFps: Float? = null,
+    /** Music under the whole timeline. */
+    val music: MusicTrack? = null,
     /** Vectorscope and skin measurement of the last frame tapped in the preview. */
     val scope: ScopeResult? = null,
     /** Look copied with "Copy", waiting to be pasted. */
@@ -342,7 +346,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
     private val history = ArrayList<EditSnapshot>()
     private var historyIndex = -1
 
-    private fun UiState.snapshot() = EditSnapshot(projectName, activities, clips, groups, globalGrade, style, timelineFps, exportSettings)
+    private fun UiState.snapshot() = EditSnapshot(projectName, activities, clips, groups, globalGrade, style, timelineFps, exportSettings, music)
 
     /**
      * Records a step a moment after the edit settles, so a slider drag or a widget move is one
@@ -401,6 +405,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                 style = snapshot.style,
                 timelineFps = snapshot.timelineFps,
                 exportSettings = snapshot.exportSettings,
+                music = snapshot.music,
                 selectedClip = s.selectedClip?.coerceAtMost(snapshot.clips.lastIndex)?.takeIf { it >= 0 } ?: snapshot.clips.indices.firstOrNull(),
                 compareGrade = null,
                 cine = null,
@@ -446,13 +451,14 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
         groups = groups.map { SavedGroup(it.id, it.name, it.grade, it.lutName) },
         globalGrade = globalGrade,
         timelineFps = timelineFps,
+        music = music,
     )
 
     fun refreshProjects() = _state.update {
         it.copy(
             projects = projectStore.list().map { info ->
                 val p = runCatching { projectStore.load(info.name) }.getOrNull()
-                info.copy(bytes = p?.let { d -> library.sizeOf(d.activities + d.clips.map { c -> c.uri }) } ?: 0L)
+                info.copy(bytes = p?.let { d -> library.sizeOf(d.mediaUris) } ?: 0L)
             },
         )
     }
@@ -508,6 +514,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                         groups = project.groups.map { ClipGroup(it.id, it.name, it.grade, it.lutName) },
                         globalGrade = project.globalGrade,
                         timelineFps = project.timelineFps,
+                        music = project.music,
                         selectedClip = clips.indices.firstOrNull(),
                         highlights = null,
                         defaultGrade = ColorGrade(),
@@ -543,6 +550,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                 groups = emptyList(),
                 globalGrade = ColorGrade(),
                 timelineFps = null,
+                music = null,
                 selectedClip = null,
                 highlights = null,
                 defaultGrade = ColorGrade(),
@@ -583,7 +591,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
         if (name == _state.value.projectName) newProject()
         if (!_state.value.busy) {
             val current = _state.value.toProject()
-            val inUse = (projectStore.all() + current).flatMap { p -> p.activities + p.clips.map { it.uri } }.toSet()
+            val inUse = (projectStore.all() + current).flatMap { it.mediaUris }.toSet()
             runCatching { library.deleteUnused(inUse) }
         }
         refreshProjects()
@@ -615,7 +623,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
 
     /** Media of the open project that is still only referenced from the gallery or the cloud. */
     val UiState.externalMedia: List<Uri>
-        get() = (clips.map { it.meta.uri } + activities.mapNotNull { it.uri }).distinct().filterNot(library::isInLibrary)
+        get() = (clips.map { it.meta.uri } + activities.mapNotNull { it.uri } + listOfNotNull(music?.uri)).distinct().filterNot(library::isInLibrary)
 
     /**
      * Copies media the project still takes from the gallery or the cloud (projects made before
@@ -648,6 +656,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                 s.copy(
                     clips = s.clips.map { c -> copies[c.meta.uri]?.let { c.copy(meta = c.meta.copy(uri = it)) } ?: c },
                     activities = s.activities.map { a -> a.uri?.let(copies::get)?.let { a.copy(uri = it) } ?: a },
+                    music = s.music?.let { m -> copies[m.uri]?.let { m.copy(uri = it) } ?: m },
                     busy = false,
                     loadingMessage = null,
                     loadingProgress = null,
@@ -657,6 +666,38 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
             refreshPreview()
         }
     }
+
+    // Music
+
+    /** Copies [uri] into the app and puts it under the whole timeline. */
+    fun setMusic(uri: Uri) {
+        if (_state.value.busy) return
+        val context = getApplication<Application>()
+        val name = ClipMetadataReader.displayName(context, uri) ?: "Music"
+        _state.update { it.copy(busy = true, loadingMessage = "Copying $name", loadingProgress = null) }
+        loadJob = viewModelScope.launch {
+            val local = runCatching {
+                withContext(Dispatchers.IO) {
+                    library.import(uri) { copied, total ->
+                        _state.update { it.copy(loadingMessage = "Copying $name · ${copied / 1_000_000} MB", loadingProgress = if (total > 0) copied.toFloat() / total else null) }
+                    }
+                }
+            }.onFailure { if (it is kotlinx.coroutines.CancellationException) throw it }.getOrNull()
+            _state.update { s ->
+                s.copy(
+                    music = local?.let { MusicTrack(it, name, s.music?.volume ?: 0.8f, s.music?.originalVolume ?: 0.4f) } ?: s.music,
+                    busy = false,
+                    loadingMessage = null,
+                    loadingProgress = null,
+                    messages = if (local == null) s.messages + "Could not add $name" else s.messages,
+                )
+            }
+        }
+    }
+
+    fun updateMusic(transform: (MusicTrack) -> MusicTrack) = _state.update { s -> s.copy(music = s.music?.let(transform)) }
+
+    fun removeMusic() = _state.update { it.copy(music = null) }
 
     /** Stops copying files in; what was not finished is removed. */
     fun cancelLoading() {
@@ -1361,7 +1402,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
             kind == ExportKind.PNG_SEQUENCE -> requests.map { JobSpec(kind, it.name, listOf(it), null) }
             kind == ExportKind.VIDEO && settings.wholeTimeline -> {
                 val name = s.projectName.replace(Regex("[^\\p{L}\\p{N} ._-]"), "_")
-                listOf(JobSpec(kind, s.projectName, requests, spec(requests, "${name}_sweetspot.mp4")))
+                listOf(JobSpec(kind, s.projectName, requests, spec(requests, "${name}_sweetspot.mp4"), s.music))
             }
             else -> requests.map { JobSpec(kind, it.name, listOf(it), spec(listOf(it), "${it.baseName}_sweetspot.mp4")) }
         }

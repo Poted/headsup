@@ -87,6 +87,7 @@ import app.headsup.core.color.ColourMask
 import app.headsup.core.color.ColourTransition
 import app.headsup.core.color.MaskKind
 import app.headsup.core.frame.Reframe
+import app.headsup.export.MusicTrack
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.requiredSize
 import androidx.compose.foundation.gestures.detectTransformGestures
@@ -155,6 +156,9 @@ fun ClipPreview(
     /** Position in the clip to jump to once (e.g. a highlight), then [onSeekDone]. */
     seekRequest: Long? = null,
     onSeekDone: () -> Unit = {},
+    /** Music under the timeline, played in step with it; [timelineOffsetMs] is where this clip starts. */
+    music: MusicTrack? = null,
+    timelineOffsetMs: Long = 0L,
 ) {
     val context = LocalContext.current
     val exoPlayer = remember { ExoPlayer.Builder(context).build() }
@@ -204,10 +208,24 @@ fun ClipPreview(
         }
     }
     // Slow motion plays slowed down in the preview too; the dashboard follows the picture's own time.
-    LaunchedEffect(clip.speed, clip.muteChangedSpeed) {
+    LaunchedEffect(clip.speed, clip.muteChangedSpeed, music?.originalVolume) {
         exoPlayer.setPlaybackSpeed(clip.speed)
-        exoPlayer.volume = if (clip.speed != 1f && clip.muteChangedSpeed) 0f else 1f
+        exoPlayer.volume = if (clip.speed != 1f && clip.muteChangedSpeed) 0f else music?.originalVolume ?: 1f
     }
+    // Music: its own player, looping, started at the timeline position whenever playback starts.
+    val musicPlayer = remember { ExoPlayer.Builder(context).build().apply { repeatMode = Player.REPEAT_MODE_ALL } }
+    DisposableEffect(musicPlayer) { onDispose { musicPlayer.release() } }
+    LaunchedEffect(music?.uri) {
+        val uri = music?.uri
+        if (uri == null) {
+            musicPlayer.stop()
+            musicPlayer.clearMediaItems()
+        } else {
+            musicPlayer.setMediaItem(MediaItem.fromUri(uri))
+            musicPlayer.prepare()
+        }
+    }
+    LaunchedEffect(music?.volume) { musicPlayer.volume = music?.volume ?: 0f }
     val ended by rememberUpdatedState(onEnded)
     DisposableEffect(exoPlayer) {
         val listener = object : Player.Listener {
@@ -311,6 +329,17 @@ fun ClipPreview(
     }
     // Position within the clip, as the dashboard and timeline count it (negative before the cut).
     val positionMs = if (scrubbing) playerMs - clip.trimStartMs else playerMs
+    LaunchedEffect(playing, clip.id, music?.uri) {
+        if (music == null) return@LaunchedEffect
+        if (playing) {
+            val timelineMs = timelineOffsetMs + if (photo) positionMs else (positionMs / clip.speed).toLong()
+            val length = musicPlayer.duration.takeIf { it > 0 }
+            musicPlayer.seekTo(if (length != null) timelineMs % length else timelineMs)
+            musicPlayer.play()
+        } else {
+            musicPlayer.pause()
+        }
+    }
 
     val sampler = remember(activity) { activity?.let { TelemetrySampler(it.track) } }
     val renderer = remember { DashboardRenderer(context.assets) }

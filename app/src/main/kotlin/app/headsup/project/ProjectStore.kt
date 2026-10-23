@@ -7,6 +7,7 @@ import app.headsup.core.color.ColourMask
 import app.headsup.core.color.MaskKind
 import app.headsup.core.frame.Reframe
 import app.headsup.render.EffectSettings
+import app.headsup.export.MusicTrack
 import app.headsup.render.GraphMetric
 import org.json.JSONArray
 import org.json.JSONObject
@@ -46,7 +47,11 @@ data class ProjectData(
     val globalGrade: ColorGrade,
     /** Timeline frame rate, or null for the first clip's. */
     val timelineFps: Float? = null,
-)
+    val music: MusicTrack? = null,
+) {
+    /** Every media file the project uses. */
+    val mediaUris: List<Uri> get() = activities + clips.map { it.uri } + listOfNotNull(music?.uri)
+}
 
 /** A saved project as listed; [bytes] is the space its copied media take (shared copies counted in each). */
 data class ProjectInfo(val name: String, val modifiedMs: Long, val bytes: Long = 0L)
@@ -110,6 +115,10 @@ internal object Json {
         .put("groups", JSONArray(p.groups.map(::group)))
         .put("globalGrade", grade(p.globalGrade))
         .putOpt("timelineFps", p.timelineFps)
+        .putOpt(
+            "music",
+            p.music?.let { JSONObject().put("uri", it.uri.toString()).put("name", it.name).put("volume", it.volume).put("originalVolume", it.originalVolume) },
+        )
 
     fun project(o: JSONObject) = ProjectData(
         name = o.optString("name", "Project"),
@@ -118,6 +127,14 @@ internal object Json {
         groups = o.optJSONArray("groups").objects().map(::group),
         globalGrade = grade(o.optJSONObject("globalGrade")),
         timelineFps = if (o.has("timelineFps")) o.getDouble("timelineFps").toFloat() else null,
+        music = o.optJSONObject("music")?.let {
+            MusicTrack(
+                Uri.parse(it.getString("uri")),
+                it.optString("name", "Music"),
+                it.optDouble("volume", 0.8).toFloat(),
+                it.optDouble("originalVolume", 0.4).toFloat(),
+            )
+        },
     )
 
     private fun clip(c: SavedClip) = JSONObject()

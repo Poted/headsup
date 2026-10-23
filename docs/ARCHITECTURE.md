@@ -225,3 +225,12 @@ a one-second clip. On the timeline a photo stays for a chosen time (1–30 s, de
 range is its length) and its dashboard shows the moment it was taken. The preview shows the
 decoded picture (EXIF-upright) with the same colour shader and framing, on its own clock so the
 timeline plays through it; export turns it into video (Media3 image input at the timeline rate).
+
+## Music
+
+A music track (copied into the app like other media) plays under the whole timeline: in export
+as a second, looping `EditedMediaItemSequence` mixed with the clips' sound, which is lowered by
+the "Clip sound" level (`ChannelMixingAudioProcessor`); the music fades in over 0.5 s and out
+over the last 2 s (`FadeAudioProcessor`; when the track is shorter and loops, each loop fades
+in again). The preview plays it with a second player, started at the timeline position of the
+playhead whenever playback starts. Per-clip export has no music.

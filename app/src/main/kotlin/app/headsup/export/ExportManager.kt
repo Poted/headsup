@@ -180,7 +180,7 @@ class ExportManager(private val context: Context) {
      * scaling to the output, dashboard, then speed and frame rate. The dashboard comes before the
      * speed change so it reads the clip's own time and slows down with the picture.
      */
-    private fun editedItem(request: ExportRequest, out: OutputSpec, test: Boolean): EditedMediaItem {
+    private fun editedItem(request: ExportRequest, out: OutputSpec, test: Boolean, soundGain: Float = 1f): EditedMediaItem {
         val sampler = request.telemetry?.let { TelemetrySampler(it.track) }
         val overlay = TelemetryOverlay(
             DashboardRenderer(context.assets), request.style, request.effects, request.grade?.vignette ?: 0f, out.width, out.height,
@@ -209,7 +209,11 @@ class ExportManager(private val context: Context) {
             val clipFps = (request.frameRate ?: target) * speed
             if (clipFps > target + 0.5f) effects += FrameDropEffect.createDefaultFrameDropEffect(target)
         }
-        val audio = if (speed != 1f && !request.muteChangedSpeed) listOf<AudioProcessor>(SpeedChangingAudioProcessor(ConstantSpeed(speed))) else emptyList()
+        val audio = buildList<AudioProcessor> {
+            if (speed != 1f && !request.muteChangedSpeed) add(SpeedChangingAudioProcessor(ConstantSpeed(speed)))
+            // Under a music track the clips' own sound is lowered.
+            if (soundGain != 1f) add(AudioMix.gain(soundGain))
+        }
 
         if (request.isPhoto) {
             // A photo becomes video: shown for its time on the timeline at the output frame rate.
@@ -236,11 +240,21 @@ class ExportManager(private val context: Context) {
         val spec = job.spec
         val out = requireNotNull(spec.output)
         val test = spec.kind == ExportKind.TEN_BIT_TEST
-        val items = spec.parts.map { editedItem(it, out, test) }
+        val music = spec.music
+        val items = spec.parts.map { editedItem(it, out, test, soundGain = music?.originalVolume ?: 1f) }
         // Clips without sound (drones) or muted slow motion get silence, so the parts join cleanly.
-        val composition = Composition.Builder(
-            EditedMediaItemSequence.Builder(items).experimentalSetForceAudioTrack(items.size > 1).build(),
-        ).build()
+        val video = EditedMediaItemSequence.Builder(items).experimentalSetForceAudioTrack(items.size > 1 || music != null).build()
+        val composition = if (music == null) {
+            Composition.Builder(video).build()
+        } else {
+            // Music loops if shorter than the timeline, is cut where it ends, and fades in and out.
+            val totalUs = spec.parts.sumOf { if (it.isPhoto) it.durationMs else (it.durationMs / it.speed).toLong() } * 1000L
+            val track = EditedMediaItem.Builder(MediaItem.fromUri(music.uri))
+                .setRemoveVideo(true)
+                .setEffects(Effects(listOf(AudioMix.gain(music.volume), FadeAudioProcessor(totalUs, 500_000L, 2_000_000L)), emptyList()))
+                .build()
+            Composition.Builder(video, EditedMediaItemSequence.Builder(track).setIsLooping(true).build()).build()
+        }
 
         val encoderFactory = DefaultEncoderFactory.Builder(context)
             .setRequestedVideoEncoderSettings(VideoEncoderSettings.Builder().setBitrate(out.bitrate).build())
