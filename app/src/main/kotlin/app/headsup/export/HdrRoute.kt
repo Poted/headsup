@@ -10,6 +10,7 @@ import androidx.media3.common.ColorInfo
 import androidx.media3.common.DataReader
 import androidx.media3.common.Format
 import androidx.media3.common.MimeTypes
+import androidx.media3.common.OverlaySettings
 import androidx.media3.common.VideoFrameProcessingException
 import androidx.media3.common.util.Clock
 import androidx.media3.common.util.GlProgram
@@ -20,7 +21,6 @@ import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DataSourceBitmapLoader
 import androidx.media3.effect.BaseGlShaderProgram
 import androidx.media3.effect.BitmapOverlay
-import androidx.media3.effect.OverlaySettings
 import androidx.media3.effect.StaticOverlaySettings
 import androidx.media3.effect.TextOverlay
 import androidx.media3.effect.GlEffect
