@@ -112,7 +112,6 @@ import app.headsup.export.ExportSettings
 import app.headsup.export.ExportPreset
 import app.headsup.export.OutputSpec
 import app.headsup.export.VideoCodec
-import app.headsup.export.MusicTrack
 import app.headsup.export.HdrRoute
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.geometry.CornerRadius
@@ -166,7 +165,7 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
     val fitPicker = rememberLauncherForActivityResult(OpenDocumentsIn(DOWNLOADS_FOLDER)) { vm.addActivities(it) }
     val videoPicker = rememberLauncherForActivityResult(ActivityResultContracts.PickMultipleVisualMedia()) { vm.addClips(it) }
     val lutPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri -> uri?.let(vm::importLut) }
-    val musicPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri -> uri?.let(vm::setMusic) }
+    val soundPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { vm.addAudioFiles(it) }
     val addFit = { fitPicker.launch(arrayOf("*/*")) }
     val addVideos = { videoPicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageAndVideo)) }
 
@@ -256,7 +255,8 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
                         autoPlay = continuePlaying,
                         seekRequest = seekRequest,
                         onSeekDone = { seekRequest = null },
-                        music = state.music,
+                        audio = state.audioClips,
+                        clipSound = state.clipSound,
                         timelineOffsetMs = state.clips.take(state.selectedClip ?: 0).sumOf { it.timelineDurationMs },
                         timelineTotalMs = state.clips.sumOf { it.timelineDurationMs },
                         onAutoPlayStarted = { continuePlaying = false },
@@ -295,7 +295,7 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
             ) {
                 if (state.messages.isNotEmpty()) Messages(state.messages, vm::dismissMessages)
                 when (tool) {
-                    Tool.FILES -> FilesPanel(state, vm, onAddVideos = addVideos, onAddFit = addFit, onAddMusic = { musicPicker.launch(arrayOf("audio/*")) })
+                    Tool.FILES -> FilesPanel(state, vm, onAddVideos = addVideos, onAddFit = addFit, onAddSound = { soundPicker.launch(arrayOf("audio/*")) })
                     Tool.EDIT -> EditPanel(state, vm, playhead, editTab, { editTab = it }, onCutScrub = { cutScrub.value = it }) { f ->
                         val index = state.clips.indexOfFirst { it.id == f.clipId }
                         if (index >= 0) {
@@ -304,7 +304,7 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
                         }
                     }
                     Tool.AUDIO -> AudioPanel(
-                        state, vm, onAddMusic = { musicPicker.launch(arrayOf("audio/*")) },
+                        state, vm, onImport = { soundPicker.launch(arrayOf("audio/*")) },
                         playheadMs = {
                             val i = state.selectedClip ?: 0
                             val clip = state.clips.getOrNull(i)
@@ -458,7 +458,7 @@ private fun FilesPanel(
     vm: HeadsupViewModel,
     onAddVideos: () -> Unit,
     onAddFit: () -> Unit,
-    onAddMusic: () -> Unit,
+    onAddSound: () -> Unit,
 ) {
     ProjectRow(state, vm)
     Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -493,7 +493,7 @@ private fun FilesPanel(
         if (state.activities.isEmpty()) Hint("Add the .FIT file(s) from your watch.")
         state.activities.forEachIndexed { i, a -> ActivityRow(a, onRemove = { vm.removeActivity(i) }) }
     }
-    Group { MusicFile(state, vm, onAddMusic) }
+    Group { SoundLibrary(state, vm, onAddSound) }
 }
 
 private enum class EditTab(val label: String) { CLIP("Clip"), FRAME("Frame"), MOMENTS("Moments") }
@@ -591,7 +591,7 @@ private fun ClipEditing(state: UiState, vm: HeadsupViewModel, playhead: LongStat
         RulerSlider(clip.fadeInMs / 1000f, 0f..maxS, 0.1f, { v -> vm.setFades(index, (v * 1000).toLong(), clip.fadeOutMs) }, onReset = { vm.setFades(index, 0L, clip.fadeOutMs) })
         ValueHeader("Fade out to black", fadeLabel(clip.fadeOutMs))
         RulerSlider(clip.fadeOutMs / 1000f, 0f..maxS, 0.1f, { v -> vm.setFades(index, clip.fadeInMs, (v * 1000).toLong()) }, onReset = { vm.setFades(index, clip.fadeInMs, 0L) })
-        Hint("Picture, dashboard and sound fade together. Music has its own fades on the Audio page.")
+        Hint("Picture, dashboard and sound fade together. Sounds on the audio tracks have their own fades on the Audio page.")
     }
 }
 
@@ -611,67 +611,111 @@ private fun WatchSyncControls(state: UiState, vm: HeadsupViewModel, playhead: Lo
     OffsetControls(clip.manualOffsetMs) { vm.setManualOffset(index, it) }
 }
 
-/** The music file itself: added, changed or removed here; what it does is on the Audio page. */
+/** The project's sound files: music, ambience, effects. Placed on the audio tracks on the Audio page. */
 @Composable
-private fun MusicFile(state: UiState, vm: HeadsupViewModel, onAdd: () -> Unit) {
-    val music = state.music
+private fun SoundLibrary(state: UiState, vm: HeadsupViewModel, onAdd: () -> Unit) {
     Row(verticalAlignment = Alignment.CenterVertically) {
-        Column(Modifier.weight(1f)) {
-            Label("Music")
-            Hint(music?.let { it.name + (if (it.durationMs > 0) " · " + Formats.duration(it.durationMs) else "") } ?: "A track under the timeline; placed and mixed on the Audio page.")
+        Label("Sound")
+        Spacer(Modifier.weight(1f))
+        SmallAction("+ Add", onAdd, enabled = !state.busy)
+    }
+    if (state.audioFiles.isEmpty()) Hint("Music, ambience, effects: copied into the project, then placed on the Audio page.")
+    for (f in state.audioFiles) {
+        val uses = state.audioClips.count { it.uri == f.uri }
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text(f.name, style = MaterialTheme.typography.bodyMedium, maxLines = 1)
+                Hint(listOfNotNull(f.durationMs.takeIf { it > 0 }?.let { Formats.duration(it) }, state.audioAnalysis[f.uri]?.rhythm?.bpm?.let { String.format(Locale.US, "≈ %.0f BPM", it) }, if (uses > 0) "used $uses×" else null).joinToString(" · "))
+            }
+            SmallAction("Remove", { vm.removeAudioFile(f.uri) })
         }
-        if (music != null) SmallAction("Remove", vm::removeMusic)
-        SmallAction(if (music == null) "+ Add" else "Change", onAdd, enabled = !state.busy)
     }
 }
 
 /**
- * Sound: the music's place on the timeline (where it starts, which part of the song, repeating),
- * fades only where asked, and the levels of the music and the clips' own sound.
+ * Sound: the audio tracks under the video, a sound added from the project's library, the
+ * selected sound's level, and the level of the video clips' own sound.
  */
 @Composable
-private fun AudioPanel(state: UiState, vm: HeadsupViewModel, onAddMusic: () -> Unit, playheadMs: () -> Long, onSeek: (Long) -> Unit) {
-    val music = state.music
-    Group { MusicFile(state, vm, onAddMusic) }
-    if (music == null) return
+private fun AudioPanel(state: UiState, vm: HeadsupViewModel, onImport: () -> Unit, playheadMs: () -> Long, onSeek: (Long) -> Unit) {
+    var picking by remember { mutableStateOf(false) }
     Group {
-        Label("Timeline")
-        MusicTimeline(
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Label("Tracks")
+            Spacer(Modifier.weight(1f))
+            SmallAction("+ Add sound", { picking = true })
+        }
+        AudioTimeline(
             clipLengthsMs = state.clips.map { it.timelineDurationMs },
-            music = music,
-            envelope = state.musicEnvelope,
-            accents = state.musicAccents,
+            clips = state.audioClips,
+            analysis = state.audioAnalysis,
+            selected = state.selectedAudio,
             playheadMs = playheadMs,
-            onChange = { m -> vm.updateMusic { m } },
+            onSelect = vm::selectAudio,
+            onChange = { c -> vm.updateAudio(c.id) { c } },
             onSeek = onSeek,
         )
-        val p = music.placement
-        Hint(
-            listOfNotNull(
-                "Starts at ${Formats.duration(music.startOnTimelineMs)}",
-                "song ${Formats.duration(music.songStartMs)}–${Formats.duration(p.songStopMs)}",
-                music.fadeInMs.takeIf { it > 0 }?.let { "fade in ${fadeLabel(it)}" },
-                music.fadeOutMs.takeIf { it > 0 }?.let { "fade out ${fadeLabel(it)}" },
-                if (state.musicEnvelope == null) "reading the song…" else "${state.musicAccents.size} accents",
-            ).joinToString(" · "),
-        )
-        Hint("Drag the music to move it, its edges to trim it, the dots on top to fade. Hold, then drag, to slide the song inside. Tap to jump there; drag the clips row to scroll.")
+        Hint("Tap a sound to select it. Drag it to move it (also to another track), its edges to trim, the dots on top to fade; hold, then drag, to slide the sound inside. Tap empty space to jump there.")
+    }
+    val clip = state.audioClips.firstOrNull { it.id == state.selectedAudio }
+    if (clip != null) Group {
+        val p = clip.piece
+        val rhythm = state.audioAnalysis[clip.uri]?.rhythm
         Row(verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
-                Text("Repeat", style = MaterialTheme.typography.bodyMedium)
-                Hint(if (music.loop) "The used part starts again when it ends." else "Stops when the used part ends.")
+                Text(clip.name, style = MaterialTheme.typography.titleSmall, maxLines = 1)
+                Hint(
+                    listOfNotNull(
+                        "${Formats.duration(p.startOnTimelineMs)}–${Formats.duration(p.endOnTimelineMs)}",
+                        "from ${Formats.duration(p.sourceStartMs)}",
+                        p.fadeIn.takeIf { it > 0 }?.let { "fade in ${fadeLabel(it)}" },
+                        p.fadeOut.takeIf { it > 0 }?.let { "fade out ${fadeLabel(it)}" },
+                        rhythm?.bpm?.let { String.format(Locale.US, "≈ %.0f BPM", it) },
+                    ).joinToString(" · "),
+                )
             }
-            Switch(checked = music.loop, onCheckedChange = { v -> vm.updateMusic { it.copy(loop = v) } })
+            SmallAction("Duplicate", { vm.duplicateAudio(clip.id) })
+            SmallAction("Delete", { vm.removeAudio(clip.id) })
         }
+        ValueHeader("Level", String.format(Locale.US, "%.0f %%", clip.volume * 100))
+        RulerSlider(clip.volume, 0f..1f, 0.02f, { v -> vm.updateAudio(clip.id) { it.copy(volume = v) } }, onReset = { vm.updateAudio(clip.id) { it.copy(volume = 0.8f) } })
     }
     Group {
-        Label("Levels")
-        ValueHeader("Music", String.format(Locale.US, "%.0f %%", music.volume * 100))
-        RulerSlider(music.volume, 0f..1f, 0.02f, { v -> vm.updateMusic { it.copy(volume = v) } }, onReset = { vm.updateMusic { it.copy(volume = 0.8f) } })
-        ValueHeader("Clip sound", String.format(Locale.US, "%.0f %%", music.originalVolume * 100))
-        RulerSlider(
-            music.originalVolume, 0f..1f, 0.02f, { v -> vm.updateMusic { it.copy(originalVolume = v) } },
-            onReset = { vm.updateMusic { it.copy(originalVolume = 0.4f) } },
+        ValueHeader("Clips' own sound", String.format(Locale.US, "%.0f %%", state.clipSound * 100))
+        RulerSlider(state.clipSound, 0f..1f, 0.02f, vm::setClipSound, onReset = { vm.setClipSound(1f) })
+    }
+    if (picking) {
+        AlertDialog(
+            onDismissRequest = { picking = false },
+            title = { Text("Add sound") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    if (state.audioFiles.isEmpty()) Hint("The project has no sounds yet. Add them on the Files page (or Import here); they are copied into the project.")
+                    for (f in state.audioFiles) {
+                        Row(
+                            Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(10.dp))
+                                .clickable {
+                                    vm.placeAudio(f, playheadMs())
+                                    picking = false
+                                }
+                                .padding(vertical = 8.dp, horizontal = 4.dp),
+                        ) {
+                            Text(f.name, Modifier.weight(1f), maxLines = 1)
+                            Text(if (f.durationMs > 0) Formats.duration(f.durationMs) else "", color = HeadsupColors.TextMuted)
+                        }
+                    }
+                    Hint("Placed at the playhead, on a free track.")
+                }
+            },
+            confirmButton = { TextButton(onClick = { picking = false }) { Text("Close") } },
+            dismissButton = {
+                TextButton(onClick = {
+                    picking = false
+                    onImport()
+                }) { Text("Import…") }
+            },
         )
     }
 }

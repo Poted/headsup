@@ -8,7 +8,8 @@ import app.headsup.core.color.MaskKind
 import app.headsup.core.color.MaskKey
 import app.headsup.core.frame.Reframe
 import app.headsup.render.EffectSettings
-import app.headsup.export.MusicTrack
+import app.headsup.export.AudioClip
+import app.headsup.export.AudioFile
 import app.headsup.render.GraphMetric
 import org.json.JSONArray
 import org.json.JSONObject
@@ -50,10 +51,14 @@ data class ProjectData(
     val globalGrade: ColorGrade,
     /** Timeline frame rate, or null for the first clip's. */
     val timelineFps: Float? = null,
-    val music: MusicTrack? = null,
+    /** The project's sound files and the clips placed from them on the audio tracks. */
+    val audioFiles: List<AudioFile> = emptyList(),
+    val audioClips: List<AudioClip> = emptyList(),
+    /** Level of the video clips' own sound. */
+    val clipSound: Float = 1f,
 ) {
     /** Every media file the project uses. */
-    val mediaUris: List<Uri> get() = activities + clips.map { it.uri } + listOfNotNull(music?.uri)
+    val mediaUris: List<Uri> get() = activities + clips.map { it.uri } + audioFiles.map { it.uri } + audioClips.map { it.uri }
 }
 
 /** A saved project as listed; [bytes] is the space its copied media take (shared copies counted in each). */
@@ -108,7 +113,7 @@ class ProjectStore(context: Context) {
 
 /** JSON form of the project; unknown or missing fields fall back to defaults, so old files still open. */
 internal object Json {
-    private const val VERSION = 2
+    private const val VERSION = 3
 
     fun project(p: ProjectData) = JSONObject()
         .put("version", VERSION)
@@ -118,14 +123,9 @@ internal object Json {
         .put("groups", JSONArray(p.groups.map(::group)))
         .put("globalGrade", grade(p.globalGrade))
         .putOpt("timelineFps", p.timelineFps)
-        .putOpt(
-            "music",
-            p.music?.let {
-                JSONObject().put("uri", it.uri.toString()).put("name", it.name).put("volume", it.volume).put("originalVolume", it.originalVolume)
-                    .put("durationMs", it.durationMs).put("startOnTimelineMs", it.startOnTimelineMs).put("songStartMs", it.songStartMs)
-                    .put("loop", it.loop).put("fadeInMs", it.fadeInMs).put("fadeOutMs", it.fadeOutMs).put("songEndMs", it.songEndMs)
-            },
-        )
+        .put("audioFiles", JSONArray(p.audioFiles.map { JSONObject().put("uri", it.uri.toString()).put("name", it.name).put("durationMs", it.durationMs) }))
+        .put("audioClips", JSONArray(p.audioClips.map(::audioClip)))
+        .put("clipSound", p.clipSound)
 
     fun project(o: JSONObject) = ProjectData(
         name = o.optString("name", "Project"),
@@ -134,22 +134,46 @@ internal object Json {
         groups = o.optJSONArray("groups").objects().map(::group),
         globalGrade = grade(o.optJSONObject("globalGrade")),
         timelineFps = if (o.has("timelineFps")) o.getDouble("timelineFps").toFloat() else null,
-        music = o.optJSONObject("music")?.let {
-            MusicTrack(
-                Uri.parse(it.getString("uri")),
-                it.optString("name", "Music"),
-                it.optDouble("volume", 0.8).toFloat(),
-                it.optDouble("originalVolume", 0.4).toFloat(),
-                durationMs = it.optLong("durationMs", 0L),
-                startOnTimelineMs = it.optLong("startOnTimelineMs", 0L),
-                songStartMs = it.optLong("songStartMs", 0L),
-                loop = it.optBoolean("loop", true),
-                fadeInMs = it.optLong("fadeInMs", 0L),
-                fadeOutMs = it.optLong("fadeOutMs", 0L),
-                songEndMs = it.optLong("songEndMs", 0L),
-            )
-        },
+        audioFiles = o.optJSONArray("audioFiles").objects().map {
+            AudioFile(Uri.parse(it.getString("uri")), it.optString("name", "Sound"), it.optLong("durationMs", 0L))
+        } + listOfNotNull(o.optJSONObject("music")?.let { m -> AudioFile(Uri.parse(m.getString("uri")), m.optString("name", "Music"), m.optLong("durationMs", 0L)) }),
+        audioClips = o.optJSONArray("audioClips").objects().map(::audioClip) + oldMusic(o.optJSONObject("music")),
+        clipSound = o.optDouble("clipSound", o.optJSONObject("music")?.optDouble("originalVolume", 1.0) ?: 1.0).toFloat(),
     )
+
+    private fun audioClip(c: AudioClip) = JSONObject()
+        .put("id", c.id).put("uri", c.uri.toString()).put("name", c.name).put("lane", c.lane)
+        .put("sourceDurationMs", c.sourceDurationMs).put("startOnTimelineMs", c.startOnTimelineMs)
+        .put("sourceStartMs", c.sourceStartMs).put("sourceEndMs", c.sourceEndMs)
+        .put("volume", c.volume).put("fadeInMs", c.fadeInMs).put("fadeOutMs", c.fadeOutMs)
+
+    private fun audioClip(o: JSONObject) = AudioClip(
+        id = o.optLong("id"),
+        uri = Uri.parse(o.getString("uri")),
+        name = o.optString("name", "Sound"),
+        lane = o.optInt("lane", 0),
+        sourceDurationMs = o.optLong("sourceDurationMs", 0L),
+        startOnTimelineMs = o.optLong("startOnTimelineMs", 0L),
+        sourceStartMs = o.optLong("sourceStartMs", 0L),
+        sourceEndMs = o.optLong("sourceEndMs", 0L),
+        volume = o.optDouble("volume", 0.8).toFloat(),
+        fadeInMs = o.optLong("fadeInMs", 0L),
+        fadeOutMs = o.optLong("fadeOutMs", 0L),
+    )
+
+    /** Version 2's single music track becomes one clip on the first audio track. */
+    private fun oldMusic(m: JSONObject?): List<AudioClip> {
+        if (m == null) return emptyList()
+        val songEnd = m.optLong("songEndMs", 0L)
+        return listOf(
+            AudioClip(
+                id = 1L, uri = Uri.parse(m.getString("uri")), name = m.optString("name", "Music"),
+                sourceDurationMs = m.optLong("durationMs", 0L), startOnTimelineMs = m.optLong("startOnTimelineMs", 0L),
+                sourceStartMs = m.optLong("songStartMs", 0L), sourceEndMs = songEnd,
+                volume = m.optDouble("volume", 0.8).toFloat(), fadeInMs = m.optLong("fadeInMs", 0L), fadeOutMs = m.optLong("fadeOutMs", 0L),
+            ),
+        )
+    }
 
     private fun clip(c: SavedClip) = JSONObject()
         .put("uri", c.uri.toString())

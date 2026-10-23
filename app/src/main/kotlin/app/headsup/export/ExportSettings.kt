@@ -57,12 +57,15 @@ data class OutputSpec(
 
 /**
  * One export to run: a video made of [parts] (several = joined into one file), or a PNG sequence
- * of one clip. [music] plays under the whole video.
+ * of one clip. [audio] plays under the video, mixed with the clips' sound at [clipSound].
  */
 data class JobSpec(
     val kind: ExportKind,
     val title: String,
     val parts: List<ExportRequest>,
     val output: OutputSpec?,
-    val music: MusicTrack? = null,
+    /** Audio clips under the video (only for a whole-timeline export). */
+    val audio: List<AudioClip> = emptyList(),
+    /** Level of the video clips' own sound, 0..1. */
+    val clipSound: Float = 1f,
 )

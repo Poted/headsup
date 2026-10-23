@@ -45,7 +45,8 @@ import app.headsup.core.color.MaskTracker
 import app.headsup.export.JobSpec
 import app.headsup.export.OutputSpec
 import app.headsup.export.VideoCodec
-import app.headsup.export.MusicTrack
+import app.headsup.export.AudioClip
+import app.headsup.export.AudioFile
 import app.headsup.media.ClipMetadata
 import app.headsup.media.ClipMetadataReader
 import app.headsup.media.MediaLibrary
@@ -187,6 +188,9 @@ data class FoundHighlight(val highlight: Highlight, val clipId: Long, val clipNa
  * One step of undo history: the edit itself (files, cuts, colour, groups, effects, framing,
  * dashboard), not what is selected or on screen. [project] keeps histories of projects apart.
  */
+/** A sound file's loudness (waveform) and rhythm (beat grid, accents). */
+data class SoundAnalysis(val envelope: AudioEnvelope, val rhythm: AudioEnvelope.Rhythm)
+
 private data class EditSnapshot(
     val project: String,
     val activities: List<LoadedActivity>,
@@ -196,7 +200,9 @@ private data class EditSnapshot(
     val style: DashboardStyle,
     val timelineFps: Float?,
     val exportSettings: ExportSettings,
-    val music: MusicTrack?,
+    val audioFiles: List<AudioFile>,
+    val audioClips: List<AudioClip>,
+    val clipSound: Float,
 )
 
 /** What the colour page edits; the order is that of its tabs. */
@@ -260,11 +266,15 @@ data class UiState(
     val exportSettings: ExportSettings = ExportSettings(),
     /** Frame rate of the timeline (exports and slow-motion maths); null = the first clip's. */
     val timelineFps: Float? = null,
-    /** Music under the whole timeline. */
-    val music: MusicTrack? = null,
-    /** The music's loudness over time and its accents, for the timeline (null while analysed). */
-    val musicEnvelope: AudioEnvelope? = null,
-    val musicAccents: List<AudioEnvelope.Accent> = emptyList(),
+    /** The project's sound files (Files page) and the clips placed from them on the audio tracks. */
+    val audioFiles: List<AudioFile> = emptyList(),
+    val audioClips: List<AudioClip> = emptyList(),
+    /** Level of the video clips' own sound, 0..1. */
+    val clipSound: Float = 1f,
+    /** The audio clip being edited on the Audio page. */
+    val selectedAudio: Long? = null,
+    /** Loudness and rhythm of each sound file, for the audio timeline (missing while analysed). */
+    val audioAnalysis: Map<Uri, SoundAnalysis> = emptyMap(),
     /** Vectorscope and skin measurement of the last frame tapped in the preview. */
     val scope: ScopeResult? = null,
     /** Look copied with "Copy", waiting to be pasted. */
@@ -363,7 +373,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
     private val history = ArrayList<EditSnapshot>()
     private var historyIndex = -1
 
-    private fun UiState.snapshot() = EditSnapshot(projectName, activities, clips, groups, globalGrade, style, timelineFps, exportSettings, music)
+    private fun UiState.snapshot() = EditSnapshot(projectName, activities, clips, groups, globalGrade, style, timelineFps, exportSettings, audioFiles, audioClips, clipSound)
 
     /**
      * Records a step a moment after the edit settles, so a slider drag or a widget move is one
@@ -422,7 +432,9 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                 style = snapshot.style,
                 timelineFps = snapshot.timelineFps,
                 exportSettings = snapshot.exportSettings,
-                music = snapshot.music,
+                audioFiles = snapshot.audioFiles,
+                audioClips = snapshot.audioClips,
+                clipSound = snapshot.clipSound,
                 selectedClip = s.selectedClip?.coerceAtMost(snapshot.clips.lastIndex)?.takeIf { it >= 0 } ?: snapshot.clips.indices.firstOrNull(),
                 compareGrade = null,
                 cine = null,
@@ -432,7 +444,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
         }
         stylePrefs.save(snapshot.style)
         updateHistoryFlags()
-        measureMusicIfNeeded()
+        analyseAudio()
         refreshPreview()
     }
 
@@ -470,7 +482,9 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
         groups = groups.map { SavedGroup(it.id, it.name, it.grade, it.lutName) },
         globalGrade = globalGrade,
         timelineFps = timelineFps,
-        music = music,
+        audioFiles = audioFiles,
+        audioClips = audioClips,
+        clipSound = clipSound,
     )
 
     fun refreshProjects() = _state.update {
@@ -535,7 +549,10 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                         groups = project.groups.map { ClipGroup(it.id, it.name, it.grade, it.lutName) },
                         globalGrade = project.globalGrade,
                         timelineFps = project.timelineFps,
-                        music = project.music,
+                        audioFiles = project.audioFiles.distinctBy { it.uri },
+                        audioClips = project.audioClips,
+                        clipSound = project.clipSound,
+                        selectedAudio = null,
                         selectedClip = clips.indices.firstOrNull(),
                         highlights = null,
                         defaultGrade = ColorGrade(),
@@ -556,7 +573,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                 )
             }
             projectStore.lastProject = project.name
-            measureMusicIfNeeded()
+            analyseAudio()
             refreshPreview()
         }
     }
@@ -572,7 +589,10 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                 groups = emptyList(),
                 globalGrade = ColorGrade(),
                 timelineFps = null,
-                music = null,
+                audioFiles = emptyList(),
+                audioClips = emptyList(),
+                clipSound = 1f,
+                selectedAudio = null,
                 selectedClip = null,
                 highlights = null,
                 defaultGrade = ColorGrade(),
@@ -645,7 +665,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
 
     /** Media of the open project that is still only referenced from the gallery or the cloud. */
     val UiState.externalMedia: List<Uri>
-        get() = (clips.map { it.meta.uri } + activities.mapNotNull { it.uri } + listOfNotNull(music?.uri)).distinct().filterNot(library::isInLibrary)
+        get() = (clips.map { it.meta.uri } + activities.mapNotNull { it.uri } + audioFiles.map { it.uri }).distinct().filterNot(library::isInLibrary)
 
     /**
      * Copies media the project still takes from the gallery or the cloud (projects made before
@@ -678,7 +698,8 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                 s.copy(
                     clips = s.clips.map { c -> copies[c.meta.uri]?.let { c.copy(meta = c.meta.copy(uri = it)) } ?: c },
                     activities = s.activities.map { a -> a.uri?.let(copies::get)?.let { a.copy(uri = it) } ?: a },
-                    music = s.music?.let { m -> copies[m.uri]?.let { m.copy(uri = it) } ?: m },
+                    audioFiles = s.audioFiles.map { f -> copies[f.uri]?.let { f.copy(uri = it) } ?: f },
+                    audioClips = s.audioClips.map { c -> copies[c.uri]?.let { c.copy(uri = it) } ?: c },
                     busy = false,
                     loadingMessage = null,
                     loadingProgress = null,
@@ -689,35 +710,85 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    // Music
+    // Sound
 
-    /** Copies [uri] into the app and puts it under the whole timeline. */
-    fun setMusic(uri: Uri) {
-        if (_state.value.busy) return
+    /** Copies sound files into the app's folder and adds them to the project's library (Files page). */
+    fun addAudioFiles(uris: List<Uri>) {
+        if (uris.isEmpty() || _state.value.busy) return
         val context = getApplication<Application>()
-        val name = ClipMetadataReader.displayName(context, uri) ?: "Music"
-        _state.update { it.copy(busy = true, loadingMessage = "Copying $name", loadingProgress = null) }
+        _state.update { it.copy(busy = true, loadingMessage = "Copying sound", loadingProgress = null) }
         loadJob = viewModelScope.launch {
-            val local = runCatching {
-                withContext(Dispatchers.IO) {
-                    library.import(uri) { copied, total ->
-                        _state.update { it.copy(loadingMessage = "Copying $name · ${copied / 1_000_000} MB", loadingProgress = if (total > 0) copied.toFloat() / total else null) }
+            val added = mutableListOf<AudioFile>()
+            val failed = mutableListOf<String>()
+            for (uri in uris) {
+                val name = ClipMetadataReader.displayName(context, uri) ?: "Sound"
+                val local = runCatching {
+                    withContext(Dispatchers.IO) {
+                        library.import(uri) { copied, total ->
+                            _state.update { it.copy(loadingMessage = "Copying $name · ${copied / 1_000_000} MB", loadingProgress = if (total > 0) copied.toFloat() / total else null) }
+                        }
                     }
-                }
-            }.onFailure { if (it is kotlinx.coroutines.CancellationException) throw it }.getOrNull()
-            val songMs = local?.let { durationOf(it) } ?: 0L
+                }.onFailure { if (it is kotlinx.coroutines.CancellationException) throw it }.getOrNull()
+                if (local == null) failed += name else added += AudioFile(local, name, durationOf(local))
+            }
             _state.update { s ->
                 s.copy(
-                    music = local?.let { MusicTrack(it, name, s.music?.volume ?: 0.8f, s.music?.originalVolume ?: 0.4f, durationMs = songMs) } ?: s.music,
+                    audioFiles = (s.audioFiles + added).distinctBy { it.uri },
                     busy = false,
                     loadingMessage = null,
                     loadingProgress = null,
-                    messages = if (local == null) s.messages + "Could not add $name" else s.messages,
+                    messages = s.messages + failed.map { "Could not add $it" },
                 )
             }
-            measureMusicIfNeeded()
+            analyseAudio()
         }
     }
+
+    /** Removes a sound from the library, and its clips from the tracks. */
+    fun removeAudioFile(uri: Uri) = _state.update { s ->
+        s.copy(audioFiles = s.audioFiles.filter { it.uri != uri }, audioClips = s.audioClips.filter { it.uri != uri })
+    }
+
+    /**
+     * Places [file] at [atMs] on the timeline, on the first track that is free there (a new
+     * track if none), and selects it.
+     */
+    fun placeAudio(file: AudioFile, atMs: Long) {
+        val s = _state.value
+        val id = (s.audioClips.maxOfOrNull { it.id } ?: 0L) + 1
+        val draft = AudioClip(id, file.uri, file.name, sourceDurationMs = file.durationMs, startOnTimelineMs = atMs.coerceAtLeast(0L))
+        val lane = freeLane(s.audioClips, draft.piece.startOnTimelineMs, draft.piece.endOnTimelineMs)
+        _state.update { it.copy(audioClips = it.audioClips + draft.copy(lane = lane), selectedAudio = id) }
+    }
+
+    /** The first track with nothing between [fromMs] and [toMs] (ignoring clip [except]). */
+    private fun freeLane(clips: List<AudioClip>, fromMs: Long, toMs: Long, except: Long? = null): Int {
+        var lane = 0
+        while (clips.any { it.id != except && it.lane == lane && it.piece.startOnTimelineMs < toMs && it.piece.endOnTimelineMs > fromMs }) lane++
+        return lane
+    }
+
+    fun selectAudio(id: Long?) = _state.update { it.copy(selectedAudio = id) }
+
+    fun updateAudio(id: Long, transform: (AudioClip) -> AudioClip) =
+        _state.update { s -> s.copy(audioClips = s.audioClips.map { if (it.id == id) transform(it) else it }) }
+
+    fun removeAudio(id: Long) = _state.update { s -> s.copy(audioClips = s.audioClips.filter { it.id != id }, selectedAudio = null) }
+
+    /** A copy right after the clip (on its track if there is room, else on a free one): repeats a loop or a sound. */
+    fun duplicateAudio(id: Long) {
+        val s = _state.value
+        val c = s.audioClips.firstOrNull { it.id == id } ?: return
+        val newId = (s.audioClips.maxOfOrNull { it.id } ?: 0L) + 1
+        val p = c.piece
+        val start = p.endOnTimelineMs
+        val copy = c.copy(id = newId, startOnTimelineMs = start)
+        val lane = if (s.audioClips.none { it.lane == c.lane && it.piece.startOnTimelineMs < start + p.lengthMs && it.piece.endOnTimelineMs > start }) c.lane
+        else freeLane(s.audioClips, start, start + p.lengthMs)
+        _state.update { it.copy(audioClips = it.audioClips + copy.copy(lane = lane), selectedAudio = newId) }
+    }
+
+    fun setClipSound(level: Float) = _state.update { it.copy(clipSound = level.coerceIn(0f, 1f)) }
 
     private suspend fun durationOf(uri: Uri): Long = withContext(Dispatchers.IO) {
         runCatching {
@@ -731,31 +802,22 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
         }.getOrDefault(0L)
     }
 
-    /** Projects saved before the song's length was stored get it measured once. */
-    private var analysedMusic: Uri? = null
+    private val analysing = mutableSetOf<Uri>()
 
-    /** Measures the song once (older projects) and analyses its loudness and accents for the timeline. */
-    private fun measureMusicIfNeeded() {
-        val music = _state.value.music ?: return
-        if (music.durationMs <= 0) viewModelScope.launch {
-            val d = durationOf(music.uri)
-            if (d > 0) _state.update { s -> s.copy(music = s.music?.takeIf { it.uri == music.uri }?.copy(durationMs = d) ?: s.music) }
+    /** Analyses each sound file once (loudness and rhythm) for the timeline. */
+    private fun analyseAudio() {
+        val s = _state.value
+        for (file in s.audioFiles) {
+            if (file.uri in s.audioAnalysis || !analysing.add(file.uri)) continue
+            viewModelScope.launch {
+                val envelope = withContext(Dispatchers.IO) { AudioAnalysis.envelope(getApplication(), file.uri) }
+                val rhythm = envelope?.let { withContext(Dispatchers.Default) { it.rhythm() } }
+                analysing.remove(file.uri)
+                if (envelope != null && rhythm != null) {
+                    _state.update { it.copy(audioAnalysis = it.audioAnalysis + (file.uri to SoundAnalysis(envelope, rhythm))) }
+                }
+            }
         }
-        if (analysedMusic == music.uri) return
-        analysedMusic = music.uri
-        _state.update { it.copy(musicEnvelope = null, musicAccents = emptyList()) }
-        viewModelScope.launch {
-            val envelope = withContext(Dispatchers.IO) { AudioAnalysis.envelope(getApplication(), music.uri) }
-            val accents = envelope?.let { withContext(Dispatchers.Default) { it.accents() } }.orEmpty()
-            _state.update { s -> if (s.music?.uri == music.uri) s.copy(musicEnvelope = envelope, musicAccents = accents) else s }
-        }
-    }
-
-    fun updateMusic(transform: (MusicTrack) -> MusicTrack) = _state.update { s -> s.copy(music = s.music?.let(transform)) }
-
-    fun removeMusic() {
-        analysedMusic = null
-        _state.update { it.copy(music = null, musicEnvelope = null, musicAccents = emptyList()) }
     }
 
     /** Stops copying files in; what was not finished is removed. */
@@ -1639,9 +1701,9 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
             kind == ExportKind.PNG_SEQUENCE -> requests.map { JobSpec(kind, it.name, listOf(it), null) }
             kind == ExportKind.VIDEO && settings.wholeTimeline -> {
                 val name = s.projectName.replace(Regex("[^\\p{L}\\p{N} ._-]"), "_")
-                listOf(JobSpec(kind, s.projectName, requests, spec(requests, "${name}_sweetspot.mp4"), s.music))
+                listOf(JobSpec(kind, s.projectName, requests, spec(requests, "${name}_sweetspot.mp4"), s.audioClips, s.clipSound))
             }
-            else -> requests.map { JobSpec(kind, it.name, listOf(it), spec(listOf(it), "${it.baseName}_sweetspot.mp4")) }
+            else -> requests.map { JobSpec(kind, it.name, listOf(it), spec(listOf(it), "${it.baseName}_sweetspot.mp4"), clipSound = s.clipSound) }
         }
     }
 

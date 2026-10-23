@@ -231,27 +231,28 @@ range is its length) and its dashboard shows the moment it was taken. The previe
 decoded picture (EXIF-upright) with the same colour shader and framing, on its own clock so the
 timeline plays through it; export turns it into video (Media3 image input at the timeline rate).
 
-## Music
-
-A music track (copied into the app like other media) plays under the whole timeline: in export
-as a second, looping `EditedMediaItemSequence` mixed with the clips' sound, which is lowered by
-the "Clip sound" level (`ChannelMixingAudioProcessor`); the music fades in over 0.5 s and out
-over the last 2 s (`FadeAudioProcessor`; when the track is shorter and loops, each loop fades
-in again). The preview plays it with a second player, started at the timeline position of the
-playhead whenever playback starts. Per-clip export has no music.
-
 ## Sound and fades
 
-Music is placed on the timeline (`core/edit/MusicPlacement`): a start on the timeline, a start in
-the song, repeat or stop at the song's end, and fades only where set. The export lays the song out
-as pieces in a second Media3 sequence (a gap first when it starts later), cut where the timeline
-ends; the preview's music player follows the same placement. Clips can fade in from and out to
-black (`Fade`): `FadeEffect` on the picture (dashboard included) and `FadeAudioProcessor` on the
-sound, both in timeline time. Pages: Files (the project's media, FIT and music files), Edit (timeline frame rate, cut, speed,
-fades, framing, moments), Colour, Effects (dashboard incl. watch sync, film effects), Audio (music
-timeline, levels), Export.
+The project has a sound library (Files page; files are copied into the app like other media) and
+audio tracks (Audio page), as in DaVinci: `AudioClip`s placed from the library on numbered tracks,
+each with its start on the timeline, used part of the source, level and fades
+(`core/edit/AudioPiece`). Tracks play together, so music, ambience and effects can overlap; the
+video clips' own sound has one level for all. Repeating a sound is a duplicate placed after it.
 
-The Audio page's timeline (`ui/MusicTimeline`) edits the placement directly: move, trim (song
-start/end), slip (hold, then drag), fade handles, tap to jump. The song is decoded once into a
-20 ms loudness envelope (`media/AudioAnalysis`, `core/edit/AudioEnvelope`), drawn as the waveform;
-accents are loudness rises well above their surroundings, shown as ticks.
+Export: one Media3 sequence per track (gaps between its clips, each cut at the timeline's end and
+where the next one on its track starts), mixed with the video's sound. Preview: one player per
+audio clip, kept in step with the timeline position. The timeline (`ui/AudioTimeline`) edits the
+clips directly: select, move (also between tracks, snapping to cuts, other clips and the
+playhead), trim, slip (hold, then drag), fade handles; tapping empty space jumps the preview.
+
+Each sound is decoded once into a 20 ms loudness envelope (`media/AudioAnalysis`) for its waveform
+and rhythm (`AudioEnvelope.rhythm`): onset strength from loudness rises in dB, tempo from its
+autocorrelation (60–200 BPM, only with a clear periodicity), a beat grid nudged to the onsets,
+and accents where a rise stands well above its surroundings.
+
+Video clips can fade in from and out to black (`Fade`): `FadeEffect` on the picture (dashboard
+included) and `FadeAudioProcessor` on the sound, both in timeline time.
+
+Pages: Files (the project's media, FIT and sound files), Edit (timeline frame rate, cut, speed,
+fades, framing, moments), Colour, Effects (dashboard incl. watch sync, film effects), Audio
+(tracks, levels), Export.

@@ -251,45 +251,52 @@ class ExportManager(private val context: Context) {
             .build()
     }
 
-    private fun runVideo(job: ExportJob) {
-        val spec = job.spec
-        val out = requireNotNull(spec.output)
-        val music = spec.music
-        val items = spec.parts.map { editedItem(it, out, soundGain = music?.originalVolume ?: 1f) }
-        // Clips without sound (drones) or muted slow motion get silence, so the parts join cleanly.
-        val video = EditedMediaItemSequence.Builder(items).experimentalSetForceAudioTrack(items.size > 1 || music != null).build()
-        val composition = if (music == null) {
-            Composition.Builder(video).build()
-        } else {
-            // Music where it was placed: song pieces back to back (repeats if looped), cut where the
-            // timeline ends; fades only where they were asked for.
-            val totalMs = spec.parts.sumOf { if (it.isPhoto) it.durationMs else (it.durationMs / it.speed).toLong() }
-            val endMs = totalMs
-            val placement = music.placement
-            val segments = placement.segments(endMs)
-            val musicEndMs = placement.endMs(endMs)
-            val track = EditedMediaItemSequence.Builder(emptyList<EditedMediaItem>()).experimentalSetForceAudioTrack(true)
-            segments.firstOrNull()?.let { if (it.timelineStartMs > 0) track.addGap(it.timelineStartMs * 1000L) }
-            segments.forEachIndexed { i, seg ->
-                val fadeIn = if (i == 0) placement.fadeInMs else 0L
-                // Time from this piece's start to where the music stops; the fade-out may begin in an earlier piece.
-                val untilEndMs = musicEndMs - seg.timelineStartMs
-                val fadesOut = placement.fadeOutMs > 0 && untilEndMs - seg.lengthMs < placement.fadeOutMs
+    /**
+     * One audio sequence per track: its clips in order with silence between them, each cut where
+     * the timeline ends (and where the next one on the same track begins), at its level and with
+     * its fades. Media3 mixes the sequences with the video's sound.
+     */
+    private fun audioTracks(clips: List<AudioClip>, totalMs: Long): List<EditedMediaItemSequence> =
+        clips.groupBy { it.lane }.toSortedMap().values.mapNotNull { lane ->
+            val builder = EditedMediaItemSequence.Builder(emptyList<EditedMediaItem>()).experimentalSetForceAudioTrack(true)
+            var at = 0L
+            var any = false
+            for (clip in lane.sortedBy { it.startOnTimelineMs }) {
+                val p = clip.piece
+                val start = maxOf(p.startOnTimelineMs, at)
+                val end = minOf(p.endOnTimelineMs, totalMs)
+                if (end - start < 50) continue
+                if (start > at) builder.addGap((start - at) * 1000L)
+                val from = p.sourceStartMs + (start - p.startOnTimelineMs)
                 val item = MediaItem.Builder()
-                    .setUri(music.uri)
+                    .setUri(clip.uri)
                     .setClippingConfiguration(
-                        MediaItem.ClippingConfiguration.Builder().setStartPositionMs(seg.songFromMs).setEndPositionMs(seg.songToMs).build(),
+                        MediaItem.ClippingConfiguration.Builder().setStartPositionMs(from).setEndPositionMs(from + (end - start)).build(),
                     )
                     .build()
                 val audio = buildList<AudioProcessor> {
-                    add(AudioMix.gain(music.volume))
-                    if (fadeIn > 0 || fadesOut) add(FadeAudioProcessor(untilEndMs * 1000L, fadeIn * 1000L, placement.fadeOutMs * 1000L))
+                    add(AudioMix.gain(clip.volume))
+                    // Fades as placed: in from the clip's start, out before its own end (even if cut earlier).
+                    if (p.fadeIn > 0 || p.fadeOut > 0) {
+                        add(FadeAudioProcessor((p.endOnTimelineMs - start) * 1000L, (p.fadeIn - (start - p.startOnTimelineMs)).coerceAtLeast(0L) * 1000L, p.fadeOut * 1000L))
+                    }
                 }
-                track.addItem(EditedMediaItem.Builder(item).setRemoveVideo(true).setEffects(Effects(audio, emptyList())).build())
+                builder.addItem(EditedMediaItem.Builder(item).setRemoveVideo(true).setEffects(Effects(audio, emptyList())).build())
+                at = end
+                any = true
             }
-            if (segments.isEmpty()) Composition.Builder(video).build()
-            else Composition.Builder(video, track.build()).build()
+            if (any) builder.build() else null
         }
+
+    private fun runVideo(job: ExportJob) {
+        val spec = job.spec
+        val out = requireNotNull(spec.output)
+        val items = spec.parts.map { editedItem(it, out, soundGain = spec.clipSound) }
+        val totalMs = spec.parts.sumOf { if (it.isPhoto) it.durationMs else (it.durationMs / it.speed).toLong() }
+        val tracks = audioTracks(spec.audio, totalMs)
+        // Clips without sound (drones) or muted slow motion get silence, so the parts join cleanly.
+        val video = EditedMediaItemSequence.Builder(items).experimentalSetForceAudioTrack(items.size > 1 || tracks.isNotEmpty()).build()
+        val composition = Composition.Builder(listOf(video) + tracks).build()
 
         val encoderFactory = DefaultEncoderFactory.Builder(context)
             .setRequestedVideoEncoderSettings(VideoEncoderSettings.Builder().setBitrate(out.bitrate).build())

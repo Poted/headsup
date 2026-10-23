@@ -89,7 +89,7 @@ import app.headsup.core.color.ColourTransition
 import app.headsup.core.color.MaskKind
 import app.headsup.core.frame.Reframe
 import app.headsup.core.edit.Fade
-import app.headsup.export.MusicTrack
+import app.headsup.export.AudioClip
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.requiredSize
 import androidx.compose.foundation.gestures.detectTransformGestures
@@ -158,10 +158,12 @@ fun ClipPreview(
     /** Position in the clip to jump to once (e.g. a highlight), then [onSeekDone]. */
     seekRequest: Long? = null,
     onSeekDone: () -> Unit = {},
-    /** Music under the timeline, played in step with it; [timelineOffsetMs] is where this clip starts. */
-    music: MusicTrack? = null,
+    /** Audio clips on the tracks, played in step with the timeline; [timelineOffsetMs] is where this clip starts. */
+    audio: List<AudioClip> = emptyList(),
+    /** Level of the clips' own sound. */
+    clipSound: Float = 1f,
     timelineOffsetMs: Long = 0L,
-    /** The whole timeline's length, where the music stops. */
+    /** The whole timeline's length, where the audio stops. */
     timelineTotalMs: Long = 0L,
 ) {
     val context = LocalContext.current
@@ -213,18 +215,20 @@ fun ClipPreview(
     }
     // Slow motion plays slowed down in the preview too; the dashboard follows the picture's own time.
     LaunchedEffect(clip.speed) { exoPlayer.setPlaybackSpeed(clip.speed) }
-    val clipVolume = if (clip.speed != 1f && clip.muteChangedSpeed) 0f else music?.originalVolume ?: 1f
-    // Music: its own player, looping, started at the timeline position whenever playback starts.
-    val musicPlayer = remember { ExoPlayer.Builder(context).build() }
-    DisposableEffect(musicPlayer) { onDispose { musicPlayer.release() } }
-    LaunchedEffect(music?.uri) {
-        val uri = music?.uri
-        if (uri == null) {
-            musicPlayer.stop()
-            musicPlayer.clearMediaItems()
-        } else {
-            musicPlayer.setMediaItem(MediaItem.fromUri(uri))
-            musicPlayer.prepare()
+    val clipVolume = if (clip.speed != 1f && clip.muteChangedSpeed) 0f else clipSound
+    // One player per audio clip, kept while the clip exists.
+    val audioPlayers = remember { HashMap<Long, Pair<android.net.Uri, ExoPlayer>>() }
+    DisposableEffect(Unit) { onDispose { audioPlayers.values.forEach { it.second.release() }; audioPlayers.clear() } }
+    LaunchedEffect(audio.map { it.id to it.uri }) {
+        val wanted = audio.associate { it.id to it.uri }
+        for (id in audioPlayers.keys.toList()) {
+            if (wanted[id] != audioPlayers[id]?.first) audioPlayers.remove(id)?.second?.release()
+        }
+        for ((id, uri) in wanted) if (id !in audioPlayers) {
+            audioPlayers[id] = uri to ExoPlayer.Builder(context).build().apply {
+                setMediaItem(MediaItem.fromUri(uri))
+                prepare()
+            }
         }
     }
     val ended by rememberUpdatedState(onEnded)
@@ -336,29 +340,30 @@ fun ClipPreview(
     val clipTimelineMs = if (photo) positionMs else (positionMs / clip.speed).toLong()
     val fadeGain = Fade.gain(clipTimelineMs, clip.timelineDurationMs, clip.fadeInMs, clip.fadeOutMs)
     SideEffect { exoPlayer.volume = clipVolume * fadeGain }
-    // Music follows the timeline: placed, repeated or stopped and faded as in the export.
-    val musicNow by rememberUpdatedState(music)
+    // Audio clips follow the timeline: each plays where it is placed, faded as in the export.
+    val audioNow by rememberUpdatedState(audio)
     val timelineNow by rememberUpdatedState(timelineOffsetMs + clipTimelineMs)
     val totalNow by rememberUpdatedState(timelineTotalMs)
-    LaunchedEffect(playing, clip.id, music?.uri) {
-        if (music == null) return@LaunchedEffect
+    LaunchedEffect(playing, clip.id) {
         if (!playing) {
-            musicPlayer.pause()
+            audioPlayers.values.forEach { it.second.pause() }
             return@LaunchedEffect
         }
         while (true) {
-            val m = musicNow ?: break
-            val placement = m.placement.let { if (it.songDurationMs > 0) it else it.copy(songDurationMs = musicPlayer.duration.coerceAtLeast(0L)) }
             val at = timelineNow
-            val song = placement.songPositionAt(at, totalNow)
-            if (song == null) {
-                musicPlayer.pause()
-            } else {
-                if (!musicPlayer.isPlaying || kotlin.math.abs(musicPlayer.currentPosition - song) > 300) {
-                    musicPlayer.seekTo(song)
-                    musicPlayer.play()
+            for (c in audioNow) {
+                val player = audioPlayers[c.id]?.second ?: continue
+                val p = c.piece.let { if (it.sourceDurationMs > 0) it else it.copy(sourceDurationMs = player.duration.coerceAtLeast(0L)) }
+                val source = p.sourceAt(at)?.takeIf { at < totalNow }
+                if (source == null) {
+                    if (player.isPlaying) player.pause()
+                } else {
+                    if (!player.isPlaying || kotlin.math.abs(player.currentPosition - source) > 300) {
+                        player.seekTo(source)
+                        player.play()
+                    }
+                    player.volume = c.volume * p.gainAt(at)
                 }
-                musicPlayer.volume = m.volume * placement.gainAt(at, totalNow)
             }
             delay(50)
         }
