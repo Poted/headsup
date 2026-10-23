@@ -30,7 +30,6 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.drawscope.Stroke as TextStroke
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -96,7 +95,7 @@ private fun LogoText(text: String, modifier: Modifier) {
                 style = base.copy(color = Color(0xFF1B1A19).copy(alpha = 0.9f - i * 0.12f)),
             )
         }
-        Text(text, style = base.copy(color = Color(0xFF0E0E0E), drawStyle = TextStroke(width = with(density) { 3.dp.toPx() })))
+        Text(text, style = base.copy(color = Color(0xFF0E0E0E), drawStyle = Stroke(width = with(density) { 3.dp.toPx() })))
         Text(text, style = base.copy(brush = Brush.verticalGradient(listOf(Color.White, Color(0xFFD9D6D2)))))
     }
 }
