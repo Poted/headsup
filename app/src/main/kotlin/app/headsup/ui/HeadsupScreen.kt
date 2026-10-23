@@ -122,6 +122,7 @@ import app.headsup.render.EffectSettings
 import app.headsup.render.GraphMetric
 import app.headsup.render.DashboardStyle
 import app.headsup.render.Formats
+import app.headsup.media.ProxyState
 import app.headsup.render.Reading
 import app.headsup.render.LayoutPreset
 import app.headsup.render.Layouts
@@ -285,6 +286,7 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
                         scrubTo = scrubTo,
                         onPlaying = {
                             previewPlaying.value = it
+                            vm.setPreviewPlaying(it)
                             if (it) scrubT.value = null
                         },
                         playlist = state.clips,
@@ -292,6 +294,7 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
                         // Played on into the next clip: it becomes the clip shown and edited.
                         onAdvance = { i -> if (i != state.selectedClip && i in state.clips.indices) vm.selectClip(i) },
                         framingOf = { state.framing(it) },
+                        sourceOf = { state.previewSource(it) },
                         cutScrub = cutScrub,
                         onFrameSource = { frameSource.value = it },
                         reframe = state.framing(selected),
@@ -593,6 +596,14 @@ private fun FilesPanel(
                             if (uses.size > 1) "on the timeline ${uses.size}×" else null,
                         ).joinToString(" · "),
                     )
+                    // Large clips play from a light copy in the preview; the export uses the original.
+                    when (val p = state.proxies[uri]) {
+                        is ProxyState.Making -> Hint("Preview file ${(p.progress * 100).toInt()}%")
+                        ProxyState.Waiting -> Hint("Preview file waiting (made while the preview is paused)")
+                        ProxyState.Failed -> Hint("Preview file failed: the preview plays the original")
+                        is ProxyState.Ready -> Hint("Preview file ready (1080p)")
+                        null -> Unit
+                    }
                 }
                 SmallAction("Remove", { vm.removeClipsOf(uri) })
             }

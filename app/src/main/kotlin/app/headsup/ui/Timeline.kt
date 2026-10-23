@@ -578,7 +578,7 @@ private fun DrawScope.drawVideo(
                 if (x + tileW > 0f && x < size.width) {
                     val tl = g.starts[i] + shift + ((x - l) / g.zoom).toLong()
                     val fileMs = c.trimStartMs + ((tl - g.starts[i]) * c.speed).toLong()
-                    filmstrip.frame(c.meta.uri, fileMs, stepMs, c.meta.isPhoto)?.let { img ->
+                    filmstrip.frame(state.previewSource(c), fileMs, stepMs, c.meta.isPhoto)?.let { img ->
                         // Centre crop of the frame into the tile.
                         val srcAspect = img.width.toFloat() / img.height
                         val (sw, sh) = if (srcAspect > aspect) (img.height * aspect).toInt() to img.height else img.width to (img.width / aspect).toInt()

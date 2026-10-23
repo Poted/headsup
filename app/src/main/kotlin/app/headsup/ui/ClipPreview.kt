@@ -183,6 +183,8 @@ fun ClipPreview(
     onAdvance: (Int) -> Unit = {},
     /** Framing of any clip of the playlist (for a picture still showing another clip than [clip]). */
     framingOf: (ClipState) -> Reframe = { it.reframe },
+    /** File the preview plays for a clip: a light preview file of a large clip, or the clip itself. */
+    sourceOf: (ClipState) -> android.net.Uri = { it.meta.uri },
 ) {
     val context = LocalContext.current
     // Two players: one shows the clip, the other holds the next one ready (a different shape or
@@ -214,9 +216,9 @@ fun ClipPreview(
     val photoBitmap by produceState<ImageBitmap?>(null, clip.meta.uri, photo) {
         value = if (photo) withContext(Dispatchers.IO) { decodePhoto(context, clip.meta.uri) } else null
     }
-    fun keyOf(c: ClipState): Any = Triple(c.meta.uri, c.trimStartMs, c.trimEndMs)
+    fun keyOf(c: ClipState): Any = Triple(sourceOf(c), c.trimStartMs, c.trimEndMs)
     fun clipped(c: ClipState) = MediaItem.Builder()
-        .setUri(c.meta.uri)
+        .setUri(sourceOf(c))
         .setMediaId(c.id.toString())
         .setClippingConfiguration(MediaItem.ClippingConfiguration.Builder().setStartPositionMs(c.trimStartMs).setEndPositionMs(c.trimEndMs).build())
         .build()
@@ -237,7 +239,7 @@ fun ClipPreview(
         val key = keyOf(clip)
         if (scrubbing) {
             exoPlayer.pause()
-            exoPlayer.setMediaItem(MediaItem.Builder().setUri(clip.meta.uri).setMediaId(clip.id.toString()).build(), cutScrub.value ?: 0L)
+            exoPlayer.setMediaItem(MediaItem.Builder().setUri(sourceOf(clip)).setMediaId(clip.id.toString()).build(), cutScrub.value ?: 0L)
             exoPlayer.prepare()
             holds[active] = null
             queued[0] = null
@@ -265,7 +267,8 @@ fun ClipPreview(
     val nextKey = next?.let(::keyOf)
     // Large clips (8K) get one decoder: the next one is queued after this one in the same player,
     // which goes on to it by itself (a new decoder at the cut, but never two at once).
-    val lean = remember(clip.meta, next?.meta) { next != null && !DecoderBudget.fitsTwo(clip.meta, next.meta) }
+    val light = next != null && sourceOf(clip) != clip.meta.uri && sourceOf(next) != next.meta.uri
+    val lean = remember(clip.meta, next?.meta, light) { next != null && !light && !DecoderBudget.fitsTwo(clip.meta, next.meta) }
     LaunchedEffect(nextKey, active, scrubbing, lean, keyOf(clip)) {
         if (scrubbing) return@LaunchedEffect
         val shown = players[active]

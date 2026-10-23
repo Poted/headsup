@@ -272,7 +272,12 @@ The preview has two players: one shows the clip, the other holds the next video 
 (first frame decoded), and at the cut the picture and playback switch to it; a single player
 would need a new decoder at a cut between files of different shape, which shows as a pause.
 The next clip starts hidden and silent about 120 ms before the cut, so it is already moving when
-the picture switches to it (a player takes a moment to start, and its end is reported late). Large clips
+the picture switches to it (a player takes a moment to start, and its end is reported late). Clips above 1080p get a light preview file (`Proxies`): a 1080p HEVC copy of the same length,
+colours and sound, made in the background one at a time (held while the preview plays, since it
+needs the same decoder) and kept in the app's files by the source's address. The preview and the
+timeline's thumbnails use it once ready; export always reads the originals. With preview files,
+two clips always fit the decoder, so every cut gets the two-player switch above. Without them,
+large clips
 (above 4K, or where the decoder reports too little capacity for two, `DecoderBudget`) get one
 decoder: the next clip is queued after the current one in the same player, which goes on to it
 by itself (a new decoder at the cut, so a short pause, but never two decoders at once). Each

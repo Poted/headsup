@@ -58,6 +58,8 @@ import app.headsup.render.StylePrefs
 import app.headsup.render.Widget
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
+import app.headsup.media.Proxies
+import app.headsup.media.ProxyState
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
@@ -284,7 +286,12 @@ data class UiState(
     val scope: ScopeResult? = null,
     /** Look copied with "Copy", waiting to be pasted. */
     val copiedLook: ClipLook? = null,
+    /** Preview files of large clips, by source. */
+    val proxies: Map<Uri, ProxyState> = emptyMap(),
 ) {
+    /** What the preview plays for [c]: its light preview file when ready, else the clip itself. */
+    fun previewSource(c: ClipState): Uri = (proxies[c.meta.uri] as? ProxyState.Ready)?.file ?: c.meta.uri
+
     val selected: ClipState? get() = selectedClip?.let { clips.getOrNull(it) }
 
     /** The timeline's frame rate: chosen, or the first clip's, or 30. */
@@ -372,12 +379,34 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
     private var scopeMarker = 0.5f to 0.5f
     private var previewRunning = false
     private var previewDirty = false
+    private val proxies = Proxies(app, viewModelScope)
 
     init {
         projectStore.lastProject?.takeIf(projectStore::exists)?.let(::openProject)
             ?: _state.update { it.copy(projectName = newProjectName()) }
         autosave()
         recordHistory()
+        watchProxies()
+    }
+
+    /** Preview files for large clips: asked for as clips come in, their state kept in [UiState.proxies]. */
+    private fun watchProxies() {
+        viewModelScope.launch {
+            _state.map { s -> s.clips.map { it.meta } }.distinctUntilChanged().collect { proxies.request(it) }
+        }
+        viewModelScope.launch {
+            proxies.states.collect { states -> _state.update { it.copy(proxies = states) } }
+        }
+    }
+
+    /** The preview plays: preview files wait, so their decoding does not take the player's decoder. */
+    fun setPreviewPlaying(playing: Boolean) {
+        proxies.held = playing
+    }
+
+    override fun onCleared() {
+        proxies.release()
+        super.onCleared()
     }
 
     // Undo and redo
