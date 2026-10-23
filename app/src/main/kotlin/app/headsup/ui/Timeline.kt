@@ -527,7 +527,7 @@ private fun DrawScope.drawRuler(g: Geometry, colour: Color, text: androidx.compo
         drawLine(colour.copy(alpha = 0.6f), Offset(x, g.rulerH * if (major) 0.35f else 0.65f), Offset(x, g.rulerH), strokeWidth = 1f)
         if (major) {
             val label = if (step < 1000) String.format(java.util.Locale.US, "%.1f", t / 1000f) else Formats.duration(t)
-            drawText(text, label, Offset(x + 3.dp.toPx(), 0f), TextStyle(color = colour, fontSize = 9.sp))
+            drawLabel(text, label, Offset(x + 3.dp.toPx(), 0f), TextStyle(color = colour, fontSize = 9.sp))
         }
         t += step
     }
@@ -580,9 +580,9 @@ private fun DrawScope.drawVideo(
             }
             // Duration and speed, the group, how well it matches the watch data.
             val label = Formats.duration(c.timelineDurationMs) + if (c.speed != 1f) " · ${if (c.speed % 1f == 0f) c.speed.toInt() else c.speed}×" else ""
-            drawText(text, label, Offset(l + 5.dp.toPx(), top + h - 15.dp.toPx()), TextStyle(color = Color.White, fontSize = 10.sp, background = Color.Black.copy(alpha = 0.5f)))
+            drawLabel(text, label, Offset(l + 5.dp.toPx(), top + h - 15.dp.toPx()), TextStyle(color = Color.White, fontSize = 10.sp, background = Color.Black.copy(alpha = 0.5f)))
             state.groups.firstOrNull { it.id == c.groupId }?.let {
-                drawText(text, it.name, Offset(l + 5.dp.toPx(), top + 3.dp.toPx()), TextStyle(color = HeadsupColors.OnHighlight, fontSize = 10.sp, background = HeadsupColors.Highlight.copy(alpha = 0.9f)))
+                drawLabel(text, it.name, Offset(l + 5.dp.toPx(), top + 3.dp.toPx()), TextStyle(color = HeadsupColors.OnHighlight, fontSize = 10.sp, background = HeadsupColors.Highlight.copy(alpha = 0.9f)))
             }
             val dotColour = when (c.sync?.confidence) {
                 Confidence.HIGH -> HeadsupColors.Good
@@ -662,7 +662,7 @@ private fun DrawScope.drawAudio(g: Geometry, state: UiState, text: androidx.comp
                     if (x in l..r) drawLine(Color.White.copy(alpha = 0.3f + 0.6f * a.strength), Offset(x, top), Offset(x, top + (5 + 6 * a.strength).dp.toPx()), strokeWidth = 2f)
                 }
             }
-            drawText(text, c.name, Offset(l.coerceAtLeast(0f) + 5.dp.toPx(), top + 2.dp.toPx()), TextStyle(color = Color.White.copy(alpha = 0.85f), fontSize = 10.sp), maxLines = 1)
+            drawLabel(text, c.name, Offset(l.coerceAtLeast(0f) + 5.dp.toPx(), top + 2.dp.toPx()), TextStyle(color = Color.White.copy(alpha = 0.85f), fontSize = 10.sp))
         }
         if (selected) {
             drawRoundRect(Color.White, Offset(l, top), Size((r - l).coerceAtLeast(2f), h), CornerRadius(5.dp.toPx()), style = Stroke(2.dp.toPx()))
@@ -680,3 +680,15 @@ private fun DrawScope.drawAudio(g: Geometry, state: UiState, text: androidx.comp
         }
     }
 }
+
+/**
+ * Text on the timeline, clipped to what is left of the canvas: drawText fails when the space to
+ * the right or below its position is negative (a label near the right edge).
+ */
+private fun DrawScope.drawLabel(text: androidx.compose.ui.text.TextMeasurer, value: String, at: Offset, style: TextStyle) {
+    val width = size.width - at.x
+    val height = size.height - at.y
+    if (width < 8f || height < 8f || value.isEmpty()) return
+    drawText(text, value, at, style, softWrap = false, maxLines = 1, size = Size(width, height))
+}
+
