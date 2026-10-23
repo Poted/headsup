@@ -343,6 +343,7 @@ private fun FilesPanel(
     onAddVideos: () -> Unit,
     onAddFit: () -> Unit,
 ) {
+    ProjectRow(state, vm)
     Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
         AddTile(HeadsupIcons.Video, "Videos", onAddVideos, Modifier.weight(1f))
         AddTile(HeadsupIcons.Watch, "FIT", onAddFit, Modifier.weight(1f))
@@ -388,6 +389,58 @@ private fun FilesPanel(
         Label("Activities")
         if (state.activities.isEmpty()) Hint("Add the .FIT file(s) from your watch.")
         state.activities.forEachIndexed { i, a -> ActivityRow(a, onRemove = { vm.removeActivity(i) }) }
+    }
+}
+
+/** The open project (saved automatically) and the list of saved ones. */
+@Composable
+private fun ProjectRow(state: UiState, vm: HeadsupViewModel) {
+    var listOpen by remember { mutableStateOf(false) }
+    var renaming by remember { mutableStateOf(false) }
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Column(Modifier.weight(1f)) {
+            Text("Project · saved automatically", style = MaterialTheme.typography.labelSmall, color = HeadsupColors.TextMuted)
+            Text(state.projectName, style = MaterialTheme.typography.titleSmall, maxLines = 1)
+        }
+        SmallAction("Rename", { renaming = true })
+        SmallAction("Projects", { vm.refreshProjects(); listOpen = true })
+    }
+    if (renaming) {
+        RenameDialog(state.projectName, onDismiss = { renaming = false }, title = "Project name") { vm.renameProject(it); renaming = false }
+    }
+    if (listOpen) {
+        AlertDialog(
+            onDismissRequest = { listOpen = false },
+            title = { Text("Projects") },
+            text = {
+                Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    if (state.projects.isEmpty()) Hint("No saved projects yet. A project is saved once it has files.")
+                    for (p in state.projects) {
+                        val current = p.name == state.projectName
+                        Row(
+                            Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(12.dp))
+                                .background(if (current) HeadsupColors.SurfaceHigh else Color.Transparent)
+                                .clickable { listOpen = false; if (!current) vm.openProject(p.name) }
+                                .padding(horizontal = 8.dp, vertical = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Column(Modifier.weight(1f)) {
+                                Text(p.name, style = MaterialTheme.typography.bodyMedium, maxLines = 1)
+                                Hint(
+                                    Instant.ofEpochMilli(p.modifiedMs).atZone(ZoneId.systemDefault()).toLocalDateTime()
+                                        .withNano(0).toString().replace('T', ' '),
+                                )
+                            }
+                            SmallAction("Delete", { vm.deleteProject(p.name) })
+                        }
+                    }
+                }
+            },
+            confirmButton = { TextButton(onClick = { listOpen = false; vm.newProject() }) { Text("New project") } },
+            dismissButton = { TextButton(onClick = { listOpen = false }) { Text("Close") } },
+        )
     }
 }
 
@@ -890,11 +943,11 @@ private fun GroupControls(state: UiState, clip: ClipState, index: Int, group: Cl
 }
 
 @Composable
-private fun RenameDialog(initial: String, onDismiss: () -> Unit, onConfirm: (String) -> Unit) {
+private fun RenameDialog(initial: String, onDismiss: () -> Unit, title: String = "Group name", onConfirm: (String) -> Unit) {
     var name by remember { mutableStateOf(initial) }
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Group name") },
+        title = { Text(title) },
         text = { OutlinedTextField(value = name, onValueChange = { name = it }, singleLine = true) },
         confirmButton = { TextButton(onClick = { onConfirm(name) }, enabled = name.isNotBlank()) { Text("OK") } },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },

@@ -133,3 +133,10 @@ Media3 exports SDR input (including D-Log M) in 8 bits; see
 
 minSdk 29 (Android 10). Nothing in the design is Samsung-specific; on other phones the open
 question is encoder capability (4K HEVC, 10-bit), which is probed at runtime.
+
+## Projects
+
+The timeline is saved automatically (`ProjectStore`, JSON in the app's private storage) shortly
+after each change and the last project reopens on start. A project stores file URIs, cuts, sync
+corrections, colour (clip, group, mask, global) and effects; the dashboard layout stays an app
+setting. Picked files get a persistable read permission so a project can open them again later.

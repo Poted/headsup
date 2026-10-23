@@ -1,0 +1,226 @@
+package app.headsup.project
+
+import android.content.Context
+import android.net.Uri
+import app.headsup.core.color.ColorGrade
+import app.headsup.core.color.GradientMask
+import app.headsup.render.EffectSettings
+import app.headsup.render.GraphMetric
+import org.json.JSONArray
+import org.json.JSONObject
+import java.io.File
+import java.time.LocalDateTime
+
+/** One clip on the timeline as saved: the file it comes from and everything set for it. */
+data class SavedClip(
+    val uri: Uri,
+    val trimStartMs: Long,
+    val trimEndMs: Long,
+    val manualOffsetMs: Long,
+    val colorGrade: Boolean,
+    val lutName: String?,
+    val manualStart: LocalDateTime?,
+    val grade: ColorGrade,
+    val effects: EffectSettings,
+    val mask: GradientMask?,
+    val groupId: Long?,
+)
+
+data class SavedGroup(val id: Long, val name: String, val grade: ColorGrade, val lutName: String?)
+
+/**
+ * A saved project. Video and FIT files are only referenced (by URI), not copied, so a project
+ * stays small; files deleted from the phone are reported as missing when it is opened.
+ */
+data class ProjectData(
+    val name: String,
+    val activities: List<Uri>,
+    val clips: List<SavedClip>,
+    val groups: List<SavedGroup>,
+    val globalGrade: ColorGrade,
+)
+
+data class ProjectInfo(val name: String, val modifiedMs: Long)
+
+/** Projects as JSON files in the app's private storage; the last one used reopens on start. */
+class ProjectStore(context: Context) {
+    private val dir = File(context.filesDir, "projects").apply { mkdirs() }
+    private val prefs = context.getSharedPreferences("projects", Context.MODE_PRIVATE)
+
+    var lastProject: String?
+        get() = prefs.getString(KEY_LAST, null)
+        set(value) = prefs.edit().putString(KEY_LAST, value).apply()
+
+    fun list(): List<ProjectInfo> = dir.listFiles { f -> f.extension == "json" }.orEmpty()
+        .map { ProjectInfo(it.nameWithoutExtension, it.lastModified()) }
+        .sortedByDescending { it.modifiedMs }
+
+    fun exists(name: String) = fileFor(name).exists()
+
+    fun save(project: ProjectData) {
+        val tmp = File(dir, "${safe(project.name)}.json.tmp")
+        tmp.writeText(Json.project(project).toString())
+        tmp.renameTo(fileFor(project.name))
+    }
+
+    fun load(name: String): ProjectData? = fileFor(name).takeIf { it.exists() }?.let { Json.project(JSONObject(it.readText())) }
+
+    fun delete(name: String) {
+        fileFor(name).delete()
+        if (lastProject == name) lastProject = null
+    }
+
+    fun rename(from: String, to: String): Boolean {
+        if (exists(to)) return false
+        val ok = !exists(from) || fileFor(from).renameTo(fileFor(to))
+        if (ok && lastProject == from) lastProject = to
+        return ok
+    }
+
+    private fun fileFor(name: String) = File(dir, "${safe(name)}.json")
+
+    private fun safe(name: String) = name.replace(Regex("[^\\p{L}\\p{N} ._-]"), "_").take(80)
+
+    private companion object {
+        const val KEY_LAST = "last"
+    }
+}
+
+/** JSON form of the project; unknown or missing fields fall back to defaults, so old files still open. */
+internal object Json {
+    private const val VERSION = 1
+
+    fun project(p: ProjectData) = JSONObject()
+        .put("version", VERSION)
+        .put("name", p.name)
+        .put("activities", JSONArray(p.activities.map { it.toString() }))
+        .put("clips", JSONArray(p.clips.map(::clip)))
+        .put("groups", JSONArray(p.groups.map(::group)))
+        .put("globalGrade", grade(p.globalGrade))
+
+    fun project(o: JSONObject) = ProjectData(
+        name = o.optString("name", "Project"),
+        activities = o.optJSONArray("activities").strings().map(Uri::parse),
+        clips = o.optJSONArray("clips").objects().map(::clip),
+        groups = o.optJSONArray("groups").objects().map(::group),
+        globalGrade = grade(o.optJSONObject("globalGrade")),
+    )
+
+    private fun clip(c: SavedClip) = JSONObject()
+        .put("uri", c.uri.toString())
+        .put("trimStartMs", c.trimStartMs)
+        .put("trimEndMs", c.trimEndMs)
+        .put("manualOffsetMs", c.manualOffsetMs)
+        .put("colorGrade", c.colorGrade)
+        .putOpt("lutName", c.lutName)
+        .putOpt("manualStart", c.manualStart?.toString())
+        .put("grade", grade(c.grade))
+        .put("effects", effects(c.effects))
+        .putOpt("mask", c.mask?.let(::mask))
+        .putOpt("groupId", c.groupId)
+
+    private fun clip(o: JSONObject) = SavedClip(
+        uri = Uri.parse(o.getString("uri")),
+        trimStartMs = o.optLong("trimStartMs", 0L),
+        trimEndMs = o.optLong("trimEndMs", Long.MAX_VALUE),
+        manualOffsetMs = o.optLong("manualOffsetMs", 0L),
+        colorGrade = o.optBoolean("colorGrade", true),
+        lutName = o.optStringOrNull("lutName"),
+        manualStart = o.optStringOrNull("manualStart")?.let { runCatching { LocalDateTime.parse(it) }.getOrNull() },
+        grade = grade(o.optJSONObject("grade")),
+        effects = effects(o.optJSONObject("effects")),
+        mask = o.optJSONObject("mask")?.let(::mask),
+        groupId = if (o.has("groupId")) o.getLong("groupId") else null,
+    )
+
+    private fun group(g: SavedGroup) = JSONObject()
+        .put("id", g.id)
+        .put("name", g.name)
+        .put("grade", grade(g.grade))
+        .putOpt("lutName", g.lutName)
+
+    private fun group(o: JSONObject) = SavedGroup(
+        id = o.getLong("id"),
+        name = o.optString("name", "Group"),
+        grade = grade(o.optJSONObject("grade")),
+        lutName = o.optStringOrNull("lutName"),
+    )
+
+    fun grade(g: ColorGrade) = JSONObject()
+        .put("exposure", g.exposure)
+        .put("brightness", g.brightness)
+        .put("contrast", g.contrast)
+        .put("shadows", g.shadows)
+        .put("highlights", g.highlights)
+        .put("saturation", g.saturation)
+        .put("temperature", g.temperature)
+        .put("vignette", g.vignette)
+        .put("blacks", g.blacks)
+        .put("whites", g.whites)
+        .put("vibrance", g.vibrance)
+        .put("tint", g.tint)
+        .put("skinHue", g.skinHue)
+
+    fun grade(o: JSONObject?): ColorGrade {
+        if (o == null) return ColorGrade()
+        fun f(key: String) = o.optDouble(key, 0.0).toFloat()
+        return ColorGrade(
+            exposure = f("exposure"),
+            brightness = f("brightness"),
+            contrast = f("contrast"),
+            shadows = f("shadows"),
+            highlights = f("highlights"),
+            saturation = f("saturation"),
+            temperature = f("temperature"),
+            vignette = f("vignette"),
+            blacks = f("blacks"),
+            whites = f("whites"),
+            vibrance = f("vibrance"),
+            tint = f("tint"),
+            skinHue = f("skinHue"),
+        )
+    }
+
+    private fun effects(e: EffectSettings) = JSONObject()
+        .put("grain", e.grain)
+        .put("grainSize", e.grainSize)
+        .put("glow", e.glow)
+        .put("glowThreshold", e.glowThreshold)
+        .putOpt("barsRatio", e.barsRatio)
+        .putOpt("graph", e.graph?.name)
+
+    private fun effects(o: JSONObject?): EffectSettings {
+        val d = EffectSettings()
+        if (o == null) return d
+        return EffectSettings(
+            grain = o.optDouble("grain", d.grain.toDouble()).toFloat(),
+            grainSize = o.optDouble("grainSize", d.grainSize.toDouble()).toFloat(),
+            glow = o.optDouble("glow", d.glow.toDouble()).toFloat(),
+            glowThreshold = o.optDouble("glowThreshold", d.glowThreshold.toDouble()).toFloat(),
+            barsRatio = if (o.has("barsRatio")) o.getDouble("barsRatio").toFloat() else null,
+            graph = GraphMetric.entries.firstOrNull { it.name == o.optStringOrNull("graph") },
+        )
+    }
+
+    private fun mask(m: GradientMask) = JSONObject()
+        .put("position", m.position)
+        .put("softness", m.softness)
+        .put("angleDegrees", m.angleDegrees)
+        .put("grade", grade(m.grade))
+
+    private fun mask(o: JSONObject): GradientMask {
+        val d = GradientMask()
+        return GradientMask(
+            position = o.optDouble("position", d.position.toDouble()).toFloat(),
+            softness = o.optDouble("softness", d.softness.toDouble()).toFloat(),
+            angleDegrees = o.optDouble("angleDegrees", 0.0).toFloat(),
+            grade = grade(o.optJSONObject("grade")),
+        )
+    }
+
+    private fun JSONObject.optStringOrNull(key: String): String? = if (has(key) && !isNull(key)) getString(key) else null
+
+    private fun JSONArray?.strings(): List<String> = if (this == null) emptyList() else List(length()) { getString(it) }
+
+    private fun JSONArray?.objects(): List<JSONObject> = if (this == null) emptyList() else List(length()) { getJSONObject(it) }
+}

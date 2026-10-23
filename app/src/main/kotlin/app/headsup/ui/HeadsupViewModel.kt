@@ -42,9 +42,20 @@ import app.headsup.core.sync.TimeAnchor
 import app.headsup.core.sync.TimeEvidence
 import app.headsup.core.sync.TimeSource
 import java.time.LocalDateTime
+import java.time.format.DateTimeFormatter
+import android.content.Intent
+import app.headsup.project.ProjectData
+import app.headsup.project.ProjectInfo
+import app.headsup.project.ProjectStore
+import app.headsup.project.SavedClip
+import app.headsup.project.SavedGroup
+import kotlinx.coroutines.FlowPreview
+import kotlinx.coroutines.flow.debounce
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import java.time.ZoneId
 
-data class LoadedActivity(val name: String, val track: ActivityTrack)
+data class LoadedActivity(val name: String, val track: ActivityTrack, val uri: Uri? = null)
 
 data class ClipState(
     val meta: ClipMetadata,
@@ -108,6 +119,10 @@ private fun nextClipId() = ++lastClipId
 const val MIN_CLIP_MS = 500L
 
 data class UiState(
+    /** Name of the open project, saved automatically as it changes. */
+    val projectName: String = "",
+    /** Saved projects, refreshed when the project list opens. */
+    val projects: List<ProjectInfo> = emptyList(),
     val activities: List<LoadedActivity> = emptyList(),
     val clips: List<ClipState> = emptyList(),
     val selectedClip: Int? = null,
@@ -181,6 +196,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
     private val stylePrefs = StylePrefs(app)
     private val gradeStore = GradeStore(app)
     private val effectPrefs = EffectPrefs(app)
+    private val projectStore = ProjectStore(app)
     private val _state = MutableStateFlow(
         UiState(
             style = stylePrefs.load(),
@@ -204,15 +220,165 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
     private var previewRunning = false
     private var previewDirty = false
 
+    init {
+        projectStore.lastProject?.takeIf(projectStore::exists)?.let(::openProject)
+            ?: _state.update { it.copy(projectName = newProjectName()) }
+        autosave()
+    }
+
+    // Projects
+
+    /** Saves the project a moment after anything worth keeping changes. */
+    @OptIn(FlowPreview::class)
+    private fun autosave() {
+        viewModelScope.launch {
+            _state
+                .map { s -> s.toProject().takeIf { !s.busy && (it.clips.isNotEmpty() || it.activities.isNotEmpty()) } }
+                .distinctUntilChanged()
+                .debounce(800)
+                .collect { project ->
+                    if (project == null) return@collect
+                    withContext(Dispatchers.IO) { runCatching { projectStore.save(project) } }
+                    projectStore.lastProject = project.name
+                }
+        }
+    }
+
+    private fun UiState.toProject() = ProjectData(
+        name = projectName,
+        activities = activities.mapNotNull { it.uri },
+        clips = clips.map {
+            SavedClip(
+                it.meta.uri, it.trimStartMs, it.trimEndMs, it.manualOffsetMs, it.colorGrade, it.lutName,
+                it.manualStart, it.grade, it.effects, it.mask, it.groupId,
+            )
+        },
+        groups = groups.map { SavedGroup(it.id, it.name, it.grade, it.lutName) },
+        globalGrade = globalGrade,
+    )
+
+    fun refreshProjects() = _state.update { it.copy(projects = projectStore.list()) }
+
+    /** Opens a saved project; its files are read again, missing ones are reported. */
+    fun openProject(name: String) {
+        val project = projectStore.load(name) ?: return
+        _state.update { it.copy(busy = true) }
+        viewModelScope.launch {
+            val context = getApplication<Application>()
+            val missing = mutableListOf<String>()
+            val activities = withContext(Dispatchers.IO) {
+                project.activities.mapNotNull { uri ->
+                    runCatching {
+                        val track = context.contentResolver.openInputStream(uri)!!.use { FitActivityReader.read(it) }
+                        LoadedActivity(ClipMetadataReader.displayName(context, uri) ?: uri.lastPathSegment.orEmpty(), track, uri)
+                    }.onFailure { missing += uri.lastPathSegment.orEmpty() }.getOrNull()
+                }
+            }
+            val metas = withContext(Dispatchers.IO) {
+                project.clips.map { it.uri }.distinct().associateWith { uri ->
+                    runCatching { ClipMetadataReader.read(context, uri) }.onFailure { missing += uri.lastPathSegment.orEmpty() }.getOrNull()
+                }
+            }
+            val clips = project.clips.mapNotNull { c ->
+                val meta = metas[c.uri] ?: return@mapNotNull null
+                val start = c.trimStartMs.coerceIn(0L, (meta.durationMs - MIN_CLIP_MS).coerceAtLeast(0L))
+                ClipState(
+                    meta, sync = null,
+                    trimStartMs = start,
+                    trimEndMs = c.trimEndMs.coerceIn(start, meta.durationMs),
+                    manualOffsetMs = c.manualOffsetMs,
+                    colorGrade = c.colorGrade,
+                    lutName = c.lutName,
+                    manualStart = c.manualStart,
+                    grade = c.grade,
+                    effects = c.effects,
+                    mask = c.mask,
+                    groupId = c.groupId,
+                )
+            }
+            scopeFrame = null
+            _state.update { s ->
+                resynced(
+                    s.copy(
+                        projectName = project.name,
+                        activities = activities.sortedBy { it.track.startMs },
+                        clips = clips,
+                        groups = project.groups.map { ClipGroup(it.id, it.name, it.grade, it.lutName) },
+                        globalGrade = project.globalGrade,
+                        selectedClip = clips.indices.firstOrNull(),
+                        target = GradeTarget.CLIP,
+                        compareGrade = null,
+                        scope = null,
+                        copiedLook = null,
+                        busy = false,
+                        messages = s.messages + missing.distinct().map { "Missing file: $it" },
+                    ),
+                )
+            }
+            projectStore.lastProject = project.name
+            refreshPreview()
+        }
+    }
+
+    /** Starts an empty project; the current one stays saved. */
+    fun newProject() {
+        scopeFrame = null
+        _state.update {
+            it.copy(
+                projectName = newProjectName(),
+                activities = emptyList(),
+                clips = emptyList(),
+                groups = emptyList(),
+                globalGrade = ColorGrade(),
+                selectedClip = null,
+                target = GradeTarget.CLIP,
+                compareGrade = null,
+                scope = null,
+            )
+        }
+        refreshPreview()
+    }
+
+    fun renameProject(name: String) {
+        val newName = name.trim().takeIf { it.isNotEmpty() } ?: return
+        val old = _state.value.projectName
+        if (newName == old) return
+        if (!projectStore.rename(old, newName)) {
+            _state.update { it.copy(messages = it.messages + "A project called \"$newName\" already exists.") }
+            return
+        }
+        _state.update { it.copy(projectName = newName, projects = projectStore.list()) }
+    }
+
+    fun deleteProject(name: String) {
+        projectStore.delete(name)
+        if (name == _state.value.projectName) newProject()
+        refreshProjects()
+    }
+
+    private fun newProjectName(): String {
+        val base = "Project " + LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH.mm"))
+        return generateSequence(1) { it + 1 }.map { if (it == 1) base else "$base ($it)" }.first { !projectStore.exists(it) }
+    }
+
+    /** Keeps access to a picked file after restarts, so projects can open it again. */
+    private fun keepAccess(uri: Uri) {
+        runCatching {
+            getApplication<Application>().contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+    }
+
     fun addActivities(uris: List<Uri>) = load(uris) { uri ->
+        keepAccess(uri)
         val context = getApplication<Application>()
         val name = ClipMetadataReader.displayName(context, uri) ?: uri.lastPathSegment.orEmpty()
         val track = context.contentResolver.openInputStream(uri)?.use { FitActivityReader.read(it) }
             ?: error("Cannot open $name")
-        Loaded.Activity(LoadedActivity(name, track))
+        Loaded.Activity(LoadedActivity(name, track, uri))
     }
 
     fun addClips(uris: List<Uri>) = load(uris) { uri ->
+        keepAccess(uri)
         Loaded.Clip(ClipMetadataReader.read(getApplication<Application>(), uri))
     }
 
