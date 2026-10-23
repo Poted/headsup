@@ -1085,7 +1085,8 @@ private fun CinePanel(state: UiState, vm: HeadsupViewModel, frameSource: (() -> 
 /**
  * Shot match: pick a reference frame in one clip (e.g. the Osmo), then on another clip (drone,
  * phone) pause on a similar frame and match: exposure, contrast, white balance and saturation are
- * set so both look alike. The result is ordinary corrections.
+ * set so both look alike, and skin hue too when both frames show skin. The result is ordinary
+ * corrections.
  */
 @Composable
 private fun ShotMatchPanel(state: UiState, clip: ClipState, vm: HeadsupViewModel, frameSource: (() -> Bitmap?)?) {
@@ -1111,7 +1112,10 @@ private fun ShotMatchPanel(state: UiState, clip: ClipState, vm: HeadsupViewModel
     }
     if (state.matchUndo?.first == clip.id) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Hint("Matched: exposure, contrast, temperature, tint and saturation changed.", Modifier.weight(1f))
+            Hint(
+                "Matched: exposure, contrast, temperature, tint and saturation" + if (state.matchedSkin) ", and skin hue." else ".",
+                Modifier.weight(1f),
+            )
             SmallAction("Undo", vm::undoMatch)
         }
     }

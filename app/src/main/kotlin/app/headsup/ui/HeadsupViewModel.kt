@@ -188,6 +188,8 @@ data class UiState(
     val matchReference: MatchReference? = null,
     /** Clip and its corrections before the last shot match, for undo. */
     val matchUndo: Pair<Long, ColorGrade>? = null,
+    /** Whether the last match also turned skin (both frames showed skin). */
+    val matchedSkin: Boolean = false,
     val matching: Boolean = false,
     val bitrateFactor: Float = 1f,
     /** Vectorscope and skin measurement of the last frame tapped in the preview. */
@@ -706,7 +708,9 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
             val lut = loadLut(s.lutFor(clip))
             val matched = withContext(Dispatchers.Default) { ShotMatch.match(pixels, lut, applied, reference.stats) }
             val index = _state.value.clips.indexOfFirst { it.id == clip.id }
-            _state.update { it.copy(matching = false, matchUndo = clip.id to clip.grade) }
+            _state.update {
+                it.copy(matching = false, matchUndo = clip.id to clip.grade, matchedSkin = matched.skinHue != applied.skinHue)
+            }
             if (index < 0) return@launch
             updateClip(index) { c ->
                 c.copy(
@@ -716,6 +720,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                         temperature = (c.grade.temperature + matched.temperature - applied.temperature).coerceIn(-1f, 1f),
                         tint = (c.grade.tint + matched.tint - applied.tint).coerceIn(-1f, 1f),
                         saturation = (c.grade.saturation + matched.saturation - applied.saturation).coerceIn(-1f, 1f),
+                        skinHue = (c.grade.skinHue + matched.skinHue - applied.skinHue).coerceIn(-30f, 30f),
                     ),
                 )
             }

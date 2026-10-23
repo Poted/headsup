@@ -13,8 +13,13 @@ data class MatchStats(
     val cb: Float,
     val cr: Float,
     val chroma: Float,
+    /** Mean vectorscope angle of skin-like pixels, or null when the frame shows (almost) no skin. */
+    val skinAngle: Float? = null,
 ) {
     companion object {
+        /** Below this share of skin-like pixels, skin is not matched. */
+        const val MIN_SKIN_SHARE = 0.02
+
         /** Statistics of display colours given as 0..1 RGB triples. */
         fun of(rgb: FloatArray): MatchStats {
             val n = rgb.size / 3
@@ -24,6 +29,10 @@ data class MatchStats(
             var crSum = 0.0
             var chromaSum = 0.0
             var weightSum = 0.0
+            // Skin hue as a mean direction (vector sum), so angles average correctly.
+            var skinCb = 0.0
+            var skinCr = 0.0
+            var skinWeight = 0.0
             for (i in 0 until n) {
                 val r = rgb[3 * i]
                 val g = rgb[3 * i + 1]
@@ -37,7 +46,14 @@ data class MatchStats(
                 cbSum += cb * w
                 crSum += cr * w
                 weightSum += w
-                chromaSum += sqrt(cb * cb + cr * cr)
+                val chroma = sqrt(cb * cb + cr * cr)
+                chromaSum += chroma
+                val skin = FilmLook.skinness(cb, cr, chroma)
+                if (skin > 0.5f) {
+                    skinCb += cb / chroma * skin
+                    skinCr += cr / chroma * skin
+                    skinWeight += skin
+                }
             }
             luma.sort()
             return MatchStats(
@@ -47,6 +63,7 @@ data class MatchStats(
                 cb = (cbSum / weightSum).toFloat(),
                 cr = (crSum / weightSum).toFloat(),
                 chroma = (chromaSum / n).toFloat(),
+                skinAngle = if (skinWeight / n >= MIN_SKIN_SHARE) FilmLook.angleOf(skinCb.toFloat(), skinCr.toFloat()) else null,
             )
         }
     }
@@ -57,6 +74,8 @@ data class MatchStats(
  * saturation so a frame of it looks like a reference frame from another camera. It runs the
  * clip's own colour path (corrections, then its LUT) on samples of the frame and adjusts the five
  * corrections step by step (damped Gauss–Newton) until tones, cast and colourfulness agree.
+ * When both frames show skin, the skin hue is then turned to the reference's as well (the same
+ * skin-hue correction as "Match line"), since cameras differ most visibly in how they render skin.
  */
 object ShotMatch {
     private const val MAX_SAMPLES = 3000
@@ -115,13 +134,23 @@ object ShotMatch {
                 lambda *= 4f
             }
         }
+        return matchSkin(samples, k, lut, current, reference)
+    }
+
+    /** Turns skin hues towards the reference's, if both frames show skin. */
+    private fun matchSkin(samples: FloatArray, count: Int, lut: CubeLut?, grade: ColorGrade, reference: MatchStats): ColorGrade {
+        val wanted = reference.skinAngle ?: return grade
+        var current = grade
+        // Two passes: the rotation is weighted by distance from the skin line, so one step may fall short.
+        repeat(2) {
+            val now = MatchStats.of(graded(samples, count, lut, current)).skinAngle ?: return current
+            val delta = SkinTone.angleDifference(wanted.toDouble(), now.toDouble()).toFloat()
+            current = current.copy(skinHue = (current.skinHue + delta).coerceIn(-30f, 30f))
+        }
         return current
     }
 
-    private fun vector(s: MatchStats) = floatArrayOf(stops(s.low), stops(s.median), stops(s.high), s.cb, s.cr, s.chroma)
-
-    /** Weighted difference between the frame through [grade] and the reference. */
-    private fun residual(samples: FloatArray, count: Int, lut: CubeLut?, grade: ColorGrade, target: FloatArray): FloatArray {
+    private fun graded(samples: FloatArray, count: Int, lut: CubeLut?, grade: ColorGrade): FloatArray {
         val out = FloatArray(count)
         val rgb = FloatArray(3)
         for (i in 0 until count step 3) {
@@ -133,7 +162,14 @@ object ShotMatch {
             out[i + 1] = rgb[1]
             out[i + 2] = rgb[2]
         }
-        val v = vector(MatchStats.of(out))
+        return out
+    }
+
+    private fun vector(s: MatchStats) = floatArrayOf(stops(s.low), stops(s.median), stops(s.high), s.cb, s.cr, s.chroma)
+
+    /** Weighted difference between the frame through [grade] and the reference. */
+    private fun residual(samples: FloatArray, count: Int, lut: CubeLut?, grade: ColorGrade, target: FloatArray): FloatArray {
+        val v = vector(MatchStats.of(graded(samples, count, lut, grade)))
         return FloatArray(v.size) { (v[it] - target[it]) * WEIGHTS[it] }
     }
 
