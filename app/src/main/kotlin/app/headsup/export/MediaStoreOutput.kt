@@ -9,8 +9,8 @@ import java.io.OutputStream
 
 /** Publishes finished files where the gallery and file managers can see them. */
 object MediaStoreOutput {
-    const val VIDEO_FOLDER = "DCIM/TelemetryOverlay"
-    const val OVERLAY_FOLDER = "Download/TelemetryOverlay"
+    const val VIDEO_FOLDER = "DCIM/Sweet Spot"
+    const val OVERLAY_FOLDER = "Download/Sweet Spot"
 
     fun saveVideo(context: Context, file: File, displayName: String): Uri {
         val collection = MediaStore.Video.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)

@@ -106,6 +106,7 @@ import app.headsup.core.sync.ZoneReason
 import app.headsup.export.ExportJob
 import app.headsup.export.ExportKind
 import app.headsup.export.JobStatus
+import app.headsup.export.MediaStoreOutput
 import app.headsup.export.ExportSettings
 import app.headsup.export.OutputSpec
 import app.headsup.export.VideoCodec
@@ -601,6 +602,13 @@ private fun ProjectRow(state: UiState, vm: HeadsupViewModel) {
         }
         SmallAction("Rename", { renaming = true })
         SmallAction("Projects", { vm.refreshProjects(); listOpen = true })
+    }
+    val external = with(vm) { state.externalMedia }
+    if (external.isNotEmpty() && !state.busy) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Hint("${external.size} file(s) still come from the gallery or cloud; the project breaks if they move.", Modifier.weight(1f))
+            SmallAction("Copy into project", vm::copyMediaIntoProject)
+        }
     }
     if (renaming) {
         RenameDialog(state.projectName, onDismiss = { renaming = false }, title = "Project name") { vm.renameProject(it); renaming = false }
@@ -1747,13 +1755,13 @@ private fun ExportControls(
     Button(onClick = onExportVideos, enabled = state.clips.isNotEmpty(), modifier = Modifier.fillMaxWidth()) {
         Text(if (settings.wholeTimeline) "Export timeline" else "Export ${state.clips.size} clips")
     }
-    Hint("Colour, effects, framing, speed; the dashboard where there is watch data. → DCIM/TelemetryOverlay")
+    Hint("Colour, effects, framing, speed; the dashboard where there is watch data. → ${MediaStoreOutput.VIDEO_FOLDER}")
 
     Label("Dashboard")
     val canOverlay = state.clips.any { it.sync != null }
     OutlinedButton(onClick = onExportOverlays, enabled = canOverlay, modifier = Modifier.fillMaxWidth()) { Text("Export dashboard only (PNG)") }
     Hint(
-        if (canOverlay) "Transparent PNG frames (ZIP) per clip, for DaVinci → Download/TelemetryOverlay"
+        if (canOverlay) "Transparent PNG frames (ZIP) per clip, for DaVinci → ${MediaStoreOutput.OVERLAY_FOLDER}"
         else "Needs a FIT file matched to the clips.",
     )
     Row(verticalAlignment = Alignment.CenterVertically) {

@@ -40,7 +40,7 @@ private val LOGO_SIZE = 52.sp
 private val RECORD_RED = Color(0xFFFF3B30)
 
 /**
- * Start-up animation, about three seconds: "sweetSpot" unrolls from the left, the "o" being a
+ * Start-up animation, about three seconds: "Sweet Spot" unrolls from the left, the "o" being a
  * record button that is pressed once the word is complete; then the overlay fades out.
  */
 @Composable
@@ -76,7 +76,7 @@ fun SplashOverlay(onFinished: () -> Unit) {
                     clipRect(right = size.width * reveal.value + 1f) { this@drawWithContent.drawContent() }
                 },
         ) {
-            LogoText("sweetSp", Modifier.alignByBaseline())
+            LogoText("Sweet Sp", Modifier.alignByBaseline())
             RecordButton(press.value, glow.value, Modifier.alignBy { it.measuredHeight })
             LogoText("t", Modifier.alignByBaseline())
         }

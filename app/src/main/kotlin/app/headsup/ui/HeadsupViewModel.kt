@@ -176,6 +176,8 @@ private data class EditSnapshot(
     val groups: List<ClipGroup>,
     val globalGrade: ColorGrade,
     val style: DashboardStyle,
+    val timelineFps: Float?,
+    val exportSettings: ExportSettings,
 )
 
 /** What the colour page edits; the order is that of its tabs. */
@@ -337,7 +339,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
     private val history = ArrayList<EditSnapshot>()
     private var historyIndex = -1
 
-    private fun UiState.snapshot() = EditSnapshot(projectName, activities, clips, groups, globalGrade, style)
+    private fun UiState.snapshot() = EditSnapshot(projectName, activities, clips, groups, globalGrade, style, timelineFps, exportSettings)
 
     /**
      * Records a step a moment after the edit settles, so a slider drag or a widget move is one
@@ -394,6 +396,8 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                 groups = snapshot.groups,
                 globalGrade = snapshot.globalGrade,
                 style = snapshot.style,
+                timelineFps = snapshot.timelineFps,
+                exportSettings = snapshot.exportSettings,
                 selectedClip = s.selectedClip?.coerceAtMost(snapshot.clips.lastIndex)?.takeIf { it >= 0 } ?: snapshot.clips.indices.firstOrNull(),
                 compareGrade = null,
                 cine = null,
@@ -604,6 +608,51 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
      */
     fun addClips(uris: List<Uri>) = load(uris) { uri, progress ->
         Loaded.Clip(ClipMetadataReader.read(getApplication<Application>(), library.import(uri, progress)))
+    }
+
+    /** Media of the open project that is still only referenced from the gallery or the cloud. */
+    val UiState.externalMedia: List<Uri>
+        get() = (clips.map { it.meta.uri } + activities.mapNotNull { it.uri }).distinct().filterNot(library::isInLibrary)
+
+    /**
+     * Copies media the project still takes from the gallery or the cloud (projects made before
+     * copies existed) into the app, and switches the project to the copies.
+     */
+    fun copyMediaIntoProject() {
+        val pending = _state.value.externalMedia
+        if (pending.isEmpty() || _state.value.busy) return
+        _state.update { it.copy(busy = true, loadingMessage = "Copying…", loadingProgress = null) }
+        loadJob = viewModelScope.launch {
+            val context = getApplication<Application>()
+            val copies = HashMap<Uri, Uri>()
+            val failed = mutableListOf<String>()
+            withContext(Dispatchers.IO) {
+                pending.forEachIndexed { i, uri ->
+                    val name = ClipMetadataReader.displayName(context, uri) ?: uri.lastPathSegment.orEmpty()
+                    runCatching {
+                        copies[uri] = library.import(uri) { copied, total ->
+                            _state.update {
+                                it.copy(
+                                    loadingMessage = "Copying $name (${i + 1}/${pending.size}) · ${copied / 1_000_000} MB",
+                                    loadingProgress = if (total > 0) copied.toFloat() / total else null,
+                                )
+                            }
+                        }
+                    }.onFailure { if (it is kotlinx.coroutines.CancellationException) throw it else failed += name }
+                }
+            }
+            _state.update { s ->
+                s.copy(
+                    clips = s.clips.map { c -> copies[c.meta.uri]?.let { c.copy(meta = c.meta.copy(uri = it)) } ?: c },
+                    activities = s.activities.map { a -> a.uri?.let(copies::get)?.let { a.copy(uri = it) } ?: a },
+                    busy = false,
+                    loadingMessage = null,
+                    loadingProgress = null,
+                    messages = s.messages + failed.map { "Could not copy: $it" },
+                )
+            }
+            refreshPreview()
+        }
     }
 
     /** Stops copying files in; what was not finished is removed. */
