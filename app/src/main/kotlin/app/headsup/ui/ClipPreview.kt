@@ -102,7 +102,9 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.runtime.State
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.media3.common.C
 import androidx.media3.common.PlaybackException
+import app.headsup.media.DecoderBudget
 import androidx.media3.common.Player
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
@@ -214,11 +216,23 @@ fun ClipPreview(
         .setClippingConfiguration(MediaItem.ClippingConfiguration.Builder().setStartPositionMs(c.trimStartMs).setEndPositionMs(c.trimEndMs).build())
         .build()
     LaunchedEffect(players) { if (!shaderPreview) players.forEach { it.setVideoEffects(listOf<Effect>(liveLut)) } }
+    // While set, the picture of this player stays shown: the one switched to has no frame yet.
+    var heldPicture by remember { mutableStateOf<Int?>(null) }
+    /** Makes the player switched to ready to show its picture; [from] is the one left. */
+    fun takeOver(to: Int, from: Int) {
+        if (videoOn(players[to])) return
+        // Its decoder only fits once the other one's is freed (until the first frame, the old picture stays).
+        players[from].stop()
+        holds[from] = null
+        heldPicture = from
+        setVideo(players[to], true)
+    }
     LaunchedEffect(keyOf(clip), scrubbing) {
         if (photo) {
             exoPlayer.stop()
             exoPlayer.clearMediaItems()
             holds[active] = null
+            heldPicture = null
             photoPlaying = autoPlay
             if (autoPlay) onAutoPlayStarted()
             return@LaunchedEffect
@@ -227,6 +241,8 @@ fun ClipPreview(
         val key = keyOf(clip)
         if (scrubbing) {
             exoPlayer.pause()
+            setVideo(exoPlayer, true)
+            heldPicture = null
             exoPlayer.setMediaItem(MediaItem.fromUri(clip.meta.uri), cutScrub.value ?: 0L)
             exoPlayer.prepare()
             holds[active] = null
@@ -235,10 +251,13 @@ fun ClipPreview(
                 // The other player already has it (the clip after the one shown): just switch.
                 exoPlayer.pause()
                 active = 1 - active
+                takeOver(active, 1 - active)
                 players[active].seekTo(0L)
                 players[active].videoSize.takeIf { it.width > 0 && it.height > 0 }?.let { renderedAspect = it.width * it.pixelWidthHeightRatio / it.height }
             } else {
                 // Only the used part of the file plays; positions count from the cut.
+                setVideo(exoPlayer, true)
+                heldPicture = null
                 exoPlayer.setMediaItem(clipped(clip))
                 exoPlayer.prepare()
                 holds[active] = key
@@ -252,7 +271,9 @@ fun ClipPreview(
     // The clip after this one, ready in the other player with its first frame decoded.
     val next = playlist.getOrNull(playlistIndex + 1)?.takeIf { !it.meta.isPhoto && !photo && playlist.getOrNull(playlistIndex)?.id == clip.id }
     val nextKey = next?.let(::keyOf)
-    LaunchedEffect(nextKey, active, scrubbing) {
+    // Large clips (8K) get one decoder: the next one waits without its picture until the cut.
+    val lean = remember(clip.meta, next?.meta) { next != null && !DecoderBudget.fitsTwo(clip.meta, next.meta) }
+    LaunchedEffect(nextKey, active, scrubbing, lean) {
         if (scrubbing) return@LaunchedEffect
         if (next == null) {
             if (holds[1 - active] != null) {
@@ -262,9 +283,10 @@ fun ClipPreview(
             }
             return@LaunchedEffect
         }
-        if (holds[1 - active] == nextKey) return@LaunchedEffect
+        if (holds[1 - active] == nextKey && videoOn(standby) != lean) return@LaunchedEffect
         standby.playWhenReady = false
         standby.volume = 0f
+        setVideo(standby, !lean)
         standby.setMediaItem(clipped(next))
         standby.setPlaybackSpeed(next.speed)
         standby.prepare()
@@ -310,9 +332,10 @@ fun ClipPreview(
         val other = players[1 - from]
         if (from != active || nextKeyNow == null || holds[1 - from] != nextKeyNow || other.playbackState == Player.STATE_IDLE) return false
         active = 1 - from
-        other.videoSize.takeIf { it.width > 0 && it.height > 0 }?.let { renderedAspect = it.width * it.pixelWidthHeightRatio / it.height }
+        other.videoSize.takeIf { it.width > 0 && it.height > 0 && videoOn(other) }?.let { renderedAspect = it.width * it.pixelWidthHeightRatio / it.height }
         if (!other.isPlaying) other.play()
         players[from].pause()
+        takeOver(1 - from, from)
         handover[0] = false
         advance(indexNow + 1)
         return true
@@ -336,21 +359,29 @@ fun ClipPreview(
                         holds[i] = null
                         return
                     }
-                    playerError = error.errorCodeName
                     // Once: free the other player's decoder and try again from the same place.
                     if (!retried[i]) {
                         retried[i] = true
                         freeStandby()
                         player.prepare()
+                    } else {
+                        playerError = error.errorCodeName
                     }
                 }
 
                 // The picture is laid out by the frames actually shown, so a clip of another shape is
                 // never drawn in the previous clip's layout while the switch is under way.
                 override fun onVideoSizeChanged(videoSize: androidx.media3.common.VideoSize) {
-                    if (i == active && videoSize.width > 0 && videoSize.height > 0) {
+                    if (i == active && heldPicture == null && videoSize.width > 0 && videoSize.height > 0) {
                         renderedAspect = videoSize.width * videoSize.pixelWidthHeightRatio / videoSize.height
                     }
+                }
+
+                // The clip switched to has its picture: show it, laid out for its shape.
+                override fun onRenderedFirstFrame() {
+                    if (i != active || heldPicture == null) return
+                    player.videoSize.takeIf { it.width > 0 && it.height > 0 }?.let { renderedAspect = it.width * it.pixelWidthHeightRatio / it.height }
+                    heldPicture = null
                 }
             }.also(player::addListener)
         }
@@ -388,7 +419,8 @@ fun ClipPreview(
         tableVersion++
     }
     var textureView by remember { mutableStateOf<TextureView?>(null) }
-    LaunchedEffect(active) { textureView = textureViews[active] }
+    val showing = heldPicture ?: active
+    LaunchedEffect(showing) { textureView = textureViews[showing] }
     val sample by rememberUpdatedState(onSample)
     val maskMover by rememberUpdatedState(onMoveMask)
     val reframer by rememberUpdatedState(onReframe)
@@ -457,7 +489,7 @@ fun ClipPreview(
             // At a cut: the next clip starts (hidden, silent) a moment before, so it is already moving
             // when the picture switches to it at the cut; a player needs a little time to start.
             val other = players[1 - active]
-            val nextReady = nextKeyNow != null && holds[1 - active] == nextKeyNow && other.playbackState == Player.STATE_READY
+            val nextReady = nextKeyNow != null && holds[1 - active] == nextKeyNow && other.playbackState == Player.STATE_READY && videoOn(other)
             if (exoPlayer.isPlaying && !fileTime && nextReady) {
                 val remaining = ((clipLength - exoPlayer.currentPosition) / speedNow).toLong()
                 if (remaining <= HANDOVER_LEAD_MS && !handover[0]) {
@@ -604,13 +636,13 @@ fun ClipPreview(
                 // Both players' pictures stay in place; only the one playing is shown (and coloured).
                 for (i in 0..1) {
                     key(i) {
-                        val shown = i == active && !photo
+                        val shown = i == showing && !photo
                         AndroidView(
                             factory = { ctx ->
                                 TextureView(ctx).also { tv ->
                                     players[i].setVideoTextureView(tv)
                                     textureViews[i] = tv
-                                    if (i == active) textureView = tv
+                                    if (i == showing) textureView = tv
                                 }
                             },
                             modifier = if (shown) pictureLayer else Modifier.requiredSize(with(density) { pictureW.toDp() }, with(density) { pictureH.toDp() }).alpha(0f),
@@ -777,6 +809,14 @@ fun ClipPreview(
 }
 
 private const val SAMPLE_WIDTH = 192
+
+private fun videoOn(p: Player) = C.TRACK_TYPE_VIDEO !in p.trackSelectionParameters.disabledTrackTypes
+
+/** Loads the clip with or without its picture (without, it needs no video decoder). */
+private fun setVideo(p: Player, on: Boolean) {
+    if (videoOn(p) == on) return
+    p.trackSelectionParameters = p.trackSelectionParameters.buildUpon().setTrackTypeDisabled(C.TRACK_TYPE_VIDEO, !on).build()
+}
 
 /** How long before a cut the next clip starts (hidden), and when the picture switches to it. */
 private const val HANDOVER_LEAD_MS = 120L
