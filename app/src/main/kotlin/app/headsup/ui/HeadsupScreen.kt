@@ -1091,6 +1091,9 @@ private fun CinePanel(state: UiState, vm: HeadsupViewModel, frameSource: (() -> 
 @Composable
 private fun ShotMatchPanel(state: UiState, clip: ClipState, vm: HeadsupViewModel, frameSource: (() -> Bitmap?)?) {
     val reference = state.matchReference
+    val group = state.groupOf(clip)
+    // A camera group is matched as a whole by default: colour character only, brightness per shot.
+    var wholeGroup by rememberSaveable(group?.id) { mutableStateOf(group != null) }
     Hint(
         when {
             reference == null -> "1. Pause on a good frame of the clip whose colours you like and set it as the reference."
@@ -1105,15 +1108,32 @@ private fun ShotMatchPanel(state: UiState, clip: ClipState, vm: HeadsupViewModel
             modifier = Modifier.weight(1f),
         ) { Text(if (reference?.clipId == clip.id) "Reference ✓" else "Set as reference", maxLines = 1) }
         Button(
-            onClick = { frameSource?.invoke()?.let(vm::matchToReference) },
+            onClick = { frameSource?.invoke()?.let { vm.matchToReference(it, wholeGroup && group != null) } },
             enabled = frameSource != null && reference != null && reference.clipId != clip.id && !state.matching,
             modifier = Modifier.weight(1f),
         ) { Text(if (state.matching) "Matching…" else "Match", maxLines = 1) }
     }
-    if (state.matchUndo?.first == clip.id) {
+    if (group != null) {
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            FilterChip(selected = wholeGroup, onClick = { wholeGroup = true }, label = { Text("Group: ${group.name}") })
+            FilterChip(selected = !wholeGroup, onClick = { wholeGroup = false }, label = { Text("This clip") })
+        }
+        Hint(
+            if (wholeGroup) {
+                "Matches the camera's colour (white balance, tint, saturation, skin) for every clip in ${group.name}; each keeps its own brightness."
+            } else {
+                "Matches this clip completely, brightness included."
+            },
+        )
+    }
+    val undo = state.matchUndo
+    if (undo != null && (undo.clipId == clip.id || (undo.groupId != null && undo.groupId == clip.groupId))) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Hint(
-                "Matched: exposure, contrast, temperature, tint and saturation" + if (state.matchedSkin) ", and skin hue." else ".",
+                when {
+                    undo.groupId != null -> "Matched the group: temperature, tint and saturation"
+                    else -> "Matched: exposure, contrast, temperature, tint and saturation"
+                } + if (state.matchedSkin) ", and skin hue." else ".",
                 Modifier.weight(1f),
             )
             SmallAction("Undo", vm::undoMatch)

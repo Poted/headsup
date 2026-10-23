@@ -139,6 +139,12 @@ data class CineSession(
 /** The frame other clips are matched to: how it looks on screen, and where it is from. */
 data class MatchReference(val clipId: Long, val clipName: String, val stats: MatchStats)
 
+/**
+ * State before a shot match, for undo: the clip's corrections, or (matching a whole group) the
+ * group's.
+ */
+data class MatchUndo(val clipId: Long, val groupId: Long?, val grade: ColorGrade)
+
 /** A highlight found in the watch data, placed in the clip that shows it. */
 data class FoundHighlight(val highlight: Highlight, val clipId: Long, val clipName: String, val positionMs: Long)
 
@@ -186,8 +192,7 @@ data class UiState(
     /** Result of the last highlight search; null until searched. */
     val highlights: List<FoundHighlight>? = null,
     val matchReference: MatchReference? = null,
-    /** Clip and its corrections before the last shot match, for undo. */
-    val matchUndo: Pair<Long, ColorGrade>? = null,
+    val matchUndo: MatchUndo? = null,
     /** Whether the last match also turned skin (both frames showed skin). */
     val matchedSkin: Boolean = false,
     val matching: Boolean = false,
@@ -697,20 +702,38 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
      * looks like the reference; solved through the clip's whole colour path (its corrections,
      * group, global node and LUT), the difference lands in the clip's own corrections.
      */
-    fun matchToReference(frame: Bitmap) {
+    /**
+     * With [wholeGroup], only the camera's character (white balance, tint, saturation, skin) is
+     * matched and written to the clip's group, so every shot of that camera follows and keeps its
+     * own brightness; exposure and contrast are still solved, but only to compare like with like.
+     */
+    fun matchToReference(frame: Bitmap, wholeGroup: Boolean = false) {
         val s = _state.value
         val clip = s.selected ?: return frame.recycle()
         val reference = s.matchReference ?: return frame.recycle()
+        val group = s.groupOf(clip)?.takeIf { wholeGroup }
         val pixels = pixelsOf(frame)
         val applied = s.appliedGrade(clip)
         _state.update { it.copy(matching = true) }
         viewModelScope.launch {
             val lut = loadLut(s.lutFor(clip))
             val matched = withContext(Dispatchers.Default) { ShotMatch.match(pixels, lut, applied, reference.stats) }
-            val index = _state.value.clips.indexOfFirst { it.id == clip.id }
-            _state.update {
-                it.copy(matching = false, matchUndo = clip.id to clip.grade, matchedSkin = matched.skinHue != applied.skinHue)
+            val undo = if (group != null) MatchUndo(clip.id, group.id, group.grade) else MatchUndo(clip.id, null, clip.grade)
+            _state.update { it.copy(matching = false, matchUndo = undo, matchedSkin = matched.skinHue != applied.skinHue) }
+            if (group != null) {
+                updateGroup(group.id) { g ->
+                    g.copy(
+                        grade = g.grade.copy(
+                            temperature = (g.grade.temperature + matched.temperature - applied.temperature).coerceIn(-1f, 1f),
+                            tint = (g.grade.tint + matched.tint - applied.tint).coerceIn(-1f, 1f),
+                            saturation = (g.grade.saturation + matched.saturation - applied.saturation).coerceIn(-1f, 1f),
+                            skinHue = (g.grade.skinHue + matched.skinHue - applied.skinHue).coerceIn(-30f, 30f),
+                        ),
+                    )
+                }
+                return@launch
             }
+            val index = _state.value.clips.indexOfFirst { it.id == clip.id }
             if (index < 0) return@launch
             updateClip(index) { c ->
                 c.copy(
@@ -728,9 +751,13 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun undoMatch() {
-        val (clipId, grade) = _state.value.matchUndo ?: return
-        val index = _state.value.clips.indexOfFirst { it.id == clipId }
-        if (index >= 0) updateClip(index) { it.copy(grade = grade) }
+        val undo = _state.value.matchUndo ?: return
+        if (undo.groupId != null) {
+            updateGroup(undo.groupId) { it.copy(grade = undo.grade) }
+        } else {
+            val index = _state.value.clips.indexOfFirst { it.id == undo.clipId }
+            if (index >= 0) updateClip(index) { it.copy(grade = undo.grade) }
+        }
         _state.update { it.copy(matchUndo = null) }
     }
 

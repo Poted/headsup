@@ -179,4 +179,7 @@ paused frame through the clip's whole colour path (corrections, group, global, L
 exposure, contrast, temperature, tint and saturation with damped Gauss–Newton steps until the
 statistics agree. If both frames show skin (over 2 % of pixels near the 123° line), the skin hue
 is then turned to the reference's mean skin angle. The change is added to the clip's own
-corrections and can be undone.
+corrections and can be undone. For a clip in a group, the default is to match the whole group
+(the camera): exposure and contrast are solved only so the frames compare like with like, and
+just white balance, tint, saturation and skin hue go into the group's corrections, so every
+shot of that camera follows while keeping its own brightness.
