@@ -194,8 +194,9 @@ fun ClipPreview(
     val players = remember { List(2) { ExoPlayer.Builder(context).build() } }
     DisposableEffect(players) { onDispose { players.forEach { it.release() } } }
     var active by remember { mutableIntStateOf(0) }
+    // The player shown, as of this composition; effects that may run after a switch in the same
+    // frame read players[active] themselves.
     val exoPlayer = players[active]
-    val standby = players[1 - active]
     // What each player holds: the clip's file and cut, or null.
     val holds = remember { arrayOfNulls<Any>(2) }
     val textureViews = remember { arrayOfNulls<TextureView>(2) }
@@ -228,6 +229,7 @@ fun ClipPreview(
     // With one decoder (large clips), the next clip waits queued in the same player: its key.
     val queued = remember { arrayOfNulls<Any>(1) }
     LaunchedEffect(keyOf(clip), scrubbing) {
+        val exoPlayer = players[active]
         if (photo) {
             exoPlayer.stop()
             exoPlayer.clearMediaItems()
@@ -253,6 +255,7 @@ fun ClipPreview(
                 players[active].seekTo(0L)
             } else {
                 // Only the used part of the file plays; positions count from the cut.
+                exoPlayer.setPlaybackSpeed(clip.speed)
                 exoPlayer.setMediaItem(clipped(clip))
                 exoPlayer.prepare()
                 holds[active] = key
@@ -273,7 +276,9 @@ fun ClipPreview(
     val lean = remember(clip.meta, next?.meta, light) { next != null && !light && !DecoderBudget.fitsTwo(clip.meta, next.meta) }
     LaunchedEffect(nextKey, active, scrubbing, lean, keyOf(clip)) {
         if (scrubbing) return@LaunchedEffect
+        // Read now, not from the composition: the clip effect above may have just switched players.
         val shown = players[active]
+        val standby = players[1 - active]
         if (lean && next != null && holds[active] == keyOf(clip)) {
             if (holds[1 - active] != null) {
                 standby.stop()
@@ -307,7 +312,7 @@ fun ClipPreview(
         holds[1 - active] = nextKey
     }
     // Slow motion plays slowed down in the preview too; the dashboard follows the picture's own time.
-    LaunchedEffect(clip.speed) { exoPlayer.setPlaybackSpeed(clip.speed) }
+    LaunchedEffect(clip.speed) { players[active].setPlaybackSpeed(clip.speed) }
     val clipVolume = if (clip.speed != 1f && clip.muteChangedSpeed) 0f else clipSound * clip.soundLevel
     // One player per audio clip, kept while the clip exists.
     val audioPlayers = remember { HashMap<Long, Pair<android.net.Uri, ExoPlayer>>() }
@@ -422,6 +427,7 @@ fun ClipPreview(
         liveLut.update(gradeCube)
         // A paused player only draws when a new frame is decoded and ignores a seek to its current
         // position, so step 1 ms back and forth to re-render the picture.
+        val exoPlayer = players[active]
         if (!exoPlayer.isPlaying) {
             exoPlayer.seekTo((exoPlayer.currentPosition + nudge).coerceAtLeast(0L))
             nudge = -nudge

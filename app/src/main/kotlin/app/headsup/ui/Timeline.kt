@@ -113,9 +113,10 @@ fun Timeline(
     val videoEnd = starts.last()
     // Sounds may run past the video's end; zooming out reaches them.
     val contentEnd = maxOf(videoEnd, audio.maxOfOrNull { it.piece.endOnTimelineMs } ?: 0L)
-    // The tracks in use, plus a free one to move the selected sound to; none away from the Audio page.
+    // Sound tracks only on the Audio page.
     val used = (audio.maxOfOrNull { it.lane } ?: -1) + 1
-    val lanes = if (!showAudio) 0 else (used + if (state.selectedAudio != null) 1 else 0).coerceIn(1, MAX_LANES)
+    // Only the tracks in use (at least one); a sound dragged below the last one opens a new track.
+    val lanes = if (!showAudio) 0 else used.coerceIn(1, MAX_LANES)
 
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -183,7 +184,7 @@ fun Timeline(
                             fling?.cancel()
                             val g = Geometry(
                                 width = size.width.toFloat(), t = playhead(), zoom = zoom, starts = startsNow, clips = clipsNow,
-                                audio = audioNow, lanes = lanesNow, d = this,
+                                audio = audioNow, lanes = if (lanesNow > 0) (lanesNow + 1).coerceAtMost(MAX_LANES) else 0, d = this,
                             )
                             val hit = g.hit(down.position, selectedNow.takeIf { videoSelectedNow }, audioSelectedNow)
                             val t0 = System.currentTimeMillis()
