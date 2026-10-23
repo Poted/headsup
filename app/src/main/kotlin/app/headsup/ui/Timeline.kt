@@ -97,6 +97,8 @@ fun Timeline(
     onSelectAudio: (Long) -> Unit,
     onDeselect: () -> Unit,
     onAdd: () -> Unit,
+    /** Adds a sound (the + after the video on the first sound track). */
+    onAddSound: () -> Unit = {},
     /** Whether the audio tracks are shown (on the Audio page; elsewhere they only take room). */
     showAudio: Boolean,
     /** Whether the preview plays (or was just asked to): a glide after a flick stops, thumbnails wait. */
@@ -113,7 +115,7 @@ fun Timeline(
     val contentEnd = maxOf(videoEnd, audio.maxOfOrNull { it.piece.endOnTimelineMs } ?: 0L)
     // The tracks in use, plus a free one to move the selected sound to; none away from the Audio page.
     val used = (audio.maxOfOrNull { it.lane } ?: -1) + 1
-    val lanes = if (!showAudio) 0 else (used + if (state.selectedAudio != null) 1 else 0).coerceIn(0, MAX_LANES)
+    val lanes = if (!showAudio) 0 else (used + if (state.selectedAudio != null) 1 else 0).coerceIn(1, MAX_LANES)
 
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -149,6 +151,7 @@ fun Timeline(
     val selectAudio by rememberUpdatedState(onSelectAudio)
     val deselect by rememberUpdatedState(onDeselect)
     val add by rememberUpdatedState(onAdd)
+    val addSound by rememberUpdatedState(onAddSound)
     val lanesNow by rememberUpdatedState(lanes)
     val videoEndNow by rememberUpdatedState(videoEnd)
     val contentEndNow by rememberUpdatedState(contentEnd)
@@ -217,6 +220,7 @@ fun Timeline(
                                         is Hit.Clip -> selectVideo(hit.index)
                                         is Hit.Sound -> selectAudio(hit.id)
                                         Hit.Add -> add()
+                                        Hit.AddSound -> addSound()
                                         Hit.Empty -> deselect()
                                         else -> Unit
                                     }
@@ -456,6 +460,7 @@ private enum class Mode { SCROLL, NONE, TRIM_CLIP_START, TRIM_CLIP_END, MOVE, SL
 private sealed interface Hit {
     data object Empty : Hit
     data object Add : Hit
+    data object AddSound : Hit
     data class Clip(val index: Int) : Hit
     data class ClipStart(val index: Int) : Hit
     data class ClipEnd(val index: Int) : Hit
@@ -524,6 +529,8 @@ private class Geometry(
         if (lanes > 0 && p.y >= lanesTop) {
             val lane = laneAt(p.y)
             val at = ms(p.x)
+            val addL = x(starts.last()) + handle
+            if (lane == 0 && p.x in addL..(addL + videoH)) return Hit.AddSound
             audio.firstOrNull { it.lane == lane && at >= it.piece.startOnTimelineMs && at < it.piece.endOnTimelineMs }?.let { return Hit.Sound(it.id) }
         }
         return Hit.Empty
@@ -650,6 +657,19 @@ private fun DrawScope.drawVideo(
 private fun DrawScope.drawAudio(g: Geometry, state: UiState, text: androidx.compose.ui.text.TextMeasurer, accent: Color, laneColour: Color) {
     if (g.lanes == 0) return
     for (lane in 0 until g.lanes) drawRoundRect(laneColour, Offset(0f, g.laneTop(lane) + 2f), Size(size.width, g.laneH - 4f), CornerRadius(6.dp.toPx()))
+    // Adding a sound: a + after the video's end on the first track (sounds stay within the video).
+    if (g.lanes > 0) {
+        val addL = g.x(g.starts.last()) + g.handle
+        if (addL < size.width) {
+            val top = g.laneTop(0) + 2f
+            val h = g.laneH - 4f
+            drawRoundRect(HeadsupColors.Outline, Offset(addL, top), Size(g.videoH, h), CornerRadius(6.dp.toPx()), style = Stroke(1.dp.toPx()))
+            val c = Offset(addL + g.videoH / 2f, top + h / 2f)
+            val arm = h * 0.22f
+            drawLine(HeadsupColors.Highlight, Offset(c.x - arm, c.y), Offset(c.x + arm, c.y), strokeWidth = 2.dp.toPx())
+            drawLine(HeadsupColors.Highlight, Offset(c.x, c.y - arm), Offset(c.x, c.y + arm), strokeWidth = 2.dp.toPx())
+        }
+    }
     for (c in state.audioClips) {
         val p = c.piece
         val l = g.x(p.startOnTimelineMs)
