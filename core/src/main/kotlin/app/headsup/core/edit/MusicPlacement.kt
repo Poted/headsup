@@ -2,9 +2,10 @@ package app.headsup.core.edit
 
 /**
  * Where a music track sits on the timeline: it starts at [startOnTimelineMs], playing the song
- * from [songStartMs]; when the song ends it starts again from [songStartMs] if [loop], otherwise
- * the rest is silent. Fades are only where asked: in over [fadeInMs] from its start, out over
- * [fadeOutMs] before it stops (the song's end without looping, else the timeline's end).
+ * from [songStartMs] to [songEndMs] (0 = the song's end); after that it starts again from
+ * [songStartMs] if [loop], otherwise the rest is silent. Fades are only where asked: in over
+ * [fadeInMs] from its start, out over [fadeOutMs] before it stops (the end of the used part
+ * without looping, else the timeline's end).
  */
 data class MusicPlacement(
     val songDurationMs: Long,
@@ -13,13 +14,18 @@ data class MusicPlacement(
     val loop: Boolean = true,
     val fadeInMs: Long = 0L,
     val fadeOutMs: Long = 0L,
+    val songEndMs: Long = 0L,
 ) {
     /** One stretch of song on the timeline, for export. */
     data class Segment(val timelineStartMs: Long, val songFromMs: Long, val songToMs: Long) {
         val lengthMs: Long get() = songToMs - songFromMs
     }
 
-    private val playable: Long get() = (songDurationMs - songStartMs).coerceAtLeast(0L)
+    /** Where the used part of the song ends. */
+    val songStopMs: Long get() = if (songEndMs in 1..songDurationMs) songEndMs else songDurationMs
+
+    /** Length of the used part of the song. */
+    val playable: Long get() = (songStopMs - songStartMs).coerceAtLeast(0L)
 
     /** Where the music ends on a timeline of [timelineMs]. */
     fun endMs(timelineMs: Long): Long =

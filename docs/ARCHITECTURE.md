@@ -242,5 +242,11 @@ the song, repeat or stop at the song's end, and fades only where set. The export
 as pieces in a second Media3 sequence (a gap first when it starts later), cut where the timeline
 ends; the preview's music player follows the same placement. Clips can fade in from and out to
 black (`Fade`): `FadeEffect` on the picture (dashboard included) and `FadeAudioProcessor` on the
-sound, both in timeline time. Pages: Files (media, FIT, music file), Audio (music placement,
-fades, levels), Colour, Effects (incl. clip fades), Frame, Moments (highlights), Export.
+sound, both in timeline time. Pages: Files (the project's media, FIT and music files), Edit (timeline frame rate, cut, speed,
+fades, framing, moments), Colour, Effects (dashboard incl. watch sync, film effects), Audio (music
+timeline, levels), Export.
+
+The Audio page's timeline (`ui/MusicTimeline`) edits the placement directly: move, trim (song
+start/end), slip (hold, then drag), fade handles, tap to jump. The song is decoded once into a
+20 ms loudness envelope (`media/AudioAnalysis`, `core/edit/AudioEnvelope`), drawn as the waveform;
+accents are loudness rises well above their surroundings, shown as ticks.

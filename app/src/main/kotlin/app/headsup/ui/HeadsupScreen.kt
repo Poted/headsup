@@ -300,7 +300,28 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
                             seekRequest = f.positionMs
                         }
                     }
-                    Tool.AUDIO -> AudioPanel(state, vm, onAddMusic = { musicPicker.launch(arrayOf("audio/*")) })
+                    Tool.AUDIO -> AudioPanel(
+                        state, vm, onAddMusic = { musicPicker.launch(arrayOf("audio/*")) },
+                        playheadMs = {
+                            val i = state.selectedClip ?: 0
+                            val clip = state.clips.getOrNull(i)
+                            val offset = state.clips.take(i).sumOf { it.timelineDurationMs }
+                            offset + if (clip == null || clip.meta.isPhoto) playhead.longValue else (playhead.longValue / clip.speed).toLong()
+                        },
+                        onSeek = { t ->
+                            // The clip under that moment, and the position in it.
+                            var start = 0L
+                            for ((i, c) in state.clips.withIndex()) {
+                                if (t < start + c.timelineDurationMs || i == state.clips.lastIndex) {
+                                    if (i != state.selectedClip) vm.selectClip(i)
+                                    val local = (t - start).coerceAtLeast(0L)
+                                    seekRequest = if (c.meta.isPhoto) local else (local * c.speed).toLong()
+                                    break
+                                }
+                                start += c.timelineDurationMs
+                            }
+                        },
+                    )
                     Tool.COLOUR -> ColourPage(state, vm, adjustment, { adjustment = it }, onAddLut = { lutPicker.launch(arrayOf("*/*")) }, frameSource.value)
                     Tool.EFFECTS -> EffectsPanel(state, vm, effectKind, playhead) { effectKind = it }
                     Tool.EXPORT -> ExportControls(
@@ -603,44 +624,39 @@ private fun MusicFile(state: UiState, vm: HeadsupViewModel, onAdd: () -> Unit) {
  * fades only where asked, and the levels of the music and the clips' own sound.
  */
 @Composable
-private fun AudioPanel(state: UiState, vm: HeadsupViewModel, onAddMusic: () -> Unit) {
+private fun AudioPanel(state: UiState, vm: HeadsupViewModel, onAddMusic: () -> Unit, playheadMs: () -> Long, onSeek: (Long) -> Unit) {
     val music = state.music
     Group { MusicFile(state, vm, onAddMusic) }
     if (music == null) return
-    val totalMs = state.clips.sumOf { it.timelineDurationMs }
     Group {
-        Label("On the timeline")
-        MusicTimeline(music, totalMs)
-        val totalS = (totalMs / 1000f).coerceAtLeast(1f)
-        ValueHeader("Starts at", Formats.duration(music.startOnTimelineMs))
-        RulerSlider(
-            music.startOnTimelineMs / 1000f, 0f..totalS, 0.1f,
-            { v -> vm.updateMusic { it.copy(startOnTimelineMs = (v * 1000).toLong()) } },
-            onReset = { vm.updateMusic { it.copy(startOnTimelineMs = 0L) } },
+        Label("Timeline")
+        MusicTimeline(
+            clipLengthsMs = state.clips.map { it.timelineDurationMs },
+            music = music,
+            envelope = state.musicEnvelope,
+            accents = state.musicAccents,
+            playheadMs = playheadMs,
+            onChange = { m -> vm.updateMusic { m } },
+            onSeek = onSeek,
         )
-        if (music.durationMs > 0) {
-            ValueHeader("From the song at", Formats.duration(music.songStartMs))
-            RulerSlider(
-                music.songStartMs / 1000f, 0f..((music.durationMs - 1000) / 1000f).coerceAtLeast(0.1f), 0.1f,
-                { v -> vm.updateMusic { it.copy(songStartMs = (v * 1000).toLong()) } },
-                onReset = { vm.updateMusic { it.copy(songStartMs = 0L) } },
-            )
-        }
+        val p = music.placement
+        Hint(
+            listOfNotNull(
+                "Starts at ${Formats.duration(music.startOnTimelineMs)}",
+                "song ${Formats.duration(music.songStartMs)}–${Formats.duration(p.songStopMs)}",
+                music.fadeInMs.takeIf { it > 0 }?.let { "fade in ${fadeLabel(it)}" },
+                music.fadeOutMs.takeIf { it > 0 }?.let { "fade out ${fadeLabel(it)}" },
+                if (state.musicEnvelope == null) "reading the song…" else "${state.musicAccents.size} accents",
+            ).joinToString(" · "),
+        )
+        Hint("Drag the music to move it, its edges to trim it, the dots on top to fade. Hold, then drag, to slide the song inside. Tap to jump there; drag the clips row to scroll.")
         Row(verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
                 Text("Repeat", style = MaterialTheme.typography.bodyMedium)
-                Hint(if (music.loop) "Starts again when the song ends." else "Stops when the song ends.")
+                Hint(if (music.loop) "The used part starts again when it ends." else "Stops when the used part ends.")
             }
             Switch(checked = music.loop, onCheckedChange = { v -> vm.updateMusic { it.copy(loop = v) } })
         }
-        Hint("Music longer than the timeline is cut where the timeline ends, at full level unless a fade is set.")
-    }
-    Group {
-        Label("Fades")
-        ValueHeader("Fade in", fadeLabel(music.fadeInMs))
-        RulerSlider(music.fadeInMs / 1000f, 0f..10f, 0.1f, { v -> vm.updateMusic { it.copy(fadeInMs = (v * 1000).toLong()) } }, onReset = { vm.updateMusic { it.copy(fadeInMs = 0L) } })
-        ValueHeader("Fade out", fadeLabel(music.fadeOutMs))
-        RulerSlider(music.fadeOutMs / 1000f, 0f..10f, 0.1f, { v -> vm.updateMusic { it.copy(fadeOutMs = (v * 1000).toLong()) } }, onReset = { vm.updateMusic { it.copy(fadeOutMs = 0L) } })
     }
     Group {
         Label("Levels")
@@ -656,36 +672,6 @@ private fun AudioPanel(state: UiState, vm: HeadsupViewModel, onAddMusic: () -> U
 
 private fun fadeLabel(ms: Long) = if (ms <= 0) "Off" else String.format(Locale.US, "%.1f s", ms / 1000f)
 
-/** The timeline as a bar with the clips, and the music under it: each repeat of the song, fades as ramps. */
-@Composable
-private fun MusicTimeline(music: MusicTrack, totalMs: Long) {
-    val segments = remember(music, totalMs) { music.placement.segments(totalMs) }
-    val clipColor = HeadsupColors.SurfaceHigh
-    val musicColor = HeadsupColors.Accent
-    Canvas(Modifier.fillMaxWidth().height(44.dp)) {
-        if (totalMs <= 0) return@Canvas
-        val w = size.width
-        fun x(ms: Long) = ms.toFloat() / totalMs * w
-        drawRoundRect(clipColor, Offset(0f, 0f), Size(w, 14.dp.toPx()), CornerRadius(4.dp.toPx()))
-        val top = 20.dp.toPx()
-        val h = size.height - top
-        for (seg in segments) {
-            val left = x(seg.timelineStartMs)
-            val right = x(seg.timelineStartMs + seg.lengthMs)
-            drawRoundRect(musicColor.copy(alpha = 0.35f), Offset(left, top), Size((right - left - 2f).coerceAtLeast(1f), h), CornerRadius(4.dp.toPx()))
-        }
-        val placement = music.placement
-        // Level line: full height = full level, ramps where it fades.
-        val path = Path()
-        val steps = 120
-        for (i in 0..steps) {
-            val t = totalMs * i / steps
-            val y = top + h * (1f - placement.gainAt(t, totalMs))
-            if (i == 0) path.moveTo(x(t), y) else path.lineTo(x(t), y)
-        }
-        drawPath(path, musicColor, style = Stroke(1.5.dp.toPx()))
-    }
-}
 
 /**
  * Highlights: the best moments found in the watch data (top speed, sprints, descents, climbs,

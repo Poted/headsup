@@ -27,8 +27,10 @@ data class MusicTrack(
     val loop: Boolean = true,
     val fadeInMs: Long = 0L,
     val fadeOutMs: Long = 0L,
+    /** Where the used part of the song ends (0 = its end). */
+    val songEndMs: Long = 0L,
 ) {
-    val placement: MusicPlacement get() = MusicPlacement(durationMs, startOnTimelineMs, songStartMs, loop, fadeInMs, fadeOutMs)
+    val placement: MusicPlacement get() = MusicPlacement(durationMs, startOnTimelineMs, songStartMs, loop, fadeInMs, fadeOutMs, songEndMs)
 }
 
 @OptIn(UnstableApi::class)

@@ -122,7 +122,7 @@ internal object Json {
             p.music?.let {
                 JSONObject().put("uri", it.uri.toString()).put("name", it.name).put("volume", it.volume).put("originalVolume", it.originalVolume)
                     .put("durationMs", it.durationMs).put("startOnTimelineMs", it.startOnTimelineMs).put("songStartMs", it.songStartMs)
-                    .put("loop", it.loop).put("fadeInMs", it.fadeInMs).put("fadeOutMs", it.fadeOutMs)
+                    .put("loop", it.loop).put("fadeInMs", it.fadeInMs).put("fadeOutMs", it.fadeOutMs).put("songEndMs", it.songEndMs)
             },
         )
 
@@ -145,6 +145,7 @@ internal object Json {
                 loop = it.optBoolean("loop", true),
                 fadeInMs = it.optLong("fadeInMs", 0L),
                 fadeOutMs = it.optLong("fadeOutMs", 0L),
+                songEndMs = it.optLong("songEndMs", 0L),
             )
         },
     )

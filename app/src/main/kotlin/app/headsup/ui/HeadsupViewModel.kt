@@ -36,6 +36,8 @@ import app.headsup.export.Telemetry
 import app.headsup.export.ExportSettings
 import app.headsup.export.ExportPreset
 import app.headsup.export.HdrRoute
+import app.headsup.core.edit.AudioEnvelope
+import app.headsup.media.AudioAnalysis
 import app.headsup.export.JobSpec
 import app.headsup.export.OutputSpec
 import app.headsup.export.VideoCodec
@@ -256,6 +258,9 @@ data class UiState(
     val timelineFps: Float? = null,
     /** Music under the whole timeline. */
     val music: MusicTrack? = null,
+    /** The music's loudness over time and its accents, for the timeline (null while analysed). */
+    val musicEnvelope: AudioEnvelope? = null,
+    val musicAccents: List<AudioEnvelope.Accent> = emptyList(),
     /** Vectorscope and skin measurement of the last frame tapped in the preview. */
     val scope: ScopeResult? = null,
     /** Look copied with "Copy", waiting to be pasted. */
@@ -423,6 +428,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
         }
         stylePrefs.save(snapshot.style)
         updateHistoryFlags()
+        measureMusicIfNeeded()
         refreshPreview()
     }
 
@@ -705,6 +711,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                     messages = if (local == null) s.messages + "Could not add $name" else s.messages,
                 )
             }
+            measureMusicIfNeeded()
         }
     }
 
@@ -721,18 +728,31 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /** Projects saved before the song's length was stored get it measured once. */
+    private var analysedMusic: Uri? = null
+
+    /** Measures the song once (older projects) and analyses its loudness and accents for the timeline. */
     private fun measureMusicIfNeeded() {
         val music = _state.value.music ?: return
-        if (music.durationMs > 0) return
-        viewModelScope.launch {
+        if (music.durationMs <= 0) viewModelScope.launch {
             val d = durationOf(music.uri)
             if (d > 0) _state.update { s -> s.copy(music = s.music?.takeIf { it.uri == music.uri }?.copy(durationMs = d) ?: s.music) }
+        }
+        if (analysedMusic == music.uri) return
+        analysedMusic = music.uri
+        _state.update { it.copy(musicEnvelope = null, musicAccents = emptyList()) }
+        viewModelScope.launch {
+            val envelope = withContext(Dispatchers.IO) { AudioAnalysis.envelope(getApplication(), music.uri) }
+            val accents = envelope?.let { withContext(Dispatchers.Default) { it.accents() } }.orEmpty()
+            _state.update { s -> if (s.music?.uri == music.uri) s.copy(musicEnvelope = envelope, musicAccents = accents) else s }
         }
     }
 
     fun updateMusic(transform: (MusicTrack) -> MusicTrack) = _state.update { s -> s.copy(music = s.music?.let(transform)) }
 
-    fun removeMusic() = _state.update { it.copy(music = null) }
+    fun removeMusic() {
+        analysedMusic = null
+        _state.update { it.copy(music = null, musicEnvelope = null, musicAccents = emptyList()) }
+    }
 
     /** Stops copying files in; what was not finished is removed. */
     fun cancelLoading() {

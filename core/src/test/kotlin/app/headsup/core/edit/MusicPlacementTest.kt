@@ -44,6 +44,14 @@ class MusicPlacementTest {
     }
 
     @Test
+    fun `a trimmed song loops only its used part`() {
+        val m = MusicPlacement(songDurationMs = 60_000, songStartMs = 10_000, songEndMs = 14_000)
+        assertEquals(4_000L, m.playable)
+        assertEquals(11_000L, m.songPositionAt(5_000, 20_000))
+        assertEquals(5, m.segments(20_000).size)
+    }
+
+    @Test
     fun `clip fade`() {
         assertEquals(0.5f, Fade.gain(500, 10_000, 1_000, 0), 1e-4f)
         assertEquals(1f, Fade.gain(9_500, 10_000, 1_000, 0), 1e-4f)
