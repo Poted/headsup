@@ -101,7 +101,7 @@ object LutBaker {
     private const val LOG_GREY = 0.42f
 
     /** ARGB colours indexed `[r][g][b]`, the layout Media3's `SingleColorLut.createFromCube` expects. */
-    fun bake(lut: CubeLut?, grade: ColorGrade, size: Int = DEFAULT_SIZE): Array<Array<IntArray>> {
+    fun bake(lut: CubeLut?, grade: ColorGrade, size: Int = DEFAULT_SIZE, wideGamut: Boolean = false): Array<Array<IntArray>> {
         val rgb = FloatArray(3)
         return Array(size) { r ->
             Array(size) { g ->
@@ -109,16 +109,21 @@ object LutBaker {
                     rgb[0] = r / (size - 1f)
                     rgb[1] = g / (size - 1f)
                     rgb[2] = b / (size - 1f)
-                    apply(lut, grade, rgb)
+                    apply(lut, grade, rgb, wideGamut)
                     argb(rgb)
                 }
             }
         }
     }
 
-    /** Transforms one colour in place (0..1 per channel). */
-    fun apply(lut: CubeLut?, grade: ColorGrade, rgb: FloatArray) {
+    /**
+     * Transforms one colour in place (0..1 per channel). [wideGamut]: the footage is BT.2020 (e.g.
+     * Samsung Log); without a LUT it is first shown in BT.709 as players do, while a LUT gets the
+     * camera's own values (log LUTs do their own gamut conversion).
+     */
+    fun apply(lut: CubeLut?, grade: ColorGrade, rgb: FloatArray, wideGamut: Boolean = false) {
         if (lut == null) {
+            if (wideGamut) Gamut.bt2020ToBt709(rgb)
             displayCorrections(grade, rgb)
         } else {
             logCorrections(grade, rgb)
@@ -241,5 +246,26 @@ object LutBaker {
     private fun argb(c: FloatArray): Int {
         fun ch(v: Float) = (v * 255f + 0.5f).toInt().coerceIn(0, 255)
         return (0xFF shl 24) or (ch(c[0]) shl 16) or (ch(c[1]) shl 8) or ch(c[2])
+    }
+}
+
+/** Gamut conversion for display-referred colours (BT.1886 gamma). */
+object Gamut {
+    private const val GAMMA = 2.4f
+    private val M = floatArrayOf(
+        1.6605f, -0.5876f, -0.0728f,
+        -0.1246f, 1.1329f, -0.0083f,
+        -0.0182f, -0.1006f, 1.1187f,
+    )
+
+    /** BT.2020 colours to BT.709, in place; out-of-gamut colours are clipped. */
+    fun bt2020ToBt709(rgb: FloatArray) {
+        val r = Math.pow(rgb[0].coerceIn(0f, 1f).toDouble(), GAMMA.toDouble()).toFloat()
+        val g = Math.pow(rgb[1].coerceIn(0f, 1f).toDouble(), GAMMA.toDouble()).toFloat()
+        val b = Math.pow(rgb[2].coerceIn(0f, 1f).toDouble(), GAMMA.toDouble()).toFloat()
+        for (i in 0..2) {
+            val v = (M[i * 3] * r + M[i * 3 + 1] * g + M[i * 3 + 2] * b).coerceIn(0f, 1f)
+            rgb[i] = Math.pow(v.toDouble(), 1.0 / GAMMA).toFloat()
+        }
     }
 }

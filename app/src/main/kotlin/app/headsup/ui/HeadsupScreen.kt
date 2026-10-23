@@ -1914,7 +1914,7 @@ private fun ExportControls(
                 FilterChip(selected = settings.hdrWhite == level, onClick = { vm.updateExportSettings { it.copy(hdrWhite = level) } }, label = { Text(label) })
             }
         }
-        Hint("Where the picture's white sits in the HLG signal. 75 % is the broadcast standard and looks right on HDR screens; gallery thumbnails and SDR players show it darker. Brighter levels look closer to the 8-bit export there, with less room for highlights.")
+        Hint("Where the picture's white sits in the HLG signal. At 93 % phone galleries and editors show it like the 8-bit export; 75 % is the broadcast standard, which they show much darker. While HDR plays, the phone may brighten the screen over the first seconds; that is the display, not the file.")
     }
     Hint(
         "Frame rate is the timeline's: clips with more frames are thinned out, none are invented. " +

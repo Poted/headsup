@@ -34,7 +34,14 @@ fed 8-bit frames. The baked colour table (`SingleColorLut`, ARGB_8888) is 8-bit 
   10-bit, BT.2020, transfer untagged), where only the HLG curve is undone; real HLG (Samsung
   HDR video), which is brought to SDR white with a highlight roll-off above it, graded, and
   written back at 75 % HLG, so its brightest highlights are compressed like in the preview.
-- Not covered: photos, PQ (HDR10/HDR10+) clips. The result looks like the SDR export on SDR
+- Not covered: photos, PQ (HDR10/HDR10+) clips.
+- White level: BT.2408 puts SDR white at 75 % HLG, but phone galleries and DJI Mimo render HLG
+  so that this looks about a third as bright as the SDR export (measured from screenshots). The
+  default is therefore 93 %, which they show like SDR; 85 % and 75 % remain selectable.
+
+BT.2020-tagged SDR/log footage (Samsung Log) is converted to BT.709 in the colour table when no
+LUT is applied (`Gamut`, `LutBaker.bake(wideGamut = true)`), as players do; with a LUT the camera
+values go to the LUT unchanged. The result looks like the SDR export on SDR
   screens and is shown as HDR on HDR screens, like DJI Mimo's 10-bit files.
 
 If this route fails on devices, the own pipeline below remains the plan.

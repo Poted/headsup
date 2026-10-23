@@ -129,6 +129,9 @@ data class ClipState(
     val timelineDurationMs: Long get() = (durationMs / speed).toLong()
     val isTrimmed: Boolean get() = trimStartMs > 0 || trimEndMs < meta.durationMs
 
+    /** BT.2020 footage that isn't HDR (e.g. Samsung Log): shown in BT.709 unless a LUT takes it. */
+    val wideGamut: Boolean get() = meta.format?.let { it.primaries == "BT.2020" && !it.isHdr } == true
+
     /** UTC time of the telemetry shown at [positionMs] into the (trimmed) clip. */
     fun telemetryUtc(positionMs: Long): Long? = sync?.let {
         // A photo is one moment: its dashboard shows the data from when it was taken.
@@ -1308,8 +1311,9 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                     val s = _state.value
                     val clip = s.selected
                     val graded = clip?.takeIf { it.colorGrade }
-                    val cube = graded?.let { bake(s.lutFor(it), s.appliedGrade(it)) }
-                    val maskCubes = graded?.let { c -> s.maskedGrades(c).map { bakeAlways(s.lutFor(c), it) } }.orEmpty()
+                    val wide = clip?.wideGamut == true
+                    val cube = if (graded != null) bake(s.lutFor(graded), s.appliedGrade(graded), wide) else if (wide) bake(null, ColorGrade(), true) else null
+                    val maskCubes = graded?.let { c -> s.maskedGrades(c).map { bakeAlways(s.lutFor(c), it, wide) } }.orEmpty()
                     val fromCube = graded?.let(s::transitionSource)?.let { prev -> bakeLook(s, prev) }
                     _state.update { it.copy(previewCube = cube, previewMaskCubes = maskCubes, previewFromCube = fromCube) }
                     analyseScope()
@@ -1321,19 +1325,19 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /** Null when nothing would change the colours. */
-    private suspend fun bake(lutName: String?, grade: ColorGrade): Array<Array<IntArray>>? {
+    private suspend fun bake(lutName: String?, grade: ColorGrade, wide: Boolean = false): Array<Array<IntArray>>? {
         val lut = loadLut(lutName)
-        if (lut == null && grade.isNeutralColour) return null
-        return withContext(Dispatchers.Default) { LutBaker.bake(lut, grade) }
+        if (lut == null && grade.isNeutralColour && !wide) return null
+        return withContext(Dispatchers.Default) { LutBaker.bake(lut, grade, wideGamut = wide) }
     }
 
     /** Table for [clip]'s whole look outside masks; untouched colours when its colour is off. */
     private suspend fun bakeLook(s: UiState, clip: ClipState): Array<Array<IntArray>> =
-        if (clip.colorGrade) bakeAlways(s.lutFor(clip), s.appliedGrade(clip)) else bakeAlways(null, ColorGrade())
+        if (clip.colorGrade) bakeAlways(s.lutFor(clip), s.appliedGrade(clip), clip.wideGamut) else bakeAlways(null, ColorGrade(), clip.wideGamut)
 
-    private suspend fun bakeAlways(lutName: String?, grade: ColorGrade): Array<Array<IntArray>> {
+    private suspend fun bakeAlways(lutName: String?, grade: ColorGrade, wide: Boolean = false): Array<Array<IntArray>> {
         val lut = loadLut(lutName)
-        return withContext(Dispatchers.Default) { LutBaker.bake(lut, grade) }
+        return withContext(Dispatchers.Default) { LutBaker.bake(lut, grade, wideGamut = wide) }
     }
 
     private suspend fun loadLut(lutName: String?): CubeLut? = lutName?.let { name ->
@@ -1378,7 +1382,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
     private fun enqueue(kind: ExportKind, indices: List<Int>) {
         val s = state.value.copy(compareGrade = null)
         viewModelScope.launch {
-            val cubes = HashMap<ClipLook, Array<Array<IntArray>>?>()
+            val cubes = HashMap<Pair<ClipLook?, Boolean>, Array<Array<IntArray>>?>()
             val requests = indices.mapNotNull { i ->
                 val clip = s.clips.getOrNull(i) ?: return@mapNotNull null
                 // The dashboard is one effect among others: without watch data the video still exports.
@@ -1389,9 +1393,14 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                 val graded = kind != ExportKind.PNG_SEQUENCE && clip.colorGrade
                 val applied = s.appliedGrade(clip)
                 val lutName = s.lutFor(clip)
-                val cube = if (graded) cubes.getOrPut(ClipLook(applied, EffectSettings(), lutName)) { bake(lutName, applied) } else null
+                val wide = clip.wideGamut
+                val cube = if (graded) {
+                    cubes.getOrPut(ClipLook(applied, EffectSettings(), lutName) to wide) { bake(lutName, applied, wide) }
+                } else if (wide && kind != ExportKind.PNG_SEQUENCE) {
+                    cubes.getOrPut(null to true) { bake(null, ColorGrade(), true) }
+                } else null
                 val masks = if (graded) clip.masks else emptyList()
-                val maskCubes = if (graded) s.maskedGrades(clip).map { bakeAlways(lutName, it) } else emptyList()
+                val maskCubes = if (graded) s.maskedGrades(clip).map { bakeAlways(lutName, it, wide) } else emptyList()
                 val fromCube = if (graded) s.transitionSource(clip)?.let { bakeLook(s, it) } else null
                 ExportRequest(
                     kind = kind,
@@ -1408,7 +1417,8 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                     telemetry = telemetry,
                     style = s.style,
                     effects = clip.effects,
-                    grade = if (graded) GradeSetup(cube, applied.vignette, masks, maskCubes, fromCube, clip.transitionMs) else null,
+                    grade = if (graded) GradeSetup(cube, applied.vignette, masks, maskCubes, fromCube, clip.transitionMs)
+                        else cube?.let { GradeSetup(it, 0f) },
                     reframe = clip.reframe,
                     speed = clip.speed,
                     isPhoto = clip.meta.isPhoto,

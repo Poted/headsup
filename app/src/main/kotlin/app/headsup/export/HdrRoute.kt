@@ -53,8 +53,13 @@ object HdrRoute {
     /** Scene-linear value Media3 encodes as 75 % HLG: where SDR white sits in HLG footage (BT.2408). */
     val SDR_WHITE: Float = hlgEotf(0.75f)
 
-    /** HLG signal levels offered for the export's white: the standard, and brighter as phones' SDR views show. */
-    val WHITE_LEVELS: List<Pair<Float, String>> = listOf(0.75f to "Standard (75 %)", 0.85f to "Brighter (85 %)", 0.95f to "Brightest (95 %)")
+    /**
+     * HLG signal levels offered for the export's white. Phone galleries and editors (measured with
+     * DJI Mimo and Samsung's gallery) show HLG about as bright as SDR when white sits near 93 %;
+     * the broadcast level (75 %) looks about a third as bright there.
+     */
+    const val DEFAULT_WHITE = 0.93f
+    val WHITE_LEVELS: List<Pair<Float, String>> = listOf(DEFAULT_WHITE to "Like SDR (93 %)", 0.85f to "85 %", 0.75f to "HDR standard (75 %)")
 
     /** Scene-linear light for an HLG signal level [x] (Media3's HLG EOTF). */
     fun hlgEotf(x: Float): Float {
