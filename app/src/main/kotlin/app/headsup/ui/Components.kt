@@ -24,6 +24,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -243,4 +244,76 @@ fun SmallAction(text: String, onClick: () -> Unit, modifier: Modifier = Modifier
         style = MaterialTheme.typography.labelLarge,
         color = if (enabled) HeadsupColors.Highlight else HeadsupColors.TextMuted,
     )
+}
+
+/**
+ * Loading indicator in the spirit of a camera: lens aperture blades turning and opening, a
+ * blinking REC dot and a running timecode, with [message] beside it.
+ */
+@Composable
+fun CineLoader(message: String, modifier: Modifier = Modifier) {
+    val transition = androidx.compose.animation.core.rememberInfiniteTransition(label = "loader")
+    val turn by transition.animateFloat(
+        0f, 360f,
+        androidx.compose.animation.core.infiniteRepeatable(androidx.compose.animation.core.tween(2400, easing = androidx.compose.animation.core.LinearEasing)),
+        label = "turn",
+    )
+    val open by transition.animateFloat(
+        0.25f, 0.75f,
+        androidx.compose.animation.core.infiniteRepeatable(
+            androidx.compose.animation.core.tween(1200, easing = androidx.compose.animation.core.FastOutSlowInEasing),
+            androidx.compose.animation.core.RepeatMode.Reverse,
+        ),
+        label = "open",
+    )
+    val blink by transition.animateFloat(
+        0f, 1f,
+        androidx.compose.animation.core.infiniteRepeatable(androidx.compose.animation.core.tween(1000, easing = androidx.compose.animation.core.LinearEasing)),
+        label = "blink",
+    )
+    // Running timecode, frames at 25 fps, from when the loader appeared.
+    var startMs by androidx.compose.runtime.remember { androidx.compose.runtime.mutableLongStateOf(0L) }
+    var nowMs by androidx.compose.runtime.remember { androidx.compose.runtime.mutableLongStateOf(0L) }
+    androidx.compose.runtime.LaunchedEffect(Unit) {
+        while (true) androidx.compose.runtime.withFrameMillis { t -> if (startMs == 0L) startMs = t; nowMs = t - startMs }
+    }
+    val shape = androidx.compose.foundation.shape.RoundedCornerShape(18.dp)
+    Row(
+        modifier
+            .fillMaxWidth()
+            .clip(shape)
+            .background(HeadsupColors.CardGradient)
+            .border(1.dp, HeadsupColors.Outline, shape)
+            .padding(horizontal = 14.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Canvas(Modifier.size(40.dp)) {
+            val r = size.minDimension / 2f
+            val c = center
+            drawCircle(HeadsupColors.Outline, radius = r, center = c)
+            drawCircle(Color(0xFF0B0B0B), radius = r * 0.92f, center = c)
+            // Six blades: lines tangent to the opening, turning together.
+            val inner = r * (0.2f + 0.55f * open)
+            for (i in 0 until 6) {
+                val a = Math.toRadians((turn + i * 60f).toDouble())
+                val p = Offset(c.x + (inner * kotlin.math.cos(a)).toFloat(), c.y + (inner * kotlin.math.sin(a)).toFloat())
+                val dir = Offset(-kotlin.math.sin(a).toFloat(), kotlin.math.cos(a).toFloat())
+                drawLine(HeadsupColors.Accent.copy(alpha = 0.85f), p - dir * r, p + dir * r * 0.3f, strokeWidth = 1.6.dp.toPx(), cap = StrokeCap.Round)
+            }
+            drawCircle(HeadsupColors.Outline, radius = r * 0.92f, center = c, style = androidx.compose.ui.graphics.drawscope.Stroke(2.dp.toPx()))
+        }
+        androidx.compose.foundation.layout.Spacer(Modifier.width(12.dp))
+        Column(Modifier.weight(1f)) {
+            Text(message, style = MaterialTheme.typography.bodyMedium)
+            val total = nowMs / 40
+            Text(
+                String.format(java.util.Locale.US, "%02d:%02d:%02d:%02d", total / 90000, total / 1500 % 60, total / 25 % 60, total % 25),
+                style = MaterialTheme.typography.labelSmall.copy(fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace),
+                color = HeadsupColors.TextMuted,
+            )
+        }
+        Box(Modifier.size(10.dp).clip(CircleShape).background(Color(0xFFFF3B30).copy(alpha = if (blink < 0.6f) 1f else 0.15f)))
+        androidx.compose.foundation.layout.Spacer(Modifier.width(6.dp))
+        Text("REC", style = MaterialTheme.typography.labelSmall, color = HeadsupColors.TextMuted)
+    }
 }

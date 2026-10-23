@@ -44,6 +44,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -199,7 +200,7 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
     Box(Modifier.fillMaxSize().background(HeadsupColors.BackgroundGradient)) {
         // No title bar: the picture starts at the top, adding files lives in the Files tool.
         Column(Modifier.fillMaxSize().systemBarsPadding().padding(top = 8.dp)) {
-            if (state.busy) LinearProgressIndicator(Modifier.fillMaxWidth().padding(horizontal = 16.dp))
+            if (state.busy) CineLoader(state.loadingMessage ?: "Working…", Modifier.padding(horizontal = 16.dp, vertical = 4.dp))
 
             // The picture stays on screen while any tool below is being used.
             val selected = state.selected
@@ -222,7 +223,7 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
                         guideMask = selected.masks.getOrNull(state.selectedMask).takeIf { editingMasks },
                         onMoveMask = if (editingMasks) { x, y -> vm.updateMask { it.copy(centerX = x, centerY = y) } } else null,
                         vignette = if (selected.colorGrade) state.appliedGrade(selected).vignette else 0f,
-                        effects = state.effects,
+                        effects = state.compareEffects ?: state.effects,
                         onSample = if (measuring) vm::sampleFrame else null,
                         marker = if (measuring) state.scope?.let { Offset(it.markerX, it.markerY) } else null,
                         maxHeight = previewMaxHeight,
@@ -1216,7 +1217,12 @@ private fun CinePanel(state: UiState, vm: HeadsupViewModel, frameSource: (() -> 
     val style = session.style
     if (style != null) {
         ValueHeader("Strength", String.format(Locale.US, "%.0f %%", session.strength * 100))
-        RulerSlider(session.strength, 0f..1f, 0.02f, { v -> vm.applyCine(style, v) }, onReset = { vm.applyCine(style, 1f) })
+        RulerSlider(
+            session.strength, 0f..1f, 0.02f, { v -> vm.applyCine(style, v) },
+            onReset = { vm.applyCine(style, 1f) },
+            onHold = vm::compareCine,
+        )
+        Hint("Hold the ruler to see the picture without the cine look.")
     }
     Row {
         SmallAction("Undo", { vm.closeCine(undo = true) })
@@ -1283,7 +1289,11 @@ private fun ShotMatchPanel(state: UiState, clip: ClipState, vm: HeadsupViewModel
             SmallAction("Undo", vm::undoMatch)
         }
         ValueHeader("Match strength", String.format(Locale.US, "%.0f %%", session.strength * 100))
-        RulerSlider(session.strength, 0f..1f, 0.02f, vm::setMatchStrength, onReset = { vm.setMatchStrength(MATCH_STRENGTH) })
+        RulerSlider(
+            session.strength, 0f..1f, 0.02f, vm::setMatchStrength,
+            onReset = { vm.setMatchStrength(MATCH_STRENGTH) },
+            onHold = if (session.groupId == null) vm::compareMatch else null,
+        )
     }
 }
 
@@ -1685,6 +1695,10 @@ private fun ExportControls(
     val settings = state.exportSettings
     val first = state.clips.firstOrNull()
     Label("Video")
+    SettingRow("Quick presets") {
+        AssistChip(onClick = { vm.applyPreset(vertical = true) }, label = { Text("Reels · TikTok · Shorts") })
+        AssistChip(onClick = { vm.applyPreset(vertical = false) }, label = { Text("YouTube") })
+    }
     SettingRow("Export") {
         FilterChip(selected = settings.wholeTimeline, onClick = { vm.updateExportSettings { it.copy(wholeTimeline = true) } }, label = { Text("Whole timeline") })
         FilterChip(selected = !settings.wholeTimeline, onClick = { vm.updateExportSettings { it.copy(wholeTimeline = false) } }, label = { Text("Each clip") })
@@ -1755,6 +1769,7 @@ private fun SettingRow(label: String, content: @Composable androidx.compose.foun
 
 @Composable
 private fun JobRow(job: ExportJob) {
+    val context = LocalContext.current
     val kind = when (job.spec.kind) {
         ExportKind.VIDEO -> "Video"
         ExportKind.PNG_SEQUENCE -> "PNG"
@@ -1762,7 +1777,10 @@ private fun JobRow(job: ExportJob) {
     }
     Card(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            Text("$kind · ${job.spec.title}", style = MaterialTheme.typography.titleSmall)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("$kind · ${job.spec.title}", Modifier.weight(1f), style = MaterialTheme.typography.titleSmall)
+                job.resultUri?.let { uri -> SmallAction("Share", { shareVideo(context, uri) }) }
+            }
             job.spec.output?.takeIf { job.spec.kind == ExportKind.VIDEO }?.let { Hint("$it" + if (job.spec.parts.size > 1) " · ${job.spec.parts.size} clips joined" else "") }
             when (job.status) {
                 JobStatus.QUEUED -> Hint("Waiting")
@@ -1777,6 +1795,15 @@ private fun JobRow(job: ExportJob) {
             job.message?.let { SelectionContainer { Text(it, style = MaterialTheme.typography.bodySmall) } }
         }
     }
+}
+
+/** Opens Android's share sheet (YouTube, Instagram, TikTok, messengers…) for an exported video. */
+private fun shareVideo(context: Context, uri: Uri) {
+    val send = Intent(Intent.ACTION_SEND)
+        .setType("video/mp4")
+        .putExtra(Intent.EXTRA_STREAM, uri)
+        .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+    context.startActivity(Intent.createChooser(send, "Share video").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
 }
 
 /** Shows each finished 10-bit test once, with a button to copy the report. */

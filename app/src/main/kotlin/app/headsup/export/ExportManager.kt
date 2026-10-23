@@ -63,6 +63,8 @@ data class ExportJob(
     val progress: Int = 0,
     /** Result or error, shown under the job. */
     val message: String? = null,
+    /** The saved video, for sharing. */
+    val resultUri: Uri? = null,
 )
 
 /**
@@ -117,9 +119,9 @@ class ExportManager(private val context: Context) {
         }
     }
 
-    private fun finish(id: Int, status: JobStatus, message: String?) {
+    private fun finish(id: Int, status: JobStatus, message: String?, resultUri: Uri? = null) {
         // A job cancelled by the user stays cancelled even if a late callback arrives.
-        setJob(id) { if (it.status == JobStatus.RUNNING) it.copy(status = status, progress = 100, message = message) else it }
+        setJob(id) { if (it.status == JobStatus.RUNNING) it.copy(status = status, progress = 100, message = message, resultUri = resultUri) else it }
         transformer = null
         worker = null
         startNextIfIdle()
@@ -270,19 +272,20 @@ class ExportManager(private val context: Context) {
         val first = spec.parts.first()
         try {
             val result = withContext(Dispatchers.IO) { VideoFormatInfo.read(context, Uri.fromFile(output)) }
+            var saved: Uri? = null
             val message = if (spec.kind == ExportKind.TEN_BIT_TEST) {
                 output.delete()
                 tenBitReport(first.sourceFormat, result)
             } else {
                 val name = requireNotNull(spec.output).fileName
-                withContext(Dispatchers.IO) { MediaStoreOutput.saveVideo(context, output, name) }
+                saved = withContext(Dispatchers.IO) { MediaStoreOutput.saveVideo(context, output, name) }
                 output.delete()
                 val warning = if (spec.parts.any { it.sourceFormat?.tenBit == true } && result?.tenBit == false) {
                     "\nWarning: the source is 10-bit but this device produced 8-bit output."
                 } else ""
                 "Saved ${MediaStoreOutput.VIDEO_FOLDER}/$name ($result)$warning"
             }
-            finish(job.id, JobStatus.DONE, message)
+            finish(job.id, JobStatus.DONE, message, saved)
         } catch (e: Throwable) {
             output.delete()
             finish(job.id, JobStatus.FAILED, e.message ?: e.javaClass.simpleName)

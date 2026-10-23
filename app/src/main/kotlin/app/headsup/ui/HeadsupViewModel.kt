@@ -36,6 +36,7 @@ import app.headsup.export.Telemetry
 import app.headsup.export.ExportSettings
 import app.headsup.export.JobSpec
 import app.headsup.export.OutputSpec
+import app.headsup.export.VideoCodec
 import app.headsup.media.ClipMetadata
 import app.headsup.media.ClipMetadataReader
 import app.headsup.render.DashboardStyle
@@ -227,6 +228,10 @@ data class UiState(
     val matchedSkin: Boolean = false,
     val matching: Boolean = false,
     val canUndo: Boolean = false,
+    /** Effects shown instead of the clip's while a ruler is held to compare (cine strength). */
+    val compareEffects: EffectSettings? = null,
+    /** What is being loaded, shown with the progress bar. */
+    val loadingMessage: String? = null,
     val canRedo: Boolean = false,
     val exportSettings: ExportSettings = ExportSettings(),
     /** Frame rate of the timeline (exports and slow-motion maths); null = the first clip's. */
@@ -436,7 +441,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
     /** Opens a saved project; its files are read again, missing ones are reported. */
     fun openProject(name: String) {
         val project = projectStore.load(name) ?: return
-        _state.update { it.copy(busy = true) }
+        _state.update { it.copy(busy = true, loadingMessage = "Opening ${project.name}…") }
         viewModelScope.launch {
             val context = getApplication<Application>()
             val missing = mutableListOf<String>()
@@ -498,6 +503,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                         compareGrade = null,
                         scope = null,
                         busy = false,
+                        loadingMessage = null,
                         messages = s.messages + missing.distinct().map { "Missing file: $it" },
                     ),
                 )
@@ -568,7 +574,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    fun addActivities(uris: List<Uri>) = load(uris) { uri ->
+    fun addActivities(uris: List<Uri>) = load(uris, "Reading ${uris.size} FIT file${if (uris.size == 1) "" else "s"}…") { uri ->
         keepAccess(uri)
         val context = getApplication<Application>()
         val name = ClipMetadataReader.displayName(context, uri) ?: uri.lastPathSegment.orEmpty()
@@ -577,7 +583,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
         Loaded.Activity(LoadedActivity(name, track, uri))
     }
 
-    fun addClips(uris: List<Uri>) = load(uris) { uri ->
+    fun addClips(uris: List<Uri>) = load(uris, "Adding ${uris.size} video${if (uris.size == 1) "" else "s"}…") { uri ->
         keepAccess(uri)
         Loaded.Clip(ClipMetadataReader.read(getApplication<Application>(), uri))
     }
@@ -909,7 +915,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
     /** Looks for the best moments in the watch data, only where there is video. */
     fun findHighlights(metric: Metric? = null) {
         val s = _state.value
-        _state.update { it.copy(busy = true) }
+        _state.update { it.copy(busy = true, loadingMessage = "Finding highlights…") }
         viewModelScope.launch {
             val found = withContext(Dispatchers.Default) {
                 s.activities.indices.flatMap { trackIndex ->
@@ -928,7 +934,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                     }
                 }.sortedByDescending { it.highlight.score }
             }
-            _state.update { it.copy(busy = false, highlights = found) }
+            _state.update { it.copy(busy = false, loadingMessage = null, highlights = found) }
         }
     }
 
@@ -1004,6 +1010,38 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                     halation = maxOf(session.baseEffects.halation, suggestion.halation * k),
                 ),
             )
+        }
+    }
+
+    /** While the strength ruler is held: the picture as it was before the cine look. */
+    fun compareCine(held: Boolean) {
+        val session = _state.value.cine?.takeIf { held }
+        _state.update { it.copy(compareGrade = session?.baseGrade, compareEffects = session?.baseEffects) }
+        refreshPreview()
+    }
+
+    /** While the match strength ruler is held: the clip as it was before the match (clip matches only). */
+    fun compareMatch(held: Boolean) {
+        val session = _state.value.matchSession?.takeIf { held && it.groupId == null }
+        _state.update { it.copy(compareGrade = session?.base) }
+        refreshPreview()
+    }
+
+    /**
+     * Quick settings for where the video goes: vertical for Reels/TikTok/Shorts (9:16 for every
+     * clip, 1080×1920, 30 fps, H.264), or YouTube (source size and shape, best quality, HEVC).
+     */
+    fun applyPreset(vertical: Boolean) {
+        if (vertical) {
+            setAspectForAll(9f / 16f)
+            _state.update {
+                it.copy(
+                    timelineFps = 30f,
+                    exportSettings = ExportSettings(wholeTimeline = true, height = 1920, bitrateFactor = 1.5f, codec = VideoCodec.H264),
+                )
+            }
+        } else {
+            _state.update { it.copy(exportSettings = ExportSettings(wholeTimeline = true, height = null, bitrateFactor = 2f, codec = VideoCodec.HEVC)) }
         }
     }
 
@@ -1259,9 +1297,9 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
         data class Clip(val meta: ClipMetadata) : Loaded
     }
 
-    private fun load(uris: List<Uri>, read: (Uri) -> Loaded) {
+    private fun load(uris: List<Uri>, message: String, read: (Uri) -> Loaded) {
         if (uris.isEmpty()) return
-        _state.update { it.copy(busy = true) }
+        _state.update { it.copy(busy = true, loadingMessage = message) }
         viewModelScope.launch {
             val results = withContext(Dispatchers.IO) {
                 uris.map { uri -> runCatching { read(uri) }.onFailure { it.printStackTrace() } }
@@ -1282,6 +1320,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                         clips = clips,
                         selectedClip = s.selectedClip ?: clips.indices.firstOrNull(),
                         busy = false,
+                        loadingMessage = null,
                         messages = s.messages + errors,
                     ),
                 )
