@@ -46,7 +46,7 @@ object PngSequenceExporter {
                     var crc = 0L
                     for (i in 0 until frames) {
                         val positionMs = (i * 1000.0 / fps).roundToLong()
-                        val data = request.dataAt(positionMs, sampler)
+                        val data = checkNotNull(request.dataAt(positionMs, sampler)) { "No watch data for ${request.name}" }
                         val key = renderer.contentKey(request.style, data, width.toFloat(), height.toFloat(), request.effects)
                         if (key != lastKey) {
                             bitmap.eraseColor(Color.TRANSPARENT)
