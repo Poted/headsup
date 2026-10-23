@@ -13,18 +13,22 @@ import androidx.media3.effect.BaseGlShaderProgram
 import androidx.media3.effect.GlEffect
 import androidx.media3.effect.GlShaderProgram
 import app.headsup.color.LiveColorLut
-import app.headsup.core.color.GradientMask
+import app.headsup.core.color.ColourMask
+import app.headsup.core.color.ColourTransition
 
 /**
- * Colour for a clip with a graduated mask: the frame goes through [cube] outside the mask and
- * [maskCube] inside it, blended by [GradientMask.weight]. Replaces Media3's single colour table
- * for such clips; the maths matches the preview shader.
+ * Colour for a clip with masks or a colour transition: the frame goes through [base], then each
+ * mask's table is blended in by [ColourMask.weight], and during the first [transitionMs] the
+ * previous clip's table [from] fades out ([ColourTransition.fromWeight]). Replaces Media3's single
+ * colour table for such clips; the maths matches the preview shader.
  */
 @OptIn(UnstableApi::class)
-class MaskGradeEffect(
-    private val cube: Array<Array<IntArray>>,
-    private val maskCube: Array<Array<IntArray>>,
-    private val mask: GradientMask,
+class GradeEffect(
+    private val base: Array<Array<IntArray>>,
+    private val masks: List<ColourMask>,
+    private val maskTables: List<Array<Array<IntArray>>>,
+    private val from: Array<Array<IntArray>>?,
+    private val transitionMs: Long,
 ) : GlEffect {
     override fun toGlShaderProgram(context: Context, useHdr: Boolean): GlShaderProgram = Program(useHdr)
 
@@ -34,15 +38,18 @@ class MaskGradeEffect(
         } catch (e: GlUtil.GlException) {
             throw VideoFrameProcessingException(e)
         }
-        private val tables = IntArray(2)
+        // Base, one per mask slot, previous clip; unused slots repeat the base table.
+        private val textures = IntArray(2 + ColourMask.MAX_PER_CLIP)
         private var width = 1
         private var height = 1
+        private var firstUs = -1L
 
         init {
             program.setBufferAttribute("aFramePosition", GlUtil.getNormalizedCoordinateBounds(), GlUtil.HOMOGENEOUS_COORDINATE_VECTOR_SIZE)
-            GLES20.glGenTextures(2, tables, 0)
-            upload(tables[0], cube)
-            upload(tables[1], maskCube)
+            GLES20.glGenTextures(textures.size, textures, 0)
+            upload(textures[0], base)
+            for (i in 0 until ColourMask.MAX_PER_CLIP) upload(textures[1 + i], maskTables.getOrNull(i) ?: base)
+            upload(textures.last(), from ?: base)
         }
 
         private fun upload(texture: Int, table: Array<Array<IntArray>>) {
@@ -64,17 +71,24 @@ class MaskGradeEffect(
 
         override fun drawFrame(inputTexId: Int, presentationTimeUs: Long) {
             try {
-                val angle = Math.toRadians(mask.angleDegrees.toDouble())
+                // Time counts from the first frame, however Media3 timestamps a clipped item.
+                if (firstUs < 0) firstUs = presentationTimeUs
+                val positionMs = (presentationTimeUs - firstUs) / 1000
                 program.use()
                 program.setSamplerTexIdUniform("uTexSampler", inputTexId, 0)
-                program.setSamplerTexIdUniform("uLut", tables[0], 1)
-                program.setSamplerTexIdUniform("uLut2", tables[1], 2)
-                program.setFloatUniform("uN", cube.size.toFloat())
+                program.setSamplerTexIdUniform("uLut", textures[0], 1)
+                for (i in 0 until ColourMask.MAX_PER_CLIP) program.setSamplerTexIdUniform("uLutM$i", textures[1 + i], 2 + i)
+                program.setSamplerTexIdUniform("uLutFrom", textures.last(), 2 + ColourMask.MAX_PER_CLIP)
+                program.setFloatUniform("uN", base.size.toFloat())
                 program.setFloatsUniform("uSize", floatArrayOf(width.toFloat(), height.toFloat()))
-                program.setFloatsUniform(
-                    "uMask",
-                    floatArrayOf(mask.position, mask.softness, kotlin.math.sin(angle).toFloat(), kotlin.math.cos(angle).toFloat()),
-                )
+                program.setFloatUniform("uMaskCount", masks.size.coerceAtMost(ColourMask.MAX_PER_CLIP).toFloat())
+                for (i in 0 until ColourMask.MAX_PER_CLIP) {
+                    val (a, b) = masks.getOrNull(i)?.shaderParams() ?: (FloatArray(4) to FloatArray(4))
+                    program.setFloatsUniform("uM${i}a", a)
+                    program.setFloatsUniform("uM${i}b", b)
+                }
+                val fromWeight = if (from != null) ColourTransition.fromWeight(positionMs, transitionMs) else 0f
+                program.setFloatUniform("uFromWeight", fromWeight)
                 program.bindAttributesAndUniforms()
                 GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4)
             } catch (e: GlUtil.GlException) {
@@ -86,7 +100,7 @@ class MaskGradeEffect(
             super.release()
             try {
                 program.delete()
-                GLES20.glDeleteTextures(2, tables, 0)
+                GLES20.glDeleteTextures(textures.size, textures, 0)
             } catch (e: GlUtil.GlException) {
                 throw VideoFrameProcessingException(e)
             }
@@ -104,15 +118,17 @@ class MaskGradeEffect(
         """
 
         // Tables are N wide and N² high (x = b, y = g + N·r), sampled without filtering and
-        // interpolated here. Texture y grows upwards, the mask measures from the top.
-        const val FRAGMENT = """
+        // interpolated here. Texture y grows upwards, masks measure from the top.
+        val FRAGMENT = """
             precision highp float;
             uniform sampler2D uTexSampler;
             uniform sampler2D uLut;
-            uniform sampler2D uLut2;
+            ${List(ColourMask.MAX_PER_CLIP) { "uniform sampler2D uLutM$it;\nuniform vec4 uM${it}a;\nuniform vec4 uM${it}b;" }.joinToString("\n")}
+            uniform sampler2D uLutFrom;
             uniform float uN;
             uniform vec2 uSize;
-            uniform vec4 uMask;
+            uniform float uMaskCount;
+            uniform float uFromWeight;
             varying vec2 vTexSamplingCoord;
 
             vec3 cell(sampler2D t, float r, float g, float b) {
@@ -131,16 +147,37 @@ class MaskGradeEffect(
                 return mix(mix(c00, c10, f.g), mix(c01, c11, f.g), f.b);
             }
 
+            float smooth01(float e0, float e1, float x) {
+                float t = clamp((x - e0) / max(e1 - e0, 0.0001), 0.0, 1.0);
+                return t * t * (3.0 - 2.0 * t);
+            }
+
+            // ColourMask.weight: a = (kind, centerX, centerY, angle), b = (sizeX, sizeY, softness, inverted).
+            float maskWeight(vec4 a, vec4 b, vec2 px) {
+                vec2 d = vec2(px.x - a.y * uSize.x, px.y - a.z * uSize.y) / uSize.y;
+                float s = sin(a.w);
+                float c = cos(a.w);
+                float w;
+                if (a.x < 0.5) {
+                    w = 1.0 - smooth01(-b.z * 0.5, b.z * 0.5, -d.x * s + d.y * c);
+                } else {
+                    float u = (d.x * c + d.y * s) / max(b.x * 0.5, 0.001);
+                    float v = (-d.x * s + d.y * c) / max(b.y * 0.5, 0.001);
+                    w = 1.0 - smooth01(1.0 - b.z * 0.5, 1.0 + b.z * 0.5, sqrt(u * u + v * v));
+                }
+                return b.w > 0.5 ? 1.0 - w : w;
+            }
+
             void main() {
                 vec4 src = texture2D(uTexSampler, vTexSamplingCoord);
                 vec2 px = vec2(vTexSamplingCoord.x, 1.0 - vTexSamplingCoord.y) * uSize;
-                vec2 p = vec2((px.x - uSize.x * 0.5) / uSize.y, px.y / uSize.y - uMask.x);
-                float d = -p.x * uMask.z + p.y * uMask.w;
-                float halfWidth = max(uMask.y * 0.5, 0.001);
-                float t = clamp((d + halfWidth) / (2.0 * halfWidth), 0.0, 1.0);
-                float w = 1.0 - t * t * (3.0 - 2.0 * t);
                 vec3 c = grade(uLut, src.rgb);
-                if (w > 0.0) c = mix(c, grade(uLut2, src.rgb), w);
+                ${List(ColourMask.MAX_PER_CLIP) { i -> """
+                if (uMaskCount > $i.5) {
+                    float w$i = maskWeight(uM${i}a, uM${i}b, px);
+                    if (w$i > 0.0) c = mix(c, grade(uLutM$i, src.rgb), w$i);
+                }""" }.joinToString("")}
+                if (uFromWeight > 0.0) c = mix(c, grade(uLutFrom, src.rgb), uFromWeight);
                 gl_FragColor = vec4(c, src.a);
             }
         """

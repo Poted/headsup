@@ -76,7 +76,12 @@ import app.headsup.render.Placement
 import app.headsup.render.Widget
 import java.time.Instant
 import java.time.ZoneId
-import app.headsup.core.color.GradientMask
+import app.headsup.core.color.ColourMask
+import app.headsup.core.color.ColourTransition
+import app.headsup.core.color.MaskKind
+import app.headsup.color.GradeTables
+import androidx.compose.ui.graphics.drawscope.rotate
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.runtime.State
 import androidx.compose.runtime.rememberCoroutineScope
@@ -97,11 +102,15 @@ fun ClipPreview(
     style: DashboardStyle,
     /** Baked colour table to preview, or null for untouched colours. */
     gradeCube: Array<Array<IntArray>>?,
-    /** Graduated mask and the colour table used inside it (Android 13+ preview only). */
-    mask: GradientMask? = null,
-    maskCube: Array<Array<IntArray>>? = null,
-    /** Draws the mask's line and blend edges while it is being edited. */
-    maskGuide: Boolean = false,
+    /** Masks and their colour tables (Android 13+ preview only). */
+    masks: List<ColourMask> = emptyList(),
+    maskCubes: List<Array<Array<IntArray>>> = emptyList(),
+    /** Previous clip's colour table and how long the clip blends in from it. */
+    fromCube: Array<Array<IntArray>>? = null,
+    transitionMs: Long = 0L,
+    /** Mask being edited: its outline is drawn, and dragging on the picture moves it. */
+    guideMask: ColourMask? = null,
+    onMoveMask: ((Float, Float) -> Unit)? = null,
     vignette: Float,
     effects: EffectSettings,
     maxHeight: Dp,
@@ -166,12 +175,13 @@ fun ClipPreview(
     var histogram by remember { mutableStateOf<FloatArray?>(null) }
     val previewShader = remember { if (Build.VERSION.SDK_INT >= 33) GradePreviewShader() else null }
     var tableVersion by remember { mutableIntStateOf(0) }
-    LaunchedEffect(gradeCube, maskCube) {
-        previewShader?.setTables(gradeCube, maskCube)
+    LaunchedEffect(gradeCube, maskCubes, fromCube) {
+        previewShader?.setTables(GradeTables(gradeCube, maskCubes, fromCube))
         tableVersion++
     }
     var textureView by remember { mutableStateOf<TextureView?>(null) }
     val sample by rememberUpdatedState(onSample)
+    val maskMover by rememberUpdatedState(onMoveMask)
 
     LaunchedEffect(histogramOn, gradeCube) {
         while (histogramOn) {
@@ -218,7 +228,8 @@ fun ClipPreview(
                         // Reading these here re-applies the shader when they change, without recomposing.
                         tableVersion
                         val frame = if (effects.grain > 0f) (positionMs / 33).toFloat() else 0f
-                        renderEffect = previewShader?.effect(effects, zebra, frame, size.width, size.height, mask)
+                        val fromWeight = if (fromCube != null) ColourTransition.fromWeight(positionMs, transitionMs) else 0f
+                        renderEffect = previewShader?.effect(effects, zebra, frame, size.width, size.height, masks, fromWeight)
                     },
                 )
                 Canvas(
@@ -227,6 +238,17 @@ fun ClipPreview(
                         .pointerInput(renderer) {
                             awaitEachGesture {
                                 val down = awaitFirstDown()
+                                // While a mask is edited, a finger on the picture moves it (widgets stay put).
+                                val moveMask = maskMover
+                                if (moveMask != null) {
+                                    down.consume()
+                                    moveMask(down.position.x / size.width, down.position.y / size.height)
+                                    drag(down.id) { change ->
+                                        change.consume()
+                                        moveMask(change.position.x / size.width, change.position.y / size.height)
+                                    }
+                                    return@awaitEachGesture
+                                }
                                 val widget = renderer.hitTest(down.position.x, down.position.y, slop = 12.dp.toPx())
                                 if (widget == null) {
                                     // A tap elsewhere measures colour when the skin tool is open.
@@ -261,7 +283,7 @@ fun ClipPreview(
                         },
                 ) {
                     drawIntoCanvas { renderer.drawVignette(it.nativeCanvas, size.width, size.height, vignette) }
-                    if (maskGuide && mask != null) drawMaskGuide(mask)
+                    guideMask?.let { drawMaskGuide(it) }
                     marker?.let { m ->
                         val c = Offset(m.x * size.width, m.y * size.height)
                         drawCircle(Color.Black.copy(alpha = 0.5f), radius = 14.dp.toPx(), center = c, style = Stroke(3.dp.toPx()))
@@ -320,26 +342,38 @@ fun ClipPreview(
 
 private const val SAMPLE_WIDTH = 192
 
-/** The mask's centre line (solid) and the ends of its blend (dashed), as in DaVinci's window controls. */
-private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawMaskGuide(mask: GradientMask) {
-    val a = Math.toRadians(mask.angleDegrees.toDouble())
-    val dir = Offset(kotlin.math.cos(a).toFloat(), kotlin.math.sin(a).toFloat())
-    // Normal pointing down (into the unmasked part), in pixels per unit of frame height.
-    val normal = Offset(-dir.y, dir.x) * size.height
-    val centre = Offset(size.width / 2f, mask.position * size.height)
-    val reach = size.width + size.height
-    fun line(offset: Float, dashed: Boolean) {
-        val c = centre + normal * offset
-        drawLine(
-            Color.White.copy(alpha = if (dashed) 0.6f else 0.9f),
-            c - dir * reach, c + dir * reach,
-            strokeWidth = (if (dashed) 1f else 1.5f) * density,
-            pathEffect = if (dashed) PathEffect.dashPathEffect(floatArrayOf(8f * density, 6f * density)) else null,
-        )
+/** The mask's edge (solid) and the ends of its soft blend (dashed), as in DaVinci's window controls. */
+private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawMaskGuide(mask: ColourMask) {
+    val centre = Offset(mask.centerX * size.width, mask.centerY * size.height)
+    val dash = PathEffect.dashPathEffect(floatArrayOf(8f * density, 6f * density))
+    val solid = Color.White.copy(alpha = 0.9f)
+    val faint = Color.White.copy(alpha = 0.6f)
+    rotate(mask.angleDegrees, pivot = centre) {
+        when (mask.kind) {
+            MaskKind.LINEAR -> {
+                val reach = size.width + size.height
+                for ((offset, dashed) in listOf(0f to false, -mask.softness / 2f to true, mask.softness / 2f to true)) {
+                    val y = centre.y + offset * size.height
+                    drawLine(
+                        if (dashed) faint else solid, Offset(centre.x - reach, y), Offset(centre.x + reach, y),
+                        strokeWidth = (if (dashed) 1f else 1.5f) * density, pathEffect = if (dashed) dash else null,
+                    )
+                }
+            }
+            MaskKind.ELLIPSE -> {
+                for ((scale, dashed) in listOf(1f to false, 1f - mask.softness / 2f to true, 1f + mask.softness / 2f to true)) {
+                    if (scale <= 0f) continue
+                    val rx = mask.sizeX / 2f * size.height * scale
+                    val ry = mask.sizeY / 2f * size.height * scale
+                    drawOval(
+                        if (dashed) faint else solid, topLeft = Offset(centre.x - rx, centre.y - ry), size = Size(2 * rx, 2 * ry),
+                        style = Stroke((if (dashed) 1f else 1.5f) * density, pathEffect = if (dashed) dash else null),
+                    )
+                }
+            }
+        }
     }
-    line(0f, false)
-    line(-mask.softness / 2f, true)
-    line(mask.softness / 2f, true)
+    drawCircle(solid, radius = 4f * density, center = centre)
 }
 
 private val NO_SCRUB: State<Long?> = mutableStateOf(null)

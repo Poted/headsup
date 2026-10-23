@@ -86,7 +86,8 @@ import androidx.compose.ui.unit.IntSize
 import app.headsup.color.ScopeResult
 import app.headsup.color.Vectorscope
 import app.headsup.core.color.ColorGrade
-import app.headsup.core.color.GradientMask
+import app.headsup.core.color.ColourMask
+import app.headsup.core.color.MaskKind
 import app.headsup.core.color.SkinTone
 import kotlin.math.cos
 import kotlin.math.sin
@@ -165,7 +166,8 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
 
     var tool by rememberSaveable { mutableStateOf(Tool.FILES) }
     var adjustment by rememberSaveable { mutableStateOf(Adjustment.EXPOSURE) }
-    val measuring = tool == Tool.COLOUR && adjustment == Adjustment.SKIN
+    val measuring = tool == Tool.COLOUR && adjustment == Adjustment.SKIN && state.target != GradeTarget.MASK
+    val editingMasks = tool == Tool.COLOUR && state.target == GradeTarget.MASK && state.selected?.colorGrade == true
     // Read only where needed (cut controls), so playback does not recompose the whole screen.
     val playhead = remember { mutableLongStateOf(0L) }
     // File position of a cut handle being dragged; read only by the preview.
@@ -192,9 +194,12 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
                     activity = selected.sync?.let { state.activities.getOrNull(it.trackIndex) },
                     style = state.style,
                     gradeCube = state.previewCube,
-                    mask = selected.mask?.takeIf { selected.colorGrade },
-                    maskCube = state.previewMaskCube,
-                    maskGuide = tool == Tool.COLOUR && state.target == GradeTarget.MASK,
+                    masks = if (selected.colorGrade) selected.masks else emptyList(),
+                    maskCubes = state.previewMaskCubes,
+                    fromCube = state.previewFromCube,
+                    transitionMs = selected.transitionMs,
+                    guideMask = selected.masks.getOrNull(state.selectedMask).takeIf { editingMasks },
+                    onMoveMask = if (editingMasks) { x, y -> vm.updateMask { it.copy(centerX = x, centerY = y) } } else null,
                     vignette = if (selected.colorGrade) state.appliedGrade(selected).vignette else 0f,
                     effects = state.effects,
                     onSample = if (measuring) vm::sampleFrame else null,
@@ -758,7 +763,12 @@ internal enum class Adjustment(
 
     /** Not a ruler value: opens the LUT library (the LUT is applied last, after all corrections). */
     LUT("LUT", "LUT", 0f..1f, 1f, "", { 0f }, { g, _ -> g }),
+
+    /** Not a ruler value: how the clip blends in from the previous clip's look. */
+    BLEND("⇢", "Blend in", 0f..1f, 1f, "", { 0f }, { g, _ -> g }),
 }
+
+private val BLEND_LENGTHS = listOf(0L to "Cut", 500L to "0.5 s", 1000L to "1 s", 2000L to "2 s", 4000L to "4 s", 8000L to "8 s")
 
 @Composable
 private fun ColourPage(
@@ -775,7 +785,7 @@ private fun ColourPage(
         return
     }
     val target = state.target
-    PillTabs(listOf("This clip", "Group", "Sky mask", "All clips"), target.ordinal) { vm.setTarget(GradeTarget.entries[it]) }
+    PillTabs(listOf("This clip", "Group", "Masks", "All clips"), target.ordinal) { vm.setTarget(GradeTarget.entries[it]) }
     val group = state.groupOf(clip)
     when (target) {
         GradeTarget.CLIP -> Row(verticalAlignment = Alignment.CenterVertically) {
@@ -785,10 +795,7 @@ private fun ColourPage(
             Switch(checked = clip.colorGrade, onCheckedChange = { vm.setClipGrade(index, it) })
         }
         GradeTarget.GROUP -> GroupControls(state, clip, index, group, vm)
-        GradeTarget.MASK -> Row(verticalAlignment = Alignment.CenterVertically) {
-            Hint("Graduated filter: own corrections above the line.", Modifier.weight(1f))
-            if (clip.mask != null) SmallAction("Remove", { vm.updateMask { null } })
-        }
+        GradeTarget.MASK -> MaskList(state, clip, vm)
         GradeTarget.GLOBAL -> Row(verticalAlignment = Alignment.CenterVertically) {
             Hint("Added on top of every clip's own corrections.", Modifier.weight(1f))
             if (state.grade != ColorGrade()) SmallAction("Reset", { vm.updateGrade { ColorGrade() } })
@@ -799,34 +806,40 @@ private fun ColourPage(
         return
     }
     if (target == GradeTarget.GROUP && group == null) return
-    if (target == GradeTarget.MASK && clip.mask == null) {
-        Button(onClick = { vm.updateMask { GradientMask() } }, modifier = Modifier.fillMaxWidth()) { Text("Add graduated mask") }
-        return
-    }
+    val mask = clip.masks.getOrNull(state.selectedMask)
+    if (target == GradeTarget.MASK && mask == null) return
 
     // The ruler sits right under the correction picker, so nothing needs scrolling.
     // The LUT belongs to the clip (it depends on how the clip was shot); the mask has only tonal
     // and colour corrections, with its shape in front.
+    // Blending in from the previous clip is a property of the clip, so it is only on its own tab.
     val options = when (target) {
-        GradeTarget.CLIP, GradeTarget.GROUP -> Adjustment.entries
-        GradeTarget.GLOBAL -> Adjustment.entries - Adjustment.LUT
-        GradeTarget.MASK -> Adjustment.entries - Adjustment.LUT - Adjustment.SKIN - Adjustment.VIGNETTE
+        GradeTarget.CLIP -> if (index > 0) Adjustment.entries else Adjustment.entries - Adjustment.BLEND
+        GradeTarget.GROUP -> Adjustment.entries - Adjustment.BLEND
+        GradeTarget.GLOBAL -> Adjustment.entries - Adjustment.LUT - Adjustment.BLEND
+        GradeTarget.MASK -> Adjustment.entries - Adjustment.LUT - Adjustment.SKIN - Adjustment.VIGNETTE - Adjustment.BLEND
     }
     val adjustment = if (adjustment in options) adjustment else Adjustment.EXPOSURE
-    var shape by rememberSaveable { mutableStateOf<MaskShape?>(MaskShape.POSITION) }
-    val mask = clip.mask
-    val editingShape = if (target == GradeTarget.MASK && mask != null) shape else null
+    // On the Masks tab the ruler edits either a shape control or a correction.
+    var shape by rememberSaveable { mutableStateOf<MaskShape?>(null) }
+    var onShapes by rememberSaveable { mutableStateOf(true) }
+    val shapes = mask?.let { m -> MaskShape.entries.filter { m.kind in it.kinds } }.orEmpty()
+    val editingShape = if (target == GradeTarget.MASK && onShapes) shape?.takeIf { it in shapes } ?: shapes.firstOrNull() else null
     LazyRow(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
         if (target == GradeTarget.MASK) {
-            items(MaskShape.entries) { m ->
-                CircleOption(m.symbol, m.label, selected = m == editingShape, modified = false) { shape = m }
+            items(shapes) { m ->
+                CircleOption(m.symbol, m.label, selected = m == editingShape, modified = false) { shape = m; onShapes = true }
             }
         }
         items(options) { a ->
             val lut = if (target == GradeTarget.GROUP) group?.lutName else clip.lutName
-            val modified = if (a == Adjustment.LUT) lut != null else a.get(state.grade) != 0f
+            val modified = when (a) {
+                Adjustment.LUT -> lut != null
+                Adjustment.BLEND -> clip.transitionMs > 0
+                else -> a.get(state.grade) != 0f
+            }
             CircleOption(a.symbol, a.label, selected = editingShape == null && a == adjustment, modified = modified) {
-                shape = null
+                onShapes = false
                 onAdjustment(a)
             }
         }
@@ -837,9 +850,18 @@ private fun ColourPage(
             value = editingShape.get(mask),
             range = editingShape.range,
             step = editingShape.step,
-            onChange = { v -> vm.updateMask { m -> m?.let { editingShape.set(it, v) } } },
-            onReset = { vm.updateMask { m -> m?.let { editingShape.set(it, editingShape.get(GradientMask())) } } },
+            onChange = { v -> vm.updateMask { editingShape.set(it, v) } },
+            onReset = { vm.updateMask { editingShape.set(it, editingShape.get(ColourMask(it.kind))) } },
         )
+        return
+    }
+    if (adjustment == Adjustment.BLEND) {
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            for ((ms, label) in BLEND_LENGTHS) {
+                FilterChip(selected = clip.transitionMs == ms, onClick = { vm.setTransition(index, ms) }, label = { Text(label) })
+            }
+        }
+        Hint("Starts with the previous clip's colours and changes to this clip's over the chosen time, e.g. after a split where the light changes.")
         return
     }
     if (adjustment == Adjustment.LUT) {
@@ -867,23 +889,52 @@ private fun ColourPage(
     )
 }
 
-/** Shape controls of the graduated mask, edited with the same ruler as the corrections. */
+/** Shape controls of a mask, edited with the same ruler as the corrections. */
 private enum class MaskShape(
     val symbol: String,
     val label: String,
+    val kinds: Set<MaskKind>,
     val range: ClosedFloatingPointRange<Float>,
     val step: Float,
     val format: String,
-    val get: (GradientMask) -> Float,
-    val set: (GradientMask, Float) -> GradientMask,
+    val get: (ColourMask) -> Float,
+    val set: (ColourMask, Float) -> ColourMask,
 ) {
-    POSITION("↕", "Position", 0f..1f, 0.01f, "%.0f %%", { it.position }, { m, v -> m.copy(position = v) }),
-    SOFTNESS("◐", "Softness", 0.02f..1f, 0.02f, "%.0f %%", { it.softness }, { m, v -> m.copy(softness = v) }),
-    ANGLE("∠", "Angle", -45f..45f, 0.5f, "%+.1f°", { it.angleDegrees }, { m, v -> m.copy(angleDegrees = v) }),
+    POSITION("↕", "Position", setOf(MaskKind.LINEAR), 0f..1f, 0.01f, "%.0f %%", { it.centerY }, { m, v -> m.copy(centerY = v) }),
+    WIDTH("↔", "Width", setOf(MaskKind.ELLIPSE), 0.05f..2f, 0.01f, "%.0f %%", { it.sizeX }, { m, v -> m.copy(sizeX = v) }),
+    HEIGHT("↕", "Height", setOf(MaskKind.ELLIPSE), 0.05f..2f, 0.01f, "%.0f %%", { it.sizeY }, { m, v -> m.copy(sizeY = v) }),
+    SOFTNESS("◐", "Softness", MaskKind.entries.toSet(), 0.02f..1f, 0.02f, "%.0f %%", { it.softness }, { m, v -> m.copy(softness = v) }),
+    ANGLE("∠", "Angle", MaskKind.entries.toSet(), -90f..90f, 0.5f, "%+.1f°", { it.angleDegrees }, { m, v -> m.copy(angleDegrees = v) }),
     ;
 
     /** Value as shown above the ruler (fractions as percent). */
-    fun shown(mask: GradientMask): Float = if (this == ANGLE) get(mask) else get(mask) * 100f
+    fun shown(mask: ColourMask): Float = if (this == ANGLE) get(mask) else get(mask) * 100f
+}
+
+/** The selected clip's masks: pick one to edit, add a line or an oval, invert or remove. */
+@Composable
+private fun MaskList(state: UiState, clip: ClipState, vm: HeadsupViewModel) {
+    if (clip.masks.isEmpty()) Hint("Windows with their own corrections: a line for the sky, an oval for a face. Drag on the picture to move one.")
+    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        clip.masks.forEachIndexed { i, m ->
+            FilterChip(
+                selected = i == state.selectedMask,
+                onClick = { vm.selectMask(i) },
+                label = { Text("${i + 1} · " + if (m.kind == MaskKind.LINEAR) "Line" else "Oval") },
+            )
+        }
+        if (clip.masks.size < ColourMask.MAX_PER_CLIP) {
+            FilterChip(selected = false, onClick = { vm.addMask(MaskKind.LINEAR) }, label = { Text("+ Line") })
+            FilterChip(selected = false, onClick = { vm.addMask(MaskKind.ELLIPSE) }, label = { Text("+ Oval") })
+        }
+    }
+    val mask = clip.masks.getOrNull(state.selectedMask) ?: return
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        SmallAction(if (mask.inverted) "Inverted ✓" else "Invert", { vm.updateMask { it.copy(inverted = !it.inverted) } })
+        Spacer(Modifier.weight(1f))
+        if (mask.grade != ColorGrade()) SmallAction("Reset", { vm.updateGrade { ColorGrade() } })
+        SmallAction("Remove", { vm.removeMask(state.selectedMask) })
+    }
 }
 
 /** LUT library: the camera LUT is the last step, after all corrections. */

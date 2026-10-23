@@ -1,7 +1,7 @@
 package app.headsup.export
 
 import android.net.Uri
-import app.headsup.core.color.GradientMask
+import app.headsup.core.color.ColourMask
 import app.headsup.core.track.ActivityTrack
 import app.headsup.core.track.TelemetrySampler
 import app.headsup.media.VideoFormatInfo
@@ -15,14 +15,19 @@ enum class ExportKind { VIDEO, PNG_SEQUENCE, TEN_BIT_TEST }
 
 /**
  * Colour transform for one clip: baked LUT cube (null = untouched colours), vignette strength,
- * and an optional graduated mask with the cube used inside it.
+ * masks with one cube each, and the previous clip's cube to blend from during [transitionMs].
  */
 class GradeSetup(
     val cube: Array<Array<IntArray>>?,
     val vignette: Float,
-    val mask: GradientMask? = null,
-    val maskCube: Array<Array<IntArray>>? = null,
-)
+    val masks: List<ColourMask> = emptyList(),
+    val maskCubes: List<Array<Array<IntArray>>> = emptyList(),
+    val fromCube: Array<Array<IntArray>>? = null,
+    val transitionMs: Long = 0L,
+) {
+    /** True when a single colour table is not enough. */
+    val needsGradeEffect: Boolean get() = masks.isNotEmpty() || (fromCube != null && transitionMs > 0)
+}
 
 data class ExportRequest(
     val kind: ExportKind,

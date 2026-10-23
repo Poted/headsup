@@ -11,7 +11,8 @@ import app.headsup.color.ScopeResult
 import app.headsup.color.Vectorscope
 import app.headsup.core.color.SkinTone
 import app.headsup.core.color.ColorGrade
-import app.headsup.core.color.GradientMask
+import app.headsup.core.color.ColourMask
+import app.headsup.core.color.MaskKind
 import app.headsup.core.color.CubeLut
 import app.headsup.core.color.LutBaker
 import app.headsup.core.fit.FitActivityReader
@@ -80,12 +81,14 @@ data class ClipState(
     val grade: ColorGrade = ColorGrade(),
     /** Picture effects of this clip. */
     val effects: EffectSettings = EffectSettings(),
-    /** Graduated mask with its own corrections, or null for none. */
-    val mask: GradientMask? = null,
+    /** Windows with their own corrections (graduated lines, ovals), at most [ColourMask.MAX_PER_CLIP]. */
+    val masks: List<ColourMask> = emptyList(),
+    /** Length of the blend from the previous clip's look at the start of this one; 0 = a plain cut. */
+    val transitionMs: Long = 0L,
     /** Group whose corrections (and LUT, if the clip has none) apply too; at most one. */
     val groupId: Long? = null,
 ) {
-    val look: ClipLook get() = ClipLook(grade, effects, lutName, mask)
+    val look: ClipLook get() = ClipLook(grade, effects, lutName, masks)
 
     /** Time evidence used for matching: the manual start if set, otherwise the file's own. */
     val timeInfo: ClipInfo
@@ -101,7 +104,7 @@ data class ClipState(
 }
 
 /** What "Copy" takes from a clip and "Paste" gives to another: corrections, effects and LUT. */
-data class ClipLook(val grade: ColorGrade, val effects: EffectSettings, val lutName: String?, val mask: GradientMask? = null)
+data class ClipLook(val grade: ColorGrade, val effects: EffectSettings, val lutName: String?, val masks: List<ColourMask> = emptyList())
 
 /**
  * Clips shot the same way (e.g. "Drone"): shared corrections between the clip's and the global
@@ -143,8 +146,11 @@ data class UiState(
     val compareGrade: ColorGrade? = null,
     /** Colour table for the selected clip's preview; null when its colours stay untouched. */
     val previewCube: Array<Array<IntArray>>? = null,
-    /** Colour table inside the selected clip's mask; null without a mask. */
-    val previewMaskCube: Array<Array<IntArray>>? = null,
+    /** Colour tables inside the selected clip's masks, and the previous clip's for a transition. */
+    val previewMaskCubes: List<Array<Array<IntArray>>> = emptyList(),
+    val previewFromCube: Array<Array<IntArray>>? = null,
+    /** Mask of the selected clip that the Masks tab edits. */
+    val selectedMask: Int = 0,
     val bitrateFactor: Float = 1f,
     /** Vectorscope and skin measurement of the last frame tapped in the preview. */
     val scope: ScopeResult? = null,
@@ -158,7 +164,7 @@ data class UiState(
         get() = when (target) {
             GradeTarget.GLOBAL -> globalGrade
             GradeTarget.GROUP -> selected?.let(::groupOf)?.grade ?: ColorGrade()
-            GradeTarget.MASK -> selected?.mask?.grade ?: ColorGrade()
+            GradeTarget.MASK -> selected?.masks?.getOrNull(selectedMask)?.grade ?: ColorGrade()
             GradeTarget.CLIP -> selected?.grade ?: defaultGrade
         }
 
@@ -184,9 +190,17 @@ data class UiState(
             shown(groupOf(clip)?.grade ?: ColorGrade(), GradeTarget.GROUP, clip) +
             shown(globalGrade, GradeTarget.GLOBAL, clip)
 
-    /** What is applied inside [clip]'s mask, or null without one. */
-    fun maskedGrade(clip: ClipState): ColorGrade? =
-        clip.mask?.let { appliedGrade(clip) + shown(it.grade, GradeTarget.MASK, clip) }
+    /** What is applied inside each of [clip]'s masks. */
+    fun maskedGrades(clip: ClipState): List<ColorGrade> {
+        val outside = appliedGrade(clip)
+        return clip.masks.mapIndexed { i, m ->
+            outside + if (i == selectedMask) shown(m.grade, GradeTarget.MASK, clip) else m.grade
+        }
+    }
+
+    /** The clip before [clip] on the timeline when [clip] blends in from it. */
+    fun transitionSource(clip: ClipState): ClipState? =
+        clip.takeIf { it.transitionMs > 0 }?.let { c -> clips.getOrNull(clips.indexOfFirst { it.id == c.id } - 1) }
 
     /** Effects of the selected clip (what the effects page edits). */
     val effects: EffectSettings get() = selected?.effects ?: defaultEffects
@@ -250,7 +264,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
         clips = clips.map {
             SavedClip(
                 it.meta.uri, it.trimStartMs, it.trimEndMs, it.manualOffsetMs, it.colorGrade, it.lutName,
-                it.manualStart, it.grade, it.effects, it.mask, it.groupId,
+                it.manualStart, it.grade, it.effects, it.masks, it.groupId, it.transitionMs,
             )
         },
         groups = groups.map { SavedGroup(it.id, it.name, it.grade, it.lutName) },
@@ -292,7 +306,8 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                     manualStart = c.manualStart,
                     grade = c.grade,
                     effects = c.effects,
-                    mask = c.mask,
+                    masks = c.masks,
+                    transitionMs = c.transitionMs,
                     groupId = c.groupId,
                 )
             }
@@ -384,7 +399,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
 
     fun selectClip(index: Int) {
         scopeFrame = null
-        _state.update { it.copy(selectedClip = index, scope = null) }
+        _state.update { it.copy(selectedClip = index, scope = null, selectedMask = 0, compareGrade = null) }
         refreshPreview()
     }
 
@@ -473,7 +488,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
         refreshPreview()
     }
 
-    private fun ClipState.withLook(look: ClipLook) = copy(grade = look.grade, effects = look.effects, lutName = look.lutName, mask = look.mask)
+    private fun ClipState.withLook(look: ClipLook) = copy(grade = look.grade, effects = look.effects, lutName = look.lutName, masks = look.masks)
 
     fun dismissMessages() = _state.update { it.copy(messages = emptyList()) }
 
@@ -603,11 +618,37 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
         refreshPreview()
     }
 
-    /** Adds (null removes) or reshapes the selected clip's mask. */
-    fun updateMask(transform: (GradientMask?) -> GradientMask?) {
+    // Masks and transitions
+
+    fun addMask(kind: MaskKind) {
         val index = _state.value.selectedClip ?: return
-        updateClip(index) { it.copy(mask = transform(it.mask)) }
+        val count = _state.value.selected?.masks?.size ?: return
+        if (count >= ColourMask.MAX_PER_CLIP) return
+        updateClip(index) { it.copy(masks = it.masks + ColourMask(kind)) }
+        _state.update { it.copy(selectedMask = count) }
     }
+
+    fun removeMask(maskIndex: Int) {
+        val index = _state.value.selectedClip ?: return
+        updateClip(index) { it.copy(masks = it.masks.filterIndexed { i, _ -> i != maskIndex }) }
+        _state.update { it.copy(selectedMask = (it.selectedMask - if (it.selectedMask >= maskIndex) 1 else 0).coerceAtLeast(0)) }
+    }
+
+    fun selectMask(maskIndex: Int) {
+        _state.update { it.copy(selectedMask = maskIndex, compareGrade = null) }
+        refreshPreview()
+    }
+
+    /** Reshapes the selected mask of the selected clip. */
+    fun updateMask(transform: (ColourMask) -> ColourMask) {
+        val s = _state.value
+        val index = s.selectedClip ?: return
+        val m = s.selectedMask
+        updateClip(index) { c -> c.copy(masks = c.masks.mapIndexed { i, mask -> if (i == m) transform(mask) else mask }) }
+    }
+
+    /** Blend from the previous clip's look over [lengthMs] at the start of the clip at [index]; 0 for a cut. */
+    fun setTransition(index: Int, lengthMs: Long) = updateClip(index) { it.copy(transitionMs = lengthMs.coerceAtLeast(0L)) }
 
     /**
      * Changes the selected clip's corrections (they also become the default for clips added
@@ -622,7 +663,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                 return
             }
             GradeTarget.MASK -> {
-                updateMask { m -> (m ?: GradientMask()).let { it.copy(grade = transform(it.grade)) } }
+                updateMask { it.copy(grade = transform(it.grade)) }
                 return
             }
             GradeTarget.GROUP -> {
@@ -662,8 +703,9 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                     val clip = s.selected
                     val graded = clip?.takeIf { it.colorGrade }
                     val cube = graded?.let { bake(s.lutFor(it), s.appliedGrade(it)) }
-                    val maskCube = graded?.let { c -> s.maskedGrade(c)?.let { bakeAlways(s.lutFor(c), it) } }
-                    _state.update { it.copy(previewCube = cube, previewMaskCube = maskCube) }
+                    val maskCubes = graded?.let { c -> s.maskedGrades(c).map { bakeAlways(s.lutFor(c), it) } }.orEmpty()
+                    val fromCube = graded?.let(s::transitionSource)?.let { prev -> bakeLook(s, prev) }
+                    _state.update { it.copy(previewCube = cube, previewMaskCubes = maskCubes, previewFromCube = fromCube) }
                     analyseScope()
                 }
             } finally {
@@ -678,6 +720,10 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
         if (lut == null && grade.isNeutralColour) return null
         return withContext(Dispatchers.Default) { LutBaker.bake(lut, grade) }
     }
+
+    /** Table for [clip]'s whole look outside masks; untouched colours when its colour is off. */
+    private suspend fun bakeLook(s: UiState, clip: ClipState): Array<Array<IntArray>> =
+        if (clip.colorGrade) bakeAlways(s.lutFor(clip), s.appliedGrade(clip)) else bakeAlways(null, ColorGrade())
 
     private suspend fun bakeAlways(lutName: String?, grade: ColorGrade): Array<Array<IntArray>> {
         val lut = loadLut(lutName)
@@ -703,7 +749,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
     fun clearFinishedExports() = exportManager.clearFinished()
 
     private fun enqueue(kind: ExportKind, indices: List<Int>) {
-        val s = state.value
+        val s = state.value.copy(compareGrade = null)
         viewModelScope.launch {
             val cubes = HashMap<ClipLook, Array<Array<IntArray>>?>()
             val requests = indices.mapNotNull { i ->
@@ -711,11 +757,12 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                 val sync = clip.sync ?: return@mapNotNull null
                 val activity = s.activities.getOrNull(sync.trackIndex) ?: return@mapNotNull null
                 val graded = kind != ExportKind.PNG_SEQUENCE && clip.colorGrade
-                val applied = clip.grade + (s.groupOf(clip)?.grade ?: ColorGrade()) + s.globalGrade
+                val applied = s.appliedGrade(clip)
                 val lutName = s.lutFor(clip)
                 val cube = if (graded) cubes.getOrPut(ClipLook(applied, EffectSettings(), lutName)) { bake(lutName, applied) } else null
-                val mask = clip.mask?.takeIf { graded }
-                val maskCube = mask?.let { bakeAlways(lutName, applied + it.grade) }
+                val masks = if (graded) clip.masks else emptyList()
+                val maskCubes = if (graded) s.maskedGrades(clip).map { bakeAlways(lutName, it) } else emptyList()
+                val fromCube = if (graded) s.transitionSource(clip)?.let { bakeLook(s, it) } else null
                 ExportRequest(
                     kind = kind,
                     uri = clip.meta.uri,
@@ -732,7 +779,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                     telemetryStartUtcMs = sync.startUtcMs + clip.trimStartMs + clip.manualOffsetMs,
                     style = s.style,
                     effects = clip.effects,
-                    grade = if (graded) GradeSetup(cube, applied.vignette, mask, maskCube) else null,
+                    grade = if (graded) GradeSetup(cube, applied.vignette, masks, maskCubes, fromCube, clip.transitionMs) else null,
                     bitrateFactor = s.bitrateFactor,
                 )
             }

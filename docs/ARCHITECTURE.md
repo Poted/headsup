@@ -110,10 +110,13 @@ A global node (Colour → All clips) holds corrections added on top of every cli
 one vignette for the whole project; the values are offsets, so the two simply add up
 (`ColorGrade.plus`).
 
-A graduated mask (Colour → Sky mask) gives the part above a soft, tiltable line its own
-corrections, like an ND grad filter. Inside the mask a second table is baked (clip + global +
-mask corrections) and the two are blended by `GradientMask.weight`: in the preview shader and,
-for export, in `MaskGradeEffect`, which then replaces Media3's single colour table.
+Masks (Colour → Masks) are windows with their own corrections, like power windows in Resolve:
+lines (graduated filters) and ovals, up to four per clip, each invertible and movable by
+dragging on the preview. Each mask gets its own baked table (clip + group + global + mask
+corrections) and the tables are blended in order by `ColourMask.weight`. A clip can also blend
+in from the previous clip's look (Colour → This clip → Blend in), e.g. after a split where the
+light changes; the weight is `ColourTransition.fromWeight`. The preview shader and, for export,
+`GradeEffect` (replacing Media3's single colour table for such clips) use the same formulas.
 
 ## Export (stage 3)
 

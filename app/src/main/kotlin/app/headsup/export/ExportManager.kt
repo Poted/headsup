@@ -142,8 +142,10 @@ class ExportManager(private val context: Context) {
 
         val effects = mutableListOf<Effect>()
         val grade = request.grade
-        if (grade?.mask != null && grade.maskCube != null) {
-            effects += MaskGradeEffect(grade.cube ?: LutBaker.bake(null, ColorGrade()), grade.maskCube, grade.mask)
+        if (grade != null && grade.needsGradeEffect) {
+            effects += GradeEffect(
+                grade.cube ?: LutBaker.bake(null, ColorGrade()), grade.masks, grade.maskCubes, grade.fromCube, grade.transitionMs,
+            )
         } else {
             grade?.cube?.let { effects += SingleColorLut.createFromCube(it) }
         }

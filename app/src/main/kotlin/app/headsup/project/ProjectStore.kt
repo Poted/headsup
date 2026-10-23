@@ -3,7 +3,8 @@ package app.headsup.project
 import android.content.Context
 import android.net.Uri
 import app.headsup.core.color.ColorGrade
-import app.headsup.core.color.GradientMask
+import app.headsup.core.color.ColourMask
+import app.headsup.core.color.MaskKind
 import app.headsup.render.EffectSettings
 import app.headsup.render.GraphMetric
 import org.json.JSONArray
@@ -22,8 +23,9 @@ data class SavedClip(
     val manualStart: LocalDateTime?,
     val grade: ColorGrade,
     val effects: EffectSettings,
-    val mask: GradientMask?,
+    val masks: List<ColourMask>,
     val groupId: Long?,
+    val transitionMs: Long,
 )
 
 data class SavedGroup(val id: Long, val name: String, val grade: ColorGrade, val lutName: String?)
@@ -88,7 +90,7 @@ class ProjectStore(context: Context) {
 
 /** JSON form of the project; unknown or missing fields fall back to defaults, so old files still open. */
 internal object Json {
-    private const val VERSION = 1
+    private const val VERSION = 2
 
     fun project(p: ProjectData) = JSONObject()
         .put("version", VERSION)
@@ -116,8 +118,9 @@ internal object Json {
         .putOpt("manualStart", c.manualStart?.toString())
         .put("grade", grade(c.grade))
         .put("effects", effects(c.effects))
-        .putOpt("mask", c.mask?.let(::mask))
+        .put("masks", JSONArray(c.masks.map(::mask)))
         .putOpt("groupId", c.groupId)
+        .put("transitionMs", c.transitionMs)
 
     private fun clip(o: JSONObject) = SavedClip(
         uri = Uri.parse(o.getString("uri")),
@@ -129,8 +132,10 @@ internal object Json {
         manualStart = o.optStringOrNull("manualStart")?.let { runCatching { LocalDateTime.parse(it) }.getOrNull() },
         grade = grade(o.optJSONObject("grade")),
         effects = effects(o.optJSONObject("effects")),
-        mask = o.optJSONObject("mask")?.let(::mask),
+        // Version 1 files had at most one graduated mask, stored as "mask".
+        masks = o.optJSONArray("masks").objects().map(::mask) + listOfNotNull(o.optJSONObject("mask")?.let(::mask)),
         groupId = if (o.has("groupId")) o.getLong("groupId") else null,
+        transitionMs = o.optLong("transitionMs", 0L),
     )
 
     private fun group(g: SavedGroup) = JSONObject()
@@ -202,18 +207,31 @@ internal object Json {
         )
     }
 
-    private fun mask(m: GradientMask) = JSONObject()
-        .put("position", m.position)
-        .put("softness", m.softness)
+    private fun mask(m: ColourMask) = JSONObject()
+        .put("kind", m.kind.name)
+        .put("centerX", m.centerX)
+        .put("centerY", m.centerY)
+        .put("sizeX", m.sizeX)
+        .put("sizeY", m.sizeY)
         .put("angleDegrees", m.angleDegrees)
+        .put("softness", m.softness)
+        .put("inverted", m.inverted)
         .put("grade", grade(m.grade))
 
-    private fun mask(o: JSONObject): GradientMask {
-        val d = GradientMask()
-        return GradientMask(
-            position = o.optDouble("position", d.position.toDouble()).toFloat(),
-            softness = o.optDouble("softness", d.softness.toDouble()).toFloat(),
-            angleDegrees = o.optDouble("angleDegrees", 0.0).toFloat(),
+    private fun mask(o: JSONObject): ColourMask {
+        val kind = MaskKind.entries.firstOrNull { it.name == o.optString("kind") } ?: MaskKind.LINEAR
+        val d = ColourMask(kind)
+        fun f(key: String, default: Float) = o.optDouble(key, default.toDouble()).toFloat()
+        return ColourMask(
+            kind = kind,
+            centerX = f("centerX", d.centerX),
+            // Version 1 called the line height "position".
+            centerY = f("centerY", f("position", d.centerY)),
+            sizeX = f("sizeX", d.sizeX),
+            sizeY = f("sizeY", d.sizeY),
+            angleDegrees = f("angleDegrees", 0f),
+            softness = f("softness", d.softness),
+            inverted = o.optBoolean("inverted", false),
             grade = grade(o.optJSONObject("grade")),
         )
     }
