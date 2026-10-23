@@ -231,7 +231,8 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
         scrubT.value = t
         seekRequest = pos
     }
-    val previewMaxHeight = (LocalConfiguration.current.screenHeightDp * 0.38f).dp
+    // Room for the timeline and the tools under the picture.
+    val previewMaxHeight = (LocalConfiguration.current.screenHeightDp * 0.32f).dp
 
     Box(Modifier.fillMaxSize().background(HeadsupColors.BackgroundGradient)) {
         // No title bar: the picture starts at the top, adding files lives in the Files tool.

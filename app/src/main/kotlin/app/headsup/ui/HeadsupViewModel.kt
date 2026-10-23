@@ -564,7 +564,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                         // Older projects kept the shape per clip: one shared by all becomes the frame's.
                         frameAspect = project.frameAspect ?: clips.map { it.reframe.aspect }.distinct().singleOrNull(),
                         audioFiles = project.audioFiles.distinctBy { it.uri },
-                        audioClips = project.audioClips,
+                        audioClips = compactLanes(project.audioClips),
                         clipSound = project.clipSound,
                         selectedAudio = null,
                         selectedClip = clips.indices.firstOrNull(),
@@ -761,7 +761,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
 
     /** Removes a sound from the library, and its clips from the tracks. */
     fun removeAudioFile(uri: Uri) = _state.update { s ->
-        s.copy(audioFiles = s.audioFiles.filter { it.uri != uri }, audioClips = s.audioClips.filter { it.uri != uri })
+        s.copy(audioFiles = s.audioFiles.filter { it.uri != uri }, audioClips = compactLanes(s.audioClips.filter { it.uri != uri }))
     }
 
     /**
@@ -780,19 +780,27 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
         _state.update { it.copy(audioClips = it.audioClips + draft.copy(lane = lane), selectedAudio = id) }
     }
 
-    /** The first track with nothing between [fromMs] and [toMs] (ignoring clip [except]). */
+    /** The first track with nothing between [fromMs] and [toMs] (ignoring clip [except]); the last one if all are taken. */
     private fun freeLane(clips: List<AudioClip>, fromMs: Long, toMs: Long, except: Long? = null): Int {
         var lane = 0
-        while (clips.any { it.id != except && it.lane == lane && it.piece.startOnTimelineMs < toMs && it.piece.endOnTimelineMs > fromMs }) lane++
+        while (lane < MAX_LANES - 1 && clips.any { it.id != except && it.lane == lane && it.piece.startOnTimelineMs < toMs && it.piece.endOnTimelineMs > fromMs }) lane++
         return lane
     }
+
+    /** Tracks numbered from 0 without gaps, so no empty tracks are shown between used ones. */
+    private fun compactLanes(clips: List<AudioClip>): List<AudioClip> {
+        val used = clips.map { it.lane }.distinct().sorted()
+        return clips.map { c -> c.copy(lane = used.indexOf(c.lane).coerceAtMost(MAX_LANES - 1)) }
+    }
+
+    fun tidyLanes() = _state.update { s -> s.copy(audioClips = compactLanes(s.audioClips)) }
 
     fun selectAudio(id: Long?) = _state.update { it.copy(selectedAudio = id) }
 
     fun updateAudio(id: Long, transform: (AudioClip) -> AudioClip) =
         _state.update { s -> s.copy(audioClips = s.audioClips.map { if (it.id == id) transform(it) else it }) }
 
-    fun removeAudio(id: Long) = _state.update { s -> s.copy(audioClips = s.audioClips.filter { it.id != id }, selectedAudio = null) }
+    fun removeAudio(id: Long) = _state.update { s -> s.copy(audioClips = compactLanes(s.audioClips.filter { it.id != id }), selectedAudio = null) }
 
     /** Cuts a sound in two at [atMs] on the timeline; the second part is selected. */
     fun splitAudio(id: Long, atMs: Long) {

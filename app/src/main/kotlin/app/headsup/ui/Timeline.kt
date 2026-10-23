@@ -1,7 +1,7 @@
 package app.headsup.ui
 
 import androidx.compose.animation.core.Animatable
-import androidx.compose.animation.core.exponentialDecay
+import androidx.compose.animation.splineBasedDecay
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
@@ -105,7 +105,8 @@ fun Timeline(
     val videoEnd = starts.last()
     // Sounds may run past the video's end; zooming out reaches them.
     val contentEnd = maxOf(videoEnd, audio.maxOfOrNull { it.piece.endOnTimelineMs } ?: 0L)
-    val lanes = (audio.maxOfOrNull { it.lane } ?: -1) + 2
+    // The tracks in use and one free below them, at most MAX_LANES.
+    val lanes = ((audio.maxOfOrNull { it.lane } ?: -1) + 2).coerceIn(1, MAX_LANES)
 
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -306,10 +307,11 @@ fun Timeline(
                                     Mode.MOVE -> {
                                         val s0 = sound0 ?: return@drag
                                         val p = s0.piece
-                                        var startMs = (p.startOnTimelineMs + d).coerceAtLeast(0L)
+                                        // Sounds stay within the video: after its end nothing is exported.
+                                        var startMs = (p.startOnTimelineMs + d).coerceIn(0L, (videoEndNow - p.lengthMs).coerceAtLeast(0L))
                                         val a = snapped(startMs)
                                         val b = snapped(startMs + p.lengthMs) - p.lengthMs
-                                        startMs = if (a != startMs) a else if (b != startMs) b.coerceAtLeast(0L) else startMs
+                                        startMs = (if (a != startMs) a else if (b != startMs) b else startMs).coerceIn(0L, (videoEndNow - p.lengthMs).coerceAtLeast(0L))
                                         val toLane = if (y >= g.lanesTop) g.laneAt(y) else s0.lane
                                         val lane = if (free(toLane, startMs, startMs + p.lengthMs)) toLane else s0.lane
                                         if (free(lane, startMs, startMs + p.lengthMs)) vm.updateAudio(s0.id) { s0.copy(lane = lane, startOnTimelineMs = startMs) }
@@ -327,7 +329,7 @@ fun Timeline(
                                     Mode.TRIM_SOUND_END -> {
                                         val s0 = sound0 ?: return@drag
                                         val p = s0.piece
-                                        val moved = p.trimEnd(snapped(p.endOnTimelineMs + d) - p.endOnTimelineMs)
+                                        val moved = p.trimEnd(snapped(minOf(p.endOnTimelineMs + d, videoEndNow)) - p.endOnTimelineMs)
                                         if (free(s0.lane, moved.startOnTimelineMs, moved.endOnTimelineMs)) vm.updateAudio(s0.id) { s0.with(moved) }
                                     }
                                     Mode.FADE_IN -> {
@@ -345,17 +347,20 @@ fun Timeline(
                             }
                             when (mode) {
                                 Mode.SCROLL -> {
-                                    // Keeps gliding after a flick, slowing down.
-                                    val v = -tracker.calculateVelocity().x / zoomPx * 1000f
+                                    // Keeps gliding after a flick and slows down like any list (in pixels, px/s).
+                                    val vx = tracker.calculateVelocity().x
                                     val from = (t - (dx / zoomPx).roundToLong()).coerceIn(0L, videoEndNow)
-                                    if (abs(v) < 200f) {
+                                    if (abs(vx) < 300f) {
                                         scrub(null)
                                     } else {
+                                        val decay = splineBasedDecay<Float>(this)
+                                        val end = videoEndNow
                                         fling = scope.launch {
-                                            val anim = Animatable(from.toFloat())
-                                            anim.updateBounds(0f, videoEndNow.toFloat())
+                                            val anim = Animatable(0f)
+                                            // Pixels the timeline may still move each way before an end.
+                                            anim.updateBounds(-from * zoomPx, (end - from) * zoomPx)
                                             try {
-                                                anim.animateDecay(v, exponentialDecay(frictionMultiplier = 2f)) { scrub(value.toLong()) }
+                                                anim.animateDecay(-vx, decay) { scrub((from + value / zoomPx).toLong().coerceIn(0L, end)) }
                                             } finally {
                                                 scrub(null)
                                             }
@@ -363,6 +368,8 @@ fun Timeline(
                                     }
                                 }
                                 Mode.TRIM_CLIP_END -> trimPreview(null)
+                                // Tracks left empty by the move close up.
+                                Mode.MOVE -> vm.tidyLanes()
                                 Mode.TRIM_CLIP_START -> {
                                     val c0 = clip0
                                     val value = leftTrim
@@ -430,6 +437,7 @@ private val GAP = 6.dp
 private val LANE = 40.dp
 private val HANDLE = 14.dp
 private const val MIN_MS = 300L
+const val MAX_LANES = 4
 private const val MAX_ZOOM_DP = 0.4f
 
 /** Zoomed out at most to the whole content across half the width (the playhead can be at its end). */
