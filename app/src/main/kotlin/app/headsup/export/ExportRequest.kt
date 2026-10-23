@@ -2,6 +2,7 @@ package app.headsup.export
 
 import android.net.Uri
 import app.headsup.core.color.ColourMask
+import app.headsup.core.frame.Reframe
 import app.headsup.core.track.ActivityTrack
 import app.headsup.core.track.TelemetrySampler
 import app.headsup.media.VideoFormatInfo
@@ -50,6 +51,8 @@ data class ExportRequest(
     val effects: EffectSettings,
     val grade: GradeSetup?,
     val bitrateFactor: Float,
+    /** Zoom, position and straightening of the picture. */
+    val reframe: Reframe = Reframe(),
 ) {
     /** File name without extension; trimmed parts get their start second so names stay distinct. */
     val baseName: String

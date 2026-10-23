@@ -88,6 +88,7 @@ import app.headsup.color.Vectorscope
 import app.headsup.core.color.ColorGrade
 import app.headsup.core.color.ColourMask
 import app.headsup.core.color.MaskKind
+import app.headsup.core.frame.Reframe
 import app.headsup.core.color.CineStyle
 import android.graphics.Bitmap
 import app.headsup.core.color.SkinTone
@@ -168,6 +169,10 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
 
     var tool by rememberSaveable { mutableStateOf(Tool.FILES) }
     var adjustment by rememberSaveable { mutableStateOf(Adjustment.EXPOSURE) }
+    var effectKind by rememberSaveable { mutableStateOf(EffectKind.DASHBOARD) }
+    val framing = tool == Tool.EFFECTS && effectKind == EffectKind.FRAME
+    // Set when a clip ended during playback, so the next one starts playing on its own.
+    var continuePlaying by remember { mutableStateOf(false) }
     val measuring = tool == Tool.COLOUR && adjustment == Adjustment.SKIN && state.target != GradeTarget.MASK
     val editingMasks = tool == Tool.COLOUR && state.target == GradeTarget.MASK && state.selected?.colorGrade == true
     // Read only where needed (cut controls), so playback does not recompose the whole screen.
@@ -214,6 +219,19 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
                     onPosition = { playhead.longValue = it },
                     cutScrub = cutScrub,
                     onFrameSource = { frameSource.value = it },
+                    reframe = selected.reframe,
+                    onReframe = if (framing) { r -> vm.updateReframe { r } } else null,
+                    showGrid = framing,
+                    autoPlay = continuePlaying,
+                    onAutoPlayStarted = { continuePlaying = false },
+                    onEnded = {
+                        // The timeline plays through: the next clip follows.
+                        val next = (state.selectedClip ?: -1) + 1
+                        if (next in state.clips.indices) {
+                            continuePlaying = true
+                            vm.selectClip(next)
+                        }
+                    },
                 )
             }
             if (state.clips.isNotEmpty()) {
@@ -240,7 +258,7 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
                 when (tool) {
                     Tool.FILES -> FilesPanel(state, vm, playhead, onCutScrub = { cutScrub.value = it }, onAddVideos = addVideos, onAddFit = addFit)
                     Tool.COLOUR -> ColourPage(state, vm, adjustment, { adjustment = it }, onAddLut = { lutPicker.launch(arrayOf("*/*")) }, frameSource.value)
-                    Tool.EFFECTS -> EffectsPanel(state, vm)
+                    Tool.EFFECTS -> EffectsPanel(state, vm, effectKind) { effectKind = it }
                     Tool.EXPORT -> ExportControls(
                         bitrateFactor = state.bitrateFactor,
                         sourceBitrate = state.selected?.meta?.bitrate,
@@ -407,6 +425,8 @@ private fun FilesPanel(
 private fun ProjectRow(state: UiState, vm: HeadsupViewModel) {
     var listOpen by remember { mutableStateOf(false) }
     var renaming by remember { mutableStateOf(false) }
+    // A project from the list being renamed.
+    var renamingOther by remember { mutableStateOf<String?>(null) }
     Row(verticalAlignment = Alignment.CenterVertically) {
         Column(Modifier.weight(1f)) {
             Text("Project · saved automatically", style = MaterialTheme.typography.labelSmall, color = HeadsupColors.TextMuted)
@@ -417,6 +437,9 @@ private fun ProjectRow(state: UiState, vm: HeadsupViewModel) {
     }
     if (renaming) {
         RenameDialog(state.projectName, onDismiss = { renaming = false }, title = "Project name") { vm.renameProject(it); renaming = false }
+    }
+    renamingOther?.let { old ->
+        RenameDialog(old, onDismiss = { renamingOther = null }, title = "Project name") { vm.renameProject(it, old); renamingOther = null }
     }
     if (listOpen) {
         AlertDialog(
@@ -443,6 +466,7 @@ private fun ProjectRow(state: UiState, vm: HeadsupViewModel) {
                                         .withNano(0).toString().replace('T', ' '),
                                 )
                             }
+                            SmallAction("Rename", { renamingOther = p.name })
                             SmallAction("Delete", { vm.deleteProject(p.name) })
                         }
                     }
@@ -1120,6 +1144,7 @@ private fun VectorscopeView(scope: ScopeResult?, modifier: Modifier) {
 
 private enum class EffectKind(val symbol: String, val label: String) {
     DASHBOARD("HUD", "Dashboard"),
+    FRAME("▣", "Frame"),
     GRAPH("Gr", "Graph"),
     GRAIN("Gn", "Grain"),
     GLOW("Gl", "Glow"),
@@ -1129,13 +1154,12 @@ private enum class EffectKind(val symbol: String, val label: String) {
 
 /** Effects over the picture, picked from round options like the colour corrections. */
 @Composable
-private fun EffectsPanel(state: UiState, vm: HeadsupViewModel) {
+private fun EffectsPanel(state: UiState, vm: HeadsupViewModel, kind: EffectKind, onKind: (EffectKind) -> Unit) {
     val style = state.style
     val effects = state.effects
     val activities = state.activities
     val updateStyle = vm::updateStyle
     val updateEffects = vm::updateEffects
-    var kind by rememberSaveable { mutableStateOf(EffectKind.DASHBOARD) }
     if (state.selected != null) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text("Effects of this clip", Modifier.weight(1f), style = MaterialTheme.typography.labelLarge, color = HeadsupColors.TextMuted)
@@ -1146,13 +1170,14 @@ private fun EffectsPanel(state: UiState, vm: HeadsupViewModel) {
         items(EffectKind.entries) { e ->
             val active = when (e) {
                 EffectKind.DASHBOARD -> style.enabled
+                EffectKind.FRAME -> state.selected?.reframe?.isIdentity == false
                 EffectKind.GRAPH -> effects.graph != null
                 EffectKind.GRAIN -> effects.grain > 0f
                 EffectKind.GLOW -> effects.glow > 0f
                 EffectKind.HALATION -> effects.halation > 0f
                 EffectKind.BARS -> effects.barsRatio != null
             }
-            CircleOption(e.symbol, e.label, selected = e == kind, modified = active) { kind = e }
+            CircleOption(e.symbol, e.label, selected = e == kind, modified = active) { onKind(e) }
         }
     }
     when (kind) {
@@ -1192,6 +1217,20 @@ private fun EffectsPanel(state: UiState, vm: HeadsupViewModel) {
             RulerSlider(effects.glow, 0f..1f, 0.02f, { v -> updateEffects { it.copy(glow = v) } }, onReset = { updateEffects { it.copy(glow = 0f) } })
             ValueHeader("Threshold", String.format(Locale.US, "%.0f %%", effects.glowThreshold * 100))
             RulerSlider(effects.glowThreshold, 0.4f..0.98f, 0.02f, { v -> updateEffects { it.copy(glowThreshold = v) } }, onReset = { updateEffects { it.copy(glowThreshold = 0.75f) } })
+        }
+        EffectKind.FRAME -> {
+            val r = state.selected?.reframe ?: Reframe()
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Hint("Drag the picture to move it, pinch to zoom.", Modifier.weight(1f))
+                if (!r.isIdentity) SmallAction("Reset", { vm.updateReframe { Reframe() } })
+            }
+            ValueHeader("Zoom", String.format(Locale.US, "%.2f×", r.zoom))
+            RulerSlider(r.zoom, 1f..4f, 0.02f, { v -> vm.updateReframe { it.copy(zoom = v) } }, onReset = { vm.updateReframe { it.copy(zoom = 1f) } })
+            ValueHeader("Straighten", String.format(Locale.US, "%+.1f°", r.angleDegrees))
+            RulerSlider(
+                r.angleDegrees, -15f..15f, 0.1f, { v -> vm.updateReframe { it.copy(angleDegrees = v) } },
+                onReset = { vm.updateReframe { it.copy(angleDegrees = 0f) } },
+            )
         }
         EffectKind.HALATION -> {
             ValueHeader("Halation", String.format(Locale.US, "%.0f %%", effects.halation * 100))

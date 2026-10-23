@@ -129,6 +129,13 @@ derives a suggestion per style (warm film, teal & orange, muted) that is added t
 grade at a chosen strength, plus grain and halation (a red-orange bleed around highlights in
 the glow pass of the preview shader and `FinishEffect`).
 
+### Reframing
+
+`Reframe` (zoom, centre, straightening angle) is per clip; zoom never drops below what keeps the
+corners filled after rotation. Colour and texture are applied to the whole picture first and
+the framing afterwards, then the dashboard: in the preview as a transform of the graded layer,
+in export as a Media3 `MatrixTransformation` (aspect-corrected in NDC) before the overlay.
+
 ## Export (stage 3)
 
 - Media3 Transformer, HEVC, source resolution and frame rate, bitrate near the source.

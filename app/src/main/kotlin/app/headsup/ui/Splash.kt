@@ -40,7 +40,7 @@ private val LOGO_SIZE = 52.sp
 private val RECORD_RED = Color(0xFFFF3B30)
 
 /**
- * Start-up animation, about two seconds: "sweetSpot" unrolls from the left, the "o" being a
+ * Start-up animation, about three seconds: "sweetSpot" unrolls from the left, the "o" being a
  * record button that is pressed once the word is complete; then the overlay fades out.
  */
 @Composable
@@ -50,13 +50,15 @@ fun SplashOverlay(onFinished: () -> Unit) {
     val glow = remember { Animatable(0f) }
     val fade = remember { Animatable(1f) }
     LaunchedEffect(Unit) {
-        reveal.animateTo(1f, tween(750, easing = FastOutSlowInEasing))
+        delay(150)
+        reveal.animateTo(1f, tween(1100, easing = FastOutSlowInEasing))
+        delay(150)
         // Press: the dot sinks, then springs back with a red glow, like starting a recording.
         launch { glow.animateTo(1f, tween(250)); glow.animateTo(0.35f, tween(400)) }
         press.animateTo(0.72f, tween(110, easing = LinearEasing))
         press.animateTo(1f, spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessMedium))
-        delay(350)
-        fade.animateTo(0f, tween(350))
+        delay(900)
+        fade.animateTo(0f, tween(450))
         onFinished()
     }
     Box(

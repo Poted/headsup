@@ -79,6 +79,10 @@ import java.time.ZoneId
 import app.headsup.core.color.ColourMask
 import app.headsup.core.color.ColourTransition
 import app.headsup.core.color.MaskKind
+import app.headsup.core.frame.Reframe
+import androidx.compose.foundation.gestures.detectTransformGestures
+import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.graphics.drawscope.withTransform
 import app.headsup.color.GradeTables
 import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.geometry.Size
@@ -129,6 +133,16 @@ fun ClipPreview(
     cutScrub: State<Long?> = NO_SCRUB,
     /** Receives a function that grabs the current frame (before colour), e.g. for analysis. */
     onFrameSource: ((() -> Bitmap?) -> Unit)? = null,
+    /** Zoom, position and straightening; [onReframe] set means a finger on the picture pans and pinches it. */
+    reframe: Reframe = Reframe(),
+    onReframe: ((Reframe) -> Unit)? = null,
+    /** Rule-of-thirds grid over the picture. */
+    showGrid: Boolean = false,
+    /** Start playing as soon as the clip is loaded (continuing from the previous clip). */
+    autoPlay: Boolean = false,
+    onAutoPlayStarted: () -> Unit = {},
+    /** Playback reached the end of the clip. */
+    onEnded: () -> Unit = {},
 ) {
     val context = LocalContext.current
     val exoPlayer = remember { ExoPlayer.Builder(context).build() }
@@ -158,6 +172,20 @@ fun ClipPreview(
             )
         }
         exoPlayer.prepare()
+        if (autoPlay && !scrubbing) {
+            exoPlayer.play()
+            onAutoPlayStarted()
+        }
+    }
+    val ended by rememberUpdatedState(onEnded)
+    DisposableEffect(exoPlayer) {
+        val listener = object : Player.Listener {
+            override fun onPlaybackStateChanged(state: Int) {
+                if (state == Player.STATE_ENDED && exoPlayer.playWhenReady) ended()
+            }
+        }
+        exoPlayer.addListener(listener)
+        onDispose { exoPlayer.removeListener(listener) }
     }
     LaunchedEffect(scrubMs) { scrubMs?.let(scrubber::seek) }
     var nudge by remember { mutableStateOf(1L) }
@@ -184,6 +212,8 @@ fun ClipPreview(
     var textureView by remember { mutableStateOf<TextureView?>(null) }
     val sample by rememberUpdatedState(onSample)
     val maskMover by rememberUpdatedState(onMoveMask)
+    val reframer by rememberUpdatedState(onReframe)
+    val currentReframe by rememberUpdatedState(reframe)
     LaunchedEffect(textureView) {
         val tv = textureView ?: return@LaunchedEffect
         onFrameSource?.invoke {
@@ -228,7 +258,7 @@ fun ClipPreview(
             Modifier.fillMaxWidth().clip(RoundedCornerShape(20.dp)).background(Color.Black),
             contentAlignment = Alignment.Center,
         ) {
-            Box(Modifier.heightIn(max = maxHeight).aspectRatio(aspect, matchHeightConstraintsFirst = true)) {
+            Box(Modifier.heightIn(max = maxHeight).aspectRatio(aspect, matchHeightConstraintsFirst = true).clipToBounds()) {
                 // A TextureView (unlike PlayerView's default SurfaceView) is drawn by the UI, so the
                 // colour shader can be applied to it.
                 AndroidView(
@@ -239,22 +269,58 @@ fun ClipPreview(
                         val frame = if (effects.grain > 0f) (positionMs / 33).toFloat() else 0f
                         val fromWeight = if (fromCube != null) ColourTransition.fromWeight(positionMs, transitionMs) else 0f
                         renderEffect = previewShader?.effect(effects, zebra, frame, size.width, size.height, masks, fromWeight)
+                        // Reframing moves the graded picture, as in the export (colour first, then framing).
+                        val t = reframeTransform(reframe, size.width, size.height)
+                        scaleX = t.zoom
+                        scaleY = t.zoom
+                        rotationZ = reframe.angleDegrees
+                        translationX = t.translation.x
+                        translationY = t.translation.y
                     },
                 )
                 Canvas(
                     Modifier
                         .matchParentSize()
+                        .then(
+                            if (onReframe == null) {
+                                Modifier
+                            } else {
+                                Modifier.pointerInput(Unit) {
+                                    detectTransformGestures { _, pan, zoomChange, _ ->
+                                        val r = currentReframe
+                                        val w = size.width.toFloat()
+                                        val h = size.height.toFloat()
+                                        val z = r.clamped(w, h).effectiveZoom(w, h)
+                                        // A finger moving right shows more of the left: undo rotation and zoom.
+                                        val a = Math.toRadians(r.angleDegrees.toDouble())
+                                        val dx = (pan.x * kotlin.math.cos(a) + pan.y * kotlin.math.sin(a)).toFloat() / z
+                                        val dy = (-pan.x * kotlin.math.sin(a) + pan.y * kotlin.math.cos(a)).toFloat() / z
+                                        reframer?.invoke(
+                                            r.copy(zoom = r.zoom * zoomChange, centerX = r.centerX - dx / w, centerY = r.centerY - dy / h),
+                                        )
+                                    }
+                                }
+                            },
+                        )
                         .pointerInput(renderer) {
                             awaitEachGesture {
                                 val down = awaitFirstDown()
                                 // While a mask is edited, a finger on the picture moves it (widgets stay put).
+                                if (reframer != null) return@awaitEachGesture
                                 val moveMask = maskMover
                                 if (moveMask != null) {
+                                    // Masks live in the picture, so map the finger back through the framing.
+                                    fun move(p: Offset) {
+                                        val w = size.width.toFloat()
+                                        val h = size.height.toFloat()
+                                        val (sx, sy) = currentReframe.sourceOf(p.x, p.y, w, h)
+                                        moveMask(sx / w, sy / h)
+                                    }
                                     down.consume()
-                                    moveMask(down.position.x / size.width, down.position.y / size.height)
+                                    move(down.position)
                                     drag(down.id) { change ->
                                         change.consume()
-                                        moveMask(change.position.x / size.width, change.position.y / size.height)
+                                        move(change.position)
                                     }
                                     return@awaitEachGesture
                                 }
@@ -292,21 +358,35 @@ fun ClipPreview(
                         },
                 ) {
                     drawIntoCanvas { renderer.drawVignette(it.nativeCanvas, size.width, size.height, vignette) }
-                    guideMask?.let { drawMaskGuide(it) }
+                    guideMask?.let { m ->
+                        val t = reframeTransform(reframe, size.width, size.height)
+                        val o = Offset(size.width / 2f, size.height / 2f)
+                        withTransform({
+                            translate(t.translation.x, t.translation.y)
+                            rotate(reframe.angleDegrees, o)
+                            scale(t.zoom, t.zoom, o)
+                        }) { drawMaskGuide(m) }
+                    }
                     marker?.let { m ->
                         val c = Offset(m.x * size.width, m.y * size.height)
                         drawCircle(Color.Black.copy(alpha = 0.5f), radius = 14.dp.toPx(), center = c, style = Stroke(3.dp.toPx()))
                         drawCircle(HeadsupColors.Accent, radius = 14.dp.toPx(), center = c, style = Stroke(1.5.dp.toPx()))
                         drawCircle(HeadsupColors.Accent, radius = 2.dp.toPx(), center = c)
                     }
-                    val utc = clip.telemetryUtc(positionMs) ?: return@Canvas
-                    val track = activity?.track ?: return@Canvas
-                    val frame = sampler?.frameAt(utc) ?: return@Canvas
+                    val utc = clip.telemetryUtc(positionMs)
+                    val track = activity?.track
+                    val frame = utc?.let { sampler?.frameAt(it) }
+                    if (utc == null || track == null || frame == null) {
+                        // No watch data here: the picture effects still show.
+                        drawIntoCanvas { renderer.drawBars(it.nativeCanvas, size.width, size.height, effects) }
+                        return@Canvas
+                    }
                     val zone = track.utcOffsetSeconds
                         ?: ZoneId.systemDefault().rules.getOffset(Instant.ofEpochMilli(utc)).totalSeconds
                     val data = DashboardData(track, frame, utc, zone)
                     drawIntoCanvas { renderer.draw(it.nativeCanvas, size.width, size.height, style, data, effects) }
                 }
+                if (showGrid) Canvas(Modifier.matchParentSize()) { drawThirds() }
                 histogram?.takeIf { histogramOn }?.let { bins ->
                     Histogram(bins, Modifier.align(Alignment.BottomStart).padding(10.dp).size(width = 128.dp, height = 56.dp))
                 }
@@ -350,6 +430,37 @@ fun ClipPreview(
 }
 
 private const val SAMPLE_WIDTH = 192
+
+private class ReframeTransform(val zoom: Float, val translation: Offset)
+
+/**
+ * Layer transform (around the centre) that shows the picture as [reframe] describes: the source
+ * point at the reframe centre lands in the middle of the frame.
+ */
+private fun reframeTransform(reframe: Reframe, width: Float, height: Float): ReframeTransform {
+    if (reframe.isIdentity || width <= 0f || height <= 0f) return ReframeTransform(1f, Offset.Zero)
+    val r = reframe.clamped(width, height)
+    val z = r.effectiveZoom(width, height)
+    val a = Math.toRadians(r.angleDegrees.toDouble())
+    // T = z·R(θ)·(O − C), clockwise rotation with y down.
+    val vx = width / 2f - r.centerX * width
+    val vy = height / 2f - r.centerY * height
+    val tx = z * (vx * kotlin.math.cos(a) - vy * kotlin.math.sin(a)).toFloat()
+    val ty = z * (vx * kotlin.math.sin(a) + vy * kotlin.math.cos(a)).toFloat()
+    return ReframeTransform(z, Offset(tx, ty))
+}
+
+/** Rule-of-thirds lines, with a faint shadow so they show on bright and dark pictures. */
+private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawThirds() {
+    for (i in 1..2) {
+        val x = size.width * i / 3f
+        val y = size.height * i / 3f
+        for ((colour, width) in listOf(Color.Black.copy(alpha = 0.35f) to 2.5f, Color.White.copy(alpha = 0.75f) to 1f)) {
+            drawLine(colour, Offset(x, 0f), Offset(x, size.height), strokeWidth = width * density)
+            drawLine(colour, Offset(0f, y), Offset(size.width, y), strokeWidth = width * density)
+        }
+    }
+}
 private const val ANALYSIS_WIDTH = 256
 
 /** The mask's edge (solid) and the ends of its soft blend (dashed), as in DaVinci's window controls. */

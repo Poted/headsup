@@ -13,6 +13,7 @@ import app.headsup.core.color.SkinTone
 import app.headsup.core.color.ColorGrade
 import app.headsup.core.color.ColourMask
 import app.headsup.core.color.MaskKind
+import app.headsup.core.frame.Reframe
 import app.headsup.core.color.CineAssistant
 import app.headsup.core.color.CineStyle
 import app.headsup.core.color.FrameStats
@@ -88,6 +89,8 @@ data class ClipState(
     val masks: List<ColourMask> = emptyList(),
     /** Length of the blend from the previous clip's look at the start of this one; 0 = a plain cut. */
     val transitionMs: Long = 0L,
+    /** Zoom, position and straightening of the picture (not part of the copied look: it is per shot). */
+    val reframe: Reframe = Reframe(),
     /** Group whose corrections (and LUT, if the clip has none) apply too; at most one. */
     val groupId: Long? = null,
 ) {
@@ -282,7 +285,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
         clips = clips.map {
             SavedClip(
                 it.meta.uri, it.trimStartMs, it.trimEndMs, it.manualOffsetMs, it.colorGrade, it.lutName,
-                it.manualStart, it.grade, it.effects, it.masks, it.groupId, it.transitionMs,
+                it.manualStart, it.grade, it.effects, it.masks, it.groupId, it.transitionMs, it.reframe,
             )
         },
         groups = groups.map { SavedGroup(it.id, it.name, it.grade, it.lutName) },
@@ -326,6 +329,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                     effects = c.effects,
                     masks = c.masks,
                     transitionMs = c.transitionMs,
+                    reframe = c.reframe,
                     groupId = c.groupId,
                 )
             }
@@ -372,15 +376,17 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
         refreshPreview()
     }
 
-    fun renameProject(name: String) {
+    /** Renames project [old] (the open one by default) to [name]. */
+    fun renameProject(name: String, old: String = _state.value.projectName) {
         val newName = name.trim().takeIf { it.isNotEmpty() } ?: return
-        val old = _state.value.projectName
         if (newName == old) return
         if (!projectStore.rename(old, newName)) {
             _state.update { it.copy(messages = it.messages + "A project called \"$newName\" already exists.") }
             return
         }
-        _state.update { it.copy(projectName = newName, projects = projectStore.list()) }
+        _state.update { s ->
+            s.copy(projectName = if (s.projectName == old) newName else s.projectName, projects = projectStore.list())
+        }
     }
 
     fun deleteProject(name: String) {
@@ -691,6 +697,16 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
         _state.update { it.copy(cine = null) }
     }
 
+    /** Changes the selected clip's framing; kept inside the picture. */
+    fun updateReframe(transform: (Reframe) -> Reframe) {
+        val index = _state.value.selectedClip ?: return
+        updateClip(index) { c ->
+            val w = c.meta.width.toFloat().coerceAtLeast(1f)
+            val h = c.meta.height.toFloat().coerceAtLeast(1f)
+            c.copy(reframe = transform(c.reframe).let { it.copy(zoom = it.zoom.coerceIn(1f, 4f)) }.clamped(w, h))
+        }
+    }
+
     // Masks and transitions
 
     fun addMask(kind: MaskKind) {
@@ -854,6 +870,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                     effects = clip.effects,
                     grade = if (graded) GradeSetup(cube, applied.vignette, masks, maskCubes, fromCube, clip.transitionMs) else null,
                     bitrateFactor = s.bitrateFactor,
+                    reframe = clip.reframe,
                 )
             }
             if (requests.isEmpty()) {

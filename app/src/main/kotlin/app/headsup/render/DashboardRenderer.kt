@@ -280,8 +280,8 @@ class DashboardRenderer(private val assets: AssetManager) {
         return if (width / height >= ratio) 0f else (height - width / ratio) / 2
     }
 
-    /** Black bars that crop the picture to a wider (cinema) aspect ratio. */
-    private fun drawBars(canvas: Canvas, width: Float, height: Float, effects: EffectSettings) {
+    /** Black bars that crop the picture to a wider (cinema) aspect ratio; drawn even without watch data. */
+    fun drawBars(canvas: Canvas, width: Float, height: Float, effects: EffectSettings) {
         val bar = barHeight(width, height, effects)
         if (bar <= 0f) return
         canvas.drawRect(0f, 0f, width, bar, barPaint)

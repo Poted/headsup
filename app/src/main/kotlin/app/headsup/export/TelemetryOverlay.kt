@@ -66,7 +66,7 @@ class TelemetryOverlay(
         bitmap.eraseColor(Color.TRANSPARENT)
         val canvas = Canvas(bitmap)
         renderer.drawVignette(canvas, w, h, vignette)
-        if (data != null) renderer.draw(canvas, w, h, style, data, effects)
+        if (data != null) renderer.draw(canvas, w, h, style, data, effects) else renderer.drawBars(canvas, w, h, effects)
         lastKey = key
         return bitmap
     }

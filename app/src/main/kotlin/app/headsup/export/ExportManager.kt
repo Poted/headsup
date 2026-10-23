@@ -13,6 +13,9 @@ import androidx.media3.common.MimeTypes
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.effect.OverlayEffect
 import androidx.media3.effect.SingleColorLut
+import androidx.media3.effect.MatrixTransformation
+import android.graphics.Matrix
+import app.headsup.core.frame.Reframe
 import app.headsup.core.color.ColorGrade
 import app.headsup.core.color.LutBaker
 import androidx.media3.effect.TextureOverlay
@@ -132,6 +135,28 @@ class ExportManager(private val context: Context) {
         }
     }
 
+    /**
+     * The reframe as a Media3 matrix on normalised device coordinates (y up, −1..1 on both axes):
+     * aspect-corrected so rotation does not shear the picture.
+     */
+    private fun reframeEffect(reframe: Reframe, width: Int, height: Int): MatrixTransformation? {
+        if (reframe.isIdentity || width <= 0 || height <= 0) return null
+        val w = width.toFloat()
+        val h = height.toFloat()
+        val r = reframe.clamped(w, h)
+        val zoom = r.effectiveZoom(w, h)
+        val aspect = w / h
+        val matrix = Matrix().apply {
+            postTranslate(-(2f * r.centerX - 1f), -(1f - 2f * r.centerY))
+            postScale(aspect, 1f)
+            // Clockwise on screen is a negative angle with y pointing up.
+            postRotate(-r.angleDegrees)
+            postScale(zoom, zoom)
+            postScale(1f / aspect, 1f)
+        }
+        return MatrixTransformation { matrix }
+    }
+
     private fun runVideo(job: ExportJob) {
         val request = job.request
         val test = request.kind == ExportKind.TEN_BIT_TEST
@@ -150,6 +175,8 @@ class ExportManager(private val context: Context) {
             grade?.cube?.let { effects += SingleColorLut.createFromCube(it) }
         }
         if (request.effects.changesPixels) effects += FinishEffect(request.effects)
+        // Reframing comes after colour and texture (as in the preview) and before the dashboard.
+        reframeEffect(request.reframe, request.width, request.height)?.let { effects += it }
         effects += OverlayEffect(ImmutableList.of<TextureOverlay>(overlay))
 
         val endMs = if (test) minOf(request.trimStartMs + TEST_LENGTH_MS, request.trimEndMs) else request.trimEndMs

@@ -5,6 +5,7 @@ import android.net.Uri
 import app.headsup.core.color.ColorGrade
 import app.headsup.core.color.ColourMask
 import app.headsup.core.color.MaskKind
+import app.headsup.core.frame.Reframe
 import app.headsup.render.EffectSettings
 import app.headsup.render.GraphMetric
 import org.json.JSONArray
@@ -26,6 +27,7 @@ data class SavedClip(
     val masks: List<ColourMask>,
     val groupId: Long?,
     val transitionMs: Long,
+    val reframe: Reframe = Reframe(),
 )
 
 data class SavedGroup(val id: Long, val name: String, val grade: ColorGrade, val lutName: String?)
@@ -121,6 +123,7 @@ internal object Json {
         .put("masks", JSONArray(c.masks.map(::mask)))
         .putOpt("groupId", c.groupId)
         .put("transitionMs", c.transitionMs)
+        .put("reframe", JSONObject().put("zoom", c.reframe.zoom).put("centerX", c.reframe.centerX).put("centerY", c.reframe.centerY).put("angleDegrees", c.reframe.angleDegrees))
 
     private fun clip(o: JSONObject) = SavedClip(
         uri = Uri.parse(o.getString("uri")),
@@ -136,6 +139,14 @@ internal object Json {
         masks = o.optJSONArray("masks").objects().map(::mask) + listOfNotNull(o.optJSONObject("mask")?.let(::mask)),
         groupId = if (o.has("groupId")) o.getLong("groupId") else null,
         transitionMs = o.optLong("transitionMs", 0L),
+        reframe = o.optJSONObject("reframe")?.let { r ->
+            Reframe(
+                zoom = r.optDouble("zoom", 1.0).toFloat(),
+                centerX = r.optDouble("centerX", 0.5).toFloat(),
+                centerY = r.optDouble("centerY", 0.5).toFloat(),
+                angleDegrees = r.optDouble("angleDegrees", 0.0).toFloat(),
+            )
+        } ?: Reframe(),
     )
 
     private fun group(g: SavedGroup) = JSONObject()
