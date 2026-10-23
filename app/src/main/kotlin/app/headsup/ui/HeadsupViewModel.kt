@@ -1341,12 +1341,16 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
     /** Stops the mask moving; it stays where it is at the playhead. */
     fun clearMaskKeys() = editSelectedMask { m -> m.at(playheadFileMs).copy(keys = emptyList()) }
 
+    /** Which way [trackMask] follows the picture from the playhead. */
+    enum class TrackDirection { BOTH, FORWARD, BACKWARD }
+
     /**
-     * Tracks the selected mask from the playhead to both ends of the cut: frames every 66 ms are
-     * read once, then the mask follows the picture forwards and backwards. Keys found replace the
-     * old ones in the tracked span; where tracking is lost, the mask holds its last place.
+     * Tracks the selected mask from the playhead towards the end, the start or both ends of the
+     * cut: frames of that span are read once (every 66 ms or so), then the mask follows the picture.
+     * Keys found replace the old ones only in the tracked span, so a track can be continued from a
+     * key placed by hand; where tracking is lost, the mask holds its last place.
      */
-    fun trackMask() {
+    fun trackMask(direction: TrackDirection = TrackDirection.BOTH) {
         val s = _state.value
         if (s.busy) return
         val clip = s.selected ?: return
@@ -1359,8 +1363,10 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
         _state.update { it.copy(busy = true, loadingMessage = "Reading frames", loadingProgress = 0f) }
         loadJob = viewModelScope.launch {
             try {
+                val from = if (direction == TrackDirection.FORWARD) t0 else clip.trimStartMs
+                val to = if (direction == TrackDirection.BACKWARD) t0 else clip.trimEndMs
                 val frames = withContext(Dispatchers.Default) {
-                    TrackingFrames.read(getApplication(), clip.meta.uri, clip.trimStartMs, clip.trimEndMs, maxOf(66L, clip.durationMs / 200)) { p ->
+                    TrackingFrames.read(getApplication(), clip.meta.uri, from, to, maxOf(66L, (to - from) / 200)) { p ->
                         _state.update { it.copy(loadingMessage = "Reading frames", loadingProgress = p * 0.6f) }
                     }
                 }
@@ -1377,9 +1383,9 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                         return keys to null
                     }
                     _state.update { it.copy(loadingMessage = "Tracking", loadingProgress = 0.7f) }
-                    val (ahead, lostAhead) = follow(first + 1 until frames.size)
+                    val (ahead, lostAhead) = if (direction != TrackDirection.BACKWARD) follow(first + 1 until frames.size) else emptyList<MaskKey>() to null
                     _state.update { it.copy(loadingProgress = 0.85f) }
-                    val (behind, lostBehind) = follow(first - 1 downTo 0)
+                    val (behind, lostBehind) = if (direction != TrackDirection.FORWARD) follow(first - 1 downTo 0) else emptyList<MaskKey>() to null
                     // Only the keys the path needs, so they can be adjusted one by one.
                     Triple(MaskKey.simplify(behind.reversed() + MaskKey.of(start, frames[first].first) + ahead), lostAhead, lostBehind)
                 }
@@ -1387,21 +1393,21 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                     _state.update { it.copy(messages = it.messages + "Could not read the clip's frames for tracking.") }
                 } else {
                     val (keys, lostAhead, lostBehind) = result
-                    val from = keys.first().timeMs
-                    val to = keys.last().timeMs
+                    val spanFrom = keys.first().timeMs
+                    val spanTo = keys.last().timeMs
                     _state.update { st ->
                         st.copy(
                             clips = st.clips.map { c ->
                                 if (c.id != clipId) c else c.copy(
                                     masks = c.masks.mapIndexed { i, m ->
-                                        if (i != maskIndex) m else m.copy(keys = (m.keys.filter { it.timeMs < from || it.timeMs > to } + keys).sortedBy { it.timeMs })
+                                        if (i != maskIndex) m else m.copy(keys = (m.keys.filter { it.timeMs < spanFrom || it.timeMs > spanTo } + keys).sortedBy { it.timeMs })
                                     },
                                 )
                             },
                             messages = st.messages + listOfNotNull(
-                                "Mask tracked ${Formats.duration(from - clip.trimStartMs)}–${Formats.duration(to - clip.trimStartMs)} (${keys.size} keys).",
-                                lostAhead?.let { "Lost at ${Formats.duration(it - clip.trimStartMs)}: set a key there and track again." },
-                                lostBehind?.let { "Lost going back at ${Formats.duration(it - clip.trimStartMs)}." },
+                                "Mask tracked ${Formats.duration(spanFrom - clip.trimStartMs)}–${Formats.duration(spanTo - clip.trimStartMs)} (${keys.size} keys).",
+                                lostAhead?.let { "Lost at ${Formats.duration(it - clip.trimStartMs)}: place the mask there and Track ▶ to continue." },
+                                lostBehind?.let { "Lost going back at ${Formats.duration(it - clip.trimStartMs)}: place the mask there and ◀ Track to continue." },
                             ),
                         )
                     }

@@ -1575,7 +1575,15 @@ private fun MaskList(state: UiState, clip: ClipState, vm: HeadsupViewModel, play
             style = MaterialTheme.typography.labelMedium,
             color = HeadsupColors.TextMuted,
         )
-        if (!clip.meta.isPhoto) SmallAction("Track", vm::trackMask, enabled = !state.busy)
+        if (!clip.meta.isPhoto) {
+            if (mask.keys.isEmpty()) {
+                SmallAction("Track", { vm.trackMask(HeadsupViewModel.TrackDirection.BOTH) }, enabled = !state.busy)
+            } else {
+                // Continuing from a key placed by hand keeps what was already tracked.
+                SmallAction("◀ Track", { vm.trackMask(HeadsupViewModel.TrackDirection.BACKWARD) }, enabled = !state.busy)
+                SmallAction("Track ▶", { vm.trackMask(HeadsupViewModel.TrackDirection.FORWARD) }, enabled = !state.busy)
+            }
+        }
     }
     if (!clip.meta.isPhoto) {
         MaskKeyStrip(
@@ -1591,7 +1599,7 @@ private fun MaskList(state: UiState, clip: ClipState, vm: HeadsupViewModel, play
     }
     Hint(
         if (mask.keys.isEmpty()) "To follow movement: place the mask, then Track (it follows the picture both ways from here), or pause, + Key, and move the mask at a few moments."
-        else "Pause on a key (or tap its diamond) and move the mask to change it; between keys it glides. Where tracking was lost, place it by hand and Track again from there.",
+        else "Pause on a key (or tap its diamond) and move the mask to change it; between keys it glides. Where tracking was lost, place the mask by hand there and Track ▶ to continue; only the part after it changes.",
     )
 }
 
