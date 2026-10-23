@@ -697,16 +697,16 @@ private fun ExportRate(state: UiState) {
 /** How each clip's frames fit [fps]: by its frame rate after its speed change. */
 @Composable
 private fun RateNotes(state: UiState, fps: Float) {
-    val rates = state.clips.filter { !it.meta.isPhoto && it.meta.frameRate != null }
-        .groupingBy { (it.meta.frameRate ?: fps) to it.speed }.eachCount()
-    val notes = rates.entries.sortedBy { it.key.first }.map { (key, count) ->
-        val (rate, speed) = key
-        val clips = (if (count == 1) "1 clip" else "$count clips") + " at ${OutputSpec.formatFps(rate)} fps" + if (speed != 1f) " (${String.format(Locale.US, "%.3g", speed)}×)" else ""
+    // One line per clip, by its place on the timeline and file name.
+    val notes = state.clips.withIndex().filter { !it.value.meta.isPhoto && it.value.meta.frameRate != null }.map { (i, c) ->
+        val rate = c.meta.frameRate ?: fps
+        val speed = c.speed
+        val name = "${i + 1}. ${c.meta.name} · ${OutputSpec.formatFps(rate)} fps" + if (speed != 1f) " at ${String.format(Locale.US, "%.3g", speed)}×" else ""
         val r = rate * speed / fps
         when {
-            kotlin.math.abs(r - 1f) < 0.02f -> "$clips: every frame used, as recorded"
-            r > 1f -> "$clips: every ${String.format(Locale.US, "%.3g", r)}th frame kept (\"All frames\" on the clip's speed plays every frame as ${String.format(Locale.US, "%.3g", speed / r)}× slow motion)"
-            else -> "$clips: only ${OutputSpec.formatFps(rate * speed)} frames a second, each held longer (less smooth)"
+            kotlin.math.abs(r - 1f) < 0.02f -> "$name: every frame used"
+            r > 1f -> "$name: every ${String.format(Locale.US, "%.3g", r)}th frame kept (\"All frames\" speed: ${String.format(Locale.US, "%.3g", speed / r)}× slow motion)"
+            else -> "$name: ${OutputSpec.formatFps(rate * speed)} frames a second, each held longer"
         }
     }
     if (notes.isNotEmpty()) Hint(notes.joinToString("\n"))
