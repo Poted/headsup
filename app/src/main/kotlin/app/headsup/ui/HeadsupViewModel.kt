@@ -38,6 +38,10 @@ import app.headsup.export.ExportPreset
 import app.headsup.export.HdrRoute
 import app.headsup.core.edit.AudioEnvelope
 import app.headsup.media.AudioAnalysis
+import app.headsup.render.Formats
+import app.headsup.media.TrackingFrames
+import app.headsup.core.color.MaskKey
+import app.headsup.core.color.MaskTracker
 import app.headsup.export.JobSpec
 import app.headsup.export.OutputSpec
 import app.headsup.export.VideoCodec
@@ -1288,11 +1292,125 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /** Reshapes the selected mask of the selected clip. */
-    fun updateMask(transform: (ColourMask) -> ColourMask) {
+    /**
+     * Edits the selected mask. A mask that moves ([ColourMask.keys]) is edited as it is at the
+     * playhead, and a change of its place becomes a key there.
+     */
+    fun updateMask(transform: (ColourMask) -> ColourMask) = editSelectedMask { mask ->
+        if (mask.keys.isEmpty()) return@editSelectedMask transform(mask)
+        val t = playheadFileMs
+        val shown = mask.at(t)
+        val edited = transform(shown)
+        val kept = edited.copy(
+            centerX = mask.centerX, centerY = mask.centerY, angleDegrees = mask.angleDegrees,
+            sizeX = mask.sizeX, sizeY = mask.sizeY, keys = mask.keys,
+        )
+        val moved = edited.centerX != shown.centerX || edited.centerY != shown.centerY ||
+            edited.angleDegrees != shown.angleDegrees || edited.sizeX != shown.sizeX || edited.sizeY != shown.sizeY
+        if (moved) kept.placedAt(t, edited.centerX, edited.centerY, edited.angleDegrees, edited.sizeX, edited.sizeY) else kept
+    }
+
+    private fun editSelectedMask(transform: (ColourMask) -> ColourMask) {
         val s = _state.value
         val index = s.selectedClip ?: return
         val m = s.selectedMask
         updateClip(index) { c -> c.copy(masks = c.masks.mapIndexed { i, mask -> if (i == m) transform(mask) else mask }) }
+    }
+
+    /** The playhead in the selected clip's file, where mask keys are set and tracking starts. */
+    private var playheadFileMs = 0L
+
+    /** Called with the preview's position in the clip (from its cut). */
+    fun notePlayhead(clipMs: Long) {
+        playheadFileMs = (_state.value.selected?.trimStartMs ?: 0L) + clipMs
+    }
+
+    /** [mask] as it is at the playhead (for the shape rulers). */
+    fun maskAtPlayhead(mask: ColourMask): ColourMask = mask.at(playheadFileMs)
+
+    /** A key at the playhead with the mask where it is now; the first one makes the mask move. */
+    fun addMaskKey() = editSelectedMask { m -> m.copy(keys = MaskKey.upsert(m.keys, MaskKey.of(m.at(playheadFileMs), playheadFileMs))) }
+
+    /** Removes the key nearest the playhead (within a few frames); the last one leaves the mask where it was. */
+    fun removeMaskKey() = editSelectedMask { m ->
+        val near = m.keys.minByOrNull { kotlin.math.abs(it.timeMs - playheadFileMs) }?.takeIf { kotlin.math.abs(it.timeMs - playheadFileMs) <= 150 }
+            ?: return@editSelectedMask m
+        val rest = m.keys - near
+        if (rest.isEmpty()) m.at(playheadFileMs).copy(keys = emptyList()) else m.copy(keys = rest)
+    }
+
+    /** Stops the mask moving; it stays where it is at the playhead. */
+    fun clearMaskKeys() = editSelectedMask { m -> m.at(playheadFileMs).copy(keys = emptyList()) }
+
+    /**
+     * Tracks the selected mask from the playhead to both ends of the cut: frames every 66 ms are
+     * read once, then the mask follows the picture forwards and backwards. Keys found replace the
+     * old ones in the tracked span; where tracking is lost, the mask holds its last place.
+     */
+    fun trackMask() {
+        val s = _state.value
+        if (s.busy) return
+        val clip = s.selected ?: return
+        if (clip.meta.isPhoto) return
+        val maskIndex = s.selectedMask
+        val mask = clip.masks.getOrNull(maskIndex) ?: return
+        val clipId = clip.id
+        val t0 = playheadFileMs.coerceIn(clip.trimStartMs, clip.trimEndMs)
+        val start = mask.at(t0)
+        _state.update { it.copy(busy = true, loadingMessage = "Reading frames", loadingProgress = 0f) }
+        loadJob = viewModelScope.launch {
+            try {
+                val frames = withContext(Dispatchers.Default) {
+                    TrackingFrames.read(getApplication(), clip.meta.uri, clip.trimStartMs, clip.trimEndMs, maxOf(66L, clip.durationMs / 200)) { p ->
+                        _state.update { it.copy(loadingMessage = "Reading frames", loadingProgress = p * 0.6f) }
+                    }
+                }
+                val result = withContext(Dispatchers.Default) {
+                    val first = frames.indices.minByOrNull { kotlin.math.abs(frames[it].first - t0) } ?: return@withContext null
+                    fun follow(range: IntProgression): Pair<List<MaskKey>, Long?> {
+                        val tracker = MaskTracker(start, frames[first].second, frames[first].first)
+                        val keys = mutableListOf<MaskKey>()
+                        for (i in range) {
+                            val (ms, frame) = frames[i]
+                            val key = tracker.next(frame, ms) ?: return keys to ms
+                            keys += key
+                        }
+                        return keys to null
+                    }
+                    _state.update { it.copy(loadingMessage = "Tracking", loadingProgress = 0.7f) }
+                    val (ahead, lostAhead) = follow(first + 1 until frames.size)
+                    _state.update { it.copy(loadingProgress = 0.85f) }
+                    val (behind, lostBehind) = follow(first - 1 downTo 0)
+                    Triple(behind.reversed() + MaskKey.of(start, frames[first].first) + ahead, lostAhead, lostBehind)
+                }
+                if (result == null) {
+                    _state.update { it.copy(messages = it.messages + "Could not read the clip's frames for tracking.") }
+                } else {
+                    val (keys, lostAhead, lostBehind) = result
+                    val from = keys.first().timeMs
+                    val to = keys.last().timeMs
+                    _state.update { st ->
+                        st.copy(
+                            clips = st.clips.map { c ->
+                                if (c.id != clipId) c else c.copy(
+                                    masks = c.masks.mapIndexed { i, m ->
+                                        if (i != maskIndex) m else m.copy(keys = (m.keys.filter { it.timeMs < from || it.timeMs > to } + keys).sortedBy { it.timeMs })
+                                    },
+                                )
+                            },
+                            messages = st.messages + listOfNotNull(
+                                "Mask tracked ${Formats.duration(from - clip.trimStartMs)}–${Formats.duration(to - clip.trimStartMs)} (${keys.size} keys).",
+                                lostAhead?.let { "Lost at ${Formats.duration(it - clip.trimStartMs)}: set a key there and track again." },
+                                lostBehind?.let { "Lost going back at ${Formats.duration(it - clip.trimStartMs)}." },
+                            ),
+                        )
+                    }
+                    refreshPreview()
+                }
+            } finally {
+                _state.update { it.copy(busy = false, loadingMessage = null, loadingProgress = null) }
+            }
+        }
     }
 
     /** Blend from the previous clip's look over [lengthMs] at the start of the clip at [index]; 0 for a cut. */

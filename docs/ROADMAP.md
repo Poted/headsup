@@ -18,5 +18,5 @@ continuous playback across clips, highlights from the watch data, shot match, ph
 
 ## Later: more from DaVinci's windows
 
-- a rectangle shape; keyframes so a window can move during the clip;
-- tracking a window to follow a subject (much harder; needs motion analysis).
+- a rectangle shape;
+- perspective/planar tracking (the tracker follows position, rotation and scale only).

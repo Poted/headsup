@@ -31,6 +31,8 @@ class GradeEffect(
     private val transitionMs: Long,
     /** Input arrives through [HdrRoute]: how to get back to the values the colour tables expect. */
     private val hdrInput: HdrInput? = null,
+    /** Where the exported part starts in the file, for masks that move ([ColourMask.keys]). */
+    private val fileStartMs: Long = 0L,
 ) : GlEffect {
     override fun toGlShaderProgram(context: Context, useHdr: Boolean): GlShaderProgram = Program(useHdr)
 
@@ -85,7 +87,7 @@ class GradeEffect(
                 program.setFloatsUniform("uSize", floatArrayOf(width.toFloat(), height.toFloat()))
                 program.setFloatUniform("uMaskCount", masks.size.coerceAtMost(ColourMask.MAX_PER_CLIP).toFloat())
                 for (i in 0 until ColourMask.MAX_PER_CLIP) {
-                    val (a, b) = masks.getOrNull(i)?.shaderParams() ?: (FloatArray(4) to FloatArray(4))
+                    val (a, b) = masks.getOrNull(i)?.at(fileStartMs + positionMs)?.shaderParams() ?: (FloatArray(4) to FloatArray(4))
                     program.setFloatsUniform("uM${i}a", a)
                     program.setFloatsUniform("uM${i}b", b)
                 }

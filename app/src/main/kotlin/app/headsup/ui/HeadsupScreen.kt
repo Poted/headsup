@@ -244,7 +244,10 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
                         maxHeight = previewMaxHeight,
                         onMoveWidget = vm::moveWidget,
                         onMoveFinished = vm::persistStyle,
-                        onPosition = { playhead.longValue = it },
+                        onPosition = {
+                            playhead.longValue = it
+                            vm.notePlayhead(it)
+                        },
                         cutScrub = cutScrub,
                         onFrameSource = { frameSource.value = it },
                         reframe = selected.reframe,
@@ -1346,9 +1349,11 @@ private fun ColourPage(
         }
     }
     if (editingShape != null && mask != null) {
-        ValueHeader(editingShape.label, String.format(Locale.US, editingShape.format, editingShape.shown(mask)))
+        // A moving mask is shown and edited as it is at the playhead.
+        val here = vm.maskAtPlayhead(mask)
+        ValueHeader(editingShape.label, String.format(Locale.US, editingShape.format, editingShape.shown(here)))
         RulerSlider(
-            value = editingShape.get(mask),
+            value = editingShape.get(here),
             range = editingShape.range,
             step = editingShape.step,
             onChange = { v -> vm.updateMask { editingShape.set(it, v) } },
@@ -1557,6 +1562,25 @@ private fun MaskList(state: UiState, clip: ClipState, vm: HeadsupViewModel) {
         if (mask.grade != ColorGrade()) SmallAction("Reset", { vm.updateGrade { ColorGrade() } })
         SmallAction("Remove", { vm.removeMask(state.selectedMask) })
     }
+    // Following movement in the shot: keys at moments of the clip, or tracked automatically.
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Text(
+            if (mask.keys.isEmpty()) "Stays put" else "Moves · ${mask.keys.size} keys",
+            Modifier.weight(1f),
+            style = MaterialTheme.typography.labelMedium,
+            color = HeadsupColors.TextMuted,
+        )
+        if (!clip.meta.isPhoto) SmallAction("Track", vm::trackMask, enabled = !state.busy)
+        SmallAction("+ Key", vm::addMaskKey)
+        if (mask.keys.isNotEmpty()) {
+            SmallAction("− Key", vm::removeMaskKey)
+            SmallAction("Clear", vm::clearMaskKeys)
+        }
+    }
+    Hint(
+        if (mask.keys.isEmpty()) "To follow movement: place the mask, then Track (it follows the picture both ways from here), or add keys at a few moments and move it there."
+        else "Moving the mask sets a key at the playhead; between keys it glides. Where tracking was lost, place it by hand and Track again from there.",
+    )
 }
 
 /** LUT library: the camera LUT is the last step, after all corrections. */

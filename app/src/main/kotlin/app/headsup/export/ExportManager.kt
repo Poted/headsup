@@ -192,6 +192,7 @@ class ExportManager(private val context: Context) {
                 grade?.cube ?: LutBaker.bake(null, ColorGrade()), grade?.masks.orEmpty(), grade?.maskCubes.orEmpty(),
                 grade?.fromCube, grade?.transitionMs ?: 0L,
                 hdrInput = if (hdr) HdrRoute.inputOf(request.sourceFormat?.transfer, request.sourceFormat?.primaries) else null,
+                fileStartMs = request.trimStartMs,
             )
         } else {
             grade?.cube?.let { effects += SingleColorLut.createFromCube(it) }

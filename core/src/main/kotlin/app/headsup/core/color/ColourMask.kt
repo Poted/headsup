@@ -32,7 +32,27 @@ data class ColourMask(
     /** Swaps inside and outside (below the line, outside the oval). */
     val inverted: Boolean = false,
     val grade: ColorGrade = ColorGrade(),
+    /**
+     * Where the mask is at moments of the clip (file time), for following movement in the shot;
+     * empty = it stays put. With keys, the centre, angle and size above are only defaults.
+     */
+    val keys: List<MaskKey> = emptyList(),
 ) {
+    /** The mask at [fileMs] into the clip's file: between keys it moves smoothly, outside them it holds. */
+    fun at(fileMs: Long): ColourMask {
+        if (keys.isEmpty()) return this
+        val k = MaskKey.interpolate(keys, fileMs)
+        return copy(centerX = k.centerX, centerY = k.centerY, angleDegrees = k.angleDegrees, sizeX = k.sizeX, sizeY = k.sizeY)
+    }
+
+    /** Sets the mask's place at [fileMs] (a key there, or the defaults when it has no keys). */
+    fun placedAt(fileMs: Long, centerX: Float, centerY: Float, angleDegrees: Float, sizeX: Float, sizeY: Float): ColourMask =
+        if (keys.isEmpty()) {
+            copy(centerX = centerX, centerY = centerY, angleDegrees = angleDegrees, sizeX = sizeX, sizeY = sizeY)
+        } else {
+            copy(keys = MaskKey.upsert(keys, MaskKey(fileMs, centerX, centerY, angleDegrees, sizeX, sizeY)))
+        }
+
     /**
      * How much of the mask applies at pixel ([x], [y]) of a [width]×[height] frame, 0..1.
      * The shaders use the same formula.
@@ -68,6 +88,38 @@ data class ColourMask(
         private fun smoothstep(e0: Float, e1: Float, x: Float): Float {
             val t = ((x - e0) / (e1 - e0).coerceAtLeast(0.0001f)).coerceIn(0f, 1f)
             return t * t * (3f - 2f * t)
+        }
+    }
+}
+
+/** The mask's place at one moment of the clip's file. */
+data class MaskKey(
+    val timeMs: Long,
+    val centerX: Float,
+    val centerY: Float,
+    val angleDegrees: Float,
+    val sizeX: Float,
+    val sizeY: Float,
+) {
+    companion object {
+        /** Keys closer than this to an edited moment are replaced rather than added. */
+        const val SAME_MS = 40L
+
+        fun of(mask: ColourMask, timeMs: Long) = MaskKey(timeMs, mask.centerX, mask.centerY, mask.angleDegrees, mask.sizeX, mask.sizeY)
+
+        fun upsert(keys: List<MaskKey>, key: MaskKey): List<MaskKey> =
+            (keys.filter { kotlin.math.abs(it.timeMs - key.timeMs) > SAME_MS } + key).sortedBy { it.timeMs }
+
+        /** Linear between the neighbouring keys (sorted by time); the first or last outside them. */
+        fun interpolate(keys: List<MaskKey>, timeMs: Long): MaskKey {
+            if (timeMs <= keys.first().timeMs) return keys.first()
+            if (timeMs >= keys.last().timeMs) return keys.last()
+            val i = keys.indexOfFirst { it.timeMs > timeMs }
+            val a = keys[i - 1]
+            val b = keys[i]
+            val t = (timeMs - a.timeMs).toFloat() / (b.timeMs - a.timeMs).coerceAtLeast(1L)
+            fun mix(x: Float, y: Float) = x + (y - x) * t
+            return MaskKey(timeMs, mix(a.centerX, b.centerX), mix(a.centerY, b.centerY), mix(a.angleDegrees, b.angleDegrees), mix(a.sizeX, b.sizeX), mix(a.sizeY, b.sizeY))
         }
     }
 }

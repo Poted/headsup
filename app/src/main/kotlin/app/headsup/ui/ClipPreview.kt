@@ -330,6 +330,8 @@ fun ClipPreview(
     }
     // Position within the clip, as the dashboard and timeline count it (negative before the cut).
     val positionMs = if (scrubbing) playerMs - clip.trimStartMs else playerMs
+    // Masks that move are placed for this moment of the file.
+    val fileMs = clip.trimStartMs + positionMs
     // Position on the timeline within this clip, for fades and music.
     val clipTimelineMs = if (photo) positionMs else (positionMs / clip.speed).toLong()
     val fadeGain = Fade.gain(clipTimelineMs, clip.timelineDurationMs, clip.fadeInMs, clip.fadeOutMs)
@@ -392,7 +394,7 @@ fun ClipPreview(
                         tableVersion
                         val frame = if (effects.grain > 0f) (positionMs / 33).toFloat() else 0f
                         val fromWeight = if (fromCube != null) ColourTransition.fromWeight(positionMs, transitionMs) else 0f
-                        renderEffect = previewShader?.effect(effects, zebra, frame, size.width, size.height, masks, fromWeight)
+                        renderEffect = previewShader?.effect(effects, zebra, frame, size.width, size.height, masks.map { it.at(fileMs) }, fromWeight)
                         // Reframing moves the graded picture, as in the export (colour first, then framing).
                         val t = reframeTransform(reframe, geometry)
                         scaleX = t.zoom
@@ -487,7 +489,7 @@ fun ClipPreview(
                         },
                 ) {
                     drawIntoCanvas { renderer.drawVignette(it.nativeCanvas, size.width, size.height, vignette) }
-                    guideMask?.let { m ->
+                    guideMask?.at(fileMs)?.let { m ->
                         // Drawn in picture coordinates, moved like the picture.
                         val t = reframeTransform(reframe, geometry)
                         val o = Offset(geometry.pictureW / 2f, geometry.pictureH / 2f)

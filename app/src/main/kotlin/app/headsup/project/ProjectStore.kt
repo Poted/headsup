@@ -5,6 +5,7 @@ import android.net.Uri
 import app.headsup.core.color.ColorGrade
 import app.headsup.core.color.ColourMask
 import app.headsup.core.color.MaskKind
+import app.headsup.core.color.MaskKey
 import app.headsup.core.frame.Reframe
 import app.headsup.render.EffectSettings
 import app.headsup.export.MusicTrack
@@ -288,6 +289,14 @@ internal object Json {
         .put("softness", m.softness)
         .put("inverted", m.inverted)
         .put("grade", grade(m.grade))
+        .put(
+            "keys",
+            JSONArray(
+                m.keys.map {
+                    JSONObject().put("t", it.timeMs).put("x", it.centerX).put("y", it.centerY).put("a", it.angleDegrees).put("w", it.sizeX).put("h", it.sizeY)
+                },
+            ),
+        )
 
     private fun mask(o: JSONObject): ColourMask {
         val kind = MaskKind.entries.firstOrNull { it.name == o.optString("kind") } ?: MaskKind.LINEAR
@@ -304,6 +313,12 @@ internal object Json {
             softness = f("softness", d.softness),
             inverted = o.optBoolean("inverted", false),
             grade = grade(o.optJSONObject("grade")),
+            keys = o.optJSONArray("keys").objects().map {
+                MaskKey(
+                    it.optLong("t"), it.optDouble("x").toFloat(), it.optDouble("y").toFloat(), it.optDouble("a").toFloat(),
+                    it.optDouble("w").toFloat(), it.optDouble("h").toFloat(),
+                )
+            },
         )
     }
 

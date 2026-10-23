@@ -117,6 +117,11 @@ corrections) and the tables are blended in order by `ColourMask.weight`. A clip 
 in from the previous clip's look (Colour → This clip → Blend in), e.g. after a split where the
 light changes; the weight is `ColourTransition.fromWeight`. The preview shader and, for export,
 `GradeEffect` (replacing Media3's single colour table for such clips) use the same formulas.
+Masks can move: `ColourMask.keys` hold its place at moments of the clip's file (file time, so
+trims and splits keep them), interpolated linearly in preview and export. `MaskTracker` fills keys
+automatically: two patches along the mask are found again frame by frame (normalised
+cross-correlation, coarse-to-fine, sub-pixel), giving position, rotation and scale; frames come
+from one sequential decode of the cut (`media/TrackingFrames`, luma only, upright, ~320 px).
 
 ### Cine look
 
