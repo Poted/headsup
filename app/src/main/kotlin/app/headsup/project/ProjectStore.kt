@@ -164,7 +164,6 @@ internal object Json {
         volume = o.optDouble("volume", 0.8).toFloat(),
         fadeInMs = o.optLong("fadeInMs", 0L),
         fadeOutMs = o.optLong("fadeOutMs", 0L),
-        soundLevel = o.optDouble("soundLevel", 1.0).toFloat(),
     )
 
     /** Version 2's single music track becomes one clip on the first audio track. */
@@ -219,6 +218,7 @@ internal object Json {
         muteChangedSpeed = o.optBoolean("muteChangedSpeed", false),
         fadeInMs = o.optLong("fadeInMs", 0L),
         fadeOutMs = o.optLong("fadeOutMs", 0L),
+        soundLevel = o.optDouble("soundLevel", 1.0).toFloat(),
         reframe = o.optJSONObject("reframe")?.let { r ->
             Reframe(
                 zoom = r.optDouble("zoom", 1.0).toFloat(),
