@@ -168,6 +168,14 @@ fun ClipPreview(
     scrubTo: State<Long?> = NO_SCRUB,
     /** Playback started or stopped. */
     onPlaying: (Boolean) -> Unit = {},
+    /**
+     * All clips of the timeline and the index of [clip] among them: with only videos they are given
+     * to the player as one playlist, so the next clip is loaded ahead and plays on without a pause;
+     * [onAdvance] reports when the player moved on to another clip by itself.
+     */
+    playlist: List<ClipState> = emptyList(),
+    playlistIndex: Int = 0,
+    onAdvance: (Int) -> Unit = {},
 ) {
     val context = LocalContext.current
     val exoPlayer = remember { ExoPlayer.Builder(context).build() }
@@ -183,10 +191,18 @@ fun ClipPreview(
     // Photos are shown as a picture with their own clock; the player only plays videos.
     val photo = clip.meta.isPhoto
     var photoPlaying by remember { mutableStateOf(false) }
+    // Shape of the frames the player is showing (null until the first one).
+    var renderedAspect by remember { mutableStateOf<Float?>(null) }
     val photoBitmap by produceState<ImageBitmap?>(null, clip.meta.uri, photo) {
         value = if (photo) withContext(Dispatchers.IO) { decodePhoto(context, clip.meta.uri) } else null
     }
-    LaunchedEffect(clip.meta.uri, clip.trimStartMs, clip.trimEndMs, scrubbing) {
+    val gapless = !photo && playlist.size > 1 && playlist.none { it.meta.isPhoto } && playlistIndex in playlist.indices
+    fun clipped(c: ClipState) = MediaItem.Builder()
+        .setUri(c.meta.uri)
+        .setClippingConfiguration(MediaItem.ClippingConfiguration.Builder().setStartPositionMs(c.trimStartMs).setEndPositionMs(c.trimEndMs).build())
+        .build()
+    val mediaKey: Any = if (gapless) playlist.map { Triple(it.meta.uri, it.trimStartMs, it.trimEndMs) } else Triple(clip.meta.uri, clip.trimStartMs, clip.trimEndMs)
+    LaunchedEffect(mediaKey, scrubbing) {
         if (photo) {
             exoPlayer.stop()
             exoPlayer.clearMediaItems()
@@ -199,21 +215,23 @@ fun ClipPreview(
         if (scrubbing) {
             exoPlayer.pause()
             exoPlayer.setMediaItem(MediaItem.fromUri(clip.meta.uri), cutScrub.value ?: 0L)
+        } else if (gapless) {
+            // The whole timeline as one playlist, each clip its used part; positions count from each cut.
+            exoPlayer.setMediaItems(playlist.map(::clipped), playlistIndex, 0L)
         } else {
             // Only the used part of the file plays; positions count from the cut.
-            exoPlayer.setMediaItem(
-                MediaItem.Builder()
-                    .setUri(clip.meta.uri)
-                    .setClippingConfiguration(
-                        MediaItem.ClippingConfiguration.Builder().setStartPositionMs(clip.trimStartMs).setEndPositionMs(clip.trimEndMs).build(),
-                    )
-                    .build(),
-            )
+            exoPlayer.setMediaItem(clipped(clip))
         }
         exoPlayer.prepare()
         if (autoPlay && !scrubbing) {
             exoPlayer.play()
             onAutoPlayStarted()
+        }
+    }
+    // Another clip chosen (not reached by playing on): go to it in the playlist.
+    LaunchedEffect(playlistIndex, gapless) {
+        if (gapless && !scrubbing && exoPlayer.mediaItemCount > playlistIndex && exoPlayer.currentMediaItemIndex != playlistIndex) {
+            exoPlayer.seekTo(playlistIndex, 0L)
         }
     }
     // Slow motion plays slowed down in the preview too; the dashboard follows the picture's own time.
@@ -235,10 +253,21 @@ fun ClipPreview(
         }
     }
     val ended by rememberUpdatedState(onEnded)
+    val advance by rememberUpdatedState(onAdvance)
     DisposableEffect(exoPlayer) {
         val listener = object : Player.Listener {
             override fun onPlaybackStateChanged(state: Int) {
                 if (state == Player.STATE_ENDED && exoPlayer.playWhenReady) ended()
+            }
+
+            override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
+                if (reason == Player.MEDIA_ITEM_TRANSITION_REASON_AUTO) advance(exoPlayer.currentMediaItemIndex)
+            }
+
+            // The picture is laid out by the frames actually shown, so a clip of another shape is
+            // never drawn in the previous clip's layout while the switch is under way.
+            override fun onVideoSizeChanged(videoSize: androidx.media3.common.VideoSize) {
+                if (videoSize.width > 0 && videoSize.height > 0) renderedAspect = videoSize.width * videoSize.pixelWidthHeightRatio / videoSize.height
             }
         }
         exoPlayer.addListener(listener)
@@ -250,7 +279,7 @@ fun ClipPreview(
         val target = seekRequest ?: return@LaunchedEffect
         photoPlaying = false
         exoPlayer.pause()
-        exoPlayer.seekTo(target.coerceIn(0L, clip.durationMs))
+        if (gapless) exoPlayer.seekTo(playlistIndex, target.coerceIn(0L, clip.durationMs)) else exoPlayer.seekTo(target.coerceIn(0L, clip.durationMs))
         onSeekDone()
     }
     var nudge by remember { mutableStateOf(1L) }
@@ -390,7 +419,8 @@ fun ClipPreview(
     val sampler = remember(activity) { activity?.let { TelemetrySampler(it.track) } }
     val renderer = remember { DashboardRenderer(context.assets) }
     val currentStyle by rememberUpdatedState(style)
-    val sourceAspect = if (clip.meta.width > 0 && clip.meta.height > 0) clip.meta.width.toFloat() / clip.meta.height else 16f / 9f
+    val metaAspect = if (clip.meta.width > 0 && clip.meta.height > 0) clip.meta.width.toFloat() / clip.meta.height else 16f / 9f
+    val sourceAspect = if (photo || scrubbing) metaAspect else renderedAspect ?: metaAspect
     // The frame takes the reframe's shape; the picture is laid out under it, just covering it.
     val frameAspect = reframe.aspect ?: sourceAspect
 

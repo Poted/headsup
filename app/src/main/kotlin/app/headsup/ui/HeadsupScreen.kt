@@ -281,6 +281,10 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
                         },
                         scrubTo = scrubTo,
                         onPlaying = { if (it) scrubT.value = null },
+                        playlist = state.clips,
+                        playlistIndex = state.selectedClip ?: 0,
+                        // Played on into the next clip: it becomes the clip shown and edited.
+                        onAdvance = { i -> if (i != state.selectedClip && i in state.clips.indices) vm.selectClip(i) },
                         cutScrub = cutScrub,
                         onFrameSource = { frameSource.value = it },
                         reframe = state.framing(selected),
@@ -348,6 +352,7 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
                         vm.selectAudio(null)
                     },
                     onAdd = addVideos,
+                    showAudio = tool == Tool.AUDIO,
                 ) {
                     val t = scrubT.value ?: timelineOf(playhead.longValue)
                     when {

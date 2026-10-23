@@ -95,7 +95,9 @@ fun Timeline(
     onSelectAudio: (Long) -> Unit,
     onDeselect: () -> Unit,
     onAdd: () -> Unit,
-    /** Actions for the selection, shown on the right above the tracks. */
+    /** Whether the audio tracks are shown (on the Audio page; elsewhere they only take room). */
+    showAudio: Boolean,
+    /** Actions for the selection, shown above the tracks. */
     actions: @Composable RowScope.() -> Unit,
 ) {
     val clips = state.clips
@@ -105,8 +107,9 @@ fun Timeline(
     val videoEnd = starts.last()
     // Sounds may run past the video's end; zooming out reaches them.
     val contentEnd = maxOf(videoEnd, audio.maxOfOrNull { it.piece.endOnTimelineMs } ?: 0L)
-    // The tracks in use and one free below them, at most MAX_LANES.
-    val lanes = ((audio.maxOfOrNull { it.lane } ?: -1) + 2).coerceIn(1, MAX_LANES)
+    // The tracks in use, plus a free one to move the selected sound to; none away from the Audio page.
+    val used = (audio.maxOfOrNull { it.lane } ?: -1) + 1
+    val lanes = if (!showAudio) 0 else (used + if (state.selectedAudio != null) 1 else 0).coerceIn(0, MAX_LANES)
 
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -151,20 +154,13 @@ fun Timeline(
     Column {
         // Scrolls sideways when the selection has many actions.
         Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-            // Fit the whole project, or the clip under the playhead (for masks, colour and cuts).
-            SmallAction("Project", { if (widthPx > 0) zoom = fitZoom(videoEnd, 0.9f) })
-            SmallAction("Clip", {
-                val i = state.selectedClip ?: return@SmallAction
-                if (widthPx > 0) zoom = fitZoom(lengths.getOrElse(i) { 1000L }, 0.8f)
-            })
-            Spacer(Modifier.width(16.dp))
             actions()
         }
         Box {
             Canvas(
                 Modifier
                     .fillMaxWidth()
-                    .height(RULER + VIDEO + GAP + LANE * lanes + 4.dp)
+                    .height(RULER + VIDEO + (if (lanes > 0) GAP + LANE * lanes else 0.dp) + 4.dp)
                     .onSizeChanged {
                         widthPx = it.width.toFloat()
                         if (zoom == 0f) zoom = fitZoom(videoEnd, 0.9f)
@@ -480,7 +476,7 @@ private class Geometry(
 
     fun x(ms: Long) = width / 2f + (ms - t) * zoom
     fun ms(x: Float) = t + ((x - width / 2f) / zoom).toLong()
-    fun laneAt(y: Float) = ((y - lanesTop) / laneH).toInt().coerceIn(0, lanes - 1)
+    fun laneAt(y: Float) = if (lanes <= 0) 0 else ((y - lanesTop) / laneH).toInt().coerceIn(0, lanes - 1)
     fun laneTop(lane: Int) = lanesTop + lane * laneH
 
     fun hit(p: Offset, selectedClip: Int?, selectedSound: Long?): Hit {
@@ -514,7 +510,7 @@ private class Geometry(
             if (p.x in addL..(addL + videoH)) return Hit.Add
             return Hit.Empty
         }
-        if (p.y >= lanesTop) {
+        if (lanes > 0 && p.y >= lanesTop) {
             val lane = laneAt(p.y)
             val at = ms(p.x)
             audio.firstOrNull { it.lane == lane && at >= it.piece.startOnTimelineMs && at < it.piece.endOnTimelineMs }?.let { return Hit.Sound(it.id) }
@@ -634,6 +630,7 @@ private fun DrawScope.drawVideo(
 
 /** The audio tracks: sounds as waveforms with their beat grid and accents; the selected one with handles and fades. */
 private fun DrawScope.drawAudio(g: Geometry, state: UiState, text: androidx.compose.ui.text.TextMeasurer, accent: Color, laneColour: Color) {
+    if (g.lanes == 0) return
     for (lane in 0 until g.lanes) drawRoundRect(laneColour, Offset(0f, g.laneTop(lane) + 2f), Size(size.width, g.laneH - 4f), CornerRadius(6.dp.toPx()))
     for (c in state.audioClips) {
         val p = c.piece
