@@ -23,6 +23,8 @@ data class ExportSettings(
     val hlg: Boolean = false,
     /** HLG signal level where the picture's white goes in an HLG export. */
     val hdrWhite: Float = HdrRoute.DEFAULT_WHITE,
+    /** Frame rate of the file, or null for the timeline's (set on the Edit page). */
+    val frameRate: Float? = null,
 ) {
     companion object {
         val HEIGHTS: List<Pair<Int?, String>> = listOf(null to "Source", 2160 to "4K", 1440 to "1440p", 1080 to "1080p", 720 to "720p")

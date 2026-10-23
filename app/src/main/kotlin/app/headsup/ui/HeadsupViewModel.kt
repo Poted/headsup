@@ -249,6 +249,8 @@ data class UiState(
     /** Colour tables inside the selected clip's masks, and the previous clip's for a transition. */
     val previewMaskCubes: List<Array<Array<IntArray>>> = emptyList(),
     val previewFromCube: Array<Array<IntArray>>? = null,
+    /** Looks of the clips before and after the selected one (null: untouched), for the preview at a cut. */
+    val previewNeighbourCubes: Map<Long, Array<Array<IntArray>>?> = emptyMap(),
     /** Mask of the selected clip that the Masks tab edits. */
     val selectedMask: Int = 0,
     /** Cine assistant for the selected clip, while it is open. */
@@ -1624,13 +1626,27 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                     val cube = if (graded != null) bake(s.lutFor(graded), s.appliedGrade(graded), wide) else if (wide) bake(null, ColorGrade(), true) else null
                     val maskCubes = graded?.let { c -> s.maskedGrades(c).map { bakeAlways(s.lutFor(c), it, wide) } }.orEmpty()
                     val fromCube = graded?.let(s::transitionSource)?.let { prev -> bakeLook(s, prev) }
-                    _state.update { it.copy(previewCube = cube, previewMaskCubes = maskCubes, previewFromCube = fromCube) }
+                    val neighbours = s.selectedClip?.let { i -> listOfNotNull(s.clips.getOrNull(i - 1), s.clips.getOrNull(i + 1)) }.orEmpty()
+                        .filter { !it.meta.isPhoto }
+                        .associate { n -> n.id to neighbourLook(s, n) }
+                    _state.update { it.copy(previewCube = cube, previewMaskCubes = maskCubes, previewFromCube = fromCube, previewNeighbourCubes = neighbours) }
                     analyseScope()
                 }
             } finally {
                 previewRunning = false
             }
         }
+    }
+
+    private val lookCache = HashMap<Triple<String?, ColorGrade, Boolean>, Array<Array<IntArray>>?>()
+
+    /** [c]'s look as the preview shows it when selected (without masks), kept for reuse. */
+    private suspend fun neighbourLook(s: UiState, c: ClipState): Array<Array<IntArray>>? {
+        val key = if (c.colorGrade) Triple(s.lutFor(c), s.appliedGrade(c), c.wideGamut) else Triple(null, ColorGrade(), c.wideGamut)
+        lookCache[key]?.let { return it }
+        if (key in lookCache) return null
+        if (lookCache.size > 32) lookCache.clear()
+        return bake(key.first, key.second, key.third).also { lookCache[key] = it }
     }
 
     /** Null when nothing would change the colours. */
@@ -1760,7 +1776,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
         val pixels = (w * h) / (srcW.toDouble() * srcH).coerceAtLeast(1.0)
         val bitrate = (sourceRate * pixels * settings.bitrateFactor).toLong().coerceIn(8_000_000L, 200_000_000L).toInt()
         return OutputSpec(
-            OutputSpec.even(w), OutputSpec.even(h), s.effectiveTimelineFps, settings.codec, bitrate, fileName,
+            OutputSpec.even(w), OutputSpec.even(h), settings.frameRate ?: s.effectiveTimelineFps, settings.codec, bitrate, fileName,
             exportsTenBit(s), settings.hlg, settings.hdrWhite,
         )
     }

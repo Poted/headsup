@@ -23,6 +23,7 @@ import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.foundation.layout.ColumnScope
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -235,12 +236,14 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
         scrubT.value = t
         seekRequest = pos
     }
-    // Room for the timeline and the tools under the picture.
-    val previewMaxHeight = (LocalConfiguration.current.screenHeightDp * 0.32f).dp
+    // Held sideways, the picture and timeline take the left and the tools the right.
+    val configuration = LocalConfiguration.current
+    val wide = configuration.screenWidthDp > configuration.screenHeightDp
+    // Room for the timeline and the tools under (or beside) the picture.
+    val previewMaxHeight = (configuration.screenHeightDp * (if (wide) 0.45f else 0.32f)).dp
 
-    Box(Modifier.fillMaxSize().background(HeadsupColors.BackgroundGradient)) {
-        // No title bar: the picture starts at the top, adding files lives in the Files tool.
-        Column(Modifier.fillMaxSize().systemBarsPadding().padding(top = 8.dp)) {
+    // The picture, its transport and the timeline.
+    val pictureAndTimeline: @Composable ColumnScope.() -> Unit = {
             if (state.busy) {
                 CineLoader(
                     state.loadingMessage ?: "Working…", Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
@@ -295,6 +298,7 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
                         onAdvance = { i -> if (i != state.selectedClip && i in state.clips.indices) vm.selectClip(i) },
                         framingOf = { state.framing(it) },
                         sourceOf = { state.previewSource(it) },
+                        neighbourCubes = state.previewNeighbourCubes,
                         cutScrub = cutScrub,
                         onFrameSource = { frameSource.value = it },
                         reframe = state.framing(selected),
@@ -383,7 +387,7 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
                                 vm.removeClip(i)
                             })
                         }
-                        else -> SmallAction("+ Sound", { addingSound = true })
+                        else -> Unit
                     }
                 }
             }
@@ -404,6 +408,9 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
                 )
             }
 
+    }
+    // The tool's panel and the tools.
+    val tools: @Composable ColumnScope.() -> Unit = {
             Column(
                 Modifier
                     .weight(1f)
@@ -445,6 +452,20 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
                 }
             }
             BottomToolbar(tool) { tool = it }
+    }
+
+    Box(Modifier.fillMaxSize().background(HeadsupColors.BackgroundGradient)) {
+        // No title bar: the picture starts at the top, adding files lives in the Files tool.
+        if (wide) {
+            Row(Modifier.fillMaxSize().systemBarsPadding().padding(top = 8.dp)) {
+                Column(Modifier.weight(1.3f).fillMaxHeight(), content = pictureAndTimeline)
+                Column(Modifier.weight(1f).fillMaxHeight(), content = tools)
+            }
+        } else {
+            Column(Modifier.fillMaxSize().systemBarsPadding().padding(top = 8.dp)) {
+                pictureAndTimeline()
+                tools()
+            }
         }
     }
 }
@@ -661,15 +682,45 @@ private fun TimelineRate(state: UiState, vm: HeadsupViewModel) {
             FilterChip(selected = state.timelineFps == f, onClick = { vm.setTimelineFps(f) }, label = { Text(OutputSpec.formatFps(f)) })
         }
     }
-    // How each frame rate in the project fits the timeline.
-    val rates = state.clips.filter { !it.meta.isPhoto }.mapNotNull { it.meta.frameRate }.groupingBy { kotlin.math.round(it * 100) / 100 }.eachCount()
-    val notes = rates.entries.sortedBy { it.key }.map { (rate, count) ->
-        val clips = if (count == 1) "1 clip" else "$count clips"
-        val r = rate / fps
+    RateNotes(state, fps)
+}
+
+/** The export's frame rate: the timeline's unless changed here. */
+@Composable
+private fun ExportRate(state: UiState, vm: HeadsupViewModel) {
+    val timeline = state.effectiveTimelineFps
+    val chosen = state.exportSettings.frameRate
+    val fps = chosen ?: timeline
+    ValueHeader("Frame rate", "${OutputSpec.formatFps(fps)} fps")
+    Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        FilterChip(
+            selected = chosen == null,
+            onClick = { vm.updateExportSettings { it.copy(frameRate = null) } },
+            label = { Text("Timeline (${OutputSpec.formatFps(timeline)})") },
+        )
+        for (f in ExportSettings.FRAME_RATES) {
+            FilterChip(selected = chosen == f, onClick = { vm.updateExportSettings { it.copy(frameRate = f) } }, label = { Text(OutputSpec.formatFps(f)) })
+        }
+    }
+    if (chosen != null && kotlin.math.abs(chosen - timeline) > 0.01f) {
+        Hint("Differs from the timeline's ${OutputSpec.formatFps(timeline)} fps (Edit page).")
+    }
+    RateNotes(state, fps)
+}
+
+/** How each clip's frames fit [fps]: by its frame rate after its speed change. */
+@Composable
+private fun RateNotes(state: UiState, fps: Float) {
+    val rates = state.clips.filter { !it.meta.isPhoto && it.meta.frameRate != null }
+        .groupingBy { (it.meta.frameRate ?: fps) to it.speed }.eachCount()
+    val notes = rates.entries.sortedBy { it.key.first }.map { (key, count) ->
+        val (rate, speed) = key
+        val clips = (if (count == 1) "1 clip" else "$count clips") + " at ${OutputSpec.formatFps(rate)} fps" + if (speed != 1f) " (${String.format(Locale.US, "%.3g", speed)}×)" else ""
+        val r = rate * speed / fps
         when {
-            kotlin.math.abs(r - 1f) < 0.02f -> "$clips at ${OutputSpec.formatFps(rate)} fps: as recorded"
-            r > 1f -> "$clips at ${OutputSpec.formatFps(rate)} fps: every ${String.format(Locale.US, "%.3g", r)}th frame kept, or ${String.format(Locale.US, "%.3g", 1 / r)}× slow motion"
-            else -> "$clips at ${OutputSpec.formatFps(rate)} fps: fewer frames than the timeline, shown as recorded"
+            kotlin.math.abs(r - 1f) < 0.02f -> "$clips: every frame used, as recorded"
+            r > 1f -> "$clips: every ${String.format(Locale.US, "%.3g", r)}th frame kept (\"All frames\" on the clip's speed plays every frame as ${String.format(Locale.US, "%.3g", speed / r)}× slow motion)"
+            else -> "$clips: only ${OutputSpec.formatFps(rate * speed)} frames a second, each held longer (less smooth)"
         }
     }
     if (notes.isNotEmpty()) Hint(notes.joinToString("\n"))
@@ -2205,9 +2256,9 @@ private fun ExportControls(
         }
         Hint("For HDR screens. Phone galleries and editors show HLG darker than the 8-bit export, less so at higher white levels; while it plays the phone may brighten the screen.")
     }
+    Group { ExportRate(state, vm) }
     Hint(
-        "Frame rate: the timeline's (${OutputSpec.formatFps(state.effectiveTimelineFps)} fps, set on the Edit page). " +
-            when {
+        when {
                 tenBit && settings.hlg -> "10-bit HLG: HEVC Main10, shown as HDR on HDR screens."
                 tenBit -> "10-bit: HEVC Main10 Rec.709 like DJI Mimo's 10-bit export; looks like 8-bit, smoother gradients, more room for later grading."
                 settings.codec == VideoCodec.HEVC -> "HEVC: smaller files."

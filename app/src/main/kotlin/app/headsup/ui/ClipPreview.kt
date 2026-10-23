@@ -185,6 +185,8 @@ fun ClipPreview(
     framingOf: (ClipState) -> Reframe = { it.reframe },
     /** File the preview plays for a clip: a light preview file of a large clip, or the clip itself. */
     sourceOf: (ClipState) -> android.net.Uri = { it.meta.uri },
+    /** Colour tables of the clips next to [clip] (null: untouched), for a picture still showing one at a cut. */
+    neighbourCubes: Map<Long, Array<Array<IntArray>>?> = emptyMap(),
 ) {
     val context = LocalContext.current
     // Two players: one shows the clip, the other holds the next one ready (a different shape or
@@ -435,6 +437,18 @@ fun ClipPreview(
         previewShader?.setTables(GradeTables(gradeCube, maskCubes, fromCube))
         tableVersion++
     }
+    // Each player's picture is coloured as its own clip: the selected one fully, a neighbour still on
+    // screen at a cut (before the selection follows) by its look, so no frame shows another clip's colours.
+    val playerShaders = remember { if (Build.VERSION.SDK_INT >= 33) List(2) { GradePreviewShader() } else null }
+    for (i in 0..1) key(i) {
+        val id = pictureClip[i] ?: clip.id
+        val own = id == clip.id
+        val cube = if (own) gradeCube else neighbourCubes[id]
+        LaunchedEffect(playerShaders, own, cube, maskCubes, fromCube) {
+            playerShaders?.get(i)?.setTables(if (own) GradeTables(gradeCube, maskCubes, fromCube) else GradeTables(cube))
+            tableVersion++
+        }
+    }
     var textureView by remember { mutableStateOf<TextureView?>(null) }
     LaunchedEffect(active) { textureView = textureViews[active] }
     val sample by rememberUpdatedState(onSample)
@@ -682,7 +696,11 @@ fun ClipPreview(
                                     tableVersion
                                     val frame = if (effects.grain > 0f) (positionMs / 33).toFloat() else 0f
                                     val fromWeight = if (fromCube != null) ColourTransition.fromWeight(positionMs, transitionMs) else 0f
-                                    renderEffect = previewShader?.effect(effects, zebra, frame, this.size.width, this.size.height, masks.map { it.at(fileMs) }, fromWeight)
+                                    renderEffect = if (pictureClip[i] == null || pictureClip[i] == clip.id) {
+                                        playerShaders?.get(i)?.effect(effects, zebra, frame, this.size.width, this.size.height, masks.map { it.at(fileMs) }, fromWeight)
+                                    } else {
+                                        playerShaders?.get(i)?.effect(effects, zebra, frame, this.size.width, this.size.height, emptyList(), 0f)
+                                    }
                                     val t = reframeTransform(r, g)
                                     scaleX = t.zoom
                                     scaleY = t.zoom
@@ -817,7 +835,7 @@ fun ClipPreview(
         }
 
         Row(
-            Modifier.fillMaxWidth().clip(RoundedCornerShape(50)).background(HeadsupColors.CardGradient).border(1.dp, HeadsupColors.Outline, RoundedCornerShape(50)).padding(horizontal = 6.dp),
+            Modifier.fillMaxWidth().clip(RoundedCornerShape(50)).background(HeadsupColors.CardGradient).border(1.dp, HeadsupColors.Outline, RoundedCornerShape(50)).padding(horizontal = 6.dp, vertical = 5.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Box(
@@ -845,7 +863,18 @@ fun ClipPreview(
                     "  /  " + Formats.duration(timelineTotalMs),
                 Modifier.weight(1f),
                 style = MaterialTheme.typography.labelMedium.copy(fontFamily = FontFamily.Monospace),
+                maxLines = 1,
             )
+            // The shown clip's own frame rate (the export's is chosen on the Export page).
+            clip.meta.frameRate?.takeIf { !photo }?.let { fps ->
+                Text(
+                    String.format(java.util.Locale.US, "%.4g fps", fps) + if (clip.speed != 1f) " · ${String.format(java.util.Locale.US, "%.3g", clip.speed)}×" else "",
+                    Modifier.padding(end = 8.dp),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = HeadsupColors.TextMuted,
+                    maxLines = 1,
+                )
+            }
             ToggleDot("H", histogramOn) { histogramOn = !histogramOn }
             Spacer(Modifier.width(4.dp))
             if (Build.VERSION.SDK_INT >= 33) ToggleDot("Z", zebra) { zebra = !zebra }
