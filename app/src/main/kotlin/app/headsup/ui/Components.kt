@@ -25,6 +25,13 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -252,23 +259,23 @@ fun SmallAction(text: String, onClick: () -> Unit, modifier: Modifier = Modifier
  */
 @Composable
 fun CineLoader(message: String, modifier: Modifier = Modifier) {
-    val transition = androidx.compose.animation.core.rememberInfiniteTransition(label = "loader")
+    val transition = rememberInfiniteTransition(label = "loader")
     val turn by transition.animateFloat(
         0f, 360f,
-        androidx.compose.animation.core.infiniteRepeatable(androidx.compose.animation.core.tween(2400, easing = androidx.compose.animation.core.LinearEasing)),
+        infiniteRepeatable(tween(2400, easing = LinearEasing)),
         label = "turn",
     )
     val open by transition.animateFloat(
         0.25f, 0.75f,
-        androidx.compose.animation.core.infiniteRepeatable(
-            androidx.compose.animation.core.tween(1200, easing = androidx.compose.animation.core.FastOutSlowInEasing),
-            androidx.compose.animation.core.RepeatMode.Reverse,
+        infiniteRepeatable(
+            tween(1200, easing = FastOutSlowInEasing),
+            RepeatMode.Reverse,
         ),
         label = "open",
     )
     val blink by transition.animateFloat(
         0f, 1f,
-        androidx.compose.animation.core.infiniteRepeatable(androidx.compose.animation.core.tween(1000, easing = androidx.compose.animation.core.LinearEasing)),
+        infiniteRepeatable(tween(1000, easing = LinearEasing)),
         label = "blink",
     )
     // Running timecode, frames at 25 fps, from when the loader appeared.
