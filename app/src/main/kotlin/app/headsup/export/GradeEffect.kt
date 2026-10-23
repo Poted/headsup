@@ -20,7 +20,7 @@ import app.headsup.core.color.ColourTransition
  * Colour for a clip with masks or a colour transition: the frame goes through [base], then each
  * mask's table is blended in by [ColourMask.weight], and during the first [transitionMs] the
  * previous clip's table [from] fades out ([ColourTransition.fromWeight]). Replaces Media3's single
- * colour table for such clips; the maths matches the preview shader.
+ * colour table for such clips (and every clip of a 10-bit export); the maths matches the preview shader.
  */
 @OptIn(UnstableApi::class)
 class GradeEffect(
@@ -29,6 +29,8 @@ class GradeEffect(
     private val maskTables: List<Array<Array<IntArray>>>,
     private val from: Array<Array<IntArray>>?,
     private val transitionMs: Long,
+    /** Input arrives through [HdrRoute] (relabelled HLG): undo Media3's conversion first. */
+    private val hdrInput: Boolean = false,
 ) : GlEffect {
     override fun toGlShaderProgram(context: Context, useHdr: Boolean): GlShaderProgram = Program(useHdr)
 
@@ -89,6 +91,8 @@ class GradeEffect(
                 }
                 val fromWeight = if (from != null) ColourTransition.fromWeight(positionMs, transitionMs) else 0f
                 program.setFloatUniform("uFromWeight", fromWeight)
+                program.setIntUniform("uHdrIn", if (hdrInput) 1 else 0)
+                program.setFloatsUniform("uHlgFix", HdrRoute.HLG_FIX)
                 program.bindAttributesAndUniforms()
                 GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4)
             } catch (e: GlUtil.GlException) {
@@ -129,6 +133,8 @@ class GradeEffect(
             uniform vec2 uSize;
             uniform float uMaskCount;
             uniform float uFromWeight;
+            uniform int uHdrIn;
+            uniform mat3 uHlgFix;
             varying vec2 vTexSamplingCoord;
 
             vec3 cell(sampler2D t, float r, float g, float b) {
@@ -168,16 +174,26 @@ class GradeEffect(
                 return b.w > 0.5 ? 1.0 - w : w;
             }
 
+            // Inverse of Media3's HLG EOTF, back to the signal values.
+            float hlgOetf(float x) {
+                return x <= 1.0 / 12.0 ? sqrt(3.0 * x) : 0.17883277 * log(12.0 * x - 0.28466892) + 0.55991073;
+            }
+
             void main() {
                 vec4 src = texture2D(uTexSampler, vTexSamplingCoord);
+                vec3 srcRgb = src.rgb;
+                if (uHdrIn == 1) {
+                    vec3 lin = max(src.rgb, 0.0);
+                    srcRgb = clamp(uHlgFix * vec3(hlgOetf(lin.r), hlgOetf(lin.g), hlgOetf(lin.b)), 0.0, 1.0);
+                }
                 vec2 px = vec2(vTexSamplingCoord.x, 1.0 - vTexSamplingCoord.y) * uSize;
-                vec3 c = grade(uLut, src.rgb);
+                vec3 c = grade(uLut, srcRgb);
                 ${List(ColourMask.MAX_PER_CLIP) { i -> """
                 if (uMaskCount > $i.5) {
                     float w$i = maskWeight(uM${i}a, uM${i}b, px);
-                    if (w$i > 0.0) c = mix(c, grade(uLutM$i, src.rgb), w$i);
+                    if (w$i > 0.0) c = mix(c, grade(uLutM$i, srcRgb), w$i);
                 }""" }.joinToString("")}
-                if (uFromWeight > 0.0) c = mix(c, grade(uLutFrom, src.rgb), uFromWeight);
+                if (uFromWeight > 0.0) c = mix(c, grade(uLutFrom, srcRgb), uFromWeight);
                 gl_FragColor = vec4(c, src.a);
             }
         """

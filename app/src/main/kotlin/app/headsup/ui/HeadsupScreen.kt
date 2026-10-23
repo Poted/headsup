@@ -1786,14 +1786,34 @@ private fun ExportControls(
             FilterChip(selected = settings.bitrateFactor == factor, onClick = { vm.updateExportSettings { it.copy(bitrateFactor = factor) } }, label = { Text(label) })
         }
     }
+    val tenBitBlocker = remember(state.clips) { vm.tenBitBlocker(state) }
+    val tenBit = settings.tenBit && tenBitBlocker == null
     SettingRow("Codec") {
         for (codec in VideoCodec.entries) {
-            FilterChip(selected = settings.codec == codec, onClick = { vm.updateExportSettings { it.copy(codec = codec) } }, label = { Text(codec.label) })
+            FilterChip(
+                selected = settings.codec == codec || (tenBit && codec == VideoCodec.HEVC),
+                onClick = { vm.updateExportSettings { it.copy(codec = codec) } },
+                enabled = !tenBit,
+                label = { Text(codec.label) },
+            )
         }
+    }
+    SettingRow("Colour depth") {
+        FilterChip(selected = !tenBit, onClick = { vm.updateExportSettings { it.copy(tenBit = false) } }, label = { Text("8-bit SDR") })
+        FilterChip(
+            selected = tenBit,
+            onClick = { vm.updateExportSettings { it.copy(tenBit = true) } },
+            enabled = tenBitBlocker == null,
+            label = { Text("10-bit HDR (HLG) · experimental") },
+        )
     }
     Hint(
         "Frame rate is the timeline's: clips with more frames are thinned out, none are invented. " +
-            if (settings.codec == VideoCodec.HEVC) "HEVC: smaller files." else "H.264: plays everywhere, larger files.",
+            when {
+                tenBit -> "10-bit: HEVC Main10 HLG, like DJI Mimo's 10-bit; smoother gradients, shows as HDR on HDR screens."
+                settings.codec == VideoCodec.HEVC -> "HEVC: smaller files."
+                else -> "H.264: plays everywhere, larger files."
+            } + (tenBitBlocker?.let { " 10-bit: $it" } ?: ""),
     )
     Button(onClick = onExportVideos, enabled = state.clips.isNotEmpty(), modifier = Modifier.fillMaxWidth()) {
         Text(if (settings.wholeTimeline) "Export timeline" else "Export ${state.clips.size} clips")
@@ -1808,7 +1828,7 @@ private fun ExportControls(
         else "Needs a FIT file matched to the clips.",
     )
     Row(verticalAlignment = Alignment.CenterVertically) {
-        Hint("10-bit check: first 3 s of the selected clip, nothing saved.", Modifier.weight(1f))
+        Hint("10-bit check: first 3 s of the selected clip through the HDR route, nothing saved.", Modifier.weight(1f))
         SmallAction("Test", onTenBitTest, enabled = state.selected != null)
     }
 

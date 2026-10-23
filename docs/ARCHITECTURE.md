@@ -150,7 +150,7 @@ in export as a Media3 `MatrixTransformation` (aspect-corrected in NDC) before th
 - Output via MediaStore to `DCIM/TelemetryOverlay`, foreground service, progress, cancel.
 
 Media3 exports SDR input (including D-Log M) in 8 bits; see
-[TEN_BIT_PIPELINE.md](TEN_BIT_PIPELINE.md) for the planned own 10-bit pipeline.
+[TEN_BIT_PIPELINE.md](TEN_BIT_PIPELINE.md) for the experimental HLG route (`HdrRoute`) and the planned own 10-bit pipeline.
 
 ## Platform
 

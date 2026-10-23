@@ -17,7 +17,25 @@ The hardware can encode Main10. The 8-bit output comes from Media3: it keeps 10 
 HDR path (HLG/PQ input). D-Log M is tagged SDR, so effects run in 8-bit textures and the encoder is
 fed 8-bit frames. The baked colour table (`SingleColorLut`, ARGB_8888) is 8-bit as well.
 
-## Design
+## Current experiment: Media3 HDR route (HLG)
+
+`export/HdrRoute.kt`, behind "Colour depth → 10-bit HDR (HLG) · experimental" in the export panel
+(and always used by the "Test" button):
+
+- An extractor wrapper labels every video track HLG/BT.2020, so Media3 keeps 16-bit float
+  textures and encodes HEVC Main10 HLG (Android 13+, encoder with `FEATURE_HdrEditing`).
+- Media3 then converts the samples with the BT.2020 matrix and HLG EOTF; `GradeEffect`
+  (`hdrInput`) undoes that exactly (HLG OETF, then BT.709·BT.2020⁻¹), so the colour tables see
+  the camera's own values, as in the preview.
+- `HdrOutputEffect` maps the finished SDR picture (BT.1886, BT.709) into linear BT.2020 light with
+  SDR white at 75 % HLG (BT.2408); the dashboard goes in after it as a "text" overlay with the
+  same luminance multiplier (`HdrOverlay`).
+- Not covered: photos, clips already in HLG/PQ. The result looks like the SDR export on SDR
+  screens and is shown as HDR on HDR screens, like DJI Mimo's 10-bit files.
+
+If this route fails on devices, the own pipeline below remains the plan.
+
+## Design (own pipeline, if the HDR route fails)
 
 Replace Media3 Transformer for video exports (keep it as a fallback) with:
 

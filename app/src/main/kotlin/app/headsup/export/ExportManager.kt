@@ -182,15 +182,18 @@ class ExportManager(private val context: Context) {
      */
     private fun editedItem(request: ExportRequest, out: OutputSpec, test: Boolean, soundGain: Float = 1f): EditedMediaItem {
         val sampler = request.telemetry?.let { TelemetrySampler(it.track) }
+        val hdr = out.tenBit
         val overlay = TelemetryOverlay(
             DashboardRenderer(context.assets), request.style, request.effects, request.grade?.vignette ?: 0f, out.width, out.height,
         ) { positionMs -> request.dataAt(positionMs, sampler) }
 
         val effects = mutableListOf<Effect>()
         val grade = request.grade
-        if (grade != null && grade.needsGradeEffect) {
+        if (hdr || (grade != null && grade.needsGradeEffect)) {
+            // The HDR route always needs it: it undoes Media3's HLG conversion before the colour.
             effects += GradeEffect(
-                grade.cube ?: LutBaker.bake(null, ColorGrade()), grade.masks, grade.maskCubes, grade.fromCube, grade.transitionMs,
+                grade?.cube ?: LutBaker.bake(null, ColorGrade()), grade?.masks.orEmpty(), grade?.maskCubes.orEmpty(),
+                grade?.fromCube, grade?.transitionMs ?: 0L, hdrInput = hdr,
             )
         } else {
             grade?.cube?.let { effects += SingleColorLut.createFromCube(it) }
@@ -201,7 +204,13 @@ class ExportManager(private val context: Context) {
         // The output frame: the clip's shape cropped around the centre and scaled to the output size,
         // so every clip of a joined export has the same frame.
         effects += Presentation.createForWidthAndHeight(out.width, out.height, Presentation.LAYOUT_SCALE_TO_FIT_WITH_CROP)
-        effects += OverlayEffect(ImmutableList.of<TextureOverlay>(overlay))
+        if (hdr) {
+            // From here on the frame is linear HLG light; the dashboard is placed to match.
+            effects += HdrOutputEffect()
+            effects += OverlayEffect(ImmutableList.of<TextureOverlay>(HdrOverlay(overlay)))
+        } else {
+            effects += OverlayEffect(ImmutableList.of<TextureOverlay>(overlay))
+        }
         val speed = request.speed
         if (speed != 1f) effects += SpeedChangeEffect(speed)
         // Fewer frames when the clip (after the speed change) has more than the timeline.
@@ -263,7 +272,8 @@ class ExportManager(private val context: Context) {
         val output = File(workDir, "job-${job.id}.mp4").apply { delete() }
 
         val t = Transformer.Builder(context)
-            .setVideoMimeType(out.codec.mimeType)
+            .setVideoMimeType(if (out.tenBit) MimeTypes.VIDEO_H265 else out.codec.mimeType)
+            .apply { if (out.tenBit) setAssetLoaderFactory(HdrRoute.assetLoaderFactory(context)) }
             .setEncoderFactory(encoderFactory)
             .addListener(object : Transformer.Listener {
                 override fun onCompleted(composition: Composition, exportResult: ExportResult) {

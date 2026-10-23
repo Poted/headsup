@@ -16,6 +16,8 @@ data class ExportSettings(
     /** Bit rate relative to the source's, scaled to the output size. */
     val bitrateFactor: Float = 1f,
     val codec: VideoCodec = VideoCodec.HEVC,
+    /** HEVC Main10 HLG through [HdrRoute] (experimental). */
+    val tenBit: Boolean = false,
 ) {
     companion object {
         val HEIGHTS: List<Pair<Int?, String>> = listOf(null to "Source", 2160 to "4K", 1440 to "1440p", 1080 to "1080p", 720 to "720p")
@@ -32,9 +34,11 @@ data class OutputSpec(
     val codec: VideoCodec,
     val bitrate: Int,
     val fileName: String,
+    /** 10-bit HLG through [HdrRoute]; always HEVC. */
+    val tenBit: Boolean = false,
 ) {
     override fun toString() = "${width}×$height" + (frameRate?.let { " · ${formatFps(it)} fps" } ?: "") +
-        " · ${bitrate / 1_000_000} Mb/s · ${codec.label}"
+        " · ${bitrate / 1_000_000} Mb/s · ${codec.label}" + (if (tenBit) " · 10-bit HLG" else "")
 
     companion object {
         fun formatFps(fps: Float) = if (fps % 1f == 0f) fps.toInt().toString() else String.format(java.util.Locale.US, "%.2f", fps)

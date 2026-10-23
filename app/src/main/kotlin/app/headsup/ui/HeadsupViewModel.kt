@@ -34,6 +34,7 @@ import app.headsup.export.ExportRequest
 import app.headsup.export.GradeSetup
 import app.headsup.export.Telemetry
 import app.headsup.export.ExportSettings
+import app.headsup.export.HdrRoute
 import app.headsup.export.JobSpec
 import app.headsup.export.OutputSpec
 import app.headsup.export.VideoCodec
@@ -1324,6 +1325,14 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
 
     fun exportOverlays() = enqueue(ExportKind.PNG_SEQUENCE, state.value.clips.indices.toList())
 
+    /** Why a 10-bit (HLG) export can't be made of this timeline, or null when it can. */
+    fun tenBitBlocker(s: UiState = state.value): String? = when {
+        !HdrRoute.deviceSupported -> "This phone's encoder can't do 10-bit HDR editing."
+        s.clips.any { it.meta.isPhoto } -> "Photos can't go into a 10-bit export yet."
+        s.clips.any { it.meta.format?.isHdr == true } -> "Clips already in HDR (HLG/PQ) aren't supported yet."
+        else -> null
+    }
+
     fun runTenBitTest() = enqueue(ExportKind.TEN_BIT_TEST, listOfNotNull(state.value.selectedClip))
 
     fun cancelExports() = exportManager.cancelAll()
@@ -1386,6 +1395,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
     private fun jobsFor(kind: ExportKind, requests: List<ExportRequest>, s: UiState): List<JobSpec> {
         val settings = s.exportSettings
         val fps = s.effectiveTimelineFps
+        val tenBit = (kind == ExportKind.TEN_BIT_TEST || settings.tenBit) && tenBitBlocker(s) == null
         fun spec(parts: List<ExportRequest>, fileName: String): OutputSpec {
             val first = parts.first()
             val sourceH = first.frameHeight.toFloat()
@@ -1396,7 +1406,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
             val sourceRate = (first.sourceBitrate ?: 60_000_000).toDouble()
             val pixels = (w * h) / (first.width.toDouble() * first.height).coerceAtLeast(1.0)
             val bitrate = (sourceRate * pixels * settings.bitrateFactor).toLong().coerceIn(8_000_000L, 200_000_000L).toInt()
-            return OutputSpec(OutputSpec.even(w), OutputSpec.even(h), fps, settings.codec, bitrate, fileName)
+            return OutputSpec(OutputSpec.even(w), OutputSpec.even(h), fps, settings.codec, bitrate, fileName, tenBit)
         }
         return when {
             kind == ExportKind.PNG_SEQUENCE -> requests.map { JobSpec(kind, it.name, listOf(it), null) }
