@@ -148,18 +148,16 @@ class ExportManager(private val context: Context) {
      * aspect-corrected so rotation does not shear the picture.
      */
     /**
-     * The clip in the timeline's frame: an output of the frame's shape at the clip's own pixel
-     * scale ([Reframe.outputSize]: inside the picture when filling, around it when fitting), with
-     * the picture zoomed, moved and turned into it; bars stay black. The Presentation after it only
-     * scales to the export size.
+     * The clip in the timeline's frame, drawn straight at the export size [outW]×[outH]: the frame
+     * ([Reframe.outputSize]: inside the picture when filling, around it when fitting) with the
+     * picture zoomed, moved and turned into it; bars stay black. Working in normalised coordinates
+     * keeps any size in between (an 8K clip fitted into a wide frame) from being drawn.
      */
-    private fun reframeEffect(reframe: Reframe, width: Int, height: Int): MatrixTransformation? {
+    private fun reframeEffect(reframe: Reframe, width: Int, height: Int, outW: Int, outH: Int): MatrixTransformation? {
         if (reframe.isIdentity || width <= 0 || height <= 0) return null
         val w = width.toFloat()
         val h = height.toFloat()
         val (fw, fh) = reframe.outputSize(w, h)
-        val outW = OutputSpec.even(fw)
-        val outH = OutputSpec.even(fh)
         val r = reframe.clamped(fw, fh, w, h)
         val scale = Reframe.baseScale(fw, fh, w, h) * r.effectiveZoom(fw, fh, w, h)
         val matrix = Matrix().apply {
@@ -169,7 +167,7 @@ class ExportManager(private val context: Context) {
             // Clockwise on screen is a negative angle with y pointing up.
             postRotate(-r.angleDegrees)
             postScale(scale, scale)
-            postScale(2f / outW, 2f / outH)
+            postScale(2f / fw, 2f / fh)
         }
         return object : MatrixTransformation {
             override fun configure(inputWidth: Int, inputHeight: Int) = Size(outW, outH)
@@ -210,7 +208,7 @@ class ExportManager(private val context: Context) {
         }
         if (request.effects.changesPixels) effects += FinishEffect(request.effects)
         // Reframing comes after colour and texture (as in the preview) and before the dashboard.
-        reframeEffect(request.reframe, request.width, request.height)?.let { effects += it }
+        reframeEffect(request.reframe, request.width, request.height, out.width, out.height)?.let { effects += it }
         // The timeline's frame scaled to the output size (the same shape), so every clip of a joined
         // export has the same frame.
         effects += Presentation.createForWidthAndHeight(out.width, out.height, Presentation.LAYOUT_SCALE_TO_FIT_WITH_CROP)

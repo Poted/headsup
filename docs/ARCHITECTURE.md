@@ -272,7 +272,7 @@ crossing a cut selects the next clip, since the preview shows the clip under the
 The timeline has one frame shape (`UiState.frameAspect`, or the first clip's) and frame rate.
 Each clip's `Reframe` is applied in that shape (`UiState.framing`): filling it (cropped) or
 fitting inside it (`Reframe.fit`, black bars), plus zoom, position and straightening. The export
-places each clip into a frame of that shape at the clip's own pixel scale (a `MatrixTransformation`
-with its own output size), so nothing is scaled down before the final `Presentation`; the
-resolution setting is the frame's short side.
+draws each clip straight into a frame of that shape at the export size (a `MatrixTransformation`
+working in normalised coordinates, with its own output size), so no oversized or downscaled
+frame is drawn in between; the resolution setting is the frame's short side.
 
