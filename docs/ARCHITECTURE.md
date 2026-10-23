@@ -274,8 +274,10 @@ would need a new decoder at a cut between files of different shape, which shows 
 The next clip starts hidden and silent about 120 ms before the cut, so it is already moving when
 the picture switches to it (a player takes a moment to start, and its end is reported late). Large clips
 (above 4K, or where the decoder reports too little capacity for two, `DecoderBudget`) get one
-decoder: the next clip is loaded without its picture, and at the cut the old player is stopped
-and the new one decodes, the old picture staying until its first frame. If
+decoder: the next clip is queued after the current one in the same player, which goes on to it
+by itself (a new decoder at the cut, so a short pause, but never two decoders at once). Each
+player's picture is laid out for the clip whose frame it actually holds (`onRenderedFirstFrame`),
+so passing a cut never shows one clip's frame in the other's shape or framing. If
 a player fails (e.g. no decoder free for two large files), the other one is emptied and the
 shown one loads again. While the preview plays, the timeline's thumbnails wait (their decoding
 competes with the player), and pressing play stops a glide left from a flick.

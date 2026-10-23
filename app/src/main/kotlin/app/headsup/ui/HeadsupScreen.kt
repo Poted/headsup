@@ -291,6 +291,7 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
                         playlistIndex = state.selectedClip ?: 0,
                         // Played on into the next clip: it becomes the clip shown and edited.
                         onAdvance = { i -> if (i != state.selectedClip && i in state.clips.indices) vm.selectClip(i) },
+                        framingOf = { state.framing(it) },
                         cutScrub = cutScrub,
                         onFrameSource = { frameSource.value = it },
                         reframe = state.framing(selected),
