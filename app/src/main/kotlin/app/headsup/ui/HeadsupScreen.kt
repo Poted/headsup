@@ -88,6 +88,8 @@ import app.headsup.color.Vectorscope
 import app.headsup.core.color.ColorGrade
 import app.headsup.core.color.ColourMask
 import app.headsup.core.color.MaskKind
+import app.headsup.core.color.CineStyle
+import android.graphics.Bitmap
 import app.headsup.core.color.SkinTone
 import kotlin.math.cos
 import kotlin.math.sin
@@ -172,6 +174,8 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
     val playhead = remember { mutableLongStateOf(0L) }
     // File position of a cut handle being dragged; read only by the preview.
     val cutScrub = remember { mutableStateOf<Long?>(null) }
+    // Grabs the paused preview frame, for the cine assistant.
+    val frameSource = remember { mutableStateOf<(() -> Bitmap?)?>(null) }
     val exporting = jobs.any { it.status == JobStatus.QUEUED || it.status == JobStatus.RUNNING }
     val previewMaxHeight = (LocalConfiguration.current.screenHeightDp * 0.38f).dp
     TenBitResultDialog(jobs)
@@ -209,6 +213,7 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
                     onMoveFinished = vm::persistStyle,
                     onPosition = { playhead.longValue = it },
                     cutScrub = cutScrub,
+                    onFrameSource = { frameSource.value = it },
                 )
             }
             if (state.clips.isNotEmpty()) {
@@ -234,7 +239,7 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
                 if (state.messages.isNotEmpty()) Messages(state.messages, vm::dismissMessages)
                 when (tool) {
                     Tool.FILES -> FilesPanel(state, vm, playhead, onCutScrub = { cutScrub.value = it }, onAddVideos = addVideos, onAddFit = addFit)
-                    Tool.COLOUR -> ColourPage(state, vm, adjustment, { adjustment = it }, onAddLut = { lutPicker.launch(arrayOf("*/*")) })
+                    Tool.COLOUR -> ColourPage(state, vm, adjustment, { adjustment = it }, onAddLut = { lutPicker.launch(arrayOf("*/*")) }, frameSource.value)
                     Tool.EFFECTS -> EffectsPanel(state, vm)
                     Tool.EXPORT -> ExportControls(
                         bitrateFactor = state.bitrateFactor,
@@ -746,7 +751,11 @@ internal enum class Adjustment(
     val format: String,
     val get: (ColorGrade) -> Float,
     val set: (ColorGrade, Float) -> ColorGrade,
+    /** Value meaning "no correction" (0 except for the toning hues). */
+    val neutral: Float = 0f,
 ) {
+    /** Not a ruler value: the cine assistant, which analyses the frame and suggests a film grade. */
+    CINE("Cine", "Cine look", 0f..1f, 1f, "", { 0f }, { g, _ -> g }),
     EXPOSURE("EV", "Exposure", -2f..2f, 0.1f, "%+.1f EV", { it.exposure }, { g, v -> g.copy(exposure = v) }),
     BRIGHTNESS("Br", "Brightness", -1f..1f, 0.02f, "%+.2f", { it.brightness }, { g, v -> g.copy(brightness = v) }),
     CONTRAST("Ct", "Contrast", -1f..1f, 0.02f, "%+.2f", { it.contrast }, { g, v -> g.copy(contrast = v) }),
@@ -760,6 +769,15 @@ internal enum class Adjustment(
     TINT("Tn", "Tint", -1f..1f, 0.02f, "%+.2f", { it.tint }, { g, v -> g.copy(tint = v) }),
     SKIN("Sk", "Skin tone", -30f..30f, 0.5f, "%+.1f°", { it.skinHue }, { g, v -> g.copy(skinHue = v) }),
     VIGNETTE("Vig", "Vignette", 0f..1f, 0.02f, "%.2f", { it.vignette }, { g, v -> g.copy(vignette = v) }),
+    ROLLOFF("Rl", "Roll-off", 0f..1f, 0.02f, "%.2f", { it.rolloff }, { g, v -> g.copy(rolloff = v) }),
+    SPLIT("Sp", "Split tone", 0f..1f, 0.02f, "%.2f", { it.toneAmount }, { g, v -> g.copy(toneAmount = v) }),
+    SHADOW_HUE(
+        "S°", "Shadow hue", 0f..360f, 1f, "%.0f°", { it.shadowHue }, { g, v -> g.copy(shadowHue = v) }, ColorGrade.DEFAULT_SHADOW_HUE,
+    ),
+    HIGHLIGHT_HUE(
+        "H°", "Light hue", 0f..360f, 1f, "%.0f°", { it.highlightHue }, { g, v -> g.copy(highlightHue = v) }, ColorGrade.DEFAULT_HIGHLIGHT_HUE,
+    ),
+    TAME("Tm", "Tame colours", 0f..1f, 0.02f, "%.2f", { it.tame }, { g, v -> g.copy(tame = v) }),
 
     /** Not a ruler value: opens the LUT library (the LUT is applied last, after all corrections). */
     LUT("LUT", "LUT", 0f..1f, 1f, "", { 0f }, { g, _ -> g }),
@@ -777,6 +795,7 @@ private fun ColourPage(
     adjustment: Adjustment,
     onAdjustment: (Adjustment) -> Unit,
     onAddLut: () -> Unit,
+    frameSource: (() -> Bitmap?)?,
 ) {
     val index = state.selectedClip
     val clip = state.selected
@@ -815,9 +834,9 @@ private fun ColourPage(
     // Blending in from the previous clip is a property of the clip, so it is only on its own tab.
     val options = when (target) {
         GradeTarget.CLIP -> if (index > 0) Adjustment.entries else Adjustment.entries - Adjustment.BLEND
-        GradeTarget.GROUP -> Adjustment.entries - Adjustment.BLEND
-        GradeTarget.GLOBAL -> Adjustment.entries - Adjustment.LUT - Adjustment.BLEND
-        GradeTarget.MASK -> Adjustment.entries - Adjustment.LUT - Adjustment.SKIN - Adjustment.VIGNETTE - Adjustment.BLEND
+        GradeTarget.GROUP -> Adjustment.entries - Adjustment.BLEND - Adjustment.CINE
+        GradeTarget.GLOBAL -> Adjustment.entries - Adjustment.LUT - Adjustment.BLEND - Adjustment.CINE
+        GradeTarget.MASK -> Adjustment.entries - Adjustment.LUT - Adjustment.SKIN - Adjustment.VIGNETTE - Adjustment.BLEND - Adjustment.CINE
     }
     val adjustment = if (adjustment in options) adjustment else Adjustment.EXPOSURE
     // On the Masks tab the ruler edits either a shape control or a correction.
@@ -836,7 +855,8 @@ private fun ColourPage(
             val modified = when (a) {
                 Adjustment.LUT -> lut != null
                 Adjustment.BLEND -> clip.transitionMs > 0
-                else -> a.get(state.grade) != 0f
+                Adjustment.CINE -> state.cine != null
+                else -> a.get(state.grade) != a.neutral
             }
             CircleOption(a.symbol, a.label, selected = editingShape == null && a == adjustment, modified = modified) {
                 onShapes = false
@@ -853,6 +873,10 @@ private fun ColourPage(
             onChange = { v -> vm.updateMask { editingShape.set(it, v) } },
             onReset = { vm.updateMask { editingShape.set(it, editingShape.get(ColourMask(it.kind))) } },
         )
+        return
+    }
+    if (adjustment == Adjustment.CINE) {
+        CinePanel(state, vm, frameSource)
         return
     }
     if (adjustment == Adjustment.BLEND) {
@@ -884,9 +908,52 @@ private fun ColourPage(
         range = adjustment.range,
         step = adjustment.step,
         onChange = { v -> vm.updateGrade { adjustment.set(it, v) } },
-        onReset = { vm.updateGrade { adjustment.set(it, 0f) } },
-        onHold = { held -> vm.setCompareGrade(if (held) adjustment.set(state.grade, 0f) else null) },
+        onReset = { vm.updateGrade { adjustment.set(it, adjustment.neutral) } },
+        onHold = { held -> vm.setCompareGrade(if (held) adjustment.set(state.grade, adjustment.neutral) else null) },
     )
+}
+
+/**
+ * Cine assistant: measures the paused frame (no AI, just the picture's statistics) and suggests a
+ * film grade in a few styles. The result is ordinary corrections, adjustable afterwards.
+ */
+@Composable
+private fun CinePanel(state: UiState, vm: HeadsupViewModel, frameSource: (() -> Bitmap?)?) {
+    val session = state.cine
+    if (session == null) {
+        Hint("Pause on a typical frame. The assistant measures its tones and colours and suggests a film grade.")
+        Button(
+            onClick = { frameSource?.invoke()?.let(vm::analyseForCine) },
+            enabled = frameSource != null,
+            modifier = Modifier.fillMaxWidth(),
+        ) { Text("Analyse this frame") }
+        return
+    }
+    val s = session.stats
+    Hint(
+        String.format(
+            Locale.US, "Mid-tones %.0f %% · %.1f %% clipped · %s%s",
+            s.median * 100, s.clipped * 100,
+            if (s.foliage > 0.15f) "lots of green/blue" else "colours calm",
+            if (s.skin > 0.03f) " · skin found" else "",
+        ),
+    )
+    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        for (style in CineStyle.entries) {
+            FilterChip(selected = session.style == style, onClick = { vm.applyCine(style, session.strength) }, label = { Text(style.label) })
+        }
+    }
+    val style = session.style
+    if (style != null) {
+        ValueHeader("Strength", String.format(Locale.US, "%.0f %%", session.strength * 100))
+        RulerSlider(session.strength, 0f..1f, 0.02f, { v -> vm.applyCine(style, v) }, onReset = { vm.applyCine(style, 1f) })
+    }
+    Row {
+        SmallAction("Undo", { vm.closeCine(undo = true) })
+        Spacer(Modifier.weight(1f))
+        SmallAction("Done", { vm.closeCine(undo = false) }, enabled = style != null)
+    }
+    if (style != null) Hint("Done keeps it as normal corrections: roll-off, split tone, tame colours and the rest stay adjustable.")
 }
 
 /** Shape controls of a mask, edited with the same ruler as the corrections. */
@@ -1056,6 +1123,7 @@ private enum class EffectKind(val symbol: String, val label: String) {
     GRAPH("Gr", "Graph"),
     GRAIN("Gn", "Grain"),
     GLOW("Gl", "Glow"),
+    HALATION("Ha", "Halation"),
     BARS("Cin", "Bars"),
 }
 
@@ -1081,6 +1149,7 @@ private fun EffectsPanel(state: UiState, vm: HeadsupViewModel) {
                 EffectKind.GRAPH -> effects.graph != null
                 EffectKind.GRAIN -> effects.grain > 0f
                 EffectKind.GLOW -> effects.glow > 0f
+                EffectKind.HALATION -> effects.halation > 0f
                 EffectKind.BARS -> effects.barsRatio != null
             }
             CircleOption(e.symbol, e.label, selected = e == kind, modified = active) { kind = e }
@@ -1123,6 +1192,13 @@ private fun EffectsPanel(state: UiState, vm: HeadsupViewModel) {
             RulerSlider(effects.glow, 0f..1f, 0.02f, { v -> updateEffects { it.copy(glow = v) } }, onReset = { updateEffects { it.copy(glow = 0f) } })
             ValueHeader("Threshold", String.format(Locale.US, "%.0f %%", effects.glowThreshold * 100))
             RulerSlider(effects.glowThreshold, 0.4f..0.98f, 0.02f, { v -> updateEffects { it.copy(glowThreshold = v) } }, onReset = { updateEffects { it.copy(glowThreshold = 0.75f) } })
+        }
+        EffectKind.HALATION -> {
+            ValueHeader("Halation", String.format(Locale.US, "%.0f %%", effects.halation * 100))
+            RulerSlider(effects.halation, 0f..1f, 0.02f, { v -> updateEffects { it.copy(halation = v) } }, onReset = { updateEffects { it.copy(halation = 0f) } })
+            ValueHeader("Threshold", String.format(Locale.US, "%.0f %%", effects.glowThreshold * 100))
+            RulerSlider(effects.glowThreshold, 0.4f..0.98f, 0.02f, { v -> updateEffects { it.copy(glowThreshold = v) } }, onReset = { updateEffects { it.copy(glowThreshold = 0.75f) } })
+            Hint("Red-orange bleed around bright highlights, as on motion picture film.")
         }
         EffectKind.BARS -> {
             LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {

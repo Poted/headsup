@@ -118,6 +118,17 @@ in from the previous clip's look (Colour → This clip → Blend in), e.g. after
 light changes; the weight is `ColourTransition.fromWeight`. The preview shader and, for export,
 `GradeEffect` (replacing Media3's single colour table for such clips) use the same formulas.
 
+### Cine look
+
+`FilmLook` runs on display colours after the LUT (inside the same baked table): a highlight
+shoulder (`rolloff`), split toning of shadows and highlights by vectorscope angle (`toneAmount`,
+`shadowHue`, `highlightHue`) and calming of loud greens/blues (`tame`); skin, found by its
+closeness to the 123° line, is spared. `CineAssistant` needs no AI: it measures the paused frame
+(luminance percentiles, clipping, colourfulness, share of skin and foliage, colour cast) and
+derives a suggestion per style (warm film, teal & orange, muted) that is added to the clip's
+grade at a chosen strength, plus grain and halation (a red-orange bleed around highlights in
+the glow pass of the preview shader and `FinishEffect`).
+
 ## Export (stage 3)
 
 - Media3 Transformer, HEVC, source resolution and frame rate, bitrate near the source.

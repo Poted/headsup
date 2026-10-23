@@ -74,6 +74,7 @@ class GradePreviewShader {
         shader.setFloatUniform("grainSize", effects.grainSize)
         shader.setFloatUniform("glow", effects.glow)
         shader.setFloatUniform("threshold", effects.glowThreshold)
+        shader.setFloatUniform("halation", effects.halation)
         return RenderEffect.createRuntimeShaderEffect(shader, "image").asComposeRenderEffect()
     }
 
@@ -118,6 +119,7 @@ class GradePreviewShader {
             uniform float grainSize;
             uniform float glow;
             uniform float threshold;
+            uniform float halation;
 
             ${TABLES.joinToString("\n") { lookup(it) }}
 
@@ -164,7 +166,7 @@ class GradePreviewShader {
                     if (w$i > 0.0) c = mix(c, float3(grade_lutM$i(src.rgb)), w$i);
                 }""" }.joinToString("")}
                 if (fromWeight > 0.0) c = mix(c, float3(grade_lutFrom(src.rgb)), fromWeight);
-                if (glow > 0.0) {
+                if (glow > 0.0 || halation > 0.0) {
                     float r = shortSide * 0.012;
                     float3 acc = float3(0.0);
                     for (int i = 0; i < 12; i++) {
@@ -175,7 +177,7 @@ class GradePreviewShader {
                         float a = float(i) * 1.0472 + 0.26;
                         acc += bright(coord + float2(cos(a), sin(a)) * 2.2 * r);
                     }
-                    float3 g = clamp(acc / 18.0 * glow * 1.5, 0.0, 1.0);
+                    float3 g = clamp(acc / 18.0 * glow * 1.5 + dot(acc / 18.0, float3(0.33)) * halation * 2.0 * float3(1.0, 0.3, 0.1), 0.0, 1.0);
                     c = 1.0 - (1.0 - c) * (1.0 - g);
                 }
                 if (grain > 0.0) {

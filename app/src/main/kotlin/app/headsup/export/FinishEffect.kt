@@ -14,7 +14,7 @@ import androidx.media3.effect.GlShaderProgram
 import app.headsup.render.EffectSettings
 
 /**
- * Glow and film grain for exported video, applied after the colour table. The maths matches the
+ * Glow, halation and film grain for exported video, applied after the colour table. The maths matches the
  * preview shader (`GradePreviewShader`) so both look alike.
  */
 @OptIn(UnstableApi::class)
@@ -50,6 +50,7 @@ class FinishEffect(private val settings: EffectSettings) : GlEffect {
                 program.setFloatUniform("uGrainSize", settings.grainSize)
                 program.setFloatUniform("uGlow", settings.glow)
                 program.setFloatUniform("uThreshold", settings.glowThreshold)
+                program.setFloatUniform("uHalation", settings.halation)
                 program.bindAttributesAndUniforms()
                 GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4)
             } catch (e: GlUtil.GlException) {
@@ -88,6 +89,7 @@ class FinishEffect(private val settings: EffectSettings) : GlEffect {
             uniform float uGrainSize;
             uniform float uGlow;
             uniform float uThreshold;
+            uniform float uHalation;
             varying vec2 vTexSamplingCoord;
 
             float luma(vec3 c) { return dot(c, vec3(0.2126, 0.7152, 0.0722)); }
@@ -102,7 +104,7 @@ class FinishEffect(private val settings: EffectSettings) : GlEffect {
                 vec4 src = texture2D(uTexSampler, vTexSamplingCoord);
                 vec3 c = src.rgb;
                 float shortSide = min(uSize.x, uSize.y);
-                if (uGlow > 0.0) {
+                if (uGlow > 0.0 || uHalation > 0.0) {
                     float r = shortSide * 0.012;
                     vec3 acc = vec3(0.0);
                     for (int i = 0; i < 12; i++) {
@@ -113,7 +115,8 @@ class FinishEffect(private val settings: EffectSettings) : GlEffect {
                         float a = float(i) * 1.0472 + 0.26;
                         acc += bright(vTexSamplingCoord + vec2(cos(a), sin(a)) * 2.2 * r / uSize);
                     }
-                    vec3 g = clamp(acc / 18.0 * uGlow * 1.5, 0.0, 1.0);
+                    // Halation: film's red-orange bleed around highlights, from the same blurred taps.
+                    vec3 g = clamp(acc / 18.0 * uGlow * 1.5 + dot(acc / 18.0, vec3(0.33)) * uHalation * 2.0 * vec3(1.0, 0.3, 0.1), 0.0, 1.0);
                     c = 1.0 - (1.0 - c) * (1.0 - g);
                 }
                 if (uGrain > 0.0) {

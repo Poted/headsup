@@ -67,6 +67,11 @@ class GradeStore(private val context: Context) {
         vibrance = prefs.getFloat(prefix + "vibrance", 0f),
         tint = prefs.getFloat(prefix + "tint", 0f),
         skinHue = prefs.getFloat(prefix + "skin_hue", 0f),
+        rolloff = prefs.getFloat(prefix + "rolloff", 0f),
+        toneAmount = prefs.getFloat(prefix + "tone_amount", 0f),
+        shadowHue = prefs.getFloat(prefix + "shadow_hue", ColorGrade.DEFAULT_SHADOW_HUE),
+        highlightHue = prefs.getFloat(prefix + "highlight_hue", ColorGrade.DEFAULT_HIGHLIGHT_HUE),
+        tame = prefs.getFloat(prefix + "tame", 0f),
     )
 
     fun saveGrade(g: ColorGrade, prefix: String = "") {
@@ -84,6 +89,11 @@ class GradeStore(private val context: Context) {
             .putFloat(prefix + "vibrance", g.vibrance)
             .putFloat(prefix + "tint", g.tint)
             .putFloat(prefix + "skin_hue", g.skinHue)
+            .putFloat(prefix + "rolloff", g.rolloff)
+            .putFloat(prefix + "tone_amount", g.toneAmount)
+            .putFloat(prefix + "shadow_hue", g.shadowHue)
+            .putFloat(prefix + "highlight_hue", g.highlightHue)
+            .putFloat(prefix + "tame", g.tame)
             .apply()
     }
 

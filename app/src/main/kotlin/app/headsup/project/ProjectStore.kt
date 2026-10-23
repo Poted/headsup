@@ -165,10 +165,15 @@ internal object Json {
         .put("vibrance", g.vibrance)
         .put("tint", g.tint)
         .put("skinHue", g.skinHue)
+        .put("rolloff", g.rolloff)
+        .put("toneAmount", g.toneAmount)
+        .put("shadowHue", g.shadowHue)
+        .put("highlightHue", g.highlightHue)
+        .put("tame", g.tame)
 
     fun grade(o: JSONObject?): ColorGrade {
         if (o == null) return ColorGrade()
-        fun f(key: String) = o.optDouble(key, 0.0).toFloat()
+        fun f(key: String, default: Float = 0f) = o.optDouble(key, default.toDouble()).toFloat()
         return ColorGrade(
             exposure = f("exposure"),
             brightness = f("brightness"),
@@ -183,6 +188,11 @@ internal object Json {
             vibrance = f("vibrance"),
             tint = f("tint"),
             skinHue = f("skinHue"),
+            rolloff = f("rolloff"),
+            toneAmount = f("toneAmount"),
+            shadowHue = f("shadowHue", ColorGrade.DEFAULT_SHADOW_HUE),
+            highlightHue = f("highlightHue", ColorGrade.DEFAULT_HIGHLIGHT_HUE),
+            tame = f("tame"),
         )
     }
 
@@ -191,6 +201,7 @@ internal object Json {
         .put("grainSize", e.grainSize)
         .put("glow", e.glow)
         .put("glowThreshold", e.glowThreshold)
+        .put("halation", e.halation)
         .putOpt("barsRatio", e.barsRatio)
         .putOpt("graph", e.graph?.name)
 
@@ -202,6 +213,7 @@ internal object Json {
             grainSize = o.optDouble("grainSize", d.grainSize.toDouble()).toFloat(),
             glow = o.optDouble("glow", d.glow.toDouble()).toFloat(),
             glowThreshold = o.optDouble("glowThreshold", d.glowThreshold.toDouble()).toFloat(),
+            halation = o.optDouble("halation", 0.0).toFloat(),
             barsRatio = if (o.has("barsRatio")) o.getDouble("barsRatio").toFloat() else null,
             graph = GraphMetric.entries.firstOrNull { it.name == o.optStringOrNull("graph") },
         )

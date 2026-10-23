@@ -26,11 +26,28 @@ data class ColorGrade(
     val tint: Float = 0f,
     /** Rotation of skin hues on the vectorscope, degrees; see [SkinTone]. */
     val skinHue: Float = 0f,
+    /** Film-like shoulder: highlights bend softly towards white instead of clipping hard, 0..1. */
+    val rolloff: Float = 0f,
+    /** Split toning strength, 0..1: shadows towards [shadowHue], highlights towards [highlightHue]. */
+    val toneAmount: Float = 0f,
+    /** Vectorscope angles (as [SkinTone.chroma]); the defaults are teal and orange. */
+    val shadowHue: Float = DEFAULT_SHADOW_HUE,
+    val highlightHue: Float = DEFAULT_HIGHLIGHT_HUE,
+    /** Calms loud colours (strong greens and blues most), sparing skin, 0..1. */
+    val tame: Float = 0f,
 ) {
     val isNeutralColour: Boolean
         get() = exposure == 0f && brightness == 0f && contrast == 0f && shadows == 0f &&
             highlights == 0f && saturation == 0f && temperature == 0f &&
-            blacks == 0f && whites == 0f && vibrance == 0f && tint == 0f && skinHue == 0f
+            blacks == 0f && whites == 0f && vibrance == 0f && tint == 0f && skinHue == 0f &&
+            rolloff == 0f && toneAmount == 0f && tame == 0f
+
+    /** The corrections scaled by [k] (hues stay), e.g. a suggestion at partial strength. */
+    operator fun times(k: Float) = ColorGrade(
+        exposure * k, brightness * k, contrast * k, shadows * k, highlights * k, saturation * k, temperature * k,
+        vignette * k, blacks * k, whites * k, vibrance * k, tint * k, skinHue * k,
+        rolloff * k, toneAmount * k, shadowHue, highlightHue, tame * k,
+    )
 
     /**
      * This grade with [other] on top, e.g. a clip's corrections plus the global ones. The values
@@ -50,7 +67,18 @@ data class ColorGrade(
         vibrance = (vibrance + other.vibrance).coerceIn(-1f, 1f),
         tint = (tint + other.tint).coerceIn(-1f, 1f),
         skinHue = (skinHue + other.skinHue).coerceIn(-30f, 30f),
+        rolloff = (rolloff + other.rolloff).coerceIn(0f, 1f),
+        toneAmount = (toneAmount + other.toneAmount).coerceIn(0f, 1f),
+        // Hues cannot be added; the stronger toning decides them.
+        shadowHue = if (other.toneAmount > toneAmount) other.shadowHue else shadowHue,
+        highlightHue = if (other.toneAmount > toneAmount) other.highlightHue else highlightHue,
+        tame = (tame + other.tame).coerceIn(0f, 1f),
     )
+
+    companion object {
+        const val DEFAULT_SHADOW_HUE = 283f
+        const val DEFAULT_HIGHLIGHT_HUE = 142f
+    }
 }
 
 /**
@@ -98,7 +126,8 @@ object LutBaker {
             lut.sample(rgb[0], rgb[1], rgb[2], rgb)
         }
         for (i in 0..2) rgb[i] = rgb[i].coerceIn(0f, 1f)
-        // The skin line is defined for display-referred (Rec.709) colours, so this runs last.
+        // Film look and the skin line work on display-referred (Rec.709) colours, so they run last.
+        FilmLook.apply(grade, rgb)
         if (grade.skinHue != 0f) {
             SkinTone.rotate(rgb, grade.skinHue)
             for (i in 0..2) rgb[i] = rgb[i].coerceIn(0f, 1f)

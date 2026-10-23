@@ -13,6 +13,9 @@ import app.headsup.core.color.SkinTone
 import app.headsup.core.color.ColorGrade
 import app.headsup.core.color.ColourMask
 import app.headsup.core.color.MaskKind
+import app.headsup.core.color.CineAssistant
+import app.headsup.core.color.CineStyle
+import app.headsup.core.color.FrameStats
 import app.headsup.core.color.CubeLut
 import app.headsup.core.color.LutBaker
 import app.headsup.core.fit.FitActivityReader
@@ -112,6 +115,19 @@ data class ClipLook(val grade: ColorGrade, val effects: EffectSettings, val lutN
  */
 data class ClipGroup(val id: Long, val name: String, val grade: ColorGrade = ColorGrade(), val lutName: String? = null)
 
+/**
+ * The cine assistant's state for one clip: what it measured, the clip's grade and effects before
+ * the suggestion (so it can be scaled or undone), and the chosen style and strength.
+ */
+data class CineSession(
+    val clipId: Long,
+    val stats: FrameStats,
+    val baseGrade: ColorGrade,
+    val baseEffects: EffectSettings,
+    val style: CineStyle? = null,
+    val strength: Float = 1f,
+)
+
 /** What the colour page edits; the order is that of its tabs. */
 enum class GradeTarget { CLIP, GROUP, MASK, GLOBAL }
 
@@ -151,6 +167,8 @@ data class UiState(
     val previewFromCube: Array<Array<IntArray>>? = null,
     /** Mask of the selected clip that the Masks tab edits. */
     val selectedMask: Int = 0,
+    /** Cine assistant for the selected clip, while it is open. */
+    val cine: CineSession? = null,
     val bitrateFactor: Float = 1f,
     /** Vectorscope and skin measurement of the last frame tapped in the preview. */
     val scope: ScopeResult? = null,
@@ -399,7 +417,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
 
     fun selectClip(index: Int) {
         scopeFrame = null
-        _state.update { it.copy(selectedClip = index, scope = null, selectedMask = 0, compareGrade = null) }
+        _state.update { it.copy(selectedClip = index, scope = null, selectedMask = 0, compareGrade = null, cine = null) }
         refreshPreview()
     }
 
@@ -616,6 +634,61 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
     private fun updateGroup(id: Long, transform: (ClipGroup) -> ClipGroup) {
         _state.update { s -> s.copy(groups = s.groups.map { if (it.id == id) transform(it) else it }) }
         refreshPreview()
+    }
+
+    // Cine assistant
+
+    /** Measures [frame] (the paused preview, before colour) as graded now, and starts a suggestion session. */
+    fun analyseForCine(frame: Bitmap) {
+        val s = _state.value
+        val clip = s.selected ?: return frame.recycle()
+        val pixels = IntArray(frame.width * frame.height)
+        frame.getPixels(pixels, 0, frame.width, 0, 0, frame.width, frame.height)
+        frame.recycle()
+        val cube = s.previewCube
+        viewModelScope.launch {
+            val stats = withContext(Dispatchers.Default) {
+                if (cube != null) {
+                    val rgb = FloatArray(3)
+                    for (i in pixels.indices) {
+                        val p = pixels[i]
+                        LutBaker.sampleBaked(cube, ((p shr 16) and 0xFF) / 255f, ((p shr 8) and 0xFF) / 255f, (p and 0xFF) / 255f, rgb)
+                        pixels[i] = (0xFF shl 24) or ((rgb[0] * 255).toInt() shl 16) or ((rgb[1] * 255).toInt() shl 8) or (rgb[2] * 255).toInt()
+                    }
+                }
+                CineAssistant.analyse(pixels)
+            }
+            _state.update { it.copy(cine = CineSession(clip.id, stats, clip.grade, clip.effects)) }
+        }
+    }
+
+    /** Applies [style] at [strength] on top of the grade the clip had when the frame was measured. */
+    fun applyCine(style: CineStyle, strength: Float) {
+        val s = _state.value
+        val session = s.cine ?: return
+        val index = s.clips.indexOfFirst { it.id == session.clipId }.takeIf { it >= 0 } ?: return
+        val suggestion = CineAssistant.suggest(session.stats, style)
+        val k = strength.coerceIn(0f, 1f)
+        _state.update { it.copy(cine = session.copy(style = style, strength = k)) }
+        updateClip(index) {
+            it.copy(
+                grade = session.baseGrade + suggestion.grade * k,
+                effects = session.baseEffects.copy(
+                    grain = maxOf(session.baseEffects.grain, suggestion.grain * k),
+                    halation = maxOf(session.baseEffects.halation, suggestion.halation * k),
+                ),
+            )
+        }
+    }
+
+    /** Keeps the suggestion as ordinary corrections ([undo] = false) or restores the clip as it was. */
+    fun closeCine(undo: Boolean) {
+        val session = _state.value.cine ?: return
+        if (undo) {
+            val index = _state.value.clips.indexOfFirst { it.id == session.clipId }
+            if (index >= 0) updateClip(index) { it.copy(grade = session.baseGrade, effects = session.baseEffects) }
+        }
+        _state.update { it.copy(cine = null) }
     }
 
     // Masks and transitions

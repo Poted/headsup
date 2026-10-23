@@ -127,6 +127,8 @@ fun ClipPreview(
      * picture can follow the handle, also outside the current cut.
      */
     cutScrub: State<Long?> = NO_SCRUB,
+    /** Receives a function that grabs the current frame (before colour), e.g. for analysis. */
+    onFrameSource: ((() -> Bitmap?) -> Unit)? = null,
 ) {
     val context = LocalContext.current
     val exoPlayer = remember { ExoPlayer.Builder(context).build() }
@@ -182,6 +184,13 @@ fun ClipPreview(
     var textureView by remember { mutableStateOf<TextureView?>(null) }
     val sample by rememberUpdatedState(onSample)
     val maskMover by rememberUpdatedState(onMoveMask)
+    LaunchedEffect(textureView) {
+        val tv = textureView ?: return@LaunchedEffect
+        onFrameSource?.invoke {
+            val w = ANALYSIS_WIDTH
+            tv.getBitmap(w, (w * tv.height / tv.width.coerceAtLeast(1)).coerceAtLeast(1))
+        }
+    }
 
     LaunchedEffect(histogramOn, gradeCube) {
         while (histogramOn) {
@@ -341,6 +350,7 @@ fun ClipPreview(
 }
 
 private const val SAMPLE_WIDTH = 192
+private const val ANALYSIS_WIDTH = 256
 
 /** The mask's edge (solid) and the ends of its soft blend (dashed), as in DaVinci's window controls. */
 private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawMaskGuide(mask: ColourMask) {
