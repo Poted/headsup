@@ -606,9 +606,16 @@ private fun DrawScope.drawVideo(
             }
             drawCircle(dotColour, 3.5f.dp.toPx(), Offset(r - 8.dp.toPx(), top + 8.dp.toPx()))
         }
+    }
+    // Drawn over all clips, so the selected clip's right handle is not hidden by the next clip.
+    state.selectedClip?.let { i ->
+        val c = state.clips.getOrNull(i) ?: return@let
+        val shift = ghost?.takeIf { it.first == i }?.second ?: 0L
+        val l = g.x(g.starts[i] + shift)
+        val r = g.x(g.starts[i + 1])
+        if (r < 0f || l > size.width || r - l < 1f) return@let
         // The clip under the playhead is outlined; the selected one gets handles.
-        val current = i == state.selectedClip
-        if (current) {
+        run {
             val selected = videoSelected
             drawRoundRect(if (selected) Color.White else HeadsupColors.Accent, Offset(l, top), Size(r - l, h), radius, style = Stroke((if (selected) 2.5f else 1.5f).dp.toPx()))
             if (selected) {

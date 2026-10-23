@@ -1512,7 +1512,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                 val from = if (direction == TrackDirection.FORWARD) t0 else clip.trimStartMs
                 val to = if (direction == TrackDirection.BACKWARD) t0 else clip.trimEndMs
                 val frames = withContext(Dispatchers.Default) {
-                    TrackingFrames.read(getApplication(), clip.meta.uri, from, to, maxOf(66L, (to - from) / 200)) { p ->
+                    TrackingFrames.read(getApplication(), _state.value.previewSource(clip), from, to, maxOf(66L, (to - from) / 200)) { p ->
                         _state.update { it.copy(loadingMessage = "Reading frames", loadingProgress = p * 0.6f) }
                     }
                 }
