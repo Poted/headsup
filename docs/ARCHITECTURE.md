@@ -185,3 +185,11 @@ corrections and can be undone. For a clip in a group, the default is to match th
 (the camera): exposure and contrast are solved only so the frames compare like with like, and
 just white balance, tint, saturation and skin hue go into the group's corrections, so every
 shot of that camera follows while keeping its own brightness.
+
+## Undo and redo
+
+The ViewModel keeps up to 60 steps of the edit (files, cuts, colour, groups, masks, effects,
+framing, dashboard; not selection or playback). A step is recorded half a second after an edit
+settles, so one slider drag is one step; a step pending when undo is pressed is recorded first,
+so redo can bring it back. Opening another project starts a new history. The arrows sit quietly
+in the corner of the preview and only appear once there is something to undo.

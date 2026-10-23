@@ -140,6 +140,22 @@ object HeadsupIcons {
         }
     }
 
+    /** Arrow curving back: undo. */
+    val Undo = icon("undo") {
+        stroke {
+            moveTo(9f, 14f); lineTo(4f, 9f); lineTo(9f, 4f)
+            moveTo(4f, 9f); lineTo(14.5f, 9f); arcTo(5.5f, 5.5f, 0f, false, true, 14.5f, 20f); lineTo(11f, 20f)
+        }
+    }
+
+    /** Arrow curving forward: redo. */
+    val Redo = icon("redo") {
+        stroke {
+            moveTo(15f, 14f); lineTo(20f, 9f); lineTo(15f, 4f)
+            moveTo(20f, 9f); lineTo(9.5f, 9f); arcTo(5.5f, 5.5f, 0f, false, false, 9.5f, 20f); lineTo(13f, 20f)
+        }
+    }
+
     /** Crop corners: framing. */
     val Frame = icon("frame") {
         stroke {

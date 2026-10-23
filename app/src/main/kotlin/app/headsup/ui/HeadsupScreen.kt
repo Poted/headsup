@@ -205,43 +205,47 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
                     Modifier.padding(horizontal = 16.dp).fillMaxWidth().height(120.dp).clip(RoundedCornerShape(20.dp)).background(HeadsupColors.Surface),
                     contentAlignment = Alignment.Center,
                 ) { Hint("Preview paused while exporting") }
-                else -> ClipPreview(
-                    clip = selected,
-                    activity = selected.sync?.let { state.activities.getOrNull(it.trackIndex) },
-                    style = state.style,
-                    gradeCube = state.previewCube,
-                    masks = if (selected.colorGrade) selected.masks else emptyList(),
-                    maskCubes = state.previewMaskCubes,
-                    fromCube = state.previewFromCube,
-                    transitionMs = selected.transitionMs,
-                    guideMask = selected.masks.getOrNull(state.selectedMask).takeIf { editingMasks },
-                    onMoveMask = if (editingMasks) { x, y -> vm.updateMask { it.copy(centerX = x, centerY = y) } } else null,
-                    vignette = if (selected.colorGrade) state.appliedGrade(selected).vignette else 0f,
-                    effects = state.effects,
-                    onSample = if (measuring) vm::sampleFrame else null,
-                    marker = if (measuring) state.scope?.let { Offset(it.markerX, it.markerY) } else null,
-                    maxHeight = previewMaxHeight,
-                    onMoveWidget = vm::moveWidget,
-                    onMoveFinished = vm::persistStyle,
-                    onPosition = { playhead.longValue = it },
-                    cutScrub = cutScrub,
-                    onFrameSource = { frameSource.value = it },
-                    reframe = selected.reframe,
-                    onReframe = if (framing) { r -> vm.updateReframe { r } } else null,
-                    showGrid = framing,
-                    autoPlay = continuePlaying,
-                    seekRequest = seekRequest,
-                    onSeekDone = { seekRequest = null },
-                    onAutoPlayStarted = { continuePlaying = false },
-                    onEnded = {
-                        // The timeline plays through: the next clip follows.
-                        val next = (state.selectedClip ?: -1) + 1
-                        if (next in state.clips.indices) {
-                            continuePlaying = true
-                            vm.selectClip(next)
-                        }
-                    },
-                )
+                else -> Box {
+                    ClipPreview(
+                        clip = selected,
+                        activity = selected.sync?.let { state.activities.getOrNull(it.trackIndex) },
+                        style = state.style,
+                        gradeCube = state.previewCube,
+                        masks = if (selected.colorGrade) selected.masks else emptyList(),
+                        maskCubes = state.previewMaskCubes,
+                        fromCube = state.previewFromCube,
+                        transitionMs = selected.transitionMs,
+                        guideMask = selected.masks.getOrNull(state.selectedMask).takeIf { editingMasks },
+                        onMoveMask = if (editingMasks) { x, y -> vm.updateMask { it.copy(centerX = x, centerY = y) } } else null,
+                        vignette = if (selected.colorGrade) state.appliedGrade(selected).vignette else 0f,
+                        effects = state.effects,
+                        onSample = if (measuring) vm::sampleFrame else null,
+                        marker = if (measuring) state.scope?.let { Offset(it.markerX, it.markerY) } else null,
+                        maxHeight = previewMaxHeight,
+                        onMoveWidget = vm::moveWidget,
+                        onMoveFinished = vm::persistStyle,
+                        onPosition = { playhead.longValue = it },
+                        cutScrub = cutScrub,
+                        onFrameSource = { frameSource.value = it },
+                        reframe = selected.reframe,
+                        onReframe = if (framing) { r -> vm.updateReframe { r } } else null,
+                        showGrid = framing,
+                        autoPlay = continuePlaying,
+                        seekRequest = seekRequest,
+                        onSeekDone = { seekRequest = null },
+                        onAutoPlayStarted = { continuePlaying = false },
+                        onEnded = {
+                            // The timeline plays through: the next clip follows.
+                            val next = (state.selectedClip ?: -1) + 1
+                            if (next in state.clips.indices) {
+                                continuePlaying = true
+                                vm.selectClip(next)
+                            }
+                        },
+                    )
+                    // Undo/redo tucked into the picture's corner, only when there is something to undo.
+                    UndoRedo(state.canUndo, state.canRedo, vm::undo, vm::redo, Modifier.align(Alignment.TopEnd).padding(top = 8.dp, end = 24.dp))
+                }
             }
             if (state.clips.isNotEmpty()) {
                 ClipStrip(
@@ -342,6 +346,31 @@ private fun EmptyState(hasActivities: Boolean, onAddFit: () -> Unit, onAddVideos
         Button(onClick = onAddVideos, modifier = Modifier.fillMaxWidth()) { Text("2. Add videos") }
     }
 }
+
+/** Two small, quiet arrows over the picture; hidden until there is something to undo. */
+@Composable
+private fun UndoRedo(canUndo: Boolean, canRedo: Boolean, onUndo: () -> Unit, onRedo: () -> Unit, modifier: Modifier) {
+    if (!canUndo && !canRedo) return
+    Row(modifier, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        for ((icon, enabled, action, label) in listOf(
+            Quad(HeadsupIcons.Undo, canUndo, onUndo, "Undo"),
+            Quad(HeadsupIcons.Redo, canRedo, onRedo, "Redo"),
+        )) {
+            Box(
+                Modifier
+                    .size(30.dp)
+                    .clip(CircleShape)
+                    .background(Color.Black.copy(alpha = 0.35f))
+                    .clickable(enabled = enabled, onClick = action),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(icon, contentDescription = label, Modifier.size(16.dp), tint = Color.White.copy(alpha = if (enabled) 0.85f else 0.3f))
+            }
+        }
+    }
+}
+
+private data class Quad<A, B, C, D>(val a: A, val b: B, val c: C, val d: D)
 
 /** Rounded block used to group related controls inside a panel. */
 @Composable

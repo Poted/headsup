@@ -152,6 +152,19 @@ const val MATCH_STRENGTH = 0.6f
 /** A highlight found in the watch data, placed in the clip that shows it. */
 data class FoundHighlight(val highlight: Highlight, val clipId: Long, val clipName: String, val positionMs: Long)
 
+/**
+ * One step of undo history: the edit itself (files, cuts, colour, groups, effects, framing,
+ * dashboard), not what is selected or on screen. [project] keeps histories of projects apart.
+ */
+private data class EditSnapshot(
+    val project: String,
+    val activities: List<LoadedActivity>,
+    val clips: List<ClipState>,
+    val groups: List<ClipGroup>,
+    val globalGrade: ColorGrade,
+    val style: DashboardStyle,
+)
+
 /** What the colour page edits; the order is that of its tabs. */
 enum class GradeTarget { CLIP, GROUP, MASK, GLOBAL }
 
@@ -200,6 +213,8 @@ data class UiState(
     /** Whether the last match also turned skin (both frames showed skin). */
     val matchedSkin: Boolean = false,
     val matching: Boolean = false,
+    val canUndo: Boolean = false,
+    val canRedo: Boolean = false,
     val bitrateFactor: Float = 1f,
     /** Vectorscope and skin measurement of the last frame tapped in the preview. */
     val scope: ScopeResult? = null,
@@ -287,7 +302,85 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
         projectStore.lastProject?.takeIf(projectStore::exists)?.let(::openProject)
             ?: _state.update { it.copy(projectName = newProjectName()) }
         autosave()
+        recordHistory()
     }
+
+    // Undo and redo
+
+    private val history = ArrayList<EditSnapshot>()
+    private var historyIndex = -1
+
+    private fun UiState.snapshot() = EditSnapshot(projectName, activities, clips, groups, globalGrade, style)
+
+    /**
+     * Records a step a moment after the edit settles, so a slider drag or a widget move is one
+     * step, not hundreds.
+     */
+    @OptIn(FlowPreview::class)
+    private fun recordHistory() {
+        viewModelScope.launch {
+            _state
+                .map { s -> s.snapshot().takeIf { !s.busy } }
+                .distinctUntilChanged()
+                .debounce(500)
+                .collect { it?.let(::record) }
+        }
+    }
+
+    private fun record(snapshot: EditSnapshot) {
+        val current = history.getOrNull(historyIndex)
+        if (snapshot == current) return
+        if (current == null || current.project != snapshot.project) {
+            // Another project opened: its history starts here.
+            history.clear()
+            history += snapshot
+            historyIndex = 0
+        } else {
+            while (history.size > historyIndex + 1) history.removeAt(history.lastIndex)
+            history += snapshot
+            if (history.size > MAX_HISTORY) history.removeAt(0)
+            historyIndex = history.lastIndex
+        }
+        updateHistoryFlags()
+    }
+
+    fun undo() {
+        // An edit made just now may not be recorded yet; keep it, so redo can bring it back.
+        record(_state.value.snapshot())
+        if (historyIndex <= 0) return
+        historyIndex--
+        restore(history[historyIndex])
+    }
+
+    fun redo() {
+        if (historyIndex >= history.lastIndex) return
+        historyIndex++
+        restore(history[historyIndex])
+    }
+
+    private fun restore(snapshot: EditSnapshot) {
+        scopeFrame = null
+        _state.update { s ->
+            s.copy(
+                activities = snapshot.activities,
+                clips = snapshot.clips,
+                groups = snapshot.groups,
+                globalGrade = snapshot.globalGrade,
+                style = snapshot.style,
+                selectedClip = s.selectedClip?.coerceAtMost(snapshot.clips.lastIndex)?.takeIf { it >= 0 } ?: snapshot.clips.indices.firstOrNull(),
+                compareGrade = null,
+                cine = null,
+                matchSession = null,
+                scope = null,
+            )
+        }
+        stylePrefs.save(snapshot.style)
+        updateHistoryFlags()
+        refreshPreview()
+    }
+
+    private fun updateHistoryFlags() =
+        _state.update { it.copy(canUndo = historyIndex > 0, canRedo = historyIndex < history.lastIndex) }
 
     // Projects
 
@@ -1132,6 +1225,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
     companion object {
         /** Large enough to fix a camera clock that is minutes off. */
         const val MAX_OFFSET_MS = 600_000L
+        private const val MAX_HISTORY = 60
         private const val GLOBAL = "global_"
     }
 }
