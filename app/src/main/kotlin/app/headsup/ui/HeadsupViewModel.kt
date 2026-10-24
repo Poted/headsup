@@ -1122,6 +1122,16 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
         refreshPreview()
     }
 
+    /** Removes the photos marked for export from the album. */
+    fun removePicked() {
+        _state.update { s ->
+            val clips = s.clips.filter { !it.picked }
+            val selected = s.selected?.takeIf { !it.picked }?.let { c -> clips.indexOfFirst { it.id == c.id } } ?: 0
+            s.copy(clips = clips, selectedClip = selected.takeIf { clips.isNotEmpty() }?.coerceIn(0, clips.size - 1))
+        }
+        refreshPreview()
+    }
+
     /** Removes a file from the project: every clip cut from it. */
     fun removeClipsOf(uri: Uri) {
         _state.update { s ->

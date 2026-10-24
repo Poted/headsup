@@ -2794,6 +2794,14 @@ private fun PhotoStrip(state: UiState, vm: HeadsupViewModel, onAdd: () -> Unit) 
             SmallAction("Move ▶", { vm.moveClip(i, 1) }, enabled = i < state.clips.lastIndex)
             SmallAction("Remove", { vm.removeClip(i) })
         }
+        // Several at once: the marked photos (undo brings them back).
+        val marked = state.clips.count { it.picked }
+        if (marked > 1) {
+            Row(Modifier.padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+                Spacer(Modifier.weight(1f))
+                SmallAction("Remove marked ($marked)", vm::removePicked)
+            }
+        }
     }
 }
 
