@@ -201,6 +201,8 @@ fun ClipPreview(
     textValues: (Long) -> Map<String, String> = { emptyMap() },
     /** Draws the route map at a position in this clip (under the texts), or null. */
     routeOverlay: ((android.graphics.Canvas, Float, Float, Long) -> Unit)? = null,
+    /** The bar under the picture (play, time or size, histogram, zebra). */
+    showTransport: Boolean = true,
 ) {
     val context = LocalContext.current
     // Two players: one shows the clip, the other holds the next one ready (a different shape or
@@ -912,7 +914,7 @@ fun ClipPreview(
             }
         }
 
-        Row(
+        if (showTransport) Row(
             Modifier.fillMaxWidth().clip(RoundedCornerShape(50)).background(HeadsupColors.CardGradient).border(1.dp, HeadsupColors.Outline, RoundedCornerShape(50)).padding(horizontal = 6.dp, vertical = 5.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {

@@ -79,6 +79,9 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.foundation.gestures.Orientation
+import androidx.compose.foundation.gestures.draggable
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -257,8 +260,15 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
     val configuration = LocalConfiguration.current
     val wide = configuration.screenWidthDp > configuration.screenHeightDp
     // Room for the timeline and the tools under (or beside) the picture.
-    // An album's photo gets most of the screen (no timeline under it).
-    val previewMaxHeight = (configuration.screenHeightDp * (if (wide) 0.45f else if (state.photoProject) 0.55f else 0.32f)).dp
+    // The picture's share of the screen, set by dragging the handle under it (an album's photo
+    // starts larger: no timeline under it); full screen hides everything else.
+    var filmShare by rememberSaveable { mutableStateOf(0.32f) }
+    var albumShare by rememberSaveable { mutableStateOf(0.5f) }
+    var fullscreen by rememberSaveable { mutableStateOf(false) }
+    val density = LocalDensity.current
+    androidx.activity.compose.BackHandler(enabled = fullscreen) { fullscreen = false }
+    val share = if (wide) 0.45f else if (state.photoProject) albumShare else filmShare
+    val previewMaxHeight = if (fullscreen) (configuration.screenHeightDp - 48).dp else (configuration.screenHeightDp * share).dp
 
     // The picture, its transport and the timeline.
     val pictureAndTimeline: @Composable ColumnScope.() -> Unit = {
@@ -319,6 +329,7 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
                         neighbourCubes = state.previewNeighbourCubes,
                         texts = state.texts,
                         photoMode = state.photoProject,
+                        showTransport = !fullscreen && (!state.photoProject || tool == Tool.EDIT || tool == Tool.COLOUR),
                         // Read here so arriving place names redraw the texts.
                         textValues = state.placesVersion.let { _ -> { pos -> vm.textValues(state, selected, pos) } },
                         routeOverlay = if (state.routeMap.enabled) routeOverlayFor(vm, state, selected) else null,
@@ -348,12 +359,32 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
                         },
                     )
                     // Undo/redo tucked into the picture's corner, only when there is something to undo.
-                    UndoRedo(state.canUndo, state.canRedo, vm::undo, vm::redo, Modifier.align(Alignment.TopEnd).padding(top = 8.dp, end = 24.dp))
+                    if (!fullscreen) UndoRedo(state.canUndo, state.canRedo, vm::undo, vm::redo, Modifier.align(Alignment.TopEnd).padding(top = 8.dp, end = 24.dp))
+                    // Full screen: the picture alone, to see it as it will look.
+                    Box(
+                        Modifier
+                            .align(if (fullscreen) Alignment.TopEnd else Alignment.TopStart)
+                            .padding(top = 8.dp, start = 24.dp, end = 24.dp)
+                            .size(36.dp)
+                            .clip(CircleShape)
+                            .background(Color.Black.copy(alpha = 0.45f))
+                            .clickable { fullscreen = !fullscreen },
+                        contentAlignment = Alignment.Center,
+                    ) { Text(if (fullscreen) "✕" else "⤢", color = Color.White, style = MaterialTheme.typography.titleMedium) }
                 }
             }
-            if (state.photoProject) {
-                // Photos only: no timeline, just the photos to pick (when there is more than one).
-                if (state.clips.isNotEmpty()) PhotoStrip(state, vm, onAdd = addPhotos)
+            if (!fullscreen && state.clips.isNotEmpty()) {
+                // Dragging this moves the line between the picture and the tools.
+                PreviewHandle { dy ->
+                    val d = dy / (configuration.screenHeightDp * density.density)
+                    if (state.photoProject) albumShare = (albumShare + d).coerceIn(0.2f, 0.75f) else filmShare = (filmShare + d).coerceIn(0.18f, 0.6f)
+                }
+            }
+            if (fullscreen) {
+                // Nothing under the picture.
+            } else if (state.photoProject) {
+                // Photos only: no timeline; the album's photos are arranged on the Edit page.
+                if (state.clips.isNotEmpty() && tool == Tool.EDIT) PhotoStrip(state, vm, onAdd = addPhotos)
             } else if (state.clips.isNotEmpty()) {
                 Timeline(
                     state = state,
@@ -420,7 +451,8 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
 
     }
     // The tool's panel and the tools.
-    val tools: @Composable ColumnScope.() -> Unit = {
+    val tools: @Composable ColumnScope.() -> Unit = tools@{
+            if (fullscreen) return@tools
             Column(
                 Modifier
                     .weight(1f)
@@ -702,6 +734,11 @@ private fun EditPanel(
     onShowHighlight: (FoundHighlight) -> Unit,
 ) {
     val clip = state.selected
+    // An album's Edit page: the photos (above) and the selected one's crop.
+    if (state.photoProject) {
+        if (clip != null) PhotoCrop(state, clip, vm) else Hint("Add photos in Files.")
+        return
+    }
     LazyRow(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
         items(EditTab.entries.filter { t -> if (state.photoProject) t == EditTab.FRAME else !(t == EditTab.SPEED && clip?.meta?.isPhoto == true) }) { t ->
             val modified = when (t) {
@@ -2782,3 +2819,17 @@ private fun routeOverlayFor(vm: HeadsupViewModel, state: UiState, clip: ClipStat
     }
 }
 
+/** A grip under the picture: dragging it up or down gives the picture or the tools more room. */
+@Composable
+private fun PreviewHandle(onDrag: (Float) -> Unit) {
+    val state = androidx.compose.foundation.gestures.rememberDraggableState(onDrag)
+    Box(
+        Modifier
+            .fillMaxWidth()
+            .height(18.dp)
+            .draggable(state, Orientation.Vertical),
+        contentAlignment = Alignment.Center,
+    ) {
+        Box(Modifier.width(40.dp).height(4.dp).clip(RoundedCornerShape(2.dp)).background(HeadsupColors.Outline))
+    }
+}
