@@ -190,7 +190,9 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
     val soundPicker = rememberLauncherForActivityResult(OpenDocumentsIn(DOWNLOADS_FOLDER)) { vm.addAudioFiles(it) }
     val addFit = { fitPicker.launch(arrayOf("*/*")) }
     val addVideos = { videoPicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageAndVideo)) }
-    val addPhotos = { videoPicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) }
+    // An album adds photos from the files: the originals (a gallery picker hands over only a
+    // small JPEG of a raw photo), JPEG, HEIC, PNG and DNG alike.
+    val addPhotos = { rawPicker.launch(arrayOf("image/*")) }
 
     // The progress notification needs this on Android 13+; export works without it.
     var pendingExport by remember { mutableStateOf<(() -> Unit)?>(null) }
@@ -672,10 +674,14 @@ private fun FilesPanel(
 
 @Composable
 private fun VideoFiles(state: UiState, vm: HeadsupViewModel, onAddVideos: () -> Unit, onAddRaw: () -> Unit, onShowClip: (Int) -> Unit) {
-    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-        AddTile(HeadsupIcons.Video, if (state.photoProject) "Photo" else "Video · photo", onAddVideos, Modifier.weight(1f))
-        // The gallery's picker gives only a small preview of a raw (DNG) photo; the files give the original.
-        AddTile(HeadsupIcons.Colour, "RAW photo", onAddRaw, Modifier.weight(1f))
+    if (state.photoProject) {
+        AddTile(HeadsupIcons.Video, "Photo", onAddVideos, Modifier.fillMaxWidth())
+    } else {
+        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            AddTile(HeadsupIcons.Video, "Video · photo", onAddVideos, Modifier.weight(1f))
+            // The gallery's picker gives only a small preview of a raw (DNG) photo; the files give the original.
+            AddTile(HeadsupIcons.Colour, "RAW photo", onAddRaw, Modifier.weight(1f))
+        }
     }
     run {
         if (state.clips.isEmpty()) Hint("From the gallery or the cloud; copied into the project.")
@@ -859,6 +865,8 @@ private fun WatchSyncControls(state: UiState, vm: HeadsupViewModel, playhead: Lo
         return
     }
     SyncSummary(clip, clip.sync?.let { state.activities.getOrNull(it.trackIndex) })
+    // A photo can take any moment of an activity, e.g. one taken on another day, or a summit.
+    if (clip.meta.isPhoto) state.activities.firstOrNull()?.let { a -> PhotoMoment(clip, a.track) { vm.setManualStart(index, it) } }
     StartTimeControls(clip, state.activities) { vm.setManualStart(index, it) }
     val activity = clip.sync?.let { state.activities.getOrNull(it.trackIndex) }
     if (activity != null) SyncGraph(clip, activity.track, playhead) { vm.setManualOffset(index, clip.manualOffsetMs + it) }
@@ -2856,5 +2864,27 @@ private fun snapText(t: TextItem, x: Float, y: Float): TextItem {
     fun snap(v: Float, targets: List<Float>) = targets.minByOrNull { kotlin.math.abs(it - v) }?.takeIf { kotlin.math.abs(it - v) < pull } ?: v
     val xs = if (t.align == TextAlign.LEFT) listOf(0.06f, 0.5f) else listOf(0.5f)
     return t.copy(x = snap(x, xs), y = snap(y, listOf(0.1f, 0.5f, 0.9f)))
+}
+
+/** The moment of [track] a photo shows the watch data of: a ruler along the activity. */
+@Composable
+private fun PhotoMoment(clip: ClipState, track: app.headsup.core.track.ActivityTrack, onSet: (LocalDateTime?) -> Unit) {
+    val offset = track.utcOffsetSeconds ?: ZoneId.systemDefault().rules.getOffset(Instant.ofEpochMilli(track.startMs)).totalSeconds
+    val zone = java.time.ZoneOffset.ofTotalSeconds(offset)
+    val totalMin = ((track.endMs - track.startMs) / 60_000f).coerceAtLeast(1f)
+    // Where the photo is now (its matched moment), or the start.
+    val atMs = clip.telemetryUtc(0L)?.takeIf { it in track.startMs..track.endMs } ?: track.startMs
+    val minutes = (atMs - track.startMs) / 60_000f
+    val sample = app.headsup.core.track.TelemetrySampler(track).frameAt(atMs)
+    val clock = Formats.clock(atMs, offset).take(5)
+    val distance = sample[app.headsup.core.track.Metric.DISTANCE]?.let { String.format(Locale.US, " · %.2f km", it / 1000) }.orEmpty()
+    val altitude = sample[app.headsup.core.track.Metric.ALTITUDE]?.let { " · ${it.toInt()} m" }.orEmpty()
+    ValueHeader("Moment in the activity", clock + distance + altitude)
+    RulerSlider(
+        minutes, 0f..totalMin, (totalMin / 400f).coerceAtLeast(0.05f),
+        { v -> onSet(LocalDateTime.ofInstant(Instant.ofEpochMilli(track.startMs + (v * 60_000).toLong()), zone)) },
+        onReset = { onSet(null) },
+    )
+    Hint("Drag to pick the moment whose data the photo shows (dashboard, text fields, the dot on the map). Double-tap the ruler to go back to the photo's own time.")
 }
 

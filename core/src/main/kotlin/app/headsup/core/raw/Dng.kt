@@ -29,7 +29,13 @@ class RawImage(
     val model: String,
     /** TIFF orientation (1 upright, 3 upside down, 6 and 8 turned). */
     val orientation: Int = 1,
-)
+    /** 1: a colour filter mosaic; 3: linear RGB already demosaiced (e.g. Samsung Expert RAW), interleaved. */
+    val channels: Int = 1,
+) {
+    /** Size of the developed picture before orientation: half the mosaic, or the linear image's own. */
+    val developedWidth: Int get() = if (channels == 1) width / 2 else width
+    val developedHeight: Int get() = if (channels == 1) height / 2 else height
+}
 
 /** Settings of a raw development, applied to the raw data before the usual colour corrections. */
 data class RawDevelop(
@@ -54,8 +60,8 @@ object Dng {
             ?: throw RawException("No raw image in this DNG")
         val photometric = raw.long(Tags.PHOTOMETRIC)!!.toInt()
         val compression = raw.long(Tags.COMPRESSION)?.toInt() ?: 1
-        if (compression == Tags.COMPRESSION_JPEG_XL) throw RawException("This DNG is compressed with JPEG XL (DNG 1.7, e.g. Samsung Expert RAW), not supported yet")
-        if (photometric != Tags.PHOTOMETRIC_CFA) throw RawException("Only Bayer (CFA) raw images are supported so far")
+        if (photometric == Tags.PHOTOMETRIC_LINEAR_RAW) return readLinear(bytes, tiff, ifd0, raw, compression)
+        if (photometric != Tags.PHOTOMETRIC_CFA) throw RawException("Only Bayer (CFA) and linear raw images are supported")
         val width = raw.long(Tags.IMAGE_WIDTH)!!.toInt()
         val height = raw.long(Tags.IMAGE_LENGTH)!!.toInt()
         val bits = raw.long(Tags.BITS_PER_SAMPLE)?.toInt() ?: 16
@@ -98,6 +104,7 @@ object Dng {
                         }
                     }
                 }
+                Tags.COMPRESSION_JPEG_XL -> throw RawException("A JPEG XL Bayer (mosaic) raw is not supported yet")
                 else -> throw RawException("Raw compression $compression is not supported")
             }
         }
@@ -127,14 +134,96 @@ object Dng {
     }
 
     /**
+     * A linear (already demosaiced) raw image: three channels per pixel, in strips or tiles, each
+     * compressed with JPEG XL (DNG 1.7) or stored as 16-bit samples.
+     */
+    private fun readLinear(bytes: ByteArray, tiff: Tiff, ifd0: Tiff.Ifd, raw: Tiff.Ifd, compression: Int): RawImage {
+        val width = raw.long(Tags.IMAGE_WIDTH)!!.toInt()
+        val height = raw.long(Tags.IMAGE_LENGTH)!!.toInt()
+        val spp = raw.long(Tags.SAMPLES_PER_PIXEL)?.toInt() ?: 3
+        if (spp < 3) throw RawException("Linear raw with $spp channels is not supported")
+        val data = ShortArray(width * height * 3)
+        val tiled = raw.has(Tags.TILE_OFFSETS)
+        val offsets = raw.longs(if (tiled) Tags.TILE_OFFSETS else Tags.STRIP_OFFSETS) ?: throw RawException("No image data")
+        val counts = raw.longs(if (tiled) Tags.TILE_BYTE_COUNTS else Tags.STRIP_BYTE_COUNTS) ?: throw RawException("No image data")
+        val tileW = if (tiled) raw.long(Tags.TILE_WIDTH)!!.toInt() else width
+        val tileH = if (tiled) raw.long(Tags.TILE_LENGTH)!!.toInt() else (raw.long(Tags.ROWS_PER_STRIP)?.toInt() ?: height)
+        val across = (width + tileW - 1) / tileW
+        for (t in offsets.indices) {
+            val x0 = (t % across) * tileW
+            val y0 = (t / across) * tileH
+            when (compression) {
+                Tags.COMPRESSION_JPEG_XL -> {
+                    var image = com.traneptora.jxlatte.JXLDecoder(java.io.ByteArrayInputStream(bytes, offsets[t].toInt(), counts[t].toInt())).decode()
+                    if (image.transfer != com.traneptora.jxlatte.color.ColorFlags.TF_LINEAR) {
+                        image = image.transfer(com.traneptora.jxlatte.color.ColorFlags.TF_LINEAR, com.traneptora.jxlatte.JXLOptions.PEAK_DETECT_OFF)
+                    }
+                    val buffers = image.getBuffer(false)
+                    for (c in 0 until 3) {
+                        val b = buffers[minOf(c, buffers.size - 1)]
+                        val max = ((1L shl image.getTaggedBitDepth(minOf(c, buffers.size - 1))) - 1).toFloat()
+                        val ints = if (b.isInt) b.intBuffer else null
+                        val floats = if (b.isFloat) b.floatBuffer else null
+                        for (y in 0 until minOf(b.height, tileH)) {
+                            val py = y0 + y
+                            if (py >= height) break
+                            for (x in 0 until minOf(b.width, tileW)) {
+                                val px = x0 + x
+                                if (px >= width) break
+                                val v = if (ints != null) ints[y][x] / max else floats!![y][x]
+                                data[(py * width + px) * 3 + c] = (v.coerceIn(0f, 1f) * 65535f + 0.5f).toInt().toShort()
+                            }
+                        }
+                    }
+                }
+                Tags.COMPRESSION_NONE -> {
+                    var p = offsets[t].toInt()
+                    for (y in 0 until tileH) for (x in 0 until tileW) for (c in 0 until spp) {
+                        if (p + 1 >= bytes.size) break
+                        val px = x0 + x
+                        val py = y0 + y
+                        if (px < width && py < height && c < 3) data[(py * width + px) * 3 + c] = tiff.u16(p.toLong()).toShort()
+                        p += 2
+                    }
+                }
+                else -> throw RawException("Linear raw compression $compression is not supported")
+            }
+        }
+        // Levels apply to the stored values; JPEG XL data was already scaled to 0..65535 above.
+        val blackRaw = raw.doubles(Tags.BLACK_LEVEL) ?: doubleArrayOf(0.0)
+        val whiteRaw = raw.doubles(Tags.WHITE_LEVEL)?.firstOrNull() ?: 65535.0
+        val jxl = compression == Tags.COMPRESSION_JPEG_XL
+        val black = FloatArray(4) { if (jxl) (blackRaw.first() / whiteRaw * 65535).toFloat() else blackRaw.first().toFloat() }
+        val white = if (jxl) 65535f else whiteRaw.toFloat()
+        val ill1 = ifd0.long(Tags.CALIBRATION_ILLUMINANT_1)?.toInt()
+        val ill2 = ifd0.long(Tags.CALIBRATION_ILLUMINANT_2)?.toInt()
+        val cm1 = ifd0.doubles(Tags.COLOR_MATRIX_1)
+        val cm2 = ifd0.doubles(Tags.COLOR_MATRIX_2)
+        val matrix = when {
+            ill2 == Tags.ILLUMINANT_D65 && cm2 != null -> cm2
+            ill1 == Tags.ILLUMINANT_D65 && cm1 != null -> cm1
+            else -> cm2 ?: cm1
+        } ?: throw RawException("No colour matrix")
+        val neutral = ifd0.doubles(Tags.AS_SHOT_NEUTRAL)?.takeIf { it.size >= 3 } ?: doubleArrayOf(1.0, 1.0, 1.0)
+        return RawImage(
+            width, height, data, intArrayOf(0, 1, 1, 2), black, white, matrix.copyOf(9),
+            doubleArrayOf(neutral[0] / neutral[1], 1.0, neutral[2] / neutral[1]),
+            ifd0.doubles(Tags.BASELINE_EXPOSURE)?.firstOrNull() ?: 0.0,
+            ifd0.string(Tags.MAKE).orEmpty(), ifd0.string(Tags.MODEL).orEmpty(),
+            ifd0.long(Tags.ORIENTATION)?.toInt() ?: 1,
+            channels = 3,
+        )
+    }
+
+    /**
      * Develops [raw] into sRGB pixels (ARGB) at half size (each 2×2 filter block one pixel, so no
      * demosaicing artefacts), further reduced by [step]: levels, white balance, camera to sRGB
      * colours, exposure, highlights and shadows in linear light, then a gentle film-like curve.
      */
     fun develop(raw: RawImage, settings: RawDevelop = RawDevelop(), step: Int = 1): Developed {
         val s = step.coerceAtLeast(1)
-        val outW = raw.width / 2 / s
-        val outH = raw.height / 2 / s
+        val outW = raw.developedWidth / s
+        val outH = raw.developedHeight / s
         val pixels = IntArray(outW * outH)
         val rgbCam = cameraToSrgb(raw.colorMatrix)
         // White balance: the as-shot neutral becomes grey, then the user's warmth and tint.
@@ -155,15 +244,21 @@ object Dng {
             for (ox in 0 until outW) {
                 val x = ox * 2 * s
                 cam[0] = 0f; cam[1] = 0f; cam[2] = 0f
-                var greens = 0
-                for (k in 0 until 4) {
-                    val v = raw.data[(y + k / 2) * raw.width + x + k % 2].toInt() and 0xFFFF
-                    val n = ((v - raw.black[k]) / span[k]).coerceIn(0f, 1f)
-                    val c = at[k]
-                    if (c == 1) greens++
-                    cam[c] += n
+                if (raw.channels == 3) {
+                    // Linear raw: one pixel already has all three colours.
+                    val i = ((oy * s) * raw.width + ox * s) * 3
+                    for (c in 0 until 3) cam[c] = (((raw.data[i + c].toInt() and 0xFFFF) - raw.black[0]) / span[0]).coerceIn(0f, 1f)
+                } else {
+                    var greens = 0
+                    for (k in 0 until 4) {
+                        val v = raw.data[(y + k / 2) * raw.width + x + k % 2].toInt() and 0xFFFF
+                        val n = ((v - raw.black[k]) / span[k]).coerceIn(0f, 1f)
+                        val c = at[k]
+                        if (c == 1) greens++
+                        cam[c] += n
+                    }
+                    if (greens > 1) cam[1] /= greens
                 }
-                if (greens > 1) cam[1] /= greens
                 val r0 = cam[0] * wb[0]
                 val g0 = cam[1] * wb[1]
                 val b0 = cam[2] * wb[2]

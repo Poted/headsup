@@ -28,8 +28,8 @@ object RawPhotos {
     /** Size of the developed picture (upright), or null when the app cannot develop the file. */
     fun size(context: Context, uri: Uri): Pair<Int, Int>? {
         val raw = read(context, uri) ?: return null
-        val w = raw.width / 2
-        val h = raw.height / 2
+        val w = raw.developedWidth
+        val h = raw.developedHeight
         return if (raw.orientation == 6 || raw.orientation == 8) h to w else w to h
     }
 
@@ -39,8 +39,8 @@ object RawPhotos {
      */
     fun decode(context: Context, uri: Uri, develop: RawDevelop, maxSide: Int): Bitmap? {
         val raw = read(context, uri) ?: return null
-        val half = maxOf(raw.width, raw.height) / 2
-        val step = ((half + maxSide - 1) / maxSide).coerceAtLeast(1)
+        val full = maxOf(raw.developedWidth, raw.developedHeight)
+        val step = ((full + maxSide - 1) / maxSide).coerceAtLeast(1)
         val out = Dng.develop(raw, develop, step)
         val bitmap = Bitmap.createBitmap(out.pixels, out.width, out.height, Bitmap.Config.ARGB_8888)
         val degrees = when (raw.orientation) {

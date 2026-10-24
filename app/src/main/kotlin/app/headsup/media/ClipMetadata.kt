@@ -92,6 +92,8 @@ data class ClipMetadata(
     val isPhoto: Boolean = false,
     /** A raw (DNG) photo, developed by the app; its size is the developed picture's. */
     val isRaw: Boolean = false,
+    /** Size of the file in bytes, when known. */
+    val bytes: Long? = null,
 )
 
 object ClipMetadataReader {
@@ -172,8 +174,15 @@ object ClipMetadataReader {
             info = ClipInfo(1_000L, evidence),
             isPhoto = true,
             isRaw = rawSize != null,
+            bytes = fileSize(context, uri),
         )
     }
+
+    /** Bytes of [uri]'s file: a local copy's length, or what its provider reports. */
+    fun fileSize(context: Context, uri: Uri): Long? = runCatching {
+        if (uri.scheme == "file") uri.path?.let { java.io.File(it).length() }
+        else context.contentResolver.query(uri, arrayOf(android.provider.OpenableColumns.SIZE), null, null, null)?.use { c -> if (c.moveToFirst()) c.getLong(0) else null }
+    }.getOrNull()?.takeIf { it > 0 }
 
     /** Frame counts over a rounded duration give e.g. 29.94; report the nominal rate. */
     private fun snapFrameRate(measured: Float): Float =

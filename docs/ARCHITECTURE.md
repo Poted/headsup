@@ -322,3 +322,10 @@ the photo's EXIF (`PhotoInfo`: GPS, date, camera, exposure), the photo winning f
 Place names come from the phone's geocoder when online (`Places`), else coordinates. The preview
 fills them per frame; the export adds the moment's values in the overlay; photo exports fill them
 before drawing.
+
+Linear DNGs (already demosaiced, e.g. Samsung Expert RAW) are read too, including JPEG XL
+compressed ones (DNG 1.7): the JPEG XL codestreams are decoded by jxlatte, a pure-Java decoder
+(MIT, vendored in `core/src/main/java/com/traneptora/jxlatte` with its licence), then developed
+like Bayer raws at full size. Albums add photos through the file picker, which hands over the
+originals (the gallery's picker gives only a raw photo's small preview). A photo outside an
+activity's time can be given any moment of it (Effects → Dashboard → Sync).

@@ -954,7 +954,16 @@ fun ClipPreview(
             }
             // Timeline time (the timeline below is scrubbed by dragging it); file time while a cut handle moves.
             if (photoMode) {
-                Text("  ${clip.meta.width} × ${clip.meta.height}", Modifier.weight(1f), style = MaterialTheme.typography.labelMedium.copy(fontFamily = FontFamily.Monospace), maxLines = 1)
+                // The file: its kind, size in pixels and on disk.
+                val m = clip.meta
+                val ext = m.name.substringAfterLast('.', "").uppercase().takeIf { it.isNotEmpty() && it.length <= 4 }
+                val info = listOfNotNull(
+                    ext,
+                    "RAW".takeIf { m.isRaw && ext != "RAW" },
+                    "${m.width}×${m.height}",
+                    m.bytes?.let { b -> if (b >= 1_000_000) String.format(java.util.Locale.US, "%.1f MB", b / 1e6) else "${b / 1000} kB" },
+                ).joinToString("  ·  ")
+                Text("  $info", Modifier.weight(1f), style = MaterialTheme.typography.labelMedium.copy(fontFamily = FontFamily.Monospace), maxLines = 1)
             } else Text(
                 "  " + (if (scrubbing) timecode(playerMs, clip.meta.frameRate) else timecode(timelineOffsetMs + clipTimelineMs, clip.meta.frameRate)) +
                     "  /  " + Formats.duration(timelineTotalMs),

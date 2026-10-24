@@ -181,4 +181,49 @@ class DngTest {
         val e = assertFailsWith<RawException> { Dng.read(bytes) }
         assertTrue(e.message!!.contains("JPEG XL"))
     }
+
+    /** A DNG whose IFD0 holds a linear raw image in one JPEG XL strip (as Samsung Expert RAW writes). */
+    private fun buildLinearJxlDng(jxl: ByteArray, width: Int, height: Int): ByteArray {
+        val buf = java.nio.ByteBuffer.allocate(4096 + jxl.size).order(java.nio.ByteOrder.LITTLE_ENDIAN)
+        buf.put('I'.code.toByte()).put('I'.code.toByte()).putShort(42).putInt(8)
+        val dataAt = 1024
+        val jxlAt = 2048
+        fun entry(tag: Int, type: Int, count: Int, value: Int) { buf.putShort(tag.toShort()).putShort(type.toShort()).putInt(count).putInt(value) }
+        fun shortEntry(tag: Int, value: Int) { buf.putShort(tag.toShort()).putShort(3).putInt(1).putShort(value.toShort()).putShort(0) }
+        val entries = listOf<() -> Unit>(
+            { entry(Tags.NEW_SUBFILE_TYPE, 4, 1, 0) },
+            { entry(Tags.IMAGE_WIDTH, 4, 1, width) },
+            { entry(Tags.IMAGE_LENGTH, 4, 1, height) },
+            { shortEntry(Tags.BITS_PER_SAMPLE, 16) },
+            { shortEntry(Tags.COMPRESSION, Tags.COMPRESSION_JPEG_XL) },
+            { shortEntry(Tags.PHOTOMETRIC, Tags.PHOTOMETRIC_LINEAR_RAW) },
+            { entry(Tags.STRIP_OFFSETS, 4, 1, jxlAt) },
+            { shortEntry(Tags.SAMPLES_PER_PIXEL, 3) },
+            { entry(Tags.ROWS_PER_STRIP, 4, 1, height) },
+            { entry(Tags.STRIP_BYTE_COUNTS, 4, 1, jxl.size) },
+            { entry(Tags.COLOR_MATRIX_1, 10, 9, dataAt) },
+            { entry(Tags.AS_SHOT_NEUTRAL, 5, 3, dataAt + 72) },
+            { shortEntry(Tags.CALIBRATION_ILLUMINANT_1, Tags.ILLUMINANT_D65) },
+        )
+        buf.putShort(entries.size.toShort()); entries.forEach { it() }; buf.putInt(0)
+        buf.position(dataAt)
+        for (v in doubleArrayOf(1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0)) { buf.putInt((v * 10000).toInt()); buf.putInt(10000) }
+        for (v in doubleArrayOf(1.0, 1.0, 1.0)) { buf.putInt(10000); buf.putInt(10000) }
+        buf.position(jxlAt); buf.put(jxl)
+        return buf.array().copyOf(jxlAt + jxl.size)
+    }
+
+    @Test
+    fun `reads a linear dng compressed with jpeg xl`() {
+        val jxl = javaClass.getResourceAsStream("/white.jxl")!!.readBytes()
+        val probe = com.traneptora.jxlatte.JXLDecoder(java.io.ByteArrayInputStream(jxl)).decode()
+        val image = Dng.read(buildLinearJxlDng(jxl, probe.width, probe.height))
+        assertEquals(3, image.channels)
+        assertEquals(probe.width, image.developedWidth)
+        val out = Dng.develop(image)
+        val p = out.pixels[out.pixels.size / 2]
+        // A white picture stays (nearly) white and neutral.
+        assertTrue(((p shr 8) and 0xFF) > 200, "got ${Integer.toHexString(p)}")
+        assertTrue(abs(((p shr 16) and 0xFF) - (p and 0xFF)) <= 3)
+    }
 }
