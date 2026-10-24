@@ -39,6 +39,11 @@ class RawImage(
     val info: String = "",
     /** The camera profile's tone curve (x, y pairs in 0..1, linear light), or null for the app's own. */
     val toneCurve: FloatArray? = null,
+    /** Balanced camera values to linear ProPhoto RGB, for the profile's tables below. */
+    val balancedToProPhoto: DoubleArray? = null,
+    /** The profile's hue/sat map (before exposure) and look table (after it), packed as [HueSatMap.pack]. */
+    val hueSatMap: FloatArray? = null,
+    val lookTable: FloatArray? = null,
 ) {
     /** Vignetting and lens distortion corrections the camera wrote for this picture. */
     val corrections: List<Opcode> by lazy { Opcode.parse(opcodes3) }
@@ -181,6 +186,7 @@ object Dng {
         /** Lens shading and similar gains on the raw values (opcode list 2). */
         val gainMaps: List<Opcode.GainMap>, val opcodes3: ByteArray?,
         val balancedToSrgb: DoubleArray?, val info: String, val toneCurve: FloatArray?,
+        val balancedToProPhoto: DoubleArray?, val hueSatMap: FloatArray?, val lookTable: FloatArray?,
     )
 
     private fun layoutOf(source: RawSource): Layout {
@@ -243,6 +249,18 @@ object Dng {
         val gainMaps = allGainMaps.filter { cfa || (it.rowPitch == 1 && it.colPitch == 1) }
         val opcodes3 = raw.bytes(Tags.OPCODE_LIST_3)
         val corrections = Opcode.parse(opcodes3)
+        // The profile's tables: the hue/sat map blended for the scene's white like the matrices.
+        fun table(dims: Int, data: Int, encoding: Int): HueSatMap? = runCatching {
+            val d = ifd0.longs(dims)?.takeIf { it.size >= 3 } ?: return@runCatching null
+            val values = ifd0.doubles(data) ?: return@runCatching null
+            HueSatMap(d[0].toInt(), d[1].toInt(), d[2].toInt(), FloatArray(values.size) { values[it].toFloat() }, ifd0.long(encoding) == 1L)
+        }.getOrNull()
+        val hueSat = HueSatMap.blend(
+            table(Tags.PROFILE_HUE_SAT_MAP_DIMS, Tags.PROFILE_HUE_SAT_MAP_DATA_1, Tags.PROFILE_HUE_SAT_MAP_ENCODING),
+            table(Tags.PROFILE_HUE_SAT_MAP_DIMS, Tags.PROFILE_HUE_SAT_MAP_DATA_2, Tags.PROFILE_HUE_SAT_MAP_ENCODING),
+            colour?.weight ?: 1.0,
+        )
+        val look = table(Tags.PROFILE_LOOK_TABLE_DIMS, Tags.PROFILE_LOOK_TABLE_DATA, Tags.PROFILE_LOOK_TABLE_ENCODING)
         val toneCurve = ifd0.doubles(Tags.PROFILE_TONE_CURVE)?.takeIf { it.size >= 4 && it.size % 2 == 0 }?.let { d -> FloatArray(d.size) { d[it].toFloat() } }
         val info = listOfNotNull(
             when (compression) {
@@ -254,8 +272,8 @@ object Dng {
             String.format(java.util.Locale.US, "baseline %+.2f EV", baseline),
             colour?.let { "white ${it.kelvin} K, ${if (it.forward) "forward matrix" else "colour matrix"}" },
             toneCurve?.let { "profile curve (${it.size / 2} points)" },
-            "hue/sat map (not applied)".takeIf { ifd0.has(Tags.PROFILE_HUE_SAT_MAP_DATA_1) },
-            "look table (not applied)".takeIf { ifd0.has(Tags.PROFILE_LOOK_TABLE_DATA) },
+            "hue/sat map".takeIf { hueSat != null && colour != null },
+            "look table".takeIf { look != null && colour != null },
             "lens shading ${gainMaps.size}/${allGainMaps.size}".takeIf { allGainMaps.isNotEmpty() },
             corrections.joinToString(", ") {
                 when (it) {
@@ -272,6 +290,7 @@ object Dng {
             ifd0.string(Tags.MAKE).orEmpty(), ifd0.string(Tags.MODEL).orEmpty(),
             ifd0.long(Tags.ORIENTATION)?.toInt() ?: 1,
             gainMaps, opcodes3, colour?.balancedToSrgb, info, toneCurve,
+            colour?.balancedToProPhoto, hueSat?.pack(), look?.pack(),
         )
     }
 
@@ -314,6 +333,7 @@ object Dng {
         r.width, r.height, data, intArrayOf(0, 1, 1, 2), FloatArray(4), 65535f, l.matrix, l.neutral,
         l.baseline, l.make, l.model, l.orientation, channels = 3, opcodes3 = l.opcodes3,
         balancedToSrgb = l.balancedToSrgb, info = l.info, toneCurve = l.toneCurve,
+        balancedToProPhoto = l.balancedToProPhoto, hueSatMap = l.hueSatMap, lookTable = l.lookTable,
     )
 
     /** 16-bit samples read front to back in the file's byte order. */
@@ -387,6 +407,7 @@ object Dng {
                 l.width, l.height, mosaic, at, l.black, l.white, l.matrix, l.neutral,
                 l.baseline, l.make, l.model, l.orientation, channels = 1, opcodes3 = l.opcodes3,
                 balancedToSrgb = l.balancedToSrgb, info = l.info, toneCurve = l.toneCurve,
+                balancedToProPhoto = l.balancedToProPhoto, hueSatMap = l.hueSatMap, lookTable = l.lookTable,
             )
         }
         return image(l, r!!, r.finish())

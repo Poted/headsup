@@ -21,6 +21,10 @@ object DngColour {
     class Result(
         /** White-balanced camera values (the as-shot neutral at 1, 1, 1) to linear sRGB. */
         val balancedToSrgb: DoubleArray,
+        /** The same to linear ProPhoto RGB (D50), where profiles' hue/sat tables work. */
+        val balancedToProPhoto: DoubleArray,
+        /** Weight of the first calibration (for blending the profile's two hue/sat maps too). */
+        val weight: Double,
         /** Colour temperature of the white as shot. */
         val kelvin: Int,
         val forward: Boolean,
@@ -46,19 +50,16 @@ object DngColour {
             }
         }
         val forward = blendOrNull(c.forwardMatrix1, c.forwardMatrix2, weight)
-        val balancedToSrgb = if (forward != null) {
-            // Balanced camera → XYZ (D50) → linear sRGB.
-            Dng.multiply(XYZ_D50_TO_SRGB, forward)
-        } else {
-            // Camera → XYZ of the scene's white, adapted to D65, → sRGB.
+        // Balanced camera → XYZ (D50): the forward matrix, or the inverted colour matrix with the
+        // scene's white adapted to D50 (which also brings white to Y = 1).
+        val balancedToXyzD50 = forward ?: run {
             val camToXyz = Dng.invert(blend(c.colorMatrix1, c.colorMatrix2, weight))
             val balancedToXyz = Dng.multiply(camToXyz, diagonal(neutral))
             val white = apply(balancedToXyz, doubleArrayOf(1.0, 1.0, 1.0))
-            // The adaptation takes the white to D65 itself (Y = 1), so white comes out at 1.
-            val adapt = bradford(white, D65)
-            Dng.multiply(XYZ_D65_TO_SRGB, Dng.multiply(adapt, balancedToXyz))
+            Dng.multiply(bradford(white, D50), balancedToXyz)
         }
-        return Result(balancedToSrgb, cct(x, y).roundToInt(), forward != null)
+        val balancedToProPhoto = Dng.multiply(XYZ_D50_TO_PROPHOTO, balancedToXyzD50)
+        return Result(Dng.multiply(XYZ_D50_TO_SRGB, balancedToXyzD50), balancedToProPhoto, weight, cct(x, y).roundToInt(), forward != null)
     }
 
     /** McCamy's approximation of the correlated colour temperature. */
@@ -119,7 +120,18 @@ object DngColour {
         else -> 6504.0
     }
 
-    private val D65 = doubleArrayOf(0.95047, 1.0, 1.08883)
+    private val D50 = doubleArrayOf(0.96422, 1.0, 0.82521)
+
+    private val XYZ_D50_TO_PROPHOTO = doubleArrayOf(
+        1.3459433, -0.2556075, -0.0511118,
+        -0.5445989, 1.5081673, 0.0205351,
+        0.0, 0.0, 1.2118128,
+    )
+
+    /** Linear ProPhoto RGB to linear sRGB (with the D50 → D65 adaptation). */
+    val PROPHOTO_TO_SRGB: DoubleArray by lazy {
+        Dng.multiply(XYZ_D50_TO_SRGB, doubleArrayOf(0.7976749, 0.1351917, 0.0313534, 0.2880402, 0.7118741, 0.0000857, 0.0, 0.0, 0.8252100))
+    }
 
     private val BRADFORD = doubleArrayOf(
         0.8951, 0.2664, -0.1614,
@@ -131,11 +143,5 @@ object DngColour {
         3.1338561, -1.6168667, -0.4906146,
         -0.9787684, 1.9161415, 0.0334540,
         0.0719453, -0.2289914, 1.4052427,
-    )
-
-    private val XYZ_D65_TO_SRGB = doubleArrayOf(
-        3.2404542, -1.5371385, -0.4985314,
-        -0.9692660, 1.8760108, 0.0415560,
-        0.0556434, -0.2040259, 1.0572252,
     )
 }

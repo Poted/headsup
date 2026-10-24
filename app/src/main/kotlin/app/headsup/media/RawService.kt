@@ -77,6 +77,9 @@ class RawService : Service() {
                 putDoubleArray("balancedToSrgb", raw.balancedToSrgb)
                 putString("info", raw.info)
                 putFloatArray("toneCurve", raw.toneCurve)
+                putDoubleArray("balancedToProPhoto", raw.balancedToProPhoto)
+                putFloatArray("hueSatMap", raw.hueSatMap)
+                putFloatArray("lookTable", raw.lookTable)
             }
         } catch (e: Throwable) {
             reply.data = Bundle().apply {
@@ -186,6 +189,7 @@ object RawReader {
             data.getString("make").orEmpty(), data.getString("model").orEmpty(),
             data.getInt("orientation"), data.getInt("channels"), data.getByteArray("opcodes3"),
             data.getDoubleArray("balancedToSrgb"), data.getString("info").orEmpty(), data.getFloatArray("toneCurve"),
+            data.getDoubleArray("balancedToProPhoto"), data.getFloatArray("hueSatMap"), data.getFloatArray("lookTable"),
         )
         return RemoteRaw(image, memory, mapped)
     }

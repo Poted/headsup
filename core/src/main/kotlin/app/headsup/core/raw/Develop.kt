@@ -47,8 +47,20 @@ class Developer(raw: RawImage, private val settings: RawDevelop = RawDevelop(), 
 
     private val cam = FloatArray(width * 3)
 
-    /** The profile's tone curve as a table over 0..1. */
-    private val curve: FloatArray? = raw.toneCurve?.let { pairs ->
+    // The profile's hue/sat map and look table work in linear ProPhoto RGB.
+    private val hueSat = HueSatMap.unpack(raw.hueSatMap)
+    private val look = HueSatMap.unpack(raw.lookTable)
+    private val toProPhoto = raw.balancedToProPhoto?.takeIf { hueSat != null || look != null }
+    private val proPhoto = FloatArray(3)
+
+    private val profileCurve = raw.toneCurve != null
+
+    /**
+     * The profile's tone curve as a table over 0..1; without one, a default that lifts the darks
+     * and mids as raw converters' default curves do (linear light straight to the screen looks
+     * dark and flat): x(1 + k) / (x + k), mid grey up about 3/4 of a stop, white kept.
+     */
+    private val curve: FloatArray = raw.toneCurve?.let { pairs ->
         FloatArray(CURVE_SIZE) { i ->
             val x = i / (CURVE_SIZE - 1f)
             var k = 0
@@ -59,10 +71,13 @@ class Developer(raw: RawImage, private val settings: RawDevelop = RawDevelop(), 
             val y1 = pairs.getOrElse(k + 3) { 1f }
             if (x1 <= x0) y0 else y0 + (y1 - y0) * ((x - x0) / (x1 - x0)).coerceIn(0f, 1f)
         }
+    } ?: FloatArray(CURVE_SIZE) { i ->
+        val x = i / (CURVE_SIZE - 1f)
+        x * (1f + DEFAULT_LIFT) / (x + DEFAULT_LIFT)
     }
 
     private fun curveAt(v: Float): Float {
-        val c = curve ?: return v
+        val c = curve
         val p = v.coerceIn(0f, 1f) * (CURVE_SIZE - 1)
         val i = p.toInt().coerceAtMost(CURVE_SIZE - 2)
         return c[i] + (c[i + 1] - c[i]) * (p - i)
@@ -70,6 +85,7 @@ class Developer(raw: RawImage, private val settings: RawDevelop = RawDevelop(), 
 
     private companion object {
         const val CURVE_SIZE = 1025
+        const val DEFAULT_LIFT = 1f
     }
 
     /** Row [y]: display values (sRGB with the curve), 0..1, three per pixel, into [out]. */
@@ -98,28 +114,48 @@ class Developer(raw: RawImage, private val settings: RawDevelop = RawDevelop(), 
                 val v = vignetteRow[x]
                 r0 *= v; g0 *= v; b0 *= v
             }
-            var r = (m[0] * r0 + m[1] * g0 + m[2] * b0).toFloat() * gain
-            var g = (m[3] * r0 + m[4] * g0 + m[5] * b0).toFloat() * gain
-            var b = (m[6] * r0 + m[7] * g0 + m[8] * b0).toFloat() * gain
+            var r: Float
+            var g: Float
+            var b: Float
+            if (toProPhoto != null) {
+                val p = toProPhoto
+                proPhoto[0] = (p[0] * r0 + p[1] * g0 + p[2] * b0).toFloat()
+                proPhoto[1] = (p[3] * r0 + p[4] * g0 + p[5] * b0).toFloat()
+                proPhoto[2] = (p[6] * r0 + p[7] * g0 + p[8] * b0).toFloat()
+                hueSat?.apply(proPhoto)
+                for (c in 0 until 3) proPhoto[c] *= gain
+                look?.apply(proPhoto)
+                val s = DngColour.PROPHOTO_TO_SRGB
+                r = (s[0] * proPhoto[0] + s[1] * proPhoto[1] + s[2] * proPhoto[2]).toFloat()
+                g = (s[3] * proPhoto[0] + s[4] * proPhoto[1] + s[5] * proPhoto[2]).toFloat()
+                b = (s[6] * proPhoto[0] + s[7] * proPhoto[1] + s[8] * proPhoto[2]).toFloat()
+            } else {
+                r = (m[0] * r0 + m[1] * g0 + m[2] * b0).toFloat() * gain
+                g = (m[3] * r0 + m[4] * g0 + m[5] * b0).toFloat() * gain
+                b = (m[6] * r0 + m[7] * g0 + m[8] * b0).toFloat() * gain
+            }
             // Highlights and shadows by the pixel's brightness, keeping its colour.
             val lum = max(0.0001f, 0.2126f * r + 0.7152f * g + 0.0722f * b)
             val k = Dng.tone(lum, settings) / lum
             r *= k; g *= k; b *= k
-            if (curve != null) {
-                // The camera profile's own curve, keeping hues: the largest and smallest channels
-                // go through it, the middle one keeps its place between them.
+            run {
+                // The camera profile's own curve (or the default one), keeping hues: the largest and
+                // smallest channels go through it, the middle one keeps its place between them.
                 val hi = max(r, max(g, b))
                 val lo = min(r, min(g, b))
                 val hi2 = curveAt(hi)
                 val lo2 = curveAt(lo)
                 fun mid(v: Float) = if (hi - lo < 1e-6f) hi2 else lo2 + (hi2 - lo2) * (v - lo) / (hi - lo)
-                out[x * 3] = Dng.encodePlain(mid(r))
-                out[x * 3 + 1] = Dng.encodePlain(mid(g))
-                out[x * 3 + 2] = Dng.encodePlain(mid(b))
-            } else {
-                out[x * 3] = Dng.encode(r)
-                out[x * 3 + 1] = Dng.encode(g)
-                out[x * 3 + 2] = Dng.encode(b)
+                // A profile's curve is the whole look; the default one gets the app's gentle contrast.
+                if (profileCurve) {
+                    out[x * 3] = Dng.encodePlain(mid(r))
+                    out[x * 3 + 1] = Dng.encodePlain(mid(g))
+                    out[x * 3 + 2] = Dng.encodePlain(mid(b))
+                } else {
+                    out[x * 3] = Dng.encode(mid(r))
+                    out[x * 3 + 1] = Dng.encode(mid(g))
+                    out[x * 3 + 2] = Dng.encode(mid(b))
+                }
             }
         }
     }

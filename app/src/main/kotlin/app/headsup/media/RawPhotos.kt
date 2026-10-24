@@ -164,7 +164,8 @@ object RawPhotos {
         private set
 
     /** What each raw read held (format, baseline, white, lens corrections), for the raw controls. */
-    private val infos = java.util.concurrent.ConcurrentHashMap<Uri, String>()
+    // Observed by the raw controls, so the line appears as soon as the photo is read.
+    private val infos = androidx.compose.runtime.mutableStateMapOf<Uri, String>()
 
     fun infoOf(uri: Uri): String? = infos[uri]
 
