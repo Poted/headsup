@@ -86,7 +86,7 @@ class Filmstrip(private val context: Context, private val scope: CoroutineScope)
         if (key == PHOTO) {
             // A raw file: the camera's own small preview, rather than decoding the sensor data.
             if (app.headsup.media.RawPhotos.looksRaw(context, uri)) {
-                app.headsup.media.Exif.thumbnail(context, uri)?.let { return it.asImageBitmap() }
+                return (app.headsup.media.RawPhotos.preview(context, uri, 192) ?: app.headsup.media.Exif.thumbnail(context, uri))?.asImageBitmap()
             }
             val opts = BitmapFactory.Options().apply { inSampleSize = 16 }
             return context.contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, opts) }?.asImageBitmap()

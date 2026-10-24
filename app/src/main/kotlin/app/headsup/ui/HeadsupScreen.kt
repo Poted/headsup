@@ -2721,7 +2721,6 @@ private fun PhotoStrip(state: UiState, vm: HeadsupViewModel, onAdd: () -> Unit) 
     val scope = rememberCoroutineScope()
     val thumbs = remember { Filmstrip(context, scope) }
     DisposableEffect(thumbs) { onDispose { thumbs.release() } }
-    thumbs.version.intValue
     LazyRow(
         Modifier.fillMaxWidth().padding(vertical = 8.dp),
         horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -2738,6 +2737,8 @@ private fun PhotoStrip(state: UiState, vm: HeadsupViewModel, onAdd: () -> Unit) 
                     .border(if (selected) 2.dp else 1.dp, if (selected) HeadsupColors.Accent else HeadsupColors.Outline, RoundedCornerShape(10.dp))
                     .clickable { onSelect(i) },
             ) {
+                // Read here, so this tile (not only the row) shows its picture when it arrives.
+                thumbs.version.intValue
                 thumbs.frame(c.meta.uri, 0L, 1L, photo = true)?.let { img ->
                     androidx.compose.foundation.Image(img, contentDescription = c.meta.name, contentScale = androidx.compose.ui.layout.ContentScale.Crop, modifier = Modifier.matchParentSize())
                 }

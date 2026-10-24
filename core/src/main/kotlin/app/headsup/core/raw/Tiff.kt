@@ -126,6 +126,8 @@ object Tags {
     const val SAMPLES_PER_PIXEL = 277
     const val ROWS_PER_STRIP = 278
     const val STRIP_BYTE_COUNTS = 279
+    const val JPEG_INTERCHANGE_FORMAT = 513
+    const val JPEG_INTERCHANGE_FORMAT_LENGTH = 514
     const val TILE_WIDTH = 322
     const val TILE_LENGTH = 323
     const val TILE_OFFSETS = 324

@@ -2,11 +2,18 @@ package app.headsup.media
 
 import android.content.Context
 import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.graphics.Matrix
 import android.net.Uri
 import app.headsup.core.raw.Dng
 import app.headsup.core.raw.RawDevelop
 import app.headsup.core.raw.RawImage
+import app.headsup.core.raw.RawSource
+import app.headsup.core.raw.BytesSource
+import java.io.FileInputStream
+import java.io.InputStream
+import java.nio.ByteBuffer
+import java.nio.channels.FileChannel
 
 /**
  * Raw (DNG) photos developed by the app itself, from the sensor data, instead of Android's 8-bit
@@ -14,7 +21,7 @@ import app.headsup.core.raw.RawImage
  * read stays in memory, so moving a slider only develops it again.
  */
 object RawPhotos {
-    private var cached: Pair<Uri, RawImage>? = null
+    private var cached: Triple<Uri, Int, RawImage>? = null
     private val lock = Any()
 
     /** Whether [uri] starts like a TIFF/DNG file (whatever its name says). */
@@ -53,7 +60,7 @@ object RawPhotos {
     }
 
     private fun developed(context: Context, uri: Uri, develop: RawDevelop, maxSide: Int): Bitmap? {
-        val raw = read(context, uri) ?: return null
+        val raw = read(context, uri, maxSide) ?: return null
         val full = maxOf(raw.developedWidth, raw.developedHeight)
         val step = ((full + maxSide - 1) / maxSide).coerceAtLeast(1)
         val out = Dng.develop(raw, develop, step)
@@ -72,28 +79,93 @@ object RawPhotos {
     var lastError: String? = null
         private set
 
-    /** The whole file in one array of its exact size (no growing copies of a 70 MB file). */
-    private fun readAll(context: Context, uri: Uri): ByteArray {
-        val size = runCatching { context.contentResolver.openFileDescriptor(uri, "r")?.use { it.statSize } }.getOrNull() ?: -1L
-        return context.contentResolver.openInputStream(uri)?.use { s ->
-            if (size in 1 until Int.MAX_VALUE) {
-                val buf = ByteArray(size.toInt())
-                var n = 0
-                while (n < buf.size) { val r = s.read(buf, n, buf.size - n); if (r < 0) break; n += r }
-                if (n == buf.size) buf else buf.copyOf(n)
-            } else s.readBytes()
-        } ?: error("Cannot open the file")
+    /**
+     * The camera's own preview stored in the raw file (a JPEG), at least [minSide] / 2 on its
+     * long side when it is that large; null when there is none.
+     */
+    fun preview(context: Context, uri: Uri, minSide: Int): Bitmap? = runCatching {
+        withSource(context, uri) { source ->
+            val head = source.read(0, minOf(source.size, HEAD_BYTES.toLong()).toInt())
+            val (offset, length) = Dng.preview(head) ?: return@withSource null
+            val jpeg = source.read(offset, length)
+            val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            BitmapFactory.decodeByteArray(jpeg, 0, jpeg.size, bounds)
+            var sample = 1
+            while (maxOf(bounds.outWidth, bounds.outHeight) / (sample * 2) >= minSide) sample *= 2
+            BitmapFactory.decodeByteArray(jpeg, 0, jpeg.size, BitmapFactory.Options().apply { inSampleSize = sample })
+        }
+    }.getOrNull()
+
+    /** The file read in parts through its descriptor; a stream that cannot seek (e.g. from the cloud) is read whole. */
+    private fun <T> withSource(context: Context, uri: Uri, block: (RawSource) -> T): T {
+        val pfd = runCatching { context.contentResolver.openFileDescriptor(uri, "r") }.getOrNull()
+        if (pfd != null) {
+            val channel = FileInputStream(pfd.fileDescriptor).channel
+            if (runCatching { channel.size() > 0 }.getOrDefault(false)) return pfd.use { block(FileSource(channel)) }
+            pfd.close()
+        }
+        val bytes = context.contentResolver.openInputStream(uri)?.use { it.readBytes() } ?: error("Cannot open the file")
+        return block(BytesSource(bytes))
     }
 
-    private fun read(context: Context, uri: Uri): RawImage? = synchronized(lock) {
-        cached?.takeIf { it.first == uri }?.let { return it.second }
-        return runCatching {
-            cached = null // the previous file's data goes before the next one is read
-            val bytes = readAll(context, uri)
-            Dng.read(bytes)
-        }.onFailure { lastError = if (it is OutOfMemoryError) "Not enough memory to develop this file" else it.message }.getOrNull()?.also {
-            lastError = null
-            cached = uri to it
+    private class FileSource(private val channel: FileChannel) : RawSource {
+        override val size: Long = channel.size()
+
+        override fun read(offset: Long, length: Int): ByteArray {
+            val n = minOf(length.toLong(), (size - offset).coerceAtLeast(0)).toInt()
+            val buf = ByteBuffer.allocate(n)
+            var at = offset
+            while (buf.hasRemaining()) {
+                val r = channel.read(buf, at)
+                if (r <= 0) break
+                at += r
+            }
+            return if (buf.position() == n) buf.array() else buf.array().copyOf(buf.position())
+        }
+
+        override fun stream(offset: Long, length: Long): InputStream = object : InputStream() {
+            private var at = offset
+            private val end = minOf(offset + length, size)
+            private val one = ByteArray(1)
+
+            override fun read(): Int = if (read(one, 0, 1) <= 0) -1 else one[0].toInt() and 0xFF
+
+            override fun read(b: ByteArray, off: Int, len: Int): Int {
+                if (len == 0) return 0
+                val n = minOf(len.toLong(), end - at).toInt()
+                if (n <= 0) return -1
+                val r = channel.read(ByteBuffer.wrap(b, off, n), at)
+                if (r <= 0) return -1
+                at += r
+                return r
+            }
+
+            override fun skip(n: Long): Long {
+                val k = minOf(n, end - at).coerceAtLeast(0)
+                at += k
+                return k
+            }
+
+            override fun available(): Int = minOf(end - at, Int.MAX_VALUE.toLong()).toInt()
         }
     }
+
+    /**
+     * The raw image reduced to the size asked for while it is read, so neither the file nor the
+     * full sensor data is held. The preview's size (the last one asked) stays for slider moves;
+     * an export's larger read is not kept.
+     */
+    private fun read(context: Context, uri: Uri, maxSide: Int): RawImage? = synchronized(lock) {
+        cached?.takeIf { it.first == uri && it.second == maxSide }?.let { return it.third }
+        return runCatching {
+            if (maxSide <= KEEP_SIDE) cached = null
+            withSource(context, uri) { Dng.read(it, maxSide) }
+        }.onFailure { lastError = if (it is OutOfMemoryError) "Not enough memory to develop this file" else it.message }.getOrNull()?.also {
+            lastError = null
+            if (maxSide <= KEEP_SIDE) cached = Triple(uri, maxSide, it)
+        }
+    }
+
+    private const val HEAD_BYTES = 8 shl 20
+    private const val KEEP_SIDE = 2048
 }

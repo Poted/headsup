@@ -121,16 +121,28 @@ class DngTest {
         assertContentEquals(samples, IntArray(samples.size) { f.samples[it].toInt() and 0xFFFF })
     }
 
+    /** The developed (half-size) camera colours [Dng.read] makes of a mosaic with black 1000, white 17000. */
+    private fun halfSize(raw: IntArray, w: Int, h: Int): IntArray {
+        fun n16(v: Int) = (((v - 1000f) / 16000f).coerceIn(0f, 1f) * 65535f + 0.5f).toInt()
+        val out = IntArray(w / 2 * (h / 2) * 3)
+        for (by in 0 until h / 2) for (bx in 0 until w / 2) {
+            val i = (by * (w / 2) + bx) * 3
+            val at = { dx: Int, dy: Int -> raw[(by * 2 + dy) * w + bx * 2 + dx] }
+            out[i] = n16(at(0, 0))
+            out[i + 1] = n16(at(1, 0)) / 2 + n16(at(0, 1)) / 2
+            out[i + 2] = n16(at(1, 1))
+        }
+        return out
+    }
+
     @Test
     fun `reads a lossless jpeg dng with columns packed as two components`() {
         val raw = mosaic(16, 6)
         val image = Dng.read(buildDng(16, 6, raw, comps = 2))
-        assertEquals(16, image.width)
-        assertEquals(6, image.height)
-        assertContentEquals(raw, IntArray(raw.size) { image.data[it].toInt() and 0xFFFF })
-        assertContentEquals(intArrayOf(0, 1, 1, 2), image.cfa)
-        assertEquals(1000f, image.black[0])
-        assertEquals(17000f, image.white)
+        assertEquals(8, image.width)
+        assertEquals(3, image.height)
+        assertEquals(3, image.channels)
+        assertContentEquals(halfSize(raw, 16, 6), IntArray(image.data.size) { image.data[it].toInt() and 0xFFFF })
         assertEquals(2.0, 1.0 / image.asShotNeutral[0], 1e-3)
     }
 
@@ -138,7 +150,21 @@ class DngTest {
     fun `reads a dng whose jpeg rows hold two image rows`() {
         val raw = mosaic(8, 6)
         val image = Dng.read(buildDng(8, 6, raw, comps = 2, rowsPerJpegRow = 2))
-        assertContentEquals(raw, IntArray(raw.size) { image.data[it].toInt() and 0xFFFF })
+        assertContentEquals(halfSize(raw, 8, 6), IntArray(image.data.size) { image.data[it].toInt() and 0xFFFF })
+    }
+
+    @Test
+    fun `a raw is reduced while it is read`() {
+        val raw = mosaic(16, 8)
+        val full = halfSize(raw, 16, 8)
+        // Developed 8×4, at most 4 on the long side: each pixel the average of 2×2.
+        val image = Dng.read(BytesSource(buildDng(16, 8, raw, comps = 1)), maxSide = 4)
+        assertEquals(4, image.width)
+        assertEquals(2, image.height)
+        for (c in 0 until 3) {
+            val expected = (full[c] + full[3 + c] + full[8 * 3 + c] + full[9 * 3 + c]) / 4
+            assertTrue(abs(expected - (image.data[c].toInt() and 0xFFFF)) <= 1, "channel $c")
+        }
     }
 
     @Test
