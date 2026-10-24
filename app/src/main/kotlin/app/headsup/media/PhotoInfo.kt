@@ -32,17 +32,19 @@ data class PhotoInfo(
             runCatching {
                 context.contentResolver.openInputStream(uri)?.use { s ->
                     val e = ExifInterface(s)
-                    val ll = e.latLong
+                    val ll = FloatArray(2)
+                    val hasLocation = e.getLatLong(ll)
                     PhotoInfo(
-                        latitude = ll?.get(0),
-                        longitude = ll?.get(1),
+                        latitude = if (hasLocation) ll[0].toDouble() else null,
+                        longitude = if (hasLocation) ll[1].toDouble() else null,
                         altitudeM = e.getAttribute(ExifInterface.TAG_GPS_ALTITUDE)?.let { e.getAltitude(0.0) },
                         dateTime = e.getAttribute(ExifInterface.TAG_DATETIME_ORIGINAL) ?: e.getAttribute(ExifInterface.TAG_DATETIME),
                         make = e.getAttribute(ExifInterface.TAG_MAKE)?.trim(),
                         model = e.getAttribute(ExifInterface.TAG_MODEL)?.trim(),
                         fNumber = e.getAttributeDouble(ExifInterface.TAG_F_NUMBER, 0.0).takeIf { it > 0 },
                         exposureS = e.getAttributeDouble(ExifInterface.TAG_EXPOSURE_TIME, 0.0).takeIf { it > 0 },
-                        iso = e.getAttributeInt(ExifInterface.TAG_PHOTOGRAPHIC_SENSITIVITY, 0).takeIf { it > 0 },
+                        // "ISOSpeedRatings", called PhotographicSensitivity in newer EXIF.
+                        iso = e.getAttributeInt("ISOSpeedRatings", 0).takeIf { it > 0 },
                         focalMm = e.getAttributeDouble(ExifInterface.TAG_FOCAL_LENGTH, 0.0).takeIf { it > 0 },
                     )
                 }
