@@ -873,6 +873,8 @@ fun ClipPreview(
                 }
                 // Texts sit on the frame (not the picture), over the dashboard, as in the export.
                 val textMover by rememberUpdatedState(onMoveText)
+                // While a text is dragged, guides show the middle and the margins it snaps to.
+                var placing by remember { mutableStateOf(false) }
                 Canvas(
                     Modifier.matchParentSize().then(
                         if (onMoveText == null) {
@@ -882,17 +884,27 @@ fun ClipPreview(
                                 awaitEachGesture {
                                     val down = awaitFirstDown()
                                     down.consume()
+                                    placing = true
                                     textMover?.invoke(down.position.x / size.width, down.position.y / size.height)
                                     drag(down.id) { change ->
                                         change.consume()
                                         textMover?.invoke((change.position.x / size.width).coerceIn(0f, 1f), (change.position.y / size.height).coerceIn(0f, 1f))
                                     }
+                                    placing = false
                                 }
                             }
                         },
                     ),
                 ) {
                     routeOverlay?.let { draw -> drawIntoCanvas { draw(it.nativeCanvas, size.width, size.height, positionMs) } }
+                    if (placing) {
+                        val guide = Color.White.copy(alpha = 0.35f)
+                        val dash = PathEffect.dashPathEffect(floatArrayOf(10f, 8f))
+                        drawLine(guide, Offset(size.width / 2f, 0f), Offset(size.width / 2f, size.height), 1.5f, pathEffect = dash)
+                        drawLine(guide, Offset(0f, size.height / 2f), Offset(size.width, size.height / 2f), 1.5f, pathEffect = dash)
+                        for (fx in listOf(0.06f, 0.94f)) drawLine(guide.copy(alpha = 0.2f), Offset(size.width * fx, 0f), Offset(size.width * fx, size.height), 1f, pathEffect = dash)
+                        for (fy in listOf(0.1f, 0.9f)) drawLine(guide.copy(alpha = 0.2f), Offset(0f, size.height * fy), Offset(size.width, size.height * fy), 1f, pathEffect = dash)
+                    }
                     if (texts.isNotEmpty()) {
                         val values = if (texts.any { app.headsup.core.edit.TextFields.hasFields(it.text) }) textValues(positionMs) else emptyMap()
                         drawIntoCanvas { TextRenderer.draw(it.nativeCanvas, size.width, size.height, texts, timelineOffsetMs + clipTimelineMs, values) }

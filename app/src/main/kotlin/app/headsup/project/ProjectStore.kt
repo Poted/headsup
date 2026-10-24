@@ -178,6 +178,7 @@ internal object Json {
         .put("x", t.x.toDouble()).put("y", t.y.toDouble()).put("size", t.size.toDouble())
         .put("font", t.font.name).put("colour", t.colour).put("glow", t.glow.toDouble()).put("shadow", t.shadow)
         .put("align", t.align.name).put("animIn", t.animIn.name).put("animOut", t.animOut.name).put("animMs", t.animMs)
+        .putOpt("onlyClip", t.onlyClip).putOpt("onlyGroup", t.onlyGroup)
 
     private fun text(o: JSONObject) = TextItem(
         id = o.optLong("id"),
@@ -195,6 +196,8 @@ internal object Json {
         animIn = runCatching { TextAnim.valueOf(o.optString("animIn")) }.getOrDefault(TextAnim.FADE),
         animOut = runCatching { TextAnim.valueOf(o.optString("animOut")) }.getOrDefault(TextAnim.FADE),
         animMs = o.optLong("animMs", 500L),
+        onlyClip = if (o.has("onlyClip")) o.getLong("onlyClip") else null,
+        onlyGroup = if (o.has("onlyGroup")) o.getLong("onlyGroup") else null,
     )
 
     private fun audioClip(c: AudioClip) = JSONObject()

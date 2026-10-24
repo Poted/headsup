@@ -45,7 +45,17 @@ data class TextItem(
     val animOut: TextAnim = TextAnim.FADE,
     /** Length of the fade, rise and pop animations (typing takes as long as its letters need). */
     val animMs: Long = 500L,
+    /** In an album: shown only on this photo, or on the photos of this group (both null: on all). */
+    val onlyClip: Long? = null,
+    val onlyGroup: Long? = null,
 ) {
+    /** Whether it shows on the photo [clipId] in group [groupId]. */
+    fun showsOn(clipId: Long, groupId: Long?): Boolean = when {
+        onlyClip != null -> onlyClip == clipId
+        onlyGroup != null -> onlyGroup == groupId
+        else -> true
+    }
+
     val endMs: Long get() = startMs + lengthMs
 }
 

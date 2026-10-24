@@ -500,7 +500,11 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
         val id = (s.texts.maxOfOrNull { it.id } ?: 0L) + 1
         // On photos a text simply stays: over the whole project, without animation.
         val item = if (s.photoProject) {
-            TextItem(id = id, text = "Text", startMs = 0L, lengthMs = end.coerceAtLeast(500L), animIn = TextAnim.NONE, animOut = TextAnim.NONE)
+            // In an album a new text belongs to the photo it is added on.
+            TextItem(
+                id = id, text = "Text", startMs = 0L, lengthMs = end.coerceAtLeast(500L), animIn = TextAnim.NONE, animOut = TextAnim.NONE,
+                onlyClip = s.selected?.id,
+            )
         } else {
             TextItem(id = id, text = "Text", startMs = start, lengthMs = minOf(3_000L, (end - start).coerceAtLeast(500L)))
         }
@@ -1856,7 +1860,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                         // Texts as they are in the middle of the photo's time on the timeline (after any fade in).
                         // Data fields filled in for this photo.
                         texts = withContext(Dispatchers.IO) { textValues(s, clip, 0L) }.let { values ->
-                            s.texts.map { t -> t.copy(text = app.headsup.core.edit.TextFields.fill(t.text, values)) }
+                            s.texts.filter { it.showsOn(clip.id, clip.groupId) }.map { t -> t.copy(text = app.headsup.core.edit.TextFields.fill(t.text, values)) }
                         },
                         textMs = start + clip.timelineDurationMs / 2,
                         routeMap = s.routeMap,

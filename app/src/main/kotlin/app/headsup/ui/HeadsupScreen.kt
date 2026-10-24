@@ -327,14 +327,15 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
                         framingOf = { state.framing(it) },
                         sourceOf = { state.previewSource(it) },
                         neighbourCubes = state.previewNeighbourCubes,
-                        texts = state.texts,
+                        // In an album each photo shows only its own texts (or its group's, or all photos').
+                        texts = if (state.photoProject) state.texts.filter { it.showsOn(selected.id, selected.groupId) } else state.texts,
                         photoMode = state.photoProject,
                         showTransport = !fullscreen && (!state.photoProject || tool == Tool.EDIT || tool == Tool.COLOUR),
                         // Read here so arriving place names redraw the texts.
                         textValues = state.placesVersion.let { _ -> { pos -> vm.textValues(state, selected, pos) } },
                         routeOverlay = if (state.routeMap.enabled) routeOverlayFor(vm, state, selected) else null,
                         // A finger on the picture places the text being edited, or the route map.
-                        onMoveText = state.selectedText?.takeIf { editingTexts }?.let { id -> { x, y -> vm.updateText(id) { it.copy(x = x, y = y) } } }
+                        onMoveText = state.selectedText?.takeIf { editingTexts }?.let { id -> { x, y -> vm.updateText(id) { snapText(it, x, y) } } }
                             ?: if (tool == Tool.EFFECTS && effectKind == EffectKind.MAP && state.routeMap.enabled) { x: Float, y: Float -> vm.updateRouteMap { it.copy(x = x, y = y) } } else null,
                         cutScrub = cutScrub,
                         onFrameSource = { frameSource.value = it },
@@ -2550,12 +2551,26 @@ private fun TextPanel(state: UiState, vm: HeadsupViewModel, at: () -> Long) {
         } else {
             Hint("Tap a text's bar on the timeline to edit it.")
             Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                for (t in state.texts) FilterChip(selected = false, onClick = { vm.selectText(t.id) }, label = { Text(t.text.replace('\n', ' ').take(18)) })
+                val photoNow = state.selected
+                val shown = if (state.photoProject && photoNow != null) state.texts.filter { it.showsOn(photoNow.id, photoNow.groupId) } else state.texts
+                for (t in shown) FilterChip(selected = false, onClick = { vm.selectText(t.id) }, label = { Text(t.text.replace('\n', ' ').take(18)) })
             }
         }
         return
     }
     val update: ((TextItem) -> TextItem) -> Unit = { vm.updateText(item.id, it) }
+    // In an album: which photos the text is on.
+    val photo = state.selected
+    if (state.photoProject && photo != null) {
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text("On", style = MaterialTheme.typography.labelMedium, color = HeadsupColors.TextMuted)
+            FilterChip(selected = item.onlyClip != null, onClick = { update { it.copy(onlyClip = photo.id, onlyGroup = null) } }, label = { Text("This photo") })
+            photo.groupId?.let { g ->
+                FilterChip(selected = item.onlyGroup == g && item.onlyClip == null, onClick = { update { it.copy(onlyClip = null, onlyGroup = g) } }, label = { Text("Group") })
+            }
+            FilterChip(selected = item.onlyClip == null && item.onlyGroup == null, onClick = { update { it.copy(onlyClip = null, onlyGroup = null) } }, label = { Text("All photos") })
+        }
+    }
     OutlinedTextField(
         value = item.text,
         onValueChange = { v -> update { it.copy(text = v) } },
@@ -2833,3 +2848,15 @@ private fun PreviewHandle(onDrag: (Float) -> Unit) {
         Box(Modifier.width(40.dp).height(4.dp).clip(RoundedCornerShape(2.dp)).background(HeadsupColors.Outline))
     }
 }
+
+/**
+ * A text placed at [x], [y] (0..1), pulled to the middle and to the margins when close, so it
+ * lines up without fiddling: the centre of the frame, or a margin of 6 % from an edge.
+ */
+private fun snapText(t: TextItem, x: Float, y: Float): TextItem {
+    val pull = 0.025f
+    fun snap(v: Float, targets: List<Float>) = targets.minByOrNull { kotlin.math.abs(it - v) }?.takeIf { kotlin.math.abs(it - v) < pull } ?: v
+    val xs = if (t.align == TextAlign.LEFT) listOf(0.06f, 0.5f) else listOf(0.5f)
+    return t.copy(x = snap(x, xs), y = snap(y, listOf(0.1f, 0.5f, 0.9f)))
+}
+
