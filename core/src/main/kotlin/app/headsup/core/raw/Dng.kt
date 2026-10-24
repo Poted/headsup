@@ -37,6 +37,8 @@ class RawImage(
     val balancedToSrgb: DoubleArray? = null,
     /** What was found in the file and is applied, in a line (shown with the raw controls). */
     val info: String = "",
+    /** The camera profile's tone curve (x, y pairs in 0..1, linear light), or null for the app's own. */
+    val toneCurve: FloatArray? = null,
 ) {
     /** Vignetting and lens distortion corrections the camera wrote for this picture. */
     val corrections: List<Opcode> by lazy { Opcode.parse(opcodes3) }
@@ -120,8 +122,9 @@ object Dng {
             ?: return@runCatching null
         val cfa = raw.long(Tags.PHOTOMETRIC)!!.toInt() == Tags.PHOTOMETRIC_CFA
         if (cfa && raw.long(Tags.COMPRESSION)?.toInt() == Tags.COMPRESSION_JPEG_XL) return@runCatching null
-        val w = raw.long(Tags.IMAGE_WIDTH)!!.toInt().let { if (cfa) it / 2 else it }
-        val h = raw.long(Tags.IMAGE_LENGTH)!!.toInt().let { if (cfa) it / 2 else it }
+        // A mosaic is demosaiced at its full size.
+        val w = raw.long(Tags.IMAGE_WIDTH)!!.toInt()
+        val h = raw.long(Tags.IMAGE_LENGTH)!!.toInt()
         val o = ifd0.long(Tags.ORIENTATION)?.toInt() ?: 1
         if (o == 6 || o == 8) h to w else w to h
     }.getOrNull()
@@ -177,7 +180,7 @@ object Dng {
         val matrix: DoubleArray, val neutral: DoubleArray, val baseline: Double, val make: String, val model: String, val orientation: Int,
         /** Lens shading and similar gains on the raw values (opcode list 2). */
         val gainMaps: List<Opcode.GainMap>, val opcodes3: ByteArray?,
-        val balancedToSrgb: DoubleArray?, val info: String,
+        val balancedToSrgb: DoubleArray?, val info: String, val toneCurve: FloatArray?,
     )
 
     private fun layoutOf(source: RawSource): Layout {
@@ -240,6 +243,7 @@ object Dng {
         val gainMaps = allGainMaps.filter { cfa || (it.rowPitch == 1 && it.colPitch == 1) }
         val opcodes3 = raw.bytes(Tags.OPCODE_LIST_3)
         val corrections = Opcode.parse(opcodes3)
+        val toneCurve = ifd0.doubles(Tags.PROFILE_TONE_CURVE)?.takeIf { it.size >= 4 && it.size % 2 == 0 }?.let { d -> FloatArray(d.size) { d[it].toFloat() } }
         val info = listOfNotNull(
             when (compression) {
                 Tags.COMPRESSION_JPEG_XL -> "JPEG XL"
@@ -249,6 +253,9 @@ object Dng {
             } + if (cfa) " mosaic" else " linear",
             String.format(java.util.Locale.US, "baseline %+.2f EV", baseline),
             colour?.let { "white ${it.kelvin} K, ${if (it.forward) "forward matrix" else "colour matrix"}" },
+            toneCurve?.let { "profile curve (${it.size / 2} points)" },
+            "hue/sat map (not applied)".takeIf { ifd0.has(Tags.PROFILE_HUE_SAT_MAP_DATA_1) },
+            "look table (not applied)".takeIf { ifd0.has(Tags.PROFILE_LOOK_TABLE_DATA) },
             "lens shading ${gainMaps.size}/${allGainMaps.size}".takeIf { allGainMaps.isNotEmpty() },
             corrections.joinToString(", ") {
                 when (it) {
@@ -264,7 +271,7 @@ object Dng {
             matrix.copyOf(9), balanced, baseline,
             ifd0.string(Tags.MAKE).orEmpty(), ifd0.string(Tags.MODEL).orEmpty(),
             ifd0.long(Tags.ORIENTATION)?.toInt() ?: 1,
-            gainMaps, opcodes3, colour?.balancedToSrgb, info,
+            gainMaps, opcodes3, colour?.balancedToSrgb, info, toneCurve,
         )
     }
 
@@ -306,7 +313,7 @@ object Dng {
     private fun image(l: Layout, r: Reducer, data: java.nio.ShortBuffer) = RawImage(
         r.width, r.height, data, intArrayOf(0, 1, 1, 2), FloatArray(4), 65535f, l.matrix, l.neutral,
         l.baseline, l.make, l.model, l.orientation, channels = 3, opcodes3 = l.opcodes3,
-        balancedToSrgb = l.balancedToSrgb, info = l.info,
+        balancedToSrgb = l.balancedToSrgb, info = l.info, toneCurve = l.toneCurve,
     )
 
     /** 16-bit samples read front to back in the file's byte order. */
@@ -379,7 +386,7 @@ object Dng {
             return RawImage(
                 l.width, l.height, mosaic, at, l.black, l.white, l.matrix, l.neutral,
                 l.baseline, l.make, l.model, l.orientation, channels = 1, opcodes3 = l.opcodes3,
-                balancedToSrgb = l.balancedToSrgb, info = l.info,
+                balancedToSrgb = l.balancedToSrgb, info = l.info, toneCurve = l.toneCurve,
             )
         }
         return image(l, r!!, r.finish())
@@ -499,6 +506,12 @@ object Dng {
     }
 
     /** Linear 0..1 to sRGB 0..1 with a slight S-curve (as raw developers do by default). */
+    /** Linear 0..1 to sRGB 0..1 without the app's curve (when a profile curve already gave the look). */
+    internal fun encodePlain(linear: Float): Float {
+        val x = linear.coerceIn(0f, 1f)
+        return if (x <= 0.0031308f) 12.92f * x else 1.055f * x.pow(1f / 2.4f) - 0.055f
+    }
+
     internal fun encode(linear: Float): Float {
         val x = linear.coerceIn(0f, 1f)
         val srgb = if (x <= 0.0031308f) 12.92f * x else 1.055f * x.pow(1f / 2.4f) - 0.055f

@@ -47,6 +47,31 @@ class Developer(raw: RawImage, private val settings: RawDevelop = RawDevelop(), 
 
     private val cam = FloatArray(width * 3)
 
+    /** The profile's tone curve as a table over 0..1. */
+    private val curve: FloatArray? = raw.toneCurve?.let { pairs ->
+        FloatArray(CURVE_SIZE) { i ->
+            val x = i / (CURVE_SIZE - 1f)
+            var k = 0
+            while (k + 2 < pairs.size - 1 && pairs[k + 2] < x) k += 2
+            val x0 = pairs[k]
+            val y0 = pairs[k + 1]
+            val x1 = pairs.getOrElse(k + 2) { 1f }
+            val y1 = pairs.getOrElse(k + 3) { 1f }
+            if (x1 <= x0) y0 else y0 + (y1 - y0) * ((x - x0) / (x1 - x0)).coerceIn(0f, 1f)
+        }
+    }
+
+    private fun curveAt(v: Float): Float {
+        val c = curve ?: return v
+        val p = v.coerceIn(0f, 1f) * (CURVE_SIZE - 1)
+        val i = p.toInt().coerceAtMost(CURVE_SIZE - 2)
+        return c[i] + (c[i + 1] - c[i]) * (p - i)
+    }
+
+    private companion object {
+        const val CURVE_SIZE = 1025
+    }
+
     /** Row [y]: display values (sRGB with the curve), 0..1, three per pixel, into [out]. */
     fun row(y: Int, out: FloatArray) {
         camera.row(y, cam)
@@ -80,9 +105,22 @@ class Developer(raw: RawImage, private val settings: RawDevelop = RawDevelop(), 
             val lum = max(0.0001f, 0.2126f * r + 0.7152f * g + 0.0722f * b)
             val k = Dng.tone(lum, settings) / lum
             r *= k; g *= k; b *= k
-            out[x * 3] = Dng.encode(r)
-            out[x * 3 + 1] = Dng.encode(g)
-            out[x * 3 + 2] = Dng.encode(b)
+            if (curve != null) {
+                // The camera profile's own curve, keeping hues: the largest and smallest channels
+                // go through it, the middle one keeps its place between them.
+                val hi = max(r, max(g, b))
+                val lo = min(r, min(g, b))
+                val hi2 = curveAt(hi)
+                val lo2 = curveAt(lo)
+                fun mid(v: Float) = if (hi - lo < 1e-6f) hi2 else lo2 + (hi2 - lo2) * (v - lo) / (hi - lo)
+                out[x * 3] = Dng.encodePlain(mid(r))
+                out[x * 3 + 1] = Dng.encodePlain(mid(g))
+                out[x * 3 + 2] = Dng.encodePlain(mid(b))
+            } else {
+                out[x * 3] = Dng.encode(r)
+                out[x * 3 + 1] = Dng.encode(g)
+                out[x * 3 + 2] = Dng.encode(b)
+            }
         }
     }
 }

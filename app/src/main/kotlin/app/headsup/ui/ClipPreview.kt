@@ -750,10 +750,10 @@ fun ClipPreview(
                                     .padding(horizontal = 18.dp, vertical = 10.dp),
                                 verticalAlignment = Alignment.CenterVertically,
                             ) {
-                                androidx.compose.material3.CircularProgressIndicator(color = Color.White, strokeWidth = 2.5.dp, modifier = Modifier.size(20.dp))
+                                Spinner(Modifier.size(20.dp))
                                 androidx.compose.foundation.layout.Spacer(Modifier.size(12.dp))
                                 androidx.compose.material3.Text(
-                                    if (raw) "Developing the raw…" else "Loading the photo…",
+                                    "Loading…",
                                     color = Color.White,
                                     style = androidx.compose.material3.MaterialTheme.typography.labelLarge,
                                 )
@@ -990,7 +990,8 @@ fun ClipPreview(
             if (photoMode) {
                 // The file: its kind, size in pixels and on disk.
                 val m = clip.meta
-                val ext = m.name.substringAfterLast('.', "").uppercase().takeIf { it.isNotEmpty() && it.length <= 4 }
+                // A raw is a DNG whatever its name says (pickers may name it .jpg).
+                val ext = if (m.isRaw) "DNG" else m.name.substringAfterLast('.', "").uppercase().takeIf { it.isNotEmpty() && it.length <= 4 }
                 val info = listOfNotNull(
                     ext,
                     "RAW".takeIf { m.isRaw && ext != "RAW" },
@@ -1213,4 +1214,29 @@ private fun timecode(ms: Long, frameRate: Float?): String {
     val totalSeconds = ms / 1000
     val frames = ((ms % 1000) * fps / 1000).toInt()
     return String.format(java.util.Locale.US, "%02d:%02d:%02d:%02d", totalSeconds / 3600, totalSeconds / 60 % 60, totalSeconds % 60, frames)
+}
+
+/**
+ * A turning arc driven by the frame clock itself, so it turns also when the phone's animations
+ * are switched off (which stops the standard progress indicator).
+ */
+@Composable
+private fun Spinner(modifier: Modifier) {
+    var angle by remember { mutableStateOf(0f) }
+    LaunchedEffect(Unit) {
+        var last = 0L
+        while (true) withFrameMillis { t ->
+            if (last > 0) angle = (angle + (t - last) * 0.36f) % 360f
+            last = t
+        }
+    }
+    androidx.compose.foundation.Canvas(modifier) {
+        val stroke = size.minDimension * 0.12f
+        drawArc(
+            Color.White, startAngle = angle, sweepAngle = 270f, useCenter = false,
+            topLeft = androidx.compose.ui.geometry.Offset(stroke / 2, stroke / 2),
+            size = androidx.compose.ui.geometry.Size(size.width - stroke, size.height - stroke),
+            style = androidx.compose.ui.graphics.drawscope.Stroke(stroke, cap = androidx.compose.ui.graphics.StrokeCap.Round),
+        )
+    }
 }

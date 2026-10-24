@@ -163,10 +163,10 @@ object RawPhotos {
     var lastError: String? = null
         private set
 
-    /** What the last raw read held (format, baseline, white, lens corrections), for the raw controls. */
-    @Volatile
-    var lastInfo: String? = null
-        private set
+    /** What each raw read held (format, baseline, white, lens corrections), for the raw controls. */
+    private val infos = java.util.concurrent.ConcurrentHashMap<Uri, String>()
+
+    fun infoOf(uri: Uri): String? = infos[uri]
 
     /**
      * The camera's own preview stored in the raw file (a JPEG), at least [minSide] / 2 on its
@@ -254,7 +254,7 @@ object RawPhotos {
             RawReader.read(context, uri, maxSide, mosaic = false)
         }.onFailure { lastError = it.message }.getOrNull()?.also {
             lastError = null
-            lastInfo = it.image.info
+            infos[uri] = it.image.info
             if (maxSide <= KEEP_SIDE) cached = Triple(uri, maxSide, it)
         }
     }

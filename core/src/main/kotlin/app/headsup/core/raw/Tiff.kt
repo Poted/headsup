@@ -161,6 +161,9 @@ object Tags {
     const val FORWARD_MATRIX_1 = 50964
     const val FORWARD_MATRIX_2 = 50965
     const val BASELINE_EXPOSURE_OFFSET = 51109
+    const val PROFILE_HUE_SAT_MAP_DATA_1 = 50938
+    const val PROFILE_TONE_CURVE = 50940
+    const val PROFILE_LOOK_TABLE_DATA = 50982
     const val OPCODE_LIST_3 = 51022
 
     const val PHOTOMETRIC_CFA = 32803
