@@ -65,6 +65,8 @@ import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -339,7 +341,10 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
                     UndoRedo(state.canUndo, state.canRedo, vm::undo, vm::redo, Modifier.align(Alignment.TopEnd).padding(top = 8.dp, end = 24.dp))
                 }
             }
-            if (state.clips.isNotEmpty()) {
+            if (state.photoProject) {
+                // Photos only: no timeline, just the photos to pick (when there is more than one).
+                if (state.clips.size > 1) PhotoStrip(state, onSelect = vm::selectClip, onAdd = addVideos)
+            } else if (state.clips.isNotEmpty()) {
                 Timeline(
                     state = state,
                     vm = vm,
@@ -2618,5 +2623,43 @@ private fun RawControls(clip: ClipState, index: Int, vm: HeadsupViewModel) {
         onReset = { vm.updateRawDevelop(index) { control.set(it, 0f) } },
     )
     app.headsup.media.RawPhotos.lastError?.let { Hint("Developed by Android instead: $it") }
+}
+
+/** The photos of a photo project as thumbnails: tap one to edit it. */
+@Composable
+private fun PhotoStrip(state: UiState, onSelect: (Int) -> Unit, onAdd: () -> Unit) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val thumbs = remember { Filmstrip(context, scope) }
+    DisposableEffect(thumbs) { onDispose { thumbs.release() } }
+    thumbs.version.intValue
+    LazyRow(
+        Modifier.fillMaxWidth().padding(vertical = 8.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 16.dp),
+    ) {
+        items(state.clips.size) { i ->
+            val c = state.clips[i]
+            val selected = i == state.selectedClip
+            Box(
+                Modifier
+                    .size(64.dp)
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(HeadsupColors.Surface)
+                    .border(if (selected) 2.dp else 1.dp, if (selected) HeadsupColors.Accent else HeadsupColors.Outline, RoundedCornerShape(10.dp))
+                    .clickable { onSelect(i) },
+            ) {
+                thumbs.frame(c.meta.uri, 0L, 1L, photo = true)?.let { img ->
+                    androidx.compose.foundation.Image(img, contentDescription = c.meta.name, contentScale = androidx.compose.ui.layout.ContentScale.Crop, modifier = Modifier.matchParentSize())
+                }
+            }
+        }
+        item {
+            Box(
+                Modifier.size(64.dp).clip(RoundedCornerShape(10.dp)).border(1.dp, HeadsupColors.Outline, RoundedCornerShape(10.dp)).clickable(onClick = onAdd),
+                contentAlignment = Alignment.Center,
+            ) { Icon(HeadsupIcons.Add, contentDescription = "Add", tint = HeadsupColors.Highlight) }
+        }
+    }
 }
 
