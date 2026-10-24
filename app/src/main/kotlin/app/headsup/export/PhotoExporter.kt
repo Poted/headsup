@@ -2,6 +2,8 @@ package app.headsup.export
 
 import android.content.Context
 import android.graphics.Bitmap
+import android.graphics.BitmapShader
+import android.graphics.Shader
 import android.graphics.BitmapFactory
 import android.graphics.ColorSpace
 import android.graphics.HardwareRenderer
@@ -60,19 +62,24 @@ class PhotoRequest(
 /**
  * Exports a photo as a JPEG at its own resolution (in the timeline's frame shape), drawn the way
  * the preview draws it: the colour shader on the GPU, then framing, vignette, dashboard and
- * texts. Android 13+ (the colour shader).
+ * texts. A raw photo is developed at full size in half floats and graded at that precision, drawn
+ * at 10 bits and dithered to the JPEG's 8. Android 13+ (the colour shader).
  */
 @RequiresApi(33)
 object PhotoExporter {
     /** Longest side read from the file (larger photos are read at half, quarter… size). */
-    private const val MAX_SIDE = 6000
+    private const val MAX_SIDE = 10000
 
     fun export(context: Context, request: PhotoRequest): Uri {
-        // Raw photos are developed by the app (from the sensor data); others decoded by Android.
-        val photo = (if (request.raw) RawPhotos.decode(context, request.uri, request.rawDevelop, MAX_SIDE) else null)
+        // Raw photos are developed by the app at full size in half floats; others decoded by Android.
+        val full = if (request.raw) RawPhotos.developFull(context, request.uri, request.rawDevelop) else null
+        val photo = full?.bitmap
+            ?: (if (request.raw) RawPhotos.decode(context, request.uri, request.rawDevelop, MAX_SIDE) else null)
             ?: decodeUpright(context, request.uri) ?: error("Could not read ${request.name}")
-        val pw = photo.width.toFloat()
-        val ph = photo.height.toFloat()
+        val degrees = full?.degrees ?: 0
+        val turned = degrees == 90 || degrees == 270
+        val pw = (if (turned) photo.height else photo.width).toFloat()
+        val ph = (if (turned) photo.width else photo.height).toFloat()
         // The largest frame of the timeline's shape inside the photo.
         val (fwF, fhF) = request.reframe.outputSize(pw, ph)
         val fw = (fwF.toInt() / 2 * 2).coerceAtLeast(2)
@@ -82,14 +89,22 @@ object PhotoExporter {
         val geometry = FrameGeometry(fw.toFloat(), fh.toFloat(), picW, picH)
         val t = reframeTransform(request.reframe, geometry)
 
-        val shader = GradePreviewShader().apply { setTables(GradeTables(request.cube, request.maskCubes)) }
-        val picture = RenderNode("picture").apply {
-            setPosition(0, 0, picW.toInt(), picH.toInt())
-            setRenderEffect(shader.nativeEffect(request.effects, false, 0f, picW, picH, request.masks, 0f))
-            val c = beginRecording()
-            c.drawBitmap(photo, null, android.graphics.RectF(0f, 0f, picW, picH), android.graphics.Paint(android.graphics.Paint.FILTER_BITMAP_FLAG))
-            endRecording()
+        // The colour shader samples the photo directly (no 8-bit layer in between); the photo is
+        // turned upright and scaled to the picture by the sampling itself.
+        val image = BitmapShader(photo, Shader.TileMode.CLAMP, Shader.TileMode.CLAMP).apply {
+            filterMode = BitmapShader.FILTER_MODE_LINEAR
+            setLocalMatrix(Matrix().apply {
+                postRotate(degrees.toFloat())
+                when (degrees) {
+                    90 -> postTranslate(photo.height.toFloat(), 0f)
+                    180 -> postTranslate(photo.width.toFloat(), photo.height.toFloat())
+                    270 -> postTranslate(0f, photo.width.toFloat())
+                }
+                postScale(picW / pw, picH / ph)
+            })
         }
+        val shader = GradePreviewShader().apply { setTables(GradeTables(request.cube, request.maskCubes)) }
+        val graded = android.graphics.Paint().apply { this.shader = shader.paintShader(request.effects, picW, picH, request.masks, image) }
         val renderer = DashboardRenderer(context.assets)
         val root = RenderNode("frame").apply {
             setPosition(0, 0, fw, fh)
@@ -100,7 +115,7 @@ object PhotoExporter {
             c.rotate(request.reframe.angleDegrees)
             c.scale(t.zoom, t.zoom)
             c.translate(-picW / 2f, -picH / 2f)
-            c.drawRenderNode(picture)
+            c.drawRect(0f, 0f, picW, picH, graded)
             c.restore()
             renderer.drawVignette(c, fw.toFloat(), fh.toFloat(), request.vignette)
             val data = request.dashboard
@@ -109,38 +124,82 @@ object PhotoExporter {
             TextRenderer.draw(c, fw.toFloat(), fh.toFloat(), request.texts, request.textMs)
             endRecording()
         }
-        val full = render(root, fw, fh)
+        val rendered = render(root, fw, fh)
         photo.recycle()
         // Smaller on request (never larger than the photo).
         val target = request.longSide?.takeIf { it < maxOf(fw, fh) }
-        val bitmap = if (target == null) full else {
+        val bitmap = if (target == null) rendered else {
             val k = target.toFloat() / maxOf(fw, fh)
-            Bitmap.createScaledBitmap(full, (fw * k).toInt().coerceAtLeast(2), (fh * k).toInt().coerceAtLeast(2), true).also { full.recycle() }
+            Bitmap.createScaledBitmap(rendered, (fw * k).toInt().coerceAtLeast(2), (fh * k).toInt().coerceAtLeast(2), true).also { rendered.recycle() }
         }
         val name = request.name.substringBeforeLast('.') + "_edit.jpg"
         return MediaStoreOutput.savePhoto(context, name) { out -> bitmap.compress(Bitmap.CompressFormat.JPEG, request.quality.coerceIn(1, 100), out) }.also { bitmap.recycle() }
     }
 
-    /** Draws [root] off screen on the GPU and reads it back. */
-    private fun render(root: RenderNode, w: Int, h: Int): Bitmap {
-        val reader = ImageReader.newInstance(w, h, PixelFormat.RGBA_8888, 1, HardwareBuffer.USAGE_GPU_SAMPLED_IMAGE or HardwareBuffer.USAGE_GPU_COLOR_OUTPUT)
+    /**
+     * Draws [root] off screen on the GPU and reads it back as 8 bits per colour: drawn at 10 bits
+     * and dithered down (smooth skies stay smooth), or at 8 bits where 10 cannot be drawn.
+     */
+    private fun render(root: RenderNode, w: Int, h: Int): Bitmap =
+        runCatching { draw(root, w, h, PixelFormat.RGBA_1010102)?.let { tenBits -> dither(tenBits).also { tenBits.recycle() } } }.getOrNull()
+            ?: draw(root, w, h, PixelFormat.RGBA_8888) ?: error("Nothing was drawn")
+
+    private fun draw(root: RenderNode, w: Int, h: Int, format: Int): Bitmap? {
+        val reader = ImageReader.newInstance(w, h, format, 1, HardwareBuffer.USAGE_GPU_SAMPLED_IMAGE or HardwareBuffer.USAGE_GPU_COLOR_OUTPUT)
         val hw = HardwareRenderer()
         try {
             hw.setSurface(reader.surface)
             hw.setContentRoot(root)
             hw.createRenderRequest().setWaitForPresent(true).syncAndDraw()
-            val image = reader.acquireNextImage() ?: error("Nothing was drawn")
+            val image = reader.acquireNextImage() ?: return null
             image.use {
-                val buffer = it.hardwareBuffer ?: error("No picture buffer")
+                val buffer = it.hardwareBuffer ?: return null
                 buffer.use { b ->
-                    val wrapped = Bitmap.wrapHardwareBuffer(b, ColorSpace.get(ColorSpace.Named.SRGB)) ?: error("Could not read the picture")
-                    return wrapped.copy(Bitmap.Config.ARGB_8888, false)
+                    val wrapped = Bitmap.wrapHardwareBuffer(b, ColorSpace.get(ColorSpace.Named.SRGB)) ?: return null
+                    val config = if (format == PixelFormat.RGBA_1010102) Bitmap.Config.RGBA_1010102 else Bitmap.Config.ARGB_8888
+                    return wrapped.copy(config, false)
                 }
             }
         } finally {
             hw.destroy()
             reader.close()
         }
+    }
+
+    /** A 10-bit picture to 8 bits with a little noise below the last bit, in strips. */
+    private fun dither(src: Bitmap): Bitmap {
+        val w = src.width
+        val h = src.height
+        val out = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+        val rows = 64
+        val bytes = java.nio.ByteBuffer.allocate(w * rows * 4).order(java.nio.ByteOrder.nativeOrder())
+        val ints = IntArray(w * rows)
+        var y0 = 0
+        while (y0 < h) {
+            val n = minOf(rows, h - y0)
+            val part = Bitmap.createBitmap(src, 0, y0, w, n)
+            bytes.clear()
+            part.copyPixelsToBuffer(bytes)
+            if (part !== src) part.recycle()
+            bytes.rewind()
+            val packed = bytes.asIntBuffer()
+            for (i in 0 until w * n) {
+                val v = packed.get(i)
+                var seed = (y0 + i / w) * 7919 + (i % w) * 104729
+                fun channel(ten: Int): Int {
+                    seed = seed * 1103515245 + 12345
+                    val noise = ((seed ushr 8) and 0xFFFF) / 65536f
+                    return (ten * (255f / 1023f) + noise).toInt().coerceIn(0, 255)
+                }
+                val r = channel(v and 0x3FF)
+                val g = channel((v shr 10) and 0x3FF)
+                val b = channel((v shr 20) and 0x3FF)
+                ints[i] = (0xFF shl 24) or (r shl 16) or (g shl 8) or b
+            }
+            out.setPixels(ints, 0, w, 0, y0, w, n)
+            y0 += n
+        }
+        return out
     }
 
     /** The photo turned upright by its EXIF orientation, at most [MAX_SIDE] on its long side. */

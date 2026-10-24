@@ -44,6 +44,7 @@ data class SavedClip(
     val fadeOutMs: Long = 0L,
     val soundLevel: Float = 1f,
     val rawDevelop: RawDevelop = RawDevelop(),
+    val picked: Boolean = false,
 )
 
 /** A film made on a timeline, or an album of photos edited one by one. */
@@ -252,6 +253,7 @@ internal object Json {
         .put("fadeInMs", c.fadeInMs)
         .put("fadeOutMs", c.fadeOutMs)
         .put("soundLevel", c.soundLevel)
+        .put("picked", c.picked)
         .put("raw", JSONObject().put("exposure", c.rawDevelop.exposure.toDouble()).put("highlights", c.rawDevelop.highlights.toDouble())
             .put("shadows", c.rawDevelop.shadows.toDouble()).put("temperature", c.rawDevelop.temperature.toDouble()).put("tint", c.rawDevelop.tint.toDouble()))
         .put("reframe", JSONObject().put("zoom", c.reframe.zoom).put("centerX", c.reframe.centerX).put("centerY", c.reframe.centerY).put("angleDegrees", c.reframe.angleDegrees).put("fit", c.reframe.fit))
@@ -275,6 +277,7 @@ internal object Json {
         fadeInMs = o.optLong("fadeInMs", 0L),
         fadeOutMs = o.optLong("fadeOutMs", 0L),
         soundLevel = o.optDouble("soundLevel", 1.0).toFloat(),
+        picked = o.optBoolean("picked", false),
         rawDevelop = o.optJSONObject("raw")?.let { r ->
             RawDevelop(
                 r.optDouble("exposure", 0.0).toFloat(), r.optDouble("highlights", 0.0).toFloat(), r.optDouble("shadows", 0.0).toFloat(),

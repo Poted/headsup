@@ -142,7 +142,7 @@ class DngTest {
         assertEquals(8, image.width)
         assertEquals(3, image.height)
         assertEquals(3, image.channels)
-        assertContentEquals(halfSize(raw, 16, 6), IntArray(image.data.size) { image.data[it].toInt() and 0xFFFF })
+        assertContentEquals(halfSize(raw, 16, 6), IntArray(image.data.capacity()) { image.data.get(it).toInt() and 0xFFFF })
         assertEquals(2.0, 1.0 / image.asShotNeutral[0], 1e-3)
     }
 
@@ -150,7 +150,7 @@ class DngTest {
     fun `reads a dng whose jpeg rows hold two image rows`() {
         val raw = mosaic(8, 6)
         val image = Dng.read(buildDng(8, 6, raw, comps = 2, rowsPerJpegRow = 2))
-        assertContentEquals(halfSize(raw, 8, 6), IntArray(image.data.size) { image.data[it].toInt() and 0xFFFF })
+        assertContentEquals(halfSize(raw, 8, 6), IntArray(image.data.capacity()) { image.data.get(it).toInt() and 0xFFFF })
     }
 
     @Test
@@ -163,7 +163,7 @@ class DngTest {
         assertEquals(2, image.height)
         for (c in 0 until 3) {
             val expected = (full[c] + full[3 + c] + full[8 * 3 + c] + full[9 * 3 + c]) / 4
-            assertTrue(abs(expected - (image.data[c].toInt() and 0xFFFF)) <= 1, "channel $c")
+            assertTrue(abs(expected - (image.data.get(c).toInt() and 0xFFFF)) <= 1, "channel $c")
         }
     }
 
@@ -186,6 +186,30 @@ class DngTest {
         val b = p and 0xFF
         assertTrue(abs(r - g) <= 2 && abs(b - g) <= 2, "grey expected, got $r $g $b")
         assertEquals(4, out.width)
+    }
+
+    @Test
+    fun `a mosaic demosaiced at full size stays neutral and keeps clipped highlights white`() {
+        val w = 16
+        val h = 16
+        // Left half grey (red and blue at half of green, as the neutral says), right half clipped.
+        val raw = IntArray(w * h) { i ->
+            val x = i % w
+            val y = i / w
+            val green = (x + y) % 2 == 1
+            if (x >= w / 2) 17000 else 1000 + if (green) 4000 else 2000
+        }
+        val image = Dng.read(buildDng(w, h, raw, comps = 1), mosaic = true)
+        assertEquals(1, image.channels)
+        val out = Dng.develop(image)
+        assertEquals(w, out.width)
+        for (p in listOf(out.pixels[5 * w + 3], out.pixels[6 * w + 4], out.pixels[9 * w + 12])) {
+            val r = (p shr 16) and 0xFF
+            val g = (p shr 8) and 0xFF
+            val b = p and 0xFF
+            assertTrue(abs(r - g) <= 2 && abs(b - g) <= 2, "neutral expected, got $r $g $b")
+        }
+        assertTrue((out.pixels[9 * w + 12] and 0xFF) > 240, "clipped should be white")
     }
 
     @Test

@@ -9,6 +9,14 @@ import app.headsup.core.raw.Dng
 import app.headsup.core.raw.RawDevelop
 import app.headsup.core.raw.RawImage
 import app.headsup.core.raw.RawSource
+import app.headsup.core.raw.Allocator
+import app.headsup.core.raw.Developer
+import android.graphics.Canvas
+import android.graphics.ColorSpace
+import android.graphics.Rect
+import android.os.SharedMemory
+import android.util.Half
+import java.nio.ByteOrder
 import app.headsup.core.raw.BytesSource
 import java.io.FileInputStream
 import java.io.InputStream
@@ -73,6 +81,83 @@ object RawPhotos {
         }
         if (degrees == 0f) return bitmap
         return Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, Matrix().apply { postRotate(degrees) }, true).also { if (it !== bitmap) bitmap.recycle() }
+    }
+
+    /** A raw developed at full size for export, in half floats; [degrees] turns it upright. */
+    class FullPicture(val bitmap: Bitmap, val degrees: Int)
+
+    /**
+     * [uri] developed at its full size (a mosaic demosaiced, not averaged) into a half-float
+     * picture, for an export that keeps the precision to the end. The sensor data is held
+     * outside the Java heap while it is developed and let go after; null when the app cannot
+     * develop the file.
+     */
+    fun developFull(context: Context, uri: Uri, develop: RawDevelop): FullPicture? {
+        val memory = NativeMemory()
+        return try {
+            val raw = withSource(context, uri) { Dng.read(it, mosaic = true, alloc = memory) }
+            val dev = Developer(raw, develop)
+            val w = dev.width
+            val space = ColorSpace.get(ColorSpace.Named.EXTENDED_SRGB)
+            val picture = Bitmap.createBitmap(w, dev.height, Bitmap.Config.RGBA_F16, false, space)
+            val strip = Bitmap.createBitmap(w, STRIP_ROWS, Bitmap.Config.RGBA_F16, false, space)
+            val bytes = ByteBuffer.allocate(w * STRIP_ROWS * 8).order(ByteOrder.nativeOrder())
+            val halves = bytes.asShortBuffer()
+            val row = FloatArray(w * 3)
+            val canvas = Canvas(picture)
+            val one = Half.toHalf(1f)
+            var y0 = 0
+            while (y0 < dev.height) {
+                val n = minOf(STRIP_ROWS, dev.height - y0)
+                halves.clear()
+                for (i in 0 until n) {
+                    dev.row(y0 + i, row)
+                    for (x in 0 until w) {
+                        halves.put(Half.toHalf(row[x * 3]))
+                        halves.put(Half.toHalf(row[x * 3 + 1]))
+                        halves.put(Half.toHalf(row[x * 3 + 2]))
+                        halves.put(one)
+                    }
+                }
+                bytes.rewind()
+                strip.copyPixelsFromBuffer(bytes)
+                canvas.drawBitmap(strip, Rect(0, 0, w, n), Rect(0, y0, w, y0 + n), null)
+                y0 += n
+            }
+            strip.recycle()
+            lastError = null
+            val degrees = when (raw.orientation) {
+                3 -> 180
+                6 -> 90
+                8 -> 270
+                else -> 0
+            }
+            FullPicture(picture, degrees)
+        } catch (e: Throwable) {
+            lastError = if (e is OutOfMemoryError) "Not enough memory to develop this file at full size" else e.message
+            null
+        } finally {
+            memory.release()
+        }
+    }
+
+    /** Memory mapped outside the Java heap (shared memory), unmapped together when done. */
+    private class NativeMemory : Allocator {
+        private val maps = ArrayList<ByteBuffer>()
+
+        override fun allocate(bytes: Long): ByteBuffer {
+            val shared = SharedMemory.create("raw", Math.toIntExact(bytes))
+            try {
+                return shared.mapReadWrite().also { synchronized(maps) { maps += it } }
+            } finally {
+                shared.close() // the mapping stays until unmapped
+            }
+        }
+
+        fun release() = synchronized(maps) {
+            maps.forEach { SharedMemory.unmap(it) }
+            maps.clear()
+        }
     }
 
     @Volatile
@@ -168,4 +253,5 @@ object RawPhotos {
 
     private const val HEAD_BYTES = 8 shl 20
     private const val KEEP_SIDE = 2048
+    private const val STRIP_ROWS = 64
 }

@@ -132,6 +132,8 @@ data class ClipState(
     val soundLevel: Float = 1f,
     /** Development of a raw (DNG) photo: exposure, highlights, shadows and white balance on the raw data. */
     val rawDevelop: RawDevelop = RawDevelop(),
+    /** An album photo marked for export. */
+    val picked: Boolean = false,
 ) {
     val look: ClipLook get() = ClipLook(grade, effects, lutName, masks)
 
@@ -435,6 +437,9 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
     /** Changes the raw development of clip [index] (a DNG photo). */
     fun updateRawDevelop(index: Int, transform: (RawDevelop) -> RawDevelop) = updateClip(index) { it.copy(rawDevelop = transform(it.rawDevelop)) }
 
+    /** Marks or unmarks an album photo for export. */
+    fun togglePicked(index: Int) = updateClip(index) { it.copy(picked = !it.picked) }
+
     // Texts
 
     private val samplers = java.util.WeakHashMap<app.headsup.core.track.ActivityTrack, app.headsup.core.track.TelemetrySampler>()
@@ -640,7 +645,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
             SavedClip(
                 it.meta.uri, it.trimStartMs, it.trimEndMs, it.manualOffsetMs, it.colorGrade, it.lutName,
                 it.manualStart, it.grade, it.effects, it.masks, it.groupId, it.transitionMs, it.reframe, it.speed, it.muteChangedSpeed,
-                it.fadeInMs, it.fadeOutMs, it.soundLevel, it.rawDevelop,
+                it.fadeInMs, it.fadeOutMs, it.soundLevel, it.rawDevelop, it.picked,
             )
         },
         groups = groups.map { SavedGroup(it.id, it.name, it.grade, it.lutName) },
@@ -706,6 +711,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                     fadeOutMs = c.fadeOutMs,
                     soundLevel = c.soundLevel,
                     rawDevelop = c.rawDevelop,
+                    picked = c.picked,
                     groupId = c.groupId,
                 )
             }
@@ -1825,9 +1831,18 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
     fun exportOverlays() = enqueue(ExportKind.PNG_SEQUENCE, state.value.clips.indices.toList())
 
     /** Each photo on the timeline as a JPEG with its colours, framing, effects, dashboard and texts. */
-    fun exportPhotos(onlySelected: Boolean = false) {
+    /** Which photos an export takes. */
+    enum class PhotoSet { ALL, CURRENT, PICKED }
+
+    fun exportPhotos(which: PhotoSet = PhotoSet.ALL) {
         val s = state.value.copy(compareGrade = null)
-        val photos = s.clips.withIndex().filter { it.value.meta.isPhoto && (!onlySelected || it.index == s.selectedClip) }
+        val photos = s.clips.withIndex().filter {
+            it.value.meta.isPhoto && when (which) {
+                PhotoSet.ALL -> true
+                PhotoSet.CURRENT -> it.index == s.selectedClip
+                PhotoSet.PICKED -> it.value.picked
+            }
+        }
         if (photos.isEmpty()) return
         if (android.os.Build.VERSION.SDK_INT < 33) {
             _state.update { it.copy(messages = it.messages + "Photo export needs Android 13 or newer.") }

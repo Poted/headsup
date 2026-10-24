@@ -16,6 +16,7 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -2442,8 +2443,16 @@ private fun PhotoExport(state: UiState, vm: HeadsupViewModel) {
             }
         }
         val selectedPhoto = state.selected?.meta?.isPhoto == true
+        val picked = state.clips.count { it.meta.isPhoto && it.picked }
+        if (picked > 0) {
+            Button(onClick = { vm.exportPhotos(HeadsupViewModel.PhotoSet.PICKED) }, enabled = !state.busy, modifier = Modifier.fillMaxWidth()) {
+                Text("Export the marked photos ($picked)")
+            }
+        } else if (photoCount > 1) {
+            Hint("Mark photos for export in Edit: hold a thumbnail, or Mark under the photos.")
+        }
         if (selectedPhoto && photoCount > 1) {
-            Button(onClick = { vm.exportPhotos(onlySelected = true) }, enabled = !state.busy, modifier = Modifier.fillMaxWidth()) { Text("Export this photo (JPEG)") }
+            OutlinedButton(onClick = { vm.exportPhotos(HeadsupViewModel.PhotoSet.CURRENT) }, enabled = !state.busy, modifier = Modifier.fillMaxWidth()) { Text("Export this photo (JPEG)") }
         }
         OutlinedButton(onClick = { vm.exportPhotos() }, enabled = !state.busy, modifier = Modifier.fillMaxWidth()) {
             Text(if (photoCount == 1) "Export the photo (JPEG)" else "Export all $photoCount photos (JPEG)")
@@ -2735,12 +2744,18 @@ private fun PhotoStrip(state: UiState, vm: HeadsupViewModel, onAdd: () -> Unit) 
                     .clip(RoundedCornerShape(10.dp))
                     .background(HeadsupColors.Surface)
                     .border(if (selected) 2.dp else 1.dp, if (selected) HeadsupColors.Accent else HeadsupColors.Outline, RoundedCornerShape(10.dp))
-                    .clickable { onSelect(i) },
+                    .combinedClickable(onLongClick = { vm.togglePicked(i) }) { onSelect(i) },
             ) {
                 // Read here, so this tile (not only the row) shows its picture when it arrives.
                 thumbs.version.intValue
                 thumbs.frame(c.meta.uri, 0L, 1L, photo = true)?.let { img ->
                     androidx.compose.foundation.Image(img, contentDescription = c.meta.name, contentScale = androidx.compose.ui.layout.ContentScale.Crop, modifier = Modifier.matchParentSize())
+                }
+                if (c.picked) {
+                    Box(
+                        Modifier.align(Alignment.TopEnd).padding(4.dp).size(18.dp).clip(CircleShape).background(HeadsupColors.Highlight),
+                        contentAlignment = Alignment.Center,
+                    ) { Text("✓", style = MaterialTheme.typography.labelSmall, color = HeadsupColors.OnHighlight) }
                 }
             }
         }
@@ -2755,7 +2770,8 @@ private fun PhotoStrip(state: UiState, vm: HeadsupViewModel, onAdd: () -> Unit) 
     val i = state.selectedClip
     if (i != null && i in state.clips.indices) {
         Row(Modifier.padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-            Hint("${i + 1} of ${state.clips.size}", Modifier.weight(1f).padding(start = 4.dp))
+            Hint("${i + 1} of ${state.clips.size}" + state.clips.count { it.picked }.let { if (it > 0) " · $it marked" else "" }, Modifier.weight(1f).padding(start = 4.dp))
+            SmallAction(if (state.clips[i].picked) "✓ Marked" else "Mark", { vm.togglePicked(i) })
             SmallAction("◀ Move", { vm.moveClip(i, -1) }, enabled = i > 0)
             SmallAction("Move ▶", { vm.moveClip(i, 1) }, enabled = i < state.clips.lastIndex)
             SmallAction("Remove", { vm.removeClip(i) })

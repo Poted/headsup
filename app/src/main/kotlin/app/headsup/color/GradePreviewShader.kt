@@ -69,6 +69,35 @@ class GradePreviewShader {
         masks: List<ColourMask>,
         fromWeight: Float,
     ): RenderEffect {
+        setUniforms(effects, zebra, frame, width, height, masks, fromWeight)
+        return RenderEffect.createRuntimeShaderEffect(shader, "image")
+    }
+
+    /**
+     * The same as a shader drawing [image] directly (a photo export): the picture is sampled at
+     * its own precision, not through an 8-bit layer.
+     */
+    fun paintShader(
+        effects: EffectSettings,
+        width: Float,
+        height: Float,
+        masks: List<ColourMask>,
+        image: Shader,
+    ): Shader {
+        setUniforms(effects, false, 0f, width, height, masks, 0f)
+        shader.setInputShader("image", image)
+        return shader
+    }
+
+    private fun setUniforms(
+        effects: EffectSettings,
+        zebra: Boolean,
+        frame: Float,
+        width: Float,
+        height: Float,
+        masks: List<ColourMask>,
+        fromWeight: Float,
+    ) {
         shader.setFloatUniform("n", tableSize.toFloat())
         shader.setFloatUniform("zebra", if (zebra) 1f else 0f)
         shader.setFloatUniform("time", frame)
@@ -86,7 +115,6 @@ class GradePreviewShader {
         shader.setFloatUniform("glow", effects.glow)
         shader.setFloatUniform("threshold", effects.glowThreshold)
         shader.setFloatUniform("halation", effects.halation)
-        return RenderEffect.createRuntimeShaderEffect(shader, "image")
     }
 
     private companion object {

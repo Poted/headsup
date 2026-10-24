@@ -13,8 +13,8 @@ import kotlin.math.pow
 class RawImage(
     val width: Int,
     val height: Int,
-    /** Samples row by row (unsigned 16-bit in shorts). */
-    val data: ShortArray,
+    /** Samples row by row (unsigned 16-bit in shorts), held wherever the reader allocated them. */
+    val data: java.nio.ShortBuffer,
     /** Colour of each pixel of the 2×2 repeat, row by row: 0 red, 1 green, 2 blue. */
     val cfa: IntArray,
     /** Black level per position of the 2×2 repeat, and the white level. */
@@ -29,13 +29,24 @@ class RawImage(
     val model: String,
     /** TIFF orientation (1 upright, 3 upside down, 6 and 8 turned). */
     val orientation: Int = 1,
-    /** 1: a colour filter mosaic; 3: linear RGB already demosaiced (e.g. Samsung Expert RAW), interleaved. */
+    /** 1: a colour filter mosaic; 3: RGB (demosaiced by the camera, or reduced while read), interleaved. */
     val channels: Int = 1,
 ) {
-    /** Size of the developed picture before orientation: half the mosaic, or the linear image's own. */
-    val developedWidth: Int get() = if (channels == 1) width / 2 else width
-    val developedHeight: Int get() = if (channels == 1) height / 2 else height
+    /** Size of the developed picture before orientation (a mosaic is demosaiced to its full size). */
+    val developedWidth: Int get() = width
+    val developedHeight: Int get() = height
 }
+
+/** Gives memory for the image data; the app may place it outside the Java heap. */
+fun interface Allocator {
+    fun allocate(bytes: Long): java.nio.ByteBuffer
+
+    companion object {
+        val HEAP = Allocator { java.nio.ByteBuffer.allocate(Math.toIntExact(it)) }
+    }
+}
+
+private fun Allocator.shorts(count: Long): java.nio.ShortBuffer = allocate(count * 2).order(java.nio.ByteOrder.nativeOrder()).asShortBuffer()
 
 /** Settings of a raw development, applied to the raw data before the usual colour corrections. */
 data class RawDevelop(
@@ -113,7 +124,7 @@ object Dng {
     }.getOrNull()
 
     /** Reads the raw image of a DNG held in memory, at full (developed) size. */
-    fun read(bytes: ByteArray): RawImage = read(BytesSource(bytes))
+    fun read(bytes: ByteArray, mosaic: Boolean = false): RawImage = read(BytesSource(bytes), mosaic = mosaic)
 
     /**
      * Reads the raw image of a DNG for development: a mosaic (Bayer; uncompressed or lossless
@@ -122,9 +133,9 @@ object Dng {
      * side, so only the reduced picture is ever held: the file is read in parts from [source].
      * The result holds camera colours normalised to 0..65535 (levels applied, not yet balanced).
      */
-    fun read(source: RawSource, maxSide: Int = 0): RawImage {
+    fun read(source: RawSource, maxSide: Int = 0, mosaic: Boolean = false, alloc: Allocator = Allocator.HEAP): RawImage {
         val layout = layoutOf(source)
-        return if (layout.cfa) readMosaic(source, layout, maxSide) else readLinear(source, layout, maxSide)
+        return if (layout.cfa) readMosaic(source, layout, maxSide, mosaic, alloc) else readLinear(source, layout, maxSide, alloc)
     }
 
     /** What is needed from the directories, read from the start of the file (the whole file if a value lies further). */
@@ -195,12 +206,13 @@ object Dng {
      * Collects samples into the developed picture, reduced by a whole step: each output pixel the
      * average of step × step developed pixels, per colour.
      */
-    private class Reducer(devW: Int, devH: Int, maxSide: Int, private val shares: IntArray) {
+    private class Reducer(devW: Int, devH: Int, maxSide: Int, private val shares: IntArray, private val alloc: Allocator) {
         val step = if (maxSide <= 0) 1 else ((maxOf(devW, devH) + maxSide - 1) / maxSide).coerceIn(1, 64)
         val width = devW / step
         val height = devH / step
-        private val sums = if (step > 1) IntArray(width * height * 3) else null
-        private val direct = if (step == 1) ShortArray(width * height * 3) else null
+        private val count = width.toLong() * height * 3
+        private val sums = if (step > 1) alloc.allocate(count * 4).order(java.nio.ByteOrder.nativeOrder()).asIntBuffer() else null
+        private val direct = if (step == 1) alloc.shorts(count) else null
 
         /** Adds [n] (0..1) to colour [c] of developed pixel ([dx], [dy]). */
         fun add(dx: Int, dy: Int, c: Int, n: Float) {
@@ -209,13 +221,16 @@ object Dng {
             if (ox >= width || oy >= height) return
             val v = (n.coerceIn(0f, 1f) * 65535f + 0.5f).toInt()
             val i = (oy * width + ox) * 3 + c
-            if (sums != null) sums[i] += v else direct!![i] = ((direct[i].toInt() and 0xFFFF) + v / shares[c]).toShort()
+            if (sums != null) sums.put(i, sums.get(i) + v) else direct!!.put(i, ((direct.get(i).toInt() and 0xFFFF) + v / shares[c]).toShort())
         }
 
-        fun finish(): ShortArray = direct ?: ShortArray(sums!!.size) { i -> (sums[i] / (shares[i % 3] * step * step)).toShort() }
+        fun finish(): java.nio.ShortBuffer = direct ?: alloc.shorts(count).also { out ->
+            val sums = sums!!
+            for (i in 0 until count.toInt()) out.put(i, (sums.get(i) / (shares[i % 3] * step * step)).toShort())
+        }
     }
 
-    private fun image(l: Layout, r: Reducer, data: ShortArray) = RawImage(
+    private fun image(l: Layout, r: Reducer, data: java.nio.ShortBuffer) = RawImage(
         r.width, r.height, data, intArrayOf(0, 1, 1, 2), FloatArray(4), 65535f, l.matrix, l.neutral,
         l.baseline, l.make, l.model, l.orientation, channels = 3,
     )
@@ -231,15 +246,21 @@ object Dng {
         }
     }
 
-    private fun readMosaic(source: RawSource, l: Layout, maxSide: Int): RawImage {
+    /**
+     * A mosaic: kept as it is for demosaicing at full size ([full]), or reduced while read, one
+     * colour pixel per 2×2 block (then further by the step [maxSide] asks for).
+     */
+    private fun readMosaic(source: RawSource, l: Layout, maxSide: Int, full: Boolean, alloc: Allocator): RawImage {
         val at = IntArray(4) { l.pattern.getOrElse(it) { 1 }.coerceIn(0, 2) }
         val shares = IntArray(3) { c -> at.count { it == c }.coerceAtLeast(1) }
-        val r = Reducer(l.width / 2, l.height / 2, maxSide, shares)
+        val r = if (full) null else Reducer(l.width / 2, l.height / 2, maxSide, shares, alloc)
+        val mosaic = if (full) alloc.shorts(l.width.toLong() * l.height) else null
         val span = FloatArray(4) { (l.white - l.black[it]).coerceAtLeast(1f) }
         fun put(px: Int, py: Int, v: Int) {
             if (px >= l.width || py >= l.height) return
+            if (mosaic != null) { mosaic.put(py * l.width + px, v.toShort()); return }
             val k = ((py and 1) shl 1) or (px and 1)
-            r.add(px shr 1, py shr 1, at[k], (v - l.black[k]) / span[k])
+            r!!.add(px shr 1, py shr 1, at[k], (v - l.black[k]) / span[k])
         }
         val across = (l.width + l.tileW - 1) / l.tileW
         for (t in l.offsets.indices) {
@@ -274,15 +295,21 @@ object Dng {
                 }
             }
         }
-        return image(l, r, r.finish())
+        if (mosaic != null) {
+            return RawImage(
+                l.width, l.height, mosaic, at, l.black, l.white, l.matrix, l.neutral,
+                l.baseline, l.make, l.model, l.orientation, channels = 1,
+            )
+        }
+        return image(l, r!!, r.finish())
     }
 
     /**
      * A linear (already demosaiced) raw image: three channels per pixel, in strips or tiles, each
      * compressed with JPEG XL (DNG 1.7) or stored as 16-bit samples.
      */
-    private fun readLinear(source: RawSource, l: Layout, maxSide: Int): RawImage {
-        val r = Reducer(l.width, l.height, maxSide, intArrayOf(1, 1, 1))
+    private fun readLinear(source: RawSource, l: Layout, maxSide: Int, alloc: Allocator): RawImage {
+        val r = Reducer(l.width, l.height, maxSide, intArrayOf(1, 1, 1), alloc)
         val across = (l.width + l.tileW - 1) / l.tileW
         // JPEG XL data comes as 0..1 of its own range; the levels are scaled to it.
         val jxlBlack = (l.blackLinear / l.whiteLinear).toFloat()
@@ -335,63 +362,21 @@ object Dng {
     }
 
     /**
-     * Develops [raw] into sRGB pixels (ARGB) at half size (each 2×2 filter block one pixel, so no
-     * demosaicing artefacts), further reduced by [step]: levels, white balance, camera to sRGB
-     * colours, exposure, highlights and shadows in linear light, then a gentle film-like curve.
+     * Develops [raw] into sRGB pixels (ARGB, 8 bits), reduced by [step]; see [Developer] for the
+     * steps. A mosaic is demosaiced at full size (step 1) or averaged per 2×2 block.
      */
     fun develop(raw: RawImage, settings: RawDevelop = RawDevelop(), step: Int = 1): Developed {
-        val s = step.coerceAtLeast(1)
-        val outW = raw.developedWidth / s
-        val outH = raw.developedHeight / s
-        val pixels = IntArray(outW * outH)
-        val rgbCam = cameraToSrgb(raw.colorMatrix)
-        // White balance: the as-shot neutral becomes grey, then the user's warmth and tint.
-        val warm = 2.0.pow(settings.temperature * 0.6)
-        val tint = 2.0.pow(settings.tint * 0.4)
-        val wb = floatArrayOf(
-            (1.0 / raw.asShotNeutral[0] * warm).toFloat(),
-            (1.0 / tint).toFloat(),
-            (1.0 / raw.asShotNeutral[2] / warm).toFloat(),
-        )
-        val gain = 2.0.pow(raw.baselineExposure + settings.exposure).toFloat()
-        // Where each colour sits in the 2×2 block.
-        val at = IntArray(4) { raw.cfa.getOrElse(it) { 1 } }
-        val span = FloatArray(4) { (raw.white - raw.black[it]).coerceAtLeast(1f) }
-        val cam = FloatArray(3)
-        for (oy in 0 until outH) {
-            val y = oy * 2 * s
-            for (ox in 0 until outW) {
-                val x = ox * 2 * s
-                cam[0] = 0f; cam[1] = 0f; cam[2] = 0f
-                if (raw.channels == 3) {
-                    // Linear raw: one pixel already has all three colours.
-                    val i = ((oy * s) * raw.width + ox * s) * 3
-                    for (c in 0 until 3) cam[c] = (((raw.data[i + c].toInt() and 0xFFFF) - raw.black[0]) / span[0]).coerceIn(0f, 1f)
-                } else {
-                    var greens = 0
-                    for (k in 0 until 4) {
-                        val v = raw.data[(y + k / 2) * raw.width + x + k % 2].toInt() and 0xFFFF
-                        val n = ((v - raw.black[k]) / span[k]).coerceIn(0f, 1f)
-                        val c = at[k]
-                        if (c == 1) greens++
-                        cam[c] += n
-                    }
-                    if (greens > 1) cam[1] /= greens
-                }
-                val r0 = cam[0] * wb[0]
-                val g0 = cam[1] * wb[1]
-                val b0 = cam[2] * wb[2]
-                var r = (rgbCam[0] * r0 + rgbCam[1] * g0 + rgbCam[2] * b0).toFloat() * gain
-                var g = (rgbCam[3] * r0 + rgbCam[4] * g0 + rgbCam[5] * b0).toFloat() * gain
-                var b = (rgbCam[6] * r0 + rgbCam[7] * g0 + rgbCam[8] * b0).toFloat() * gain
-                // Highlights and shadows by the pixel's brightness, keeping its colour.
-                val lum = max(0.0001f, 0.2126f * r + 0.7152f * g + 0.0722f * b)
-                val k = tone(lum, settings) / lum
-                r *= k; g *= k; b *= k
-                pixels[oy * outW + ox] = (0xFF shl 24) or (encode(r) shl 16) or (encode(g) shl 8) or encode(b)
+        val dev = Developer(raw, settings, step)
+        val pixels = IntArray(dev.width * dev.height)
+        val row = FloatArray(dev.width * 3)
+        for (y in 0 until dev.height) {
+            dev.row(y, row)
+            for (x in 0 until dev.width) {
+                fun c(v: Float) = (v.coerceIn(0f, 1f) * 255f + 0.5f).toInt()
+                pixels[y * dev.width + x] = (0xFF shl 24) or (c(row[x * 3]) shl 16) or (c(row[x * 3 + 1]) shl 8) or c(row[x * 3 + 2])
             }
         }
-        return Developed(outW, outH, pixels)
+        return Developed(dev.width, dev.height, pixels)
     }
 
     class Developed(val width: Int, val height: Int, val pixels: IntArray)
@@ -414,12 +399,11 @@ object Dng {
         return v
     }
 
-    /** Linear 0..1 to 8-bit sRGB with a slight S-curve (as raw developers do by default). */
-    private fun encode(linear: Float): Int {
+    /** Linear 0..1 to sRGB 0..1 with a slight S-curve (as raw developers do by default). */
+    internal fun encode(linear: Float): Float {
         val x = linear.coerceIn(0f, 1f)
         val srgb = if (x <= 0.0031308f) 12.92f * x else 1.055f * x.pow(1f / 2.4f) - 0.055f
-        val curved = srgb + 0.12f * (srgb - 0.5f) * (1f - kotlin.math.abs(2f * srgb - 1f))
-        return (curved.coerceIn(0f, 1f) * 255f + 0.5f).toInt()
+        return (srgb + 0.12f * (srgb - 0.5f) * (1f - kotlin.math.abs(2f * srgb - 1f))).coerceIn(0f, 1f)
     }
 
     /**
