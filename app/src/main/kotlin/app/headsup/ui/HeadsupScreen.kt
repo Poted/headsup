@@ -255,7 +255,8 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
     val configuration = LocalConfiguration.current
     val wide = configuration.screenWidthDp > configuration.screenHeightDp
     // Room for the timeline and the tools under (or beside) the picture.
-    val previewMaxHeight = (configuration.screenHeightDp * (if (wide) 0.45f else 0.32f)).dp
+    // An album's photo gets most of the screen (no timeline under it).
+    val previewMaxHeight = (configuration.screenHeightDp * (if (wide) 0.45f else if (state.photoProject) 0.55f else 0.32f)).dp
 
     // The picture, its transport and the timeline.
     val pictureAndTimeline: @Composable ColumnScope.() -> Unit = {
@@ -345,7 +346,7 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
             }
             if (state.photoProject) {
                 // Photos only: no timeline, just the photos to pick (when there is more than one).
-                if (state.clips.size > 1) PhotoStrip(state, onSelect = vm::selectClip, onAdd = addPhotos)
+                if (state.clips.isNotEmpty()) PhotoStrip(state, vm, onAdd = addPhotos)
             } else if (state.clips.isNotEmpty()) {
                 Timeline(
                     state = state,
@@ -610,7 +611,7 @@ private fun FilesPanel(
     LazyRow(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
         item { CircleOption("▣", "Project", selected = section == "Project", modified = false) { section = "Project" } }
         item { CircleOption("▶", if (state.photoProject) "Photos" else "Video", selected = section == "Video", modified = state.clips.isNotEmpty()) { section = "Video" } }
-        item { CircleOption("♪", "Sound", selected = section == "Sound", modified = state.audioFiles.isNotEmpty()) { section = "Sound" } }
+        if (!state.photoProject) item { CircleOption("♪", "Sound", selected = section == "Sound", modified = state.audioFiles.isNotEmpty()) { section = "Sound" } }
         item { CircleOption("FIT", "Watch", selected = section == "FIT", modified = state.activities.isNotEmpty()) { section = "FIT" } }
     }
     when (section) {
@@ -2396,8 +2397,12 @@ private fun PhotoExport(state: UiState, vm: HeadsupViewModel) {
                 FilterChip(selected = settings.photoQuality == q, onClick = { vm.updateExportSettings { it.copy(photoQuality = q) } }, label = { Text(label) })
             }
         }
-        OutlinedButton(onClick = vm::exportPhotos, enabled = !state.busy, modifier = Modifier.fillMaxWidth()) {
-            Text(if (photoCount == 1) "Export the photo (JPEG)" else "Export $photoCount photos (JPEG)")
+        val selectedPhoto = state.selected?.meta?.isPhoto == true
+        if (selectedPhoto && photoCount > 1) {
+            Button(onClick = { vm.exportPhotos(onlySelected = true) }, enabled = !state.busy, modifier = Modifier.fillMaxWidth()) { Text("Export this photo (JPEG)") }
+        }
+        OutlinedButton(onClick = { vm.exportPhotos() }, enabled = !state.busy, modifier = Modifier.fillMaxWidth()) {
+            Text(if (photoCount == 1) "Export the photo (JPEG)" else "Export all $photoCount photos (JPEG)")
         }
     }
 }
@@ -2633,7 +2638,8 @@ private fun RawControls(clip: ClipState, index: Int, vm: HeadsupViewModel) {
 
 /** The photos of a photo project as thumbnails: tap one to edit it. */
 @Composable
-private fun PhotoStrip(state: UiState, onSelect: (Int) -> Unit, onAdd: () -> Unit) {
+private fun PhotoStrip(state: UiState, vm: HeadsupViewModel, onAdd: () -> Unit) {
+    val onSelect: (Int) -> Unit = vm::selectClip
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val thumbs = remember { Filmstrip(context, scope) }
@@ -2665,6 +2671,16 @@ private fun PhotoStrip(state: UiState, onSelect: (Int) -> Unit, onAdd: () -> Uni
                 Modifier.size(64.dp).clip(RoundedCornerShape(10.dp)).border(1.dp, HeadsupColors.Outline, RoundedCornerShape(10.dp)).clickable(onClick = onAdd),
                 contentAlignment = Alignment.Center,
             ) { Icon(HeadsupIcons.Add, contentDescription = "Add", tint = HeadsupColors.Highlight) }
+        }
+    }
+    // The selected photo: its place in the album, or out of it.
+    val i = state.selectedClip
+    if (i != null && i in state.clips.indices) {
+        Row(Modifier.padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+            Hint("${i + 1} of ${state.clips.size}", Modifier.weight(1f).padding(start = 4.dp))
+            SmallAction("◀ Move", { vm.moveClip(i, -1) }, enabled = i > 0)
+            SmallAction("Move ▶", { vm.moveClip(i, 1) }, enabled = i < state.clips.lastIndex)
+            SmallAction("Remove", { vm.removeClip(i) })
         }
     }
 }

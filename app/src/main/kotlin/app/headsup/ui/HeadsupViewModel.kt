@@ -1745,9 +1745,9 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
     fun exportOverlays() = enqueue(ExportKind.PNG_SEQUENCE, state.value.clips.indices.toList())
 
     /** Each photo on the timeline as a JPEG with its colours, framing, effects, dashboard and texts. */
-    fun exportPhotos() {
+    fun exportPhotos(onlySelected: Boolean = false) {
         val s = state.value.copy(compareGrade = null)
-        val photos = s.clips.withIndex().filter { it.value.meta.isPhoto }
+        val photos = s.clips.withIndex().filter { it.value.meta.isPhoto && (!onlySelected || it.index == s.selectedClip) }
         if (photos.isEmpty()) return
         if (android.os.Build.VERSION.SDK_INT < 33) {
             _state.update { it.copy(messages = it.messages + "Photo export needs Android 13 or newer.") }

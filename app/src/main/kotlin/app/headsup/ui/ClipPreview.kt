@@ -98,6 +98,7 @@ import app.headsup.export.AudioClip
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.requiredSize
 import androidx.compose.foundation.gestures.detectTransformGestures
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.drawscope.withTransform
 import app.headsup.color.GradeTables
@@ -646,13 +647,38 @@ fun ClipPreview(
     // The frame takes the reframe's shape; the picture is laid out under it, just covering it.
     val frameAspect = reframe.aspect ?: sourceAspect
 
+    // Looking closely at a photo: the view's zoom and pan (not the photo's framing).
+    val inspect = photoMode && onReframe == null && onMoveMask == null && onMoveText == null && onSample == null
+    var viewZoom by remember(clip.id) { mutableStateOf(1f) }
+    var viewPan by remember(clip.id) { mutableStateOf(Offset.Zero) }
     Column(Modifier.padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Box(
-            Modifier.fillMaxWidth().clip(RoundedCornerShape(20.dp)).background(Color.Black),
+            Modifier.fillMaxWidth().clip(RoundedCornerShape(20.dp)).background(Color.Black).then(
+                // A photo can be looked at closely: pinch to zoom the view, double tap to fit again
+                // (only when the picture is not being framed, masked or written on).
+                if (inspect) {
+                    Modifier
+                        .pointerInput(Unit) {
+                            detectTransformGestures { _, pan, zoomChange, _ ->
+                                viewZoom = (viewZoom * zoomChange).coerceIn(1f, 8f)
+                                viewPan = if (viewZoom <= 1.001f) Offset.Zero else viewPan + pan
+                            }
+                        }
+                        .pointerInput(Unit) { detectTapGestures(onDoubleTap = { viewZoom = if (viewZoom > 1.01f) 1f else 3f; viewPan = Offset.Zero }) }
+                } else Modifier,
+            ),
             contentAlignment = Alignment.Center,
         ) {
             BoxWithConstraints(
-                Modifier.heightIn(max = maxHeight).aspectRatio(frameAspect, matchHeightConstraintsFirst = true).clipToBounds(),
+                Modifier.heightIn(max = maxHeight).aspectRatio(frameAspect, matchHeightConstraintsFirst = true)
+                    .graphicsLayer {
+                        val z = if (inspect) viewZoom else 1f
+                        scaleX = z
+                        scaleY = z
+                        translationX = if (inspect) viewPan.x else 0f
+                        translationY = if (inspect) viewPan.y else 0f
+                    }
+                    .clipToBounds(),
                 contentAlignment = Alignment.Center,
             ) {
                 val boxW = constraints.maxWidth.toFloat()
