@@ -70,9 +70,11 @@ object PhotoExporter {
     /** Longest side read from the file (larger photos are read at half, quarter… size). */
     private const val MAX_SIDE = 10000
 
-    fun export(context: Context, request: PhotoRequest): Uri {
+    /** [onProgress] gets 0..1 as reading, developing, drawing and saving go. */
+    fun export(context: Context, request: PhotoRequest, onProgress: (Float) -> Unit = {}): Uri {
         // Raw photos are developed by the app at full size in half floats; others decoded by Android.
-        val full = if (request.raw) RawPhotos.developFull(context, request.uri, request.rawDevelop) else null
+        val full = if (request.raw) RawPhotos.developFull(context, request.uri, request.rawDevelop, onProgress) else null
+        onProgress(0.8f)
         val photo = full?.bitmap
             ?: (if (request.raw) RawPhotos.decode(context, request.uri, request.rawDevelop, MAX_SIDE) else null)
             ?: decodeUpright(context, request.uri) ?: error("Could not read ${request.name}")
@@ -128,6 +130,7 @@ object PhotoExporter {
         }
         val rendered = render(root, fw, fh)
         photo.recycle()
+        onProgress(0.92f)
         // Smaller on request (never larger than the photo).
         val target = request.longSide?.takeIf { it < maxOf(fw, fh) }
         val bitmap = if (target == null) rendered else {

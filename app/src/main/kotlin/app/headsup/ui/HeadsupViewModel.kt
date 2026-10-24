@@ -1954,7 +1954,13 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                         raw = clip.meta.isRaw,
                         rawDevelop = clip.rawDevelop,
                     )
-                    runCatching { withContext(Dispatchers.Default) { app.headsup.export.PhotoExporter.export(getApplication(), request) } }
+                    runCatching {
+                        withContext(Dispatchers.Default) {
+                            app.headsup.export.PhotoExporter.export(getApplication(), request) { p ->
+                                _state.update { it.copy(loadingProgress = (n + p.coerceIn(0f, 1f)) / photos.size) }
+                            }
+                        }
+                    }
                         .onSuccess { saved += clip.meta.name }
                         .onFailure { failed += "${clip.meta.name}: ${it.message ?: it.javaClass.simpleName}" }
                 }

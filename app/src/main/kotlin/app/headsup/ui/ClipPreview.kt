@@ -744,8 +744,20 @@ fun ClipPreview(
                     if (bitmap != null) Image(bitmap, contentDescription = clip.meta.name, contentScale = ContentScale.FillBounds, modifier = pictureLayer)
                     if (photoFrom != clip.meta.uri) {
                         // The next photo is being developed: the previous one is dimmed under a spinner.
-                        Box(Modifier.matchParentSize().background(Color.Black.copy(alpha = 0.45f)), contentAlignment = Alignment.Center) {
-                            androidx.compose.material3.CircularProgressIndicator(color = Color.White, strokeWidth = 3.dp, modifier = Modifier.size(36.dp))
+                        Box(Modifier.matchParentSize().background(Color.Black.copy(alpha = 0.55f)), contentAlignment = Alignment.Center) {
+                            androidx.compose.foundation.layout.Row(
+                                Modifier.clip(androidx.compose.foundation.shape.RoundedCornerShape(50)).background(Color.Black.copy(alpha = 0.7f))
+                                    .padding(horizontal = 18.dp, vertical = 10.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                androidx.compose.material3.CircularProgressIndicator(color = Color.White, strokeWidth = 2.5.dp, modifier = Modifier.size(20.dp))
+                                androidx.compose.foundation.layout.Spacer(Modifier.size(12.dp))
+                                androidx.compose.material3.Text(
+                                    if (raw) "Developing the raw…" else "Loading the photo…",
+                                    color = Color.White,
+                                    style = androidx.compose.material3.MaterialTheme.typography.labelLarge,
+                                )
+                            }
                         }
                     }
                 }

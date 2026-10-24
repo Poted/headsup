@@ -158,6 +158,9 @@ object Tags {
     const val CALIBRATION_ILLUMINANT_2 = 50779
     const val ACTIVE_AREA = 50829
     const val OPCODE_LIST_2 = 51009
+    const val FORWARD_MATRIX_1 = 50964
+    const val FORWARD_MATRIX_2 = 50965
+    const val BASELINE_EXPOSURE_OFFSET = 51109
     const val OPCODE_LIST_3 = 51022
 
     const val PHOTOMETRIC_CFA = 32803

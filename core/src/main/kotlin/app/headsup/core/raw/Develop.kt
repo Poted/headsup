@@ -16,7 +16,8 @@ class Developer(raw: RawImage, private val settings: RawDevelop = RawDevelop(), 
     private val s = step.coerceAtLeast(1)
     val width = raw.developedWidth / s
     val height = raw.developedHeight / s
-    private val rgbCam = Dng.cameraToSrgb(raw.colorMatrix)
+    // Balanced camera values to linear sRGB: the file's full colour model when it has one.
+    private val rgbCam = raw.balancedToSrgb ?: Dng.cameraToSrgb(raw.colorMatrix)
     private val gain: Float
     private val camera: CameraRows
 

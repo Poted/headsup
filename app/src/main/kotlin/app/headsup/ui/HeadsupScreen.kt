@@ -2741,6 +2741,7 @@ private fun RawControls(clip: ClipState, index: Int, vm: HeadsupViewModel) {
     )
     if (control == RawControl.SHARPEN || control == RawControl.NOISE) Hint("Judge these zoomed in: the export applies them at the photo's full size.")
     app.headsup.media.RawPhotos.lastError?.let { Hint("Developed by Android instead: $it") }
+        ?: app.headsup.media.RawPhotos.lastInfo?.takeIf { it.isNotEmpty() }?.let { Hint(it) }
 }
 
 /** The photos of a photo project as thumbnails: tap one to edit it. */

@@ -106,10 +106,12 @@ object RawPhotos {
      * outside the Java heap while it is developed and let go after; null when the app cannot
      * develop the file.
      */
-    fun developFull(context: Context, uri: Uri, develop: RawDevelop): FullPicture? {
+    fun developFull(context: Context, uri: Uri, develop: RawDevelop, onProgress: (Float) -> Unit = {}): FullPicture? {
         var remote: RemoteRaw? = null
         return try {
+            onProgress(0.05f)
             remote = RawReader.read(context, uri, 0, mosaic = true)
+            onProgress(0.4f)
             val raw = remote.image
             val dev = Developer(raw, develop)
             val w = dev.width
@@ -138,6 +140,7 @@ object RawPhotos {
                 strip.copyPixelsFromBuffer(bytes)
                 canvas.drawBitmap(strip, Rect(0, 0, w, n), Rect(0, y0, w, y0 + n), null)
                 y0 += n
+                onProgress(0.4f + 0.4f * y0 / dev.height)
             }
             strip.recycle()
             lastError = null
@@ -158,6 +161,11 @@ object RawPhotos {
 
     @Volatile
     var lastError: String? = null
+        private set
+
+    /** What the last raw read held (format, baseline, white, lens corrections), for the raw controls. */
+    @Volatile
+    var lastInfo: String? = null
         private set
 
     /**
@@ -246,6 +254,7 @@ object RawPhotos {
             RawReader.read(context, uri, maxSide, mosaic = false)
         }.onFailure { lastError = it.message }.getOrNull()?.also {
             lastError = null
+            lastInfo = it.image.info
             if (maxSide <= KEEP_SIDE) cached = Triple(uri, maxSide, it)
         }
     }

@@ -33,6 +33,10 @@ class RawImage(
     val channels: Int = 1,
     /** The DNG's opcode list 3 (corrections of the demosaiced picture), as stored. */
     val opcodes3: ByteArray? = null,
+    /** White-balanced camera values to linear sRGB by the DNG colour model, or null for the simple one from [colorMatrix]. */
+    val balancedToSrgb: DoubleArray? = null,
+    /** What was found in the file and is applied, in a line (shown with the raw controls). */
+    val info: String = "",
 ) {
     /** Vignetting and lens distortion corrections the camera wrote for this picture. */
     val corrections: List<Opcode> by lazy { Opcode.parse(opcodes3) }
@@ -173,6 +177,7 @@ object Dng {
         val matrix: DoubleArray, val neutral: DoubleArray, val baseline: Double, val make: String, val model: String, val orientation: Int,
         /** Lens shading and similar gains on the raw values (opcode list 2). */
         val gainMaps: List<Opcode.GainMap>, val opcodes3: ByteArray?,
+        val balancedToSrgb: DoubleArray?, val info: String,
     )
 
     private fun layoutOf(source: RawSource): Layout {
@@ -221,17 +226,45 @@ object Dng {
             else -> cm2 ?: cm1
         } ?: throw RawException("No colour matrix")
         val neutral = ifd0.doubles(Tags.AS_SHOT_NEUTRAL)?.takeIf { it.size >= 3 } ?: doubleArrayOf(1.0, 1.0, 1.0)
+        val balanced = doubleArrayOf(neutral[0] / neutral[1], 1.0, neutral[2] / neutral[1])
+        val colour = runCatching {
+            DngColour.transform(
+                DngColour.Calibration(cm1, cm2, ifd0.doubles(Tags.FORWARD_MATRIX_1), ifd0.doubles(Tags.FORWARD_MATRIX_2), ill1, ill2),
+                balanced,
+            )
+        }.getOrNull()
+        // The profile's offset is part of the baseline, as Adobe's converters read it.
+        val baseline = (ifd0.doubles(Tags.BASELINE_EXPOSURE)?.firstOrNull() ?: 0.0) + (ifd0.doubles(Tags.BASELINE_EXPOSURE_OFFSET)?.firstOrNull() ?: 0.0)
+        val allGainMaps = Opcode.parse(raw.bytes(Tags.OPCODE_LIST_2)).filterIsInstance<Opcode.GainMap>()
+        // Maps for a mosaic's positions mean nothing on a linear (RGB) image.
+        val gainMaps = allGainMaps.filter { cfa || (it.rowPitch == 1 && it.colPitch == 1) }
+        val opcodes3 = raw.bytes(Tags.OPCODE_LIST_3)
+        val corrections = Opcode.parse(opcodes3)
+        val info = listOfNotNull(
+            when (compression) {
+                Tags.COMPRESSION_JPEG_XL -> "JPEG XL"
+                Tags.COMPRESSION_LOSSLESS_JPEG -> "lossless JPEG"
+                Tags.COMPRESSION_NONE -> "uncompressed"
+                else -> "compression $compression"
+            } + if (cfa) " mosaic" else " linear",
+            String.format(java.util.Locale.US, "baseline %+.2f EV", baseline),
+            colour?.let { "white ${it.kelvin} K, ${if (it.forward) "forward matrix" else "colour matrix"}" },
+            "lens shading ${gainMaps.size}/${allGainMaps.size}".takeIf { allGainMaps.isNotEmpty() },
+            corrections.joinToString(", ") {
+                when (it) {
+                    is Opcode.WarpRectilinear -> "distortion (${it.planes} planes)"
+                    is Opcode.FixVignetteRadial -> "vignetting"
+                    is Opcode.GainMap -> "gain map"
+                }
+            }.takeIf { it.isNotEmpty() },
+        ).joinToString(" · ")
         return Layout(
             cfa, width, height, compression, bits, spp, offsets, counts, tileW, tileH, tiff.littleEndian,
             pattern, black, white, blackRaw.first(), whiteRaw ?: 65535.0,
-            matrix.copyOf(9), doubleArrayOf(neutral[0] / neutral[1], 1.0, neutral[2] / neutral[1]),
-            ifd0.doubles(Tags.BASELINE_EXPOSURE)?.firstOrNull() ?: 0.0,
+            matrix.copyOf(9), balanced, baseline,
             ifd0.string(Tags.MAKE).orEmpty(), ifd0.string(Tags.MODEL).orEmpty(),
             ifd0.long(Tags.ORIENTATION)?.toInt() ?: 1,
-            Opcode.parse(raw.bytes(Tags.OPCODE_LIST_2)).filterIsInstance<Opcode.GainMap>()
-                // Maps for a mosaic's positions mean nothing on a linear (RGB) image.
-                .filter { cfa || (it.rowPitch == 1 && it.colPitch == 1) },
-            raw.bytes(Tags.OPCODE_LIST_3),
+            gainMaps, opcodes3, colour?.balancedToSrgb, info,
         )
     }
 
@@ -273,6 +306,7 @@ object Dng {
     private fun image(l: Layout, r: Reducer, data: java.nio.ShortBuffer) = RawImage(
         r.width, r.height, data, intArrayOf(0, 1, 1, 2), FloatArray(4), 65535f, l.matrix, l.neutral,
         l.baseline, l.make, l.model, l.orientation, channels = 3, opcodes3 = l.opcodes3,
+        balancedToSrgb = l.balancedToSrgb, info = l.info,
     )
 
     /** 16-bit samples read front to back in the file's byte order. */
@@ -345,6 +379,7 @@ object Dng {
             return RawImage(
                 l.width, l.height, mosaic, at, l.black, l.white, l.matrix, l.neutral,
                 l.baseline, l.make, l.model, l.orientation, channels = 1, opcodes3 = l.opcodes3,
+                balancedToSrgb = l.balancedToSrgb, info = l.info,
             )
         }
         return image(l, r!!, r.finish())
