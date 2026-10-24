@@ -80,7 +80,7 @@ data class ProjectData(
 }
 
 /** A saved project as listed; [bytes] is the space its copied media take (shared copies counted in each). */
-data class ProjectInfo(val name: String, val modifiedMs: Long, val bytes: Long = 0L)
+data class ProjectInfo(val name: String, val modifiedMs: Long, val bytes: Long = 0L, val kind: ProjectKind = ProjectKind.VIDEO)
 
 /** Projects as JSON files in the app's private storage; the last one used reopens on start. */
 class ProjectStore(context: Context) {

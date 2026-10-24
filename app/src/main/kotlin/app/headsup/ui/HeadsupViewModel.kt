@@ -659,7 +659,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
         it.copy(
             projects = projectStore.list().map { info ->
                 val p = runCatching { projectStore.load(info.name) }.getOrNull()
-                info.copy(bytes = p?.let { d -> library.sizeOf(d.mediaUris) } ?: 0L)
+                info.copy(bytes = p?.let { d -> library.sizeOf(d.mediaUris) } ?: 0L, kind = p?.kind ?: ProjectKind.VIDEO)
             },
         )
     }
@@ -1957,7 +1957,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                 )
             }
             if (requests.isEmpty()) {
-                val why = if (kind == ExportKind.PNG_SEQUENCE) "the dashboard needs watch data, and no clip is matched to an activity." else "no clips."
+                val why = if (kind == ExportKind.PNG_SEQUENCE) "the dashboard needs activity data, and no clip is matched to an activity." else "no clips."
                 _state.update { it.copy(messages = it.messages + "Nothing to export: $why") }
             } else {
                 exportManager.enqueue(jobsFor(kind, requests, s))

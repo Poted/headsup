@@ -30,8 +30,7 @@ data class PhotoInfo(
 
         fun read(context: Context, uri: Uri): PhotoInfo = cache.getOrPut(uri) {
             runCatching {
-                context.contentResolver.openInputStream(uri)?.use { s ->
-                    val e = ExifInterface(s)
+                Exif.read(context, uri)?.let { e ->
                     val ll = FloatArray(2)
                     val hasLocation = e.getLatLong(ll)
                     PhotoInfo(

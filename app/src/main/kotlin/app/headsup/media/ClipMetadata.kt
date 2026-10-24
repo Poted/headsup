@@ -151,7 +151,7 @@ object ClipMetadataReader {
         val rawSize = if (RawPhotos.looksRaw(context, uri)) RawPhotos.size(context, uri) else null
         val bounds = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
         if (rawSize == null) context.contentResolver.openInputStream(uri)?.use { android.graphics.BitmapFactory.decodeStream(it, null, bounds) }
-        val exif = runCatching { context.contentResolver.openInputStream(uri)?.use { android.media.ExifInterface(it) } }.getOrNull()
+        val exif = Exif.read(context, uri)
         val orientation = exif?.getAttributeInt(android.media.ExifInterface.TAG_ORIENTATION, android.media.ExifInterface.ORIENTATION_NORMAL)
         val rotated = orientation == android.media.ExifInterface.ORIENTATION_ROTATE_90 || orientation == android.media.ExifInterface.ORIENTATION_ROTATE_270
         val evidence = listOfNotNull(

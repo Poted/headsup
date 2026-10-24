@@ -159,7 +159,6 @@ import androidx.compose.ui.input.pointer.pointerInput
 import app.headsup.core.track.ActivityTrack
 
 private val DOWNLOADS_FOLDER: Uri = DocumentsContract.buildDocumentUri("com.android.externalstorage.documents", "primary:Download")
-private val DCIM_FOLDER: Uri = DocumentsContract.buildDocumentUri("com.android.externalstorage.documents", "primary:DCIM")
 
 /** File picker that opens in [initial] instead of the last used folder. */
 private class OpenDocumentsIn(private val initial: Uri) : ActivityResultContracts.OpenMultipleDocuments() {
@@ -183,16 +182,13 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
     // FIT files usually land in Downloads; videos are picked from the gallery.
     val fitPicker = rememberLauncherForActivityResult(OpenDocumentsIn(DOWNLOADS_FOLDER)) { vm.addActivities(it) }
     val videoPicker = rememberLauncherForActivityResult(ActivityResultContracts.PickMultipleVisualMedia()) { vm.addClips(it) }
-    // Raw photos from the files: the gallery's picker hands over only a small JPEG preview of a DNG.
-    val rawPicker = rememberLauncherForActivityResult(OpenDocumentsIn(DCIM_FOLDER)) { vm.addClips(it) }
     val lutPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri -> uri?.let(vm::importLut) }
     // Sound files usually come from Downloads (the picker can go to Music from there).
     val soundPicker = rememberLauncherForActivityResult(OpenDocumentsIn(DOWNLOADS_FOLDER)) { vm.addAudioFiles(it) }
     val addFit = { fitPicker.launch(arrayOf("*/*")) }
     val addVideos = { videoPicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageAndVideo)) }
-    // An album adds photos from the files: the originals (a gallery picker hands over only a
-    // small JPEG of a raw photo), JPEG, HEIC, PNG and DNG alike.
-    val addPhotos = { rawPicker.launch(arrayOf("image/*")) }
+    // One way in, the gallery: an album takes photos only. A raw (DNG) file is recognised by its content.
+    val addPhotos = { videoPicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) }
 
     // The progress notification needs this on Android 13+; export works without it.
     var pendingExport by remember { mutableStateOf<(() -> Unit)?>(null) }
@@ -286,7 +282,7 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
             // The picture stays on screen while any tool below is being used.
             val selected = state.selected
             when {
-                selected == null -> EmptyState(hasActivities = state.activities.isNotEmpty(), onAddFit = addFit, onAddVideos = if (state.photoProject) addPhotos else addVideos)
+                selected == null -> EmptyState(state.photoProject)
                 exporting -> Box(
                     Modifier.padding(horizontal = 16.dp).fillMaxWidth().height(120.dp).clip(RoundedCornerShape(20.dp)).background(HeadsupColors.Surface),
                     contentAlignment = Alignment.Center,
@@ -473,7 +469,6 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
                 when (tool) {
                     Tool.FILES -> FilesPanel(
                         state, vm, onAddVideos = addVideos, onAddFit = addFit, onAddSound = { soundPicker.launch(arrayOf("audio/*")) },
-                        onAddRaw = { rawPicker.launch(arrayOf("image/*")) },
                         onAddPhotos = addPhotos,
                         onShowClip = { i -> jumpTo(clipStarts[i]) },
                     )
@@ -560,17 +555,12 @@ private fun BottomToolbar(selected: Tool, tools: List<Tool>, onSelect: (Tool) ->
     }
 }
 @Composable
-private fun EmptyState(hasActivities: Boolean, onAddFit: () -> Unit, onAddVideos: () -> Unit) {
-    Column(
-        Modifier.padding(horizontal = 16.dp).fillMaxWidth().clip(RoundedCornerShape(20.dp)).background(HeadsupColors.Surface).padding(20.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
+private fun EmptyState(photoProject: Boolean) {
+    Box(
+        Modifier.padding(horizontal = 16.dp).fillMaxWidth().height(120.dp).clip(RoundedCornerShape(20.dp)).background(HeadsupColors.Surface).padding(20.dp),
+        contentAlignment = Alignment.Center,
     ) {
-        Text("Start a project", style = MaterialTheme.typography.titleMedium)
-        Hint("Clips are matched to your watch data automatically by their recording time.")
-        Button(onClick = onAddFit, modifier = Modifier.fillMaxWidth()) {
-            Text(if (hasActivities) "1. Activity added ✓  (add another)" else "1. Add the FIT file from your watch")
-        }
-        Button(onClick = onAddVideos, modifier = Modifier.fillMaxWidth()) { Text("2. Add videos") }
+        Hint(if (photoProject) "Add photos below to start the album." else "Add videos or photos below to start the film.")
     }
 }
 
@@ -645,7 +635,6 @@ private fun FilesPanel(
     onAddFit: () -> Unit,
     onAddSound: () -> Unit,
     onShowClip: (Int) -> Unit,
-    onAddRaw: () -> Unit,
     onAddPhotos: () -> Unit,
 ) {
     // As on the Colour page: a row of sections, one shown. Everything the project uses is copied in
@@ -655,7 +644,7 @@ private fun FilesPanel(
         item { CircleOption("▣", "Project", selected = section == "Project", modified = false) { section = "Project" } }
         item { CircleOption("▶", if (state.photoProject) "Photos" else "Video", selected = section == "Video", modified = state.clips.isNotEmpty()) { section = "Video" } }
         if (!state.photoProject) item { CircleOption("♪", "Sound", selected = section == "Sound", modified = state.audioFiles.isNotEmpty()) { section = "Sound" } }
-        item { CircleOption("FIT", "Watch", selected = section == "FIT", modified = state.activities.isNotEmpty()) { section = "FIT" } }
+        item { CircleOption("FIT", "Activity", selected = section == "FIT", modified = state.activities.isNotEmpty()) { section = "FIT" } }
     }
     when (section) {
         "Project" -> ProjectRow(state, vm)
@@ -665,24 +654,16 @@ private fun FilesPanel(
         }
         "FIT" -> {
             AddTile(HeadsupIcons.Watch, "FIT file", onAddFit, Modifier.fillMaxWidth())
-            if (state.activities.isEmpty()) Hint("The .FIT file(s) from your watch, for the dashboard.")
+            if (state.activities.isEmpty()) Hint("The .FIT file(s) of the activity, from a watch, a band or a chest strap: for the dashboard, the data texts and the map.")
             state.activities.forEachIndexed { i, a -> ActivityRow(a, onRemove = { vm.removeActivity(i) }) }
         }
-        else -> VideoFiles(state, vm, if (state.photoProject) onAddPhotos else onAddVideos, onAddRaw, onShowClip)
+        else -> VideoFiles(state, vm, if (state.photoProject) onAddPhotos else onAddVideos, onShowClip)
     }
 }
 
 @Composable
-private fun VideoFiles(state: UiState, vm: HeadsupViewModel, onAddVideos: () -> Unit, onAddRaw: () -> Unit, onShowClip: (Int) -> Unit) {
-    if (state.photoProject) {
-        AddTile(HeadsupIcons.Video, "Photo", onAddVideos, Modifier.fillMaxWidth())
-    } else {
-        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            AddTile(HeadsupIcons.Video, "Video · photo", onAddVideos, Modifier.weight(1f))
-            // The gallery's picker gives only a small preview of a raw (DNG) photo; the files give the original.
-            AddTile(HeadsupIcons.Colour, "RAW photo", onAddRaw, Modifier.weight(1f))
-        }
-    }
+private fun VideoFiles(state: UiState, vm: HeadsupViewModel, onAdd: () -> Unit, onShowClip: (Int) -> Unit) {
+    AddTile(HeadsupIcons.Video, if (state.photoProject) "Photos" else "Videos and photos", onAdd, Modifier.fillMaxWidth())
     run {
         if (state.clips.isEmpty()) Hint("From the gallery or the cloud; copied into the project.")
         // One row per file, however many times it is cut on the timeline.
@@ -1042,7 +1023,7 @@ private fun HighlightControls(state: UiState, vm: HeadsupViewModel, onShow: (Fou
         }
     }
     if (found == null) {
-        Hint("Finds the best moments from your watch data (speed, descents, climbs, peaks) in the clips.")
+        Hint("Finds the best moments from your activity data (speed, descents, climbs, peaks) in the clips.")
         return
     }
     if (found.isEmpty()) {
@@ -1154,9 +1135,15 @@ private fun ProjectRow(state: UiState, vm: HeadsupViewModel) {
         AddTile(HeadsupIcons.Video, "New film", { vm.newProject(ProjectKind.VIDEO) }, Modifier.weight(1f))
         AddTile(HeadsupIcons.Colour, "New album", { vm.newProject(ProjectKind.PHOTOS) }, Modifier.weight(1f))
     }
-    Label("Projects")
-    if (state.projects.isEmpty()) Hint("No saved projects yet. A project is saved once it has files.")
-    for (p in state.projects) {
+    if (state.projects.isEmpty()) {
+        Label("Projects")
+        Hint("No saved projects yet. A project is saved once it has files.")
+    }
+    // Films and albums listed apart, the kind open now first.
+    val first = if (state.photoProject) ProjectKind.PHOTOS else ProjectKind.VIDEO
+    val listed = state.projects.sortedBy { it.kind != first }
+    for ((i, p) in listed.withIndex()) {
+        if (i == 0 || listed[i - 1].kind != p.kind) Label(if (p.kind == ProjectKind.PHOTOS) "Albums" else "Films")
         val current = p.name == state.projectName
         Row(
             Modifier
@@ -1424,7 +1411,7 @@ private fun sourceLabel(source: TimeSource) = when (source) {
 
 private fun zoneLabel(reason: ZoneReason, offset: Int) = when (reason) {
     ZoneReason.AS_UTC -> "UTC"
-    ZoneReason.ACTIVITY_ZONE -> "watch time zone (${Formats.utcOffset(offset)})"
+    ZoneReason.ACTIVITY_ZONE -> "activity time zone (${Formats.utcOffset(offset)})"
     ZoneReason.DEVICE_ZONE -> "phone time zone (${Formats.utcOffset(offset)})"
     ZoneReason.SEARCHED -> "guessed time zone (${Formats.utcOffset(offset)})"
 }
@@ -2416,7 +2403,7 @@ private fun ExportControls(
     Button(onClick = onExportVideos, enabled = state.clips.isNotEmpty(), modifier = Modifier.fillMaxWidth()) {
         Text(if (settings.wholeTimeline) "Export timeline" else "Export ${state.clips.size} clips")
     }
-    Hint("Colour, effects, framing, speed; the dashboard where there is watch data. → ${MediaStoreOutput.VIDEO_FOLDER}")
+    Hint("Colour, effects, framing, speed; the dashboard where there is activity data. → ${MediaStoreOutput.VIDEO_FOLDER}")
 
     Label("Dashboard")
     val canOverlay = state.clips.any { it.sync != null }
@@ -2804,7 +2791,7 @@ private fun RouteMapControls(state: UiState, vm: HeadsupViewModel) {
         Switch(checked = map.enabled, onCheckedChange = { on -> vm.updateRouteMap { it.copy(enabled = on) } }, enabled = hasRoute)
     }
     if (!hasRoute) {
-        Hint("Needs a FIT file with GPS (Files → Watch).")
+        Hint("Needs a FIT file with GPS (Files → Activity).")
         return
     }
     if (!map.enabled) return
@@ -2827,7 +2814,7 @@ private fun RouteMapControls(state: UiState, vm: HeadsupViewModel) {
         Spacer(Modifier.width(8.dp))
         FilterChip(selected = map.marker, onClick = { vm.updateRouteMap { it.copy(marker = !it.marker) } }, label = { Text("Where it is") })
     }
-    Hint("Drag on the picture to place it. The dot shows where the clip or photo is: the photo's GPS, or the watch's position at that moment.")
+    Hint("Drag on the picture to place it. The dot shows where the clip or photo is: the photo's GPS, or the activity's position at that moment.")
 }
 
 /** Draws the route map for [clip] at a position in it (the marker follows the clip). */

@@ -152,9 +152,7 @@ object PhotoExporter {
         val raw = context.contentResolver.openInputStream(uri)?.use {
             BitmapFactory.decodeStream(it, null, BitmapFactory.Options().apply { inSampleSize = sample })
         } ?: return null
-        val orientation = context.contentResolver.openInputStream(uri)?.use {
-            ExifInterface(it).getAttributeInt(ExifInterface.TAG_ORIENTATION, ExifInterface.ORIENTATION_NORMAL)
-        } ?: ExifInterface.ORIENTATION_NORMAL
+        val orientation = app.headsup.media.Exif.orientation(context, uri)
         val degrees = when (orientation) {
             ExifInterface.ORIENTATION_ROTATE_90 -> 90f
             ExifInterface.ORIENTATION_ROTATE_180 -> 180f

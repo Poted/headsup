@@ -51,6 +51,23 @@ data class RawDevelop(
 )
 
 object Dng {
+    /**
+     * Size of the developed picture (upright) and whether it is a raw the app can develop, from
+     * the directories only, so [head] can be just the start of the file; null when unsure.
+     */
+    fun probe(head: ByteArray): Pair<Int, Int>? = runCatching {
+        val tiff = Tiff(head)
+        val ifd0 = tiff.directories.first()
+        val raw = tiff.directories.firstOrNull { (it.long(Tags.NEW_SUBFILE_TYPE) ?: 0L) == 0L && it.long(Tags.PHOTOMETRIC)?.toInt() in setOf(Tags.PHOTOMETRIC_CFA, Tags.PHOTOMETRIC_LINEAR_RAW) }
+            ?: return@runCatching null
+        val cfa = raw.long(Tags.PHOTOMETRIC)!!.toInt() == Tags.PHOTOMETRIC_CFA
+        if (cfa && raw.long(Tags.COMPRESSION)?.toInt() == Tags.COMPRESSION_JPEG_XL) return@runCatching null
+        val w = raw.long(Tags.IMAGE_WIDTH)!!.toInt().let { if (cfa) it / 2 else it }
+        val h = raw.long(Tags.IMAGE_LENGTH)!!.toInt().let { if (cfa) it / 2 else it }
+        val o = ifd0.long(Tags.ORIENTATION)?.toInt() ?: 1
+        if (o == 6 || o == 8) h to w else w to h
+    }.getOrNull()
+
     /** Reads the raw image of a DNG (Bayer mosaic; uncompressed or lossless JPEG). */
     fun read(bytes: ByteArray): RawImage {
         val tiff = Tiff(bytes)
@@ -81,7 +98,10 @@ object Dng {
             val len = counts[t].toInt()
             when (compression) {
                 Tags.COMPRESSION_LOSSLESS_JPEG -> {
-                    val f = LosslessJpeg.decode(bytes, off, len)
+                    // One tile holding the whole picture decodes straight into it.
+                    val whole = offsets.size == 1 && x0 == 0 && y0 == 0 && tileW == width && tileH >= height
+                    val f = LosslessJpeg.decode(bytes, off, len, into = if (whole) data else null)
+                    if (f.samples === data) continue
                     // The decoded samples fill the tile row by row, however the JPEG frame is shaped
                     // (cameras pack two columns as two components, or two rows into one JPEG row).
                     val total = minOf(f.samples.size, tileW * tileH)

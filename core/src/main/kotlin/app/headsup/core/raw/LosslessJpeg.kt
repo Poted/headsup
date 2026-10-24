@@ -13,7 +13,11 @@ object LosslessJpeg {
         val lookup = IntArray(1 shl 9) { -1 }
     }
 
-    fun decode(data: ByteArray, offset: Int = 0, length: Int = data.size - offset): Frame {
+    /**
+     * [into], when given and of the frame's size, receives the samples instead of a new array
+     * (a whole raw image in one tile then needs no second copy in memory).
+     */
+    fun decode(data: ByteArray, offset: Int = 0, length: Int = data.size - offset, into: ShortArray? = null): Frame {
         var pos = offset
         val end = offset + length
         fun u8() = data[pos++].toInt() and 0xFF
@@ -75,7 +79,7 @@ object LosslessJpeg {
                     val pointTransform = u8() and 0x0F
                     pos = start + len - 2
                     if (width == 0 || height == 0 || components == 0) throw RawException("Lossless JPEG: no frame header")
-                    val samples = ShortArray(width * height * components)
+                    val samples = into?.takeIf { it.size == width * height * components } ?: ShortArray(width * height * components)
                     decodeScan(data, pos, end, width, height, components, precision, predictor, pointTransform, restart, Array(components) { tables[compTable[it]] ?: throw RawException("Lossless JPEG: missing Huffman table") }, samples)
                     return Frame(width, height, components, precision, samples)
                 }

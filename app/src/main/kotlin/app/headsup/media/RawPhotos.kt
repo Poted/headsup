@@ -27,17 +27,32 @@ object RawPhotos {
 
     /** Size of the developed picture (upright), or null when the app cannot develop the file. */
     fun size(context: Context, uri: Uri): Pair<Int, Int>? {
-        val raw = read(context, uri) ?: return null
-        val w = raw.developedWidth
-        val h = raw.developedHeight
-        return if (raw.orientation == 6 || raw.orientation == 8) h to w else w to h
+        // From the file's directories only (its first few MB), not by decoding the whole picture.
+        val head = runCatching {
+            context.contentResolver.openInputStream(uri)?.use { s ->
+                val buf = ByteArray(4 shl 20)
+                var n = 0
+                while (n < buf.size) { val r = s.read(buf, n, buf.size - n); if (r < 0) break; n += r }
+                buf.copyOf(n)
+            }
+        }.getOrNull() ?: return null
+        return Dng.probe(head)
     }
 
     /**
      * [uri] developed with [develop], at most about [maxSide] on its long side, upright; null when
      * the file is not one the app can develop (the reason in [lastError]), so callers fall back.
      */
-    fun decode(context: Context, uri: Uri, develop: RawDevelop, maxSide: Int): Bitmap? {
+    fun decode(context: Context, uri: Uri, develop: RawDevelop, maxSide: Int): Bitmap? = try {
+        developed(context, uri, develop, maxSide)
+    } catch (e: OutOfMemoryError) {
+        // Too large for the memory left: the caller falls back to Android's decoder.
+        synchronized(lock) { cached = null }
+        lastError = "Not enough memory to develop this file"
+        null
+    }
+
+    private fun developed(context: Context, uri: Uri, develop: RawDevelop, maxSide: Int): Bitmap? {
         val raw = read(context, uri) ?: return null
         val full = maxOf(raw.developedWidth, raw.developedHeight)
         val step = ((full + maxSide - 1) / maxSide).coerceAtLeast(1)
@@ -50,19 +65,33 @@ object RawPhotos {
             else -> 0f
         }
         if (degrees == 0f) return bitmap
-        return Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, Matrix().apply { postRotate(degrees) }, true)
+        return Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, Matrix().apply { postRotate(degrees) }, true).also { if (it !== bitmap) bitmap.recycle() }
     }
 
     @Volatile
     var lastError: String? = null
         private set
 
+    /** The whole file in one array of its exact size (no growing copies of a 70 MB file). */
+    private fun readAll(context: Context, uri: Uri): ByteArray {
+        val size = runCatching { context.contentResolver.openFileDescriptor(uri, "r")?.use { it.statSize } }.getOrNull() ?: -1L
+        return context.contentResolver.openInputStream(uri)?.use { s ->
+            if (size in 1 until Int.MAX_VALUE) {
+                val buf = ByteArray(size.toInt())
+                var n = 0
+                while (n < buf.size) { val r = s.read(buf, n, buf.size - n); if (r < 0) break; n += r }
+                if (n == buf.size) buf else buf.copyOf(n)
+            } else s.readBytes()
+        } ?: error("Cannot open the file")
+    }
+
     private fun read(context: Context, uri: Uri): RawImage? = synchronized(lock) {
         cached?.takeIf { it.first == uri }?.let { return it.second }
         return runCatching {
-            val bytes = context.contentResolver.openInputStream(uri)?.use { it.readBytes() } ?: error("Cannot open the file")
+            cached = null // the previous file's data goes before the next one is read
+            val bytes = readAll(context, uri)
             Dng.read(bytes)
-        }.onFailure { lastError = it.message }.getOrNull()?.also {
+        }.onFailure { lastError = if (it is OutOfMemoryError) "Not enough memory to develop this file" else it.message }.getOrNull()?.also {
             lastError = null
             cached = uri to it
         }

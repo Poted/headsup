@@ -235,11 +235,16 @@ fun ClipPreview(
     // A raw (DNG) photo is developed by the app, again whenever its development changes.
     val raw = photo && clip.meta.isRaw
     val photoBitmap by produceState<ImageBitmap?>(null, clip.meta.uri, photo, if (raw) clip.rawDevelop else null) {
-        value = if (photo) {
-            withContext(Dispatchers.Default) {
+        if (!photo) { value = null; return@produceState }
+        // Tried again a few times: while a project opens, other reads of the same files may hold
+        // the memory or the file for a moment.
+        for (attempt in 0 until 3) {
+            val bitmap = withContext(Dispatchers.Default) {
                 (if (raw) RawPhotos.decode(context, clip.meta.uri, clip.rawDevelop, 2048)?.asImageBitmap() else null) ?: decodePhoto(context, clip.meta.uri)
             }
-        } else null
+            if (bitmap != null) { value = bitmap; return@produceState }
+            delay(400L * (attempt + 1))
+        }
     }
     fun keyOf(c: ClipState): Any = Triple(sourceOf(c), c.trimStartMs, c.trimEndMs)
     fun clipped(c: ClipState) = MediaItem.Builder()
@@ -1003,9 +1008,7 @@ private fun decodePhoto(context: android.content.Context, uri: android.net.Uri):
     while (maxOf(bounds.outWidth, bounds.outHeight) / (sample * 2) >= 2048) sample *= 2
     val opts = android.graphics.BitmapFactory.Options().apply { inSampleSize = sample }
     val raw = context.contentResolver.openInputStream(uri)?.use { android.graphics.BitmapFactory.decodeStream(it, null, opts) } ?: return@runCatching null
-    val orientation = context.contentResolver.openInputStream(uri)?.use {
-        android.media.ExifInterface(it).getAttributeInt(android.media.ExifInterface.TAG_ORIENTATION, android.media.ExifInterface.ORIENTATION_NORMAL)
-    } ?: android.media.ExifInterface.ORIENTATION_NORMAL
+    val orientation = app.headsup.media.Exif.orientation(context, uri)
     val degrees = when (orientation) {
         android.media.ExifInterface.ORIENTATION_ROTATE_90 -> 90f
         android.media.ExifInterface.ORIENTATION_ROTATE_180 -> 180f
