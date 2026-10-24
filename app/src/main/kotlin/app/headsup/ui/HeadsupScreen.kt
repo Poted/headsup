@@ -162,7 +162,6 @@ private enum class Tool(val label: String, val icon: ImageVector) {
     EDIT("Edit", HeadsupIcons.Cut),
     COLOUR("Colour", HeadsupIcons.Colour),
     EFFECTS("Effects", HeadsupIcons.Dashboard),
-    TEXT("Text", HeadsupIcons.Text),
     AUDIO("Audio", HeadsupIcons.Music),
     EXPORT("Export", HeadsupIcons.Export),
 }
@@ -201,6 +200,8 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
     var effectKind by rememberSaveable { mutableStateOf(EffectKind.DASHBOARD) }
     var editTab by rememberSaveable { mutableStateOf(EditTab.CUT) }
     val framing = tool == Tool.EDIT && editTab == EditTab.FRAME
+    // Texts are edited among the effects.
+    val editingTexts = tool == Tool.EFFECTS && effectKind == EffectKind.TEXT
     // Set when a clip ended during playback, so the next one starts playing on its own.
     var continuePlaying by remember { mutableStateOf(false) }
     // Where to jump in the selected clip, e.g. after tapping a highlight.
@@ -306,7 +307,7 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
                         sourceOf = { state.previewSource(it) },
                         neighbourCubes = state.previewNeighbourCubes,
                         texts = state.texts,
-                        onMoveText = state.selectedText?.takeIf { tool == Tool.TEXT }?.let { id -> { x, y -> vm.updateText(id) { it.copy(x = x, y = y) } } },
+                        onMoveText = state.selectedText?.takeIf { editingTexts }?.let { id -> { x, y -> vm.updateText(id) { it.copy(x = x, y = y) } } },
                         cutScrub = cutScrub,
                         onFrameSource = { frameSource.value = it },
                         reframe = state.framing(selected),
@@ -373,7 +374,7 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
                     },
                     onAdd = addVideos,
                     onAddSound = { addingSound = true },
-                    texts = if (tool == Tool.TEXT) state.texts else emptyList(),
+                    texts = if (editingTexts) state.texts else emptyList(),
                     onSelectText = vm::selectText,
                     onMoveText = { id, start -> vm.updateText(id) { it.copy(startMs = start) } },
                     showAudio = tool == Tool.AUDIO,
@@ -433,8 +434,12 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
                         state, vm, adjustment, { adjustment = it }, onAddLut = { lutPicker.launch(arrayOf("*/*")) }, frameSource.value,
                         playhead, onSeek = { seekRequest = it },
                     )
-                    Tool.EFFECTS -> EffectsPanel(state, vm, effectKind, playhead) { effectKind = it }
-                    Tool.TEXT -> TextPanel(state, vm, at = { scrubT.value ?: timelineOf(playhead.longValue) })
+                    Tool.EFFECTS -> if (effectKind == EffectKind.TEXT) {
+                        EffectKinds(state, effectKind) { effectKind = it }
+                        TextPanel(state, vm, at = { scrubT.value ?: timelineOf(playhead.longValue) })
+                    } else {
+                        EffectsPanel(state, vm, effectKind, playhead) { effectKind = it }
+                    }
                     Tool.EXPORT -> ExportControls(
                         state = state,
                         vm = vm,
@@ -2027,7 +2032,28 @@ private fun FramePanel(state: UiState, vm: HeadsupViewModel) {
 
 // Effects page
 
+/** The row of effects; texts (for the whole timeline) are one of them. */
+@Composable
+private fun EffectKinds(state: UiState, kind: EffectKind, onKind: (EffectKind) -> Unit) {
+    val effects = state.effects
+    LazyRow(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+        items(EffectKind.entries) { e ->
+            val active = when (e) {
+                EffectKind.TEXT -> state.texts.isNotEmpty()
+                EffectKind.DASHBOARD -> state.style.enabled
+                EffectKind.GRAPH -> effects.graph != null
+                EffectKind.GRAIN -> effects.grain > 0f
+                EffectKind.GLOW -> effects.glow > 0f
+                EffectKind.HALATION -> effects.halation > 0f
+                EffectKind.BARS -> effects.barsRatio != null
+            }
+            CircleOption(e.symbol, e.label, selected = e == kind, modified = active) { onKind(e) }
+        }
+    }
+}
+
 private enum class EffectKind(val symbol: String, val label: String) {
+    TEXT("T", "Text"),
     DASHBOARD("HUD", "Dashboard"),
     GRAPH("Gr", "Graph"),
     GRAIN("Gn", "Grain"),
@@ -2050,20 +2076,9 @@ private fun EffectsPanel(state: UiState, vm: HeadsupViewModel, kind: EffectKind,
             LookActions(state, vm)
         }
     }
-    LazyRow(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
-        items(EffectKind.entries) { e ->
-            val active = when (e) {
-                EffectKind.DASHBOARD -> style.enabled
-                EffectKind.GRAPH -> effects.graph != null
-                EffectKind.GRAIN -> effects.grain > 0f
-                EffectKind.GLOW -> effects.glow > 0f
-                EffectKind.HALATION -> effects.halation > 0f
-                EffectKind.BARS -> effects.barsRatio != null
-            }
-            CircleOption(e.symbol, e.label, selected = e == kind, modified = active) { onKind(e) }
-        }
-    }
+    EffectKinds(state, kind, onKind)
     when (kind) {
+        EffectKind.TEXT -> Unit
         EffectKind.DASHBOARD -> {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text("Dashboard", Modifier.weight(1f), style = MaterialTheme.typography.labelLarge)
