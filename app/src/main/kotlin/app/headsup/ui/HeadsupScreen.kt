@@ -268,7 +268,18 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
     val density = LocalDensity.current
     androidx.activity.compose.BackHandler(enabled = fullscreen) { fullscreen = false }
     val share = if (wide) 0.45f else if (state.photoProject) albumShare else filmShare
-    val previewMaxHeight = if (fullscreen) (configuration.screenHeightDp - 48).dp else (configuration.screenHeightDp * share).dp
+    val previewMaxHeight = if (fullscreen) configuration.screenHeightDp.dp else (configuration.screenHeightDp * share).dp
+    // Full screen hides the status and navigation bars too (a swipe from the edge shows them for a moment).
+    val activityWindow = (LocalContext.current as? android.app.Activity)?.window
+    val rootView = androidx.compose.ui.platform.LocalView.current
+    DisposableEffect(fullscreen) {
+        val controller = activityWindow?.let { androidx.core.view.WindowCompat.getInsetsController(it, rootView) }
+        if (fullscreen) {
+            controller?.systemBarsBehavior = androidx.core.view.WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+            controller?.hide(androidx.core.view.WindowInsetsCompat.Type.systemBars())
+        }
+        onDispose { controller?.show(androidx.core.view.WindowInsetsCompat.Type.systemBars()) }
+    }
 
     // The picture, its transport and the timeline.
     val pictureAndTimeline: @Composable ColumnScope.() -> Unit = {
@@ -298,13 +309,14 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
                         maskCubes = state.previewMaskCubes,
                         fromCube = state.previewFromCube,
                         transitionMs = selected.transitionMs,
-                        guideMask = selected.masks.getOrNull(state.selectedMask).takeIf { editingMasks },
-                        onMoveMask = if (editingMasks) { x, y -> vm.updateMask { it.copy(centerX = x, centerY = y) } } else null,
+                        guideMask = selected.masks.getOrNull(state.selectedMask).takeIf { editingMasks && !fullscreen },
+                        onMoveMask = if (editingMasks && !fullscreen) { x, y -> vm.updateMask { it.copy(centerX = x, centerY = y) } } else null,
                         vignette = if (selected.colorGrade) state.appliedGrade(selected).vignette else 0f,
                         effects = state.compareEffects ?: state.effects,
-                        onSample = if (measuring) vm::sampleFrame else null,
+                        onSample = if (measuring && !fullscreen) vm::sampleFrame else null,
                         marker = if (measuring) state.scope?.let { Offset(it.markerX, it.markerY) } else null,
                         maxHeight = previewMaxHeight,
+                        edgeToEdge = fullscreen,
                         onMoveWidget = vm::moveWidget,
                         onMoveFinished = vm::persistStyle,
                         onPosition = {
@@ -335,13 +347,14 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
                         textValues = state.placesVersion.let { _ -> { pos -> vm.textValues(state, selected, pos) } },
                         routeOverlay = if (state.routeMap.enabled) routeOverlayFor(vm, state, selected) else null,
                         // A finger on the picture places the text being edited, or the route map.
-                        onMoveText = state.selectedText?.takeIf { editingTexts }?.let { id -> { x, y -> vm.updateText(id) { snapText(it, x, y) } } }
+                        onMoveText = if (fullscreen) null else state.selectedText?.takeIf { editingTexts }?.let { id -> { x, y -> vm.updateText(id) { snapText(it, x, y) } } }
                             ?: if (tool == Tool.EFFECTS && effectKind == EffectKind.MAP && state.routeMap.enabled) { x: Float, y: Float -> vm.updateRouteMap { it.copy(x = x, y = y) } } else null,
                         cutScrub = cutScrub,
                         onFrameSource = { frameSource.value = it },
                         reframe = state.framing(selected),
-                        onReframe = if (framing) { r -> vm.updateReframe { r } } else null,
-                        showGrid = framing,
+                        // Full screen is for looking: no framing (pinch zooms the view instead), no grid.
+                        onReframe = if (framing && !fullscreen) { r -> vm.updateReframe { r } } else null,
+                        showGrid = framing && !fullscreen,
                         autoPlay = continuePlaying,
                         seekRequest = seekRequest,
                         onSeekDone = { seekRequest = null },
@@ -511,7 +524,10 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
 
     Box(Modifier.fillMaxSize().background(HeadsupColors.BackgroundGradient)) {
         // No title bar: the picture starts at the top, adding files lives in the Files tool.
-        if (wide) {
+        if (fullscreen) {
+            // The picture alone on black, centred, whichever way the phone is held.
+            Column(Modifier.fillMaxSize().background(Color.Black), verticalArrangement = Arrangement.Center, content = pictureAndTimeline)
+        } else if (wide) {
             Row(Modifier.fillMaxSize().systemBarsPadding().padding(top = 8.dp)) {
                 Column(Modifier.weight(1.3f).fillMaxHeight(), content = pictureAndTimeline)
                 Column(Modifier.weight(1f).fillMaxHeight(), content = tools)

@@ -139,6 +139,8 @@ fun ClipPreview(
     vignette: Float,
     effects: EffectSettings,
     maxHeight: Dp,
+    /** Full screen: the picture edge to edge, no margins or rounded corners. */
+    edgeToEdge: Boolean = false,
     onMoveWidget: (Widget, Placement) -> Unit,
     onMoveFinished: () -> Unit,
     /** When set, tapping the picture (away from widgets) grabs the frame for the vectorscope. */
@@ -673,9 +675,9 @@ fun ClipPreview(
     val inspect = photoMode && onReframe == null && onMoveMask == null && onMoveText == null && onSample == null
     var viewZoom by remember(clip.id) { mutableStateOf(1f) }
     var viewPan by remember(clip.id) { mutableStateOf(Offset.Zero) }
-    Column(Modifier.padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+    Column(Modifier.padding(horizontal = if (edgeToEdge) 0.dp else 16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Box(
-            Modifier.fillMaxWidth().clip(RoundedCornerShape(20.dp)).background(Color.Black).then(
+            Modifier.fillMaxWidth().clip(RoundedCornerShape(if (edgeToEdge) 0.dp else 20.dp)).background(Color.Black).then(
                 // A photo can be looked at closely: pinch to zoom the view, double tap to fit again
                 // (only when the picture is not being framed, masked or written on).
                 if (inspect) {
