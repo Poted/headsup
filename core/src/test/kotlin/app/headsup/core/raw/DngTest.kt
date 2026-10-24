@@ -59,8 +59,8 @@ class DngTest {
     }
 
     /** A little-endian DNG: IFD0 with colour data, one SubIFD with a CFA tile in lossless JPEG. */
-    private fun buildDng(width: Int, height: Int, raw: IntArray, comps: Int): ByteArray {
-        val jpeg = encodeLj92(raw, width / comps, height, comps)
+    private fun buildDng(width: Int, height: Int, raw: IntArray, comps: Int, rowsPerJpegRow: Int = 1): ByteArray {
+        val jpeg = encodeLj92(raw, width * rowsPerJpegRow / comps, height / rowsPerJpegRow, comps)
         val out = ByteArrayOutputStream()
         val buf = java.nio.ByteBuffer.allocate(4096 + jpeg.size).order(java.nio.ByteOrder.LITTLE_ENDIAN)
         buf.put('I'.code.toByte()).put('I'.code.toByte()).putShort(42).putInt(8)
@@ -132,6 +132,13 @@ class DngTest {
         assertEquals(1000f, image.black[0])
         assertEquals(17000f, image.white)
         assertEquals(2.0, 1.0 / image.asShotNeutral[0], 1e-3)
+    }
+
+    @Test
+    fun `reads a dng whose jpeg rows hold two image rows`() {
+        val raw = mosaic(8, 6)
+        val image = Dng.read(buildDng(8, 6, raw, comps = 2, rowsPerJpegRow = 2))
+        assertContentEquals(raw, IntArray(raw.size) { image.data[it].toInt() and 0xFFFF })
     }
 
     @Test

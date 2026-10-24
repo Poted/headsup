@@ -78,6 +78,7 @@ import java.time.format.DateTimeFormatter
 import android.content.Intent
 import app.headsup.project.ProjectData
 import app.headsup.project.ProjectInfo
+import app.headsup.project.ProjectKind
 import app.headsup.project.ProjectStore
 import app.headsup.project.SavedClip
 import app.headsup.project.SavedGroup
@@ -296,6 +297,8 @@ data class UiState(
     val copiedLook: ClipLook? = null,
     /** Preview files of large clips, by source. */
     val proxies: Map<Uri, ProxyState> = emptyMap(),
+    /** A film (timeline) or a photo album (each photo edited and exported on its own). */
+    val projectKind: ProjectKind = ProjectKind.VIDEO,
     /** Texts on the timeline, and the one being edited on the Text page. */
     val texts: List<TextItem> = emptyList(),
     val selectedText: Long? = null,
@@ -306,7 +309,7 @@ data class UiState(
     val selected: ClipState? get() = selectedClip?.let { clips.getOrNull(it) }
 
     /** Only photos: the app works as a photo editor (no playback, sound, timing or text animation). */
-    val photoProject: Boolean get() = clips.isNotEmpty() && clips.all { it.meta.isPhoto }
+    val photoProject: Boolean get() = projectKind == ProjectKind.PHOTOS
 
     /** The timeline's frame rate: chosen, or the first clip's, or 30. */
     val effectiveTimelineFps: Float get() = timelineFps ?: clips.firstOrNull()?.meta?.frameRate ?: 30f
@@ -316,7 +319,7 @@ data class UiState(
         get() = frameAspect ?: clips.firstOrNull()?.meta?.takeIf { it.width > 0 && it.height > 0 }?.let { it.width.toFloat() / it.height } ?: (16f / 9f)
 
     /** [c]'s framing in the timeline's frame (preview and export). */
-    fun framing(c: ClipState): Reframe = c.reframe.copy(aspect = timelineAspect)
+    fun framing(c: ClipState): Reframe = if (photoProject) c.reframe else c.reframe.copy(aspect = timelineAspect)
 
     /** Corrections the colour page edits: the selected clip's, its mask's, or the global node's. */
     val grade: ColorGrade
@@ -571,6 +574,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
         audioClips = audioClips,
         clipSound = clipSound,
         texts = texts,
+        kind = projectKind,
     )
 
     fun refreshProjects() = _state.update {
@@ -632,6 +636,8 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                 resynced(
                     s.copy(
                         projectName = project.name,
+                        // Older projects of only photos open as albums.
+                        projectKind = project.kind ?: if (clips.isNotEmpty() && clips.all { it.meta.isPhoto }) ProjectKind.PHOTOS else ProjectKind.VIDEO,
                         activities = activities.sortedBy { it.track.startMs },
                         clips = clips,
                         groups = project.groups.map { ClipGroup(it.id, it.name, it.grade, it.lutName) },
@@ -671,11 +677,12 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /** Starts an empty project; the current one stays saved. */
-    fun newProject() {
+    fun newProject(kind: ProjectKind = ProjectKind.VIDEO) {
         scopeFrame = null
         _state.update {
             it.copy(
                 projectName = newProjectName(),
+                projectKind = kind,
                 activities = emptyList(),
                 clips = emptyList(),
                 groups = emptyList(),
@@ -1443,7 +1450,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
         refreshPreview()
     }
 
-    private fun Reframe.clampedFor(c: ClipState, aspect: Float): Reframe {
+    private fun Reframe.clampedFor(c: ClipState, aspect: Float?): Reframe {
         val w = c.meta.width.toFloat().coerceAtLeast(1f)
         val h = c.meta.height.toFloat().coerceAtLeast(1f)
         val framed = copy(aspect = aspect)
@@ -1454,8 +1461,9 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
     /** Changes the selected clip's framing; kept inside the picture. */
     fun updateReframe(transform: (Reframe) -> Reframe) {
         val index = _state.value.selectedClip ?: return
-        val aspect = _state.value.timelineAspect
-        updateClip(index) { c -> c.copy(reframe = transform(c.reframe).clampedFor(c, aspect)) }
+        val s = _state.value
+        // An album's photo keeps its own crop shape (null: the photo's); a film's clips take the timeline's.
+        updateClip(index) { c -> transform(c.reframe).let { r -> c.copy(reframe = r.clampedFor(c, if (s.photoProject) r.aspect else s.timelineAspect)) } }
     }
 
     /** Fill or fit for every clip, e.g. after changing the frame's shape. */

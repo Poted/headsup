@@ -92,6 +92,7 @@ import androidx.compose.ui.unit.IntSize
 import app.headsup.color.ScopeResult
 import app.headsup.color.Vectorscope
 import app.headsup.core.color.ColorGrade
+import app.headsup.project.ProjectKind
 import app.headsup.core.edit.TextAlign
 import app.headsup.core.edit.TextAnim
 import app.headsup.core.edit.TextAnimation
@@ -184,6 +185,7 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
     val soundPicker = rememberLauncherForActivityResult(OpenDocumentsIn(DOWNLOADS_FOLDER)) { vm.addAudioFiles(it) }
     val addFit = { fitPicker.launch(arrayOf("*/*")) }
     val addVideos = { videoPicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageAndVideo)) }
+    val addPhotos = { videoPicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) }
 
     // The progress notification needs this on Android 13+; export works without it.
     var pendingExport by remember { mutableStateOf<(() -> Unit)?>(null) }
@@ -268,7 +270,7 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
             // The picture stays on screen while any tool below is being used.
             val selected = state.selected
             when {
-                selected == null -> EmptyState(hasActivities = state.activities.isNotEmpty(), onAddFit = addFit, onAddVideos = addVideos)
+                selected == null -> EmptyState(hasActivities = state.activities.isNotEmpty(), onAddFit = addFit, onAddVideos = if (state.photoProject) addPhotos else addVideos)
                 exporting -> Box(
                     Modifier.padding(horizontal = 16.dp).fillMaxWidth().height(120.dp).clip(RoundedCornerShape(20.dp)).background(HeadsupColors.Surface),
                     contentAlignment = Alignment.Center,
@@ -343,7 +345,7 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
             }
             if (state.photoProject) {
                 // Photos only: no timeline, just the photos to pick (when there is more than one).
-                if (state.clips.size > 1) PhotoStrip(state, onSelect = vm::selectClip, onAdd = addVideos)
+                if (state.clips.size > 1) PhotoStrip(state, onSelect = vm::selectClip, onAdd = addPhotos)
             } else if (state.clips.isNotEmpty()) {
                 Timeline(
                     state = state,
@@ -428,6 +430,7 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
                     Tool.FILES -> FilesPanel(
                         state, vm, onAddVideos = addVideos, onAddFit = addFit, onAddSound = { soundPicker.launch(arrayOf("audio/*")) },
                         onAddRaw = { rawPicker.launch(arrayOf("image/*")) },
+                        onAddPhotos = addPhotos,
                         onShowClip = { i -> jumpTo(clipStarts[i]) },
                     )
                     Tool.EDIT -> EditPanel(state, vm, playhead, editTab, { editTab = it }, onCutScrub = { cutScrub.value = it }) { f ->
@@ -599,13 +602,14 @@ private fun FilesPanel(
     onAddSound: () -> Unit,
     onShowClip: (Int) -> Unit,
     onAddRaw: () -> Unit,
+    onAddPhotos: () -> Unit,
 ) {
     // As on the Colour page: a row of sections, one shown. Everything the project uses is copied in
     // here, then used on the other pages.
     var section by rememberSaveable { mutableStateOf("Video") }
     LazyRow(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
         item { CircleOption("▣", "Project", selected = section == "Project", modified = false) { section = "Project" } }
-        item { CircleOption("▶", "Video", selected = section == "Video", modified = state.clips.isNotEmpty()) { section = "Video" } }
+        item { CircleOption("▶", if (state.photoProject) "Photos" else "Video", selected = section == "Video", modified = state.clips.isNotEmpty()) { section = "Video" } }
         item { CircleOption("♪", "Sound", selected = section == "Sound", modified = state.audioFiles.isNotEmpty()) { section = "Sound" } }
         item { CircleOption("FIT", "Watch", selected = section == "FIT", modified = state.activities.isNotEmpty()) { section = "FIT" } }
     }
@@ -620,14 +624,14 @@ private fun FilesPanel(
             if (state.activities.isEmpty()) Hint("The .FIT file(s) from your watch, for the dashboard.")
             state.activities.forEachIndexed { i, a -> ActivityRow(a, onRemove = { vm.removeActivity(i) }) }
         }
-        else -> VideoFiles(state, vm, onAddVideos, onAddRaw, onShowClip)
+        else -> VideoFiles(state, vm, if (state.photoProject) onAddPhotos else onAddVideos, onAddRaw, onShowClip)
     }
 }
 
 @Composable
 private fun VideoFiles(state: UiState, vm: HeadsupViewModel, onAddVideos: () -> Unit, onAddRaw: () -> Unit, onShowClip: (Int) -> Unit) {
     Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-        AddTile(HeadsupIcons.Video, "Video · photo", onAddVideos, Modifier.weight(1f))
+        AddTile(HeadsupIcons.Video, if (state.photoProject) "Photo" else "Video · photo", onAddVideos, Modifier.weight(1f))
         // The gallery's picker gives only a small preview of a raw (DNG) photo; the files give the original.
         AddTile(HeadsupIcons.Colour, "RAW photo", onAddRaw, Modifier.weight(1f))
     }
@@ -1059,25 +1063,29 @@ private fun formatBytes(bytes: Long): String =
 /** The open project (saved automatically) and the list of saved ones. */
 @Composable
 private fun ProjectRow(state: UiState, vm: HeadsupViewModel) {
-    var listOpen by remember { mutableStateOf(false) }
     var renaming by remember { mutableStateOf(false) }
     // A project from the list being renamed.
     var renamingOther by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(Unit) { vm.refreshProjects() }
     Row(verticalAlignment = Alignment.CenterVertically) {
         Column(Modifier.weight(1f)) {
-            // On the timeline: after speed changes, at the timeline's frame rate.
-            val total = state.clips.sumOf { it.timelineDurationMs }
-            val frames = frameCount(total, state.effectiveTimelineFps) ?: 0L
+            val album = state.photoProject
             Text(
-                "Project · saved automatically" +
-                    if (state.clips.isEmpty()) "" else " · ${state.clips.size} clips, ${Formats.duration(total)}, $frames frames",
+                (if (album) "Photo album" else "Film") + " · saved automatically" + when {
+                    state.clips.isEmpty() -> ""
+                    album -> " · ${state.clips.size} photos"
+                    else -> {
+                        // On the timeline: after speed changes, at the timeline's frame rate.
+                        val total = state.clips.sumOf { it.timelineDurationMs }
+                        " · ${state.clips.size} clips, ${Formats.duration(total)}, ${frameCount(total, state.effectiveTimelineFps) ?: 0L} frames"
+                    }
+                },
                 style = MaterialTheme.typography.labelSmall,
                 color = HeadsupColors.TextMuted,
             )
             Text(state.projectName, style = MaterialTheme.typography.titleSmall, maxLines = 1)
         }
         SmallAction("Rename", { renaming = true })
-        SmallAction("Projects", { vm.refreshProjects(); listOpen = true })
     }
     val external = with(vm) { state.externalMedia }
     if (external.isNotEmpty() && !state.busy) {
@@ -1086,48 +1094,42 @@ private fun ProjectRow(state: UiState, vm: HeadsupViewModel) {
             SmallAction("Copy into project", vm::copyMediaIntoProject)
         }
     }
+    // New: a film (timeline of clips and photos) or an album (photos edited one by one).
+    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+        AddTile(HeadsupIcons.Video, "New film", { vm.newProject(ProjectKind.VIDEO) }, Modifier.weight(1f))
+        AddTile(HeadsupIcons.Colour, "New album", { vm.newProject(ProjectKind.PHOTOS) }, Modifier.weight(1f))
+    }
+    Label("Projects")
+    if (state.projects.isEmpty()) Hint("No saved projects yet. A project is saved once it has files.")
+    for (p in state.projects) {
+        val current = p.name == state.projectName
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(12.dp))
+                .background(if (current) HeadsupColors.SurfaceHigh else Color.Transparent)
+                .clickable { if (!current) vm.openProject(p.name) }
+                .padding(horizontal = 8.dp, vertical = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text(p.name, style = MaterialTheme.typography.bodyMedium, maxLines = 1)
+                Hint(
+                    Instant.ofEpochMilli(p.modifiedMs).atZone(ZoneId.systemDefault()).toLocalDateTime()
+                        .withNano(0).toString().replace('T', ' ') +
+                        if (p.bytes > 0) " · " + formatBytes(p.bytes) else "",
+                )
+            }
+            SmallAction("Rename", { renamingOther = p.name })
+            SmallAction("Delete", { vm.deleteProject(p.name) })
+        }
+    }
+    if (state.projects.isNotEmpty()) Hint("Projects keep their own copies of their files. Deleting a project frees that space; the gallery is never touched.")
     if (renaming) {
         RenameDialog(state.projectName, onDismiss = { renaming = false }, title = "Project name") { vm.renameProject(it); renaming = false }
     }
     renamingOther?.let { old ->
         RenameDialog(old, onDismiss = { renamingOther = null }, title = "Project name") { vm.renameProject(it, old); renamingOther = null }
-    }
-    if (listOpen) {
-        AlertDialog(
-            onDismissRequest = { listOpen = false },
-            title = { Text("Projects") },
-            text = {
-                Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    if (state.projects.isEmpty()) Hint("No saved projects yet. A project is saved once it has files.")
-                    else Hint("Projects keep their own copies of their videos. Deleting a project frees that space; the gallery is never touched.")
-                    for (p in state.projects) {
-                        val current = p.name == state.projectName
-                        Row(
-                            Modifier
-                                .fillMaxWidth()
-                                .clip(RoundedCornerShape(12.dp))
-                                .background(if (current) HeadsupColors.SurfaceHigh else Color.Transparent)
-                                .clickable { listOpen = false; if (!current) vm.openProject(p.name) }
-                                .padding(horizontal = 8.dp, vertical = 6.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Column(Modifier.weight(1f)) {
-                                Text(p.name, style = MaterialTheme.typography.bodyMedium, maxLines = 1)
-                                Hint(
-                                    Instant.ofEpochMilli(p.modifiedMs).atZone(ZoneId.systemDefault()).toLocalDateTime()
-                                        .withNano(0).toString().replace('T', ' ') +
-                                        if (p.bytes > 0) " · " + formatBytes(p.bytes) else "",
-                                )
-                            }
-                            SmallAction("Rename", { renamingOther = p.name })
-                            SmallAction("Delete", { vm.deleteProject(p.name) })
-                        }
-                    }
-                }
-            },
-            confirmButton = { TextButton(onClick = { listOpen = false; vm.newProject() }) { Text("New project") } },
-            dismissButton = { TextButton(onClick = { listOpen = false }) { Text("Close") } },
-        )
     }
 }
 
@@ -2022,6 +2024,10 @@ private fun FramePanel(state: UiState, vm: HeadsupViewModel) {
         Hint("Select a clip first.")
         return
     }
+    if (state.photoProject) {
+        PhotoCrop(state, clip, vm)
+        return
+    }
     // The timeline's frame: one shape for the whole project, like a DaVinci timeline's resolution.
     Label("Timeline frame")
     val first = state.clips.firstOrNull()?.meta
@@ -2661,5 +2667,24 @@ private fun PhotoStrip(state: UiState, onSelect: (Int) -> Unit, onAdd: () -> Uni
             ) { Icon(HeadsupIcons.Add, contentDescription = "Add", tint = HeadsupColors.Highlight) }
         }
     }
+}
+
+/** An album photo's crop: its shape (or its own), zoom and straightening; drag the picture to place it. */
+@Composable
+private fun PhotoCrop(state: UiState, clip: ClipState, vm: HeadsupViewModel) {
+    val r = clip.reframe
+    Label("Crop")
+    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        FilterChip(selected = r.aspect == null, onClick = { vm.updateReframe { it.copy(aspect = null) } }, label = { Text("Original") })
+        for ((aspect, label) in Reframe.PRESETS) {
+            if (aspect == null) continue
+            FilterChip(selected = r.aspect == aspect, onClick = { vm.updateReframe { it.copy(aspect = aspect) } }, label = { Text(label) })
+        }
+    }
+    Hint("Drag the picture to choose what stays, pinch to zoom.")
+    ValueHeader("Zoom", String.format(Locale.US, "%.2f×", r.zoom))
+    RulerSlider(r.zoom, 1f..4f, 0.02f, { v -> vm.updateReframe { it.copy(zoom = v) } }, onReset = { vm.updateReframe { it.copy(zoom = 1f) } })
+    ValueHeader("Straighten", String.format(Locale.US, "%+.1f°", r.angleDegrees))
+    RulerSlider(r.angleDegrees, -15f..15f, 0.1f, { v -> vm.updateReframe { it.copy(angleDegrees = v) } }, onReset = { vm.updateReframe { it.copy(angleDegrees = 0f) } })
 }
 

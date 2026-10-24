@@ -45,6 +45,9 @@ data class SavedClip(
     val rawDevelop: RawDevelop = RawDevelop(),
 )
 
+/** A film made on a timeline, or an album of photos edited one by one. */
+enum class ProjectKind { VIDEO, PHOTOS }
+
 data class SavedGroup(val id: Long, val name: String, val grade: ColorGrade, val lutName: String?)
 
 /**
@@ -67,6 +70,8 @@ data class ProjectData(
     /** Level of the video clips' own sound. */
     val clipSound: Float = 1f,
     val texts: List<TextItem> = emptyList(),
+    /** Null in projects saved before albums existed. */
+    val kind: ProjectKind? = null,
 ) {
     /** Every media file the project uses. */
     val mediaUris: List<Uri> get() = activities + clips.map { it.uri } + audioFiles.map { it.uri } + audioClips.map { it.uri }
@@ -139,6 +144,7 @@ internal object Json {
         .put("audioClips", JSONArray(p.audioClips.map(::audioClip)))
         .put("clipSound", p.clipSound)
         .put("texts", JSONArray(p.texts.map(::text)))
+        .putOpt("kind", p.kind?.name)
 
     fun project(o: JSONObject) = ProjectData(
         name = o.optString("name", "Project"),
@@ -154,6 +160,7 @@ internal object Json {
         audioClips = o.optJSONArray("audioClips").objects().map(::audioClip) + oldMusic(o.optJSONObject("music")),
         clipSound = o.optDouble("clipSound", o.optJSONObject("music")?.optDouble("originalVolume", 1.0) ?: 1.0).toFloat(),
         texts = o.optJSONArray("texts").objects().map(::text),
+        kind = runCatching { ProjectKind.valueOf(o.optString("kind")) }.getOrNull(),
     )
 
     private fun text(t: TextItem) = JSONObject()

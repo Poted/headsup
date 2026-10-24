@@ -76,16 +76,13 @@ object Dng {
             when (compression) {
                 Tags.COMPRESSION_LOSSLESS_JPEG -> {
                     val f = LosslessJpeg.decode(bytes, off, len)
-                    // The JPEG frame may pack several columns into "components": samples in order fill the tile row by row.
-                    val rowSamples = f.width * f.components
-                    for (y in 0 until f.height) {
-                        val py = y0 + y
-                        if (py >= height) break
-                        for (s in 0 until rowSamples) {
-                            val px = x0 + s
-                            if (px >= width || s >= tileW) break
-                            data[py * width + px] = f.samples[y * rowSamples + s]
-                        }
+                    // The decoded samples fill the tile row by row, however the JPEG frame is shaped
+                    // (cameras pack two columns as two components, or two rows into one JPEG row).
+                    val total = minOf(f.samples.size, tileW * tileH)
+                    for (i in 0 until total) {
+                        val px = x0 + i % tileW
+                        val py = y0 + i / tileW
+                        if (px < width && py < height) data[py * width + px] = f.samples[i]
                     }
                 }
                 Tags.COMPRESSION_NONE -> {
