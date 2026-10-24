@@ -255,7 +255,8 @@ internal object Json {
         .put("soundLevel", c.soundLevel)
         .put("picked", c.picked)
         .put("raw", JSONObject().put("exposure", c.rawDevelop.exposure.toDouble()).put("highlights", c.rawDevelop.highlights.toDouble())
-            .put("shadows", c.rawDevelop.shadows.toDouble()).put("temperature", c.rawDevelop.temperature.toDouble()).put("tint", c.rawDevelop.tint.toDouble()))
+            .put("shadows", c.rawDevelop.shadows.toDouble()).put("temperature", c.rawDevelop.temperature.toDouble()).put("tint", c.rawDevelop.tint.toDouble())
+            .put("sharpen", c.rawDevelop.sharpen.toDouble()).put("colourNoise", c.rawDevelop.colourNoise.toDouble()))
         .put("reframe", JSONObject().put("zoom", c.reframe.zoom).put("centerX", c.reframe.centerX).put("centerY", c.reframe.centerY).put("angleDegrees", c.reframe.angleDegrees).put("fit", c.reframe.fit))
 
     private fun clip(o: JSONObject) = SavedClip(
@@ -282,6 +283,8 @@ internal object Json {
             RawDevelop(
                 r.optDouble("exposure", 0.0).toFloat(), r.optDouble("highlights", 0.0).toFloat(), r.optDouble("shadows", 0.0).toFloat(),
                 r.optDouble("temperature", 0.0).toFloat(), r.optDouble("tint", 0.0).toFloat(),
+                sharpen = r.optDouble("sharpen", RawDevelop().sharpen.toDouble()).toFloat(),
+                colourNoise = r.optDouble("colourNoise", RawDevelop().colourNoise.toDouble()).toFloat(),
             )
         } ?: RawDevelop(),
         reframe = o.optJSONObject("reframe")?.let { r ->

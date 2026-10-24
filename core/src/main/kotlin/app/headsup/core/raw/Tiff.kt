@@ -100,6 +100,13 @@ class Tiff(val bytes: ByteArray) {
             }
         }
 
+        /** The raw bytes of a value (e.g. an opcode list). */
+        fun bytes(tag: Int): ByteArray? {
+            val e = entries[tag] ?: return null
+            val start = e.valueAt.toInt()
+            return tiff.bytes.copyOfRange(start, start + e.count)
+        }
+
         fun string(tag: Int): String? {
             val e = entries[tag] ?: return null
             val start = e.valueAt.toInt()
@@ -150,6 +157,8 @@ object Tags {
     const val CALIBRATION_ILLUMINANT_1 = 50778
     const val CALIBRATION_ILLUMINANT_2 = 50779
     const val ACTIVE_AREA = 50829
+    const val OPCODE_LIST_2 = 51009
+    const val OPCODE_LIST_3 = 51022
 
     const val PHOTOMETRIC_CFA = 32803
     const val PHOTOMETRIC_LINEAR_RAW = 34892

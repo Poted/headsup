@@ -2711,12 +2711,15 @@ private fun TextPanel(state: UiState, vm: HeadsupViewModel, at: () -> Long) {
 
 /** Development of a raw photo, before the colour corrections: one ruler at a time. */
 private enum class RawControl(val symbol: String, val label: String, val range: ClosedFloatingPointRange<Float>, val step: Float, val format: String,
-    val get: (app.headsup.core.raw.RawDevelop) -> Float, val set: (app.headsup.core.raw.RawDevelop, Float) -> app.headsup.core.raw.RawDevelop) {
+    val get: (app.headsup.core.raw.RawDevelop) -> Float, val set: (app.headsup.core.raw.RawDevelop, Float) -> app.headsup.core.raw.RawDevelop,
+    val neutral: Float = 0f) {
     EXPOSURE("EV", "Exposure", -3f..3f, 0.05f, "%+.2f EV", { it.exposure }, { d, v -> d.copy(exposure = v) }),
     HIGHLIGHTS("Hl", "Highlights", -1f..1f, 0.02f, "%+.2f", { it.highlights }, { d, v -> d.copy(highlights = v) }),
     SHADOWS("Sh", "Shadows", -1f..1f, 0.02f, "%+.2f", { it.shadows }, { d, v -> d.copy(shadows = v) }),
     TEMPERATURE("K", "Temperature", -1f..1f, 0.02f, "%+.2f", { it.temperature }, { d, v -> d.copy(temperature = v) }),
     TINT("Tn", "Tint", -1f..1f, 0.02f, "%+.2f", { it.tint }, { d, v -> d.copy(tint = v) }),
+    SHARPEN("Sh▲", "Sharpen", 0f..1f, 0.02f, "%.2f", { it.sharpen }, { d, v -> d.copy(sharpen = v) }, app.headsup.core.raw.RawDevelop().sharpen),
+    NOISE("NR", "Colour noise", 0f..1f, 0.02f, "%.2f", { it.colourNoise }, { d, v -> d.copy(colourNoise = v) }, app.headsup.core.raw.RawDevelop().colourNoise),
 }
 
 @Composable
@@ -2725,7 +2728,7 @@ private fun RawControls(clip: ClipState, index: Int, vm: HeadsupViewModel) {
     val develop = clip.rawDevelop
     LazyRow(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
         items(RawControl.entries) { c ->
-            CircleOption(c.symbol, c.label, selected = c == control, modified = c.get(develop) != 0f) { control = c }
+            CircleOption(c.symbol, c.label, selected = c == control, modified = c.get(develop) != c.neutral) { control = c }
         }
     }
     ValueHeader(control.label, String.format(Locale.US, control.format, control.get(develop)))
@@ -2734,8 +2737,9 @@ private fun RawControls(clip: ClipState, index: Int, vm: HeadsupViewModel) {
         range = control.range,
         step = control.step,
         onChange = { v -> vm.updateRawDevelop(index) { control.set(it, v) } },
-        onReset = { vm.updateRawDevelop(index) { control.set(it, 0f) } },
+        onReset = { vm.updateRawDevelop(index) { control.set(it, control.neutral) } },
     )
+    if (control == RawControl.SHARPEN || control == RawControl.NOISE) Hint("Judge these zoomed in: the export applies them at the photo's full size.")
     app.headsup.media.RawPhotos.lastError?.let { Hint("Developed by Android instead: $it") }
 }
 

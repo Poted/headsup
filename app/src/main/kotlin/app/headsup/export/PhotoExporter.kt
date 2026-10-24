@@ -91,8 +91,10 @@ object PhotoExporter {
 
         // The colour shader samples the photo directly (no 8-bit layer in between); the photo is
         // turned upright and scaled to the picture by the sampling itself.
-        val image = BitmapShader(photo, Shader.TileMode.CLAMP, Shader.TileMode.CLAMP).apply {
-            filterMode = BitmapShader.FILTER_MODE_LINEAR
+        val bitmapShader = BitmapShader(photo, Shader.TileMode.CLAMP, Shader.TileMode.CLAMP).apply { filterMode = BitmapShader.FILTER_MODE_LINEAR }
+        // The lens distortion (and lateral colour fringes) the camera describes, corrected as it is sampled.
+        val image: Shader = full?.warp?.let { warpShader(bitmapShader, it, photo.width, photo.height) } ?: bitmapShader
+        image.apply {
             setLocalMatrix(Matrix().apply {
                 postRotate(degrees.toFloat())
                 when (degrees) {
@@ -104,7 +106,7 @@ object PhotoExporter {
             })
         }
         val shader = GradePreviewShader().apply { setTables(GradeTables(request.cube, request.maskCubes)) }
-        val graded = android.graphics.Paint().apply { this.shader = shader.paintShader(request.effects, picW, picH, request.masks, image) }
+        val graded = android.graphics.Paint().apply { this.shader = shader.paintShader(request.effects, picW, picH, request.masks, image, request.rawDevelop.takeIf { request.raw }) }
         val renderer = DashboardRenderer(context.assets)
         val root = RenderNode("frame").apply {
             setPosition(0, 0, fw, fh)
@@ -135,6 +137,46 @@ object PhotoExporter {
         val name = request.name.substringBeforeLast('.') + "_edit.jpg"
         return MediaStoreOutput.savePhoto(context, name) { out -> bitmap.compress(Bitmap.CompressFormat.JPEG, request.quality.coerceIn(1, 100), out) }.also { bitmap.recycle() }
     }
+
+    /** [photo] ([w] × [h] pixels) sampled through the DNG's WarpRectilinear: each colour from where its lens put it. */
+    private fun warpShader(photo: Shader, warp: app.headsup.core.raw.Opcode.WarpRectilinear, w: Int, h: Int): Shader {
+        val radial = app.headsup.core.raw.Opcode.Radial(warp.cx, warp.cy, w, h)
+        return android.graphics.RuntimeShader(WARP).apply {
+            setInputShader("photo", photo)
+            setFloatUniform("center", radial.centerX.toFloat(), radial.centerY.toFloat())
+            setFloatUniform("norm", radial.norm.toFloat())
+            for (c in 0 until 3) {
+                val k = warp.coefficients[minOf(c, warp.planes - 1)]
+                setFloatUniform("r$c", k[0].toFloat(), k[1].toFloat(), k[2].toFloat(), k[3].toFloat())
+                setFloatUniform("t$c", k[4].toFloat(), k[5].toFloat())
+            }
+        }
+    }
+
+    // Opcode.WarpRectilinear.source on the GPU (pixel centres at +0.5).
+    private val WARP = """
+        uniform shader photo;
+        uniform float2 center;
+        uniform float norm;
+        uniform float4 r0; uniform float4 r1; uniform float4 r2;
+        uniform float2 t0; uniform float2 t1; uniform float2 t2;
+
+        float2 source(float2 p, float4 r, float2 t) {
+            float2 d = (p - center) / norm;
+            float q = dot(d, d);
+            float f = r.x + q * (r.y + q * (r.z + q * r.w));
+            float2 tg = float2(t.x * 2.0 * d.x * d.y + t.y * (q + 2.0 * d.x * d.x), t.y * 2.0 * d.x * d.y + t.x * (q + 2.0 * d.y * d.y));
+            return center + (d * f + tg) * norm;
+        }
+
+        half4 main(float2 coord) {
+            float2 p = coord - 0.5;
+            half red = photo.eval(source(p, r0, t0) + 0.5).r;
+            half green = photo.eval(source(p, r1, t1) + 0.5).g;
+            half blue = photo.eval(source(p, r2, t2) + 0.5).b;
+            return half4(red, green, blue, 1.0);
+        }
+    """
 
     /**
      * Draws [root] off screen on the GPU and reads it back as 8 bits per colour: drawn at 10 bits

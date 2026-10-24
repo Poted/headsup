@@ -9,6 +9,7 @@ import androidx.compose.ui.graphics.asComposeRenderEffect
 import app.headsup.core.color.ColorGrade
 import app.headsup.core.color.ColourMask
 import app.headsup.core.color.LutBaker
+import app.headsup.core.raw.RawDevelop
 import app.headsup.render.EffectSettings
 
 /** Colour tables for one clip: outside any mask, one per mask, and the previous clip's for a transition. */
@@ -57,7 +58,8 @@ class GradePreviewShader {
         height: Float,
         masks: List<ColourMask>,
         fromWeight: Float,
-    ): androidx.compose.ui.graphics.RenderEffect = nativeEffect(effects, zebra, frame, width, height, masks, fromWeight).asComposeRenderEffect()
+        detail: RawDevelop? = null,
+    ): androidx.compose.ui.graphics.RenderEffect = nativeEffect(effects, zebra, frame, width, height, masks, fromWeight, detail).asComposeRenderEffect()
 
     /** The same, for drawing outside Compose (a photo export). */
     fun nativeEffect(
@@ -68,8 +70,9 @@ class GradePreviewShader {
         height: Float,
         masks: List<ColourMask>,
         fromWeight: Float,
+        detail: RawDevelop? = null,
     ): RenderEffect {
-        setUniforms(effects, zebra, frame, width, height, masks, fromWeight)
+        setUniforms(effects, zebra, frame, width, height, masks, fromWeight, detail)
         return RenderEffect.createRuntimeShaderEffect(shader, "image")
     }
 
@@ -83,8 +86,9 @@ class GradePreviewShader {
         height: Float,
         masks: List<ColourMask>,
         image: Shader,
+        detail: RawDevelop? = null,
     ): Shader {
-        setUniforms(effects, false, 0f, width, height, masks, 0f)
+        setUniforms(effects, false, 0f, width, height, masks, 0f, detail)
         shader.setInputShader("image", image)
         return shader
     }
@@ -97,7 +101,11 @@ class GradePreviewShader {
         height: Float,
         masks: List<ColourMask>,
         fromWeight: Float,
+        detail: RawDevelop?,
     ) {
+        // A raw's sharpening and colour noise removal, on the picture before its colours.
+        shader.setFloatUniform("sharpen", detail?.sharpen ?: 0f)
+        shader.setFloatUniform("chromaNR", detail?.colourNoise ?: 0f)
         shader.setFloatUniform("n", tableSize.toFloat())
         shader.setFloatUniform("zebra", if (zebra) 1f else 0f)
         shader.setFloatUniform("time", frame)
@@ -159,6 +167,8 @@ class GradePreviewShader {
             uniform float glow;
             uniform float threshold;
             uniform float halation;
+            uniform float sharpen;
+            uniform float chromaNR;
 
             ${TABLES.joinToString("\n") { lookup(it) }}
 
@@ -196,8 +206,32 @@ class GradePreviewShader {
                 return c * k;
             }
 
+            // Colour noise: the colour averaged over a small ring, the brightness kept; then the
+            // brightness sharpened against its four neighbours (small differences, i.e. noise, left out).
+            float3 detailed(float2 p, float3 c) {
+                if (chromaNR > 0.0) {
+                    float r = 1.5 + 3.0 * chromaNR;
+                    float3 acc = c;
+                    for (int i = 0; i < 8; i++) {
+                        float a = float(i) * 0.7854;
+                        acc += float3(image.eval(p + float2(cos(a), sin(a)) * r).rgb);
+                    }
+                    float3 avg = acc / 9.0;
+                    c = mix(c, avg + (luma(c) - luma(avg)), min(1.0, chromaNR * 1.5));
+                }
+                if (sharpen > 0.0) {
+                    float3 n = (float3(image.eval(p + float2(1.0, 0.0)).rgb) + float3(image.eval(p - float2(1.0, 0.0)).rgb) +
+                        float3(image.eval(p + float2(0.0, 1.0)).rgb) + float3(image.eval(p - float2(0.0, 1.0)).rgb)) * 0.25;
+                    float d = luma(c) - luma(n);
+                    d = sign(d) * max(abs(d) - 0.004, 0.0);
+                    c += d * sharpen * 2.0;
+                }
+                return clamp(c, 0.0, 1.0);
+            }
+
             half4 main(float2 coord) {
                 half4 src = image.eval(coord);
+                if (sharpen > 0.0 || chromaNR > 0.0) src = half4(half3(detailed(coord, float3(src.rgb))), src.a);
                 float3 c = float3(grade_lut(src.rgb));
                 ${List(ColourMask.MAX_PER_CLIP) { i -> """
                 if (maskCount > ${i}.5) {

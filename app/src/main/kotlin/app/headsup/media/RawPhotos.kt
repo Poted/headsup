@@ -84,7 +84,9 @@ object RawPhotos {
         val full = maxOf(raw.developedWidth, raw.developedHeight)
         val step = ((full + maxSide - 1) / maxSide).coerceAtLeast(1)
         val out = Dng.develop(raw, develop, step)
-        val bitmap = Bitmap.createBitmap(out.pixels, out.width, out.height, Bitmap.Config.ARGB_8888)
+        // The lens distortion the camera describes, corrected (in the raw's own orientation).
+        val pixels = raw.warp?.applyTo(out.pixels, out.width, out.height) ?: out.pixels
+        val bitmap = Bitmap.createBitmap(pixels, out.width, out.height, Bitmap.Config.ARGB_8888)
         val degrees = when (raw.orientation) {
             3 -> 180f
             6 -> 90f
@@ -96,7 +98,7 @@ object RawPhotos {
     }
 
     /** A raw developed at full size for export, in half floats; [degrees] turns it upright. */
-    class FullPicture(val bitmap: Bitmap, val degrees: Int)
+    class FullPicture(val bitmap: Bitmap, val degrees: Int, val warp: app.headsup.core.raw.Opcode.WarpRectilinear?)
 
     /**
      * [uri] developed at its full size (a mosaic demosaiced, not averaged) into a half-float
@@ -145,7 +147,7 @@ object RawPhotos {
                 8 -> 270
                 else -> 0
             }
-            FullPicture(picture, degrees)
+            FullPicture(picture, degrees, raw.warp)
         } catch (e: Throwable) {
             lastError = if (e is OutOfMemoryError) "Not enough memory to develop this file at full size" else e.message
             null

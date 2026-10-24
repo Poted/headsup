@@ -31,7 +31,13 @@ class RawImage(
     val orientation: Int = 1,
     /** 1: a colour filter mosaic; 3: RGB (demosaiced by the camera, or reduced while read), interleaved. */
     val channels: Int = 1,
+    /** The DNG's opcode list 3 (corrections of the demosaiced picture), as stored. */
+    val opcodes3: ByteArray? = null,
 ) {
+    /** Vignetting and lens distortion corrections the camera wrote for this picture. */
+    val corrections: List<Opcode> by lazy { Opcode.parse(opcodes3) }
+
+    val warp: Opcode.WarpRectilinear? get() = corrections.filterIsInstance<Opcode.WarpRectilinear>().firstOrNull()
     /** Size of the developed picture before orientation (a mosaic is demosaiced to its full size). */
     val developedWidth: Int get() = width
     val developedHeight: Int get() = height
@@ -59,6 +65,10 @@ data class RawDevelop(
     /** -1..1: warmer / cooler than as shot, and green / magenta. */
     val temperature: Float = 0f,
     val tint: Float = 0f,
+    /** 0..1: sharpening of fine detail (a raw is soft before it), on the picture's brightness only. */
+    val sharpen: Float = 0.3f,
+    /** 0..1: colour noise removed (blotches of colour in the darks), keeping the brightness detail. */
+    val colourNoise: Float = 0.25f,
 ) {
     /** These settings with the ones changed from [before] to [after] set as in [after]. */
     fun synced(before: RawDevelop, after: RawDevelop) = RawDevelop(
@@ -67,6 +77,8 @@ data class RawDevelop(
         shadows = if (after.shadows != before.shadows) after.shadows else shadows,
         temperature = if (after.temperature != before.temperature) after.temperature else temperature,
         tint = if (after.tint != before.tint) after.tint else tint,
+        sharpen = if (after.sharpen != before.sharpen) after.sharpen else sharpen,
+        colourNoise = if (after.colourNoise != before.colourNoise) after.colourNoise else colourNoise,
     )
 }
 
@@ -159,6 +171,8 @@ object Dng {
         val offsets: LongArray, val counts: LongArray, val tileW: Int, val tileH: Int, val littleEndian: Boolean,
         val pattern: IntArray, val black: FloatArray, val white: Float, val blackLinear: Double, val whiteLinear: Double,
         val matrix: DoubleArray, val neutral: DoubleArray, val baseline: Double, val make: String, val model: String, val orientation: Int,
+        /** Lens shading and similar gains on the raw values (opcode list 2). */
+        val gainMaps: List<Opcode.GainMap>, val opcodes3: ByteArray?,
     )
 
     private fun layoutOf(source: RawSource): Layout {
@@ -214,7 +228,18 @@ object Dng {
             ifd0.doubles(Tags.BASELINE_EXPOSURE)?.firstOrNull() ?: 0.0,
             ifd0.string(Tags.MAKE).orEmpty(), ifd0.string(Tags.MODEL).orEmpty(),
             ifd0.long(Tags.ORIENTATION)?.toInt() ?: 1,
+            Opcode.parse(raw.bytes(Tags.OPCODE_LIST_2)).filterIsInstance<Opcode.GainMap>()
+                // Maps for a mosaic's positions mean nothing on a linear (RGB) image.
+                .filter { cfa || (it.rowPitch == 1 && it.colPitch == 1) },
+            raw.bytes(Tags.OPCODE_LIST_3),
         )
+    }
+
+    /** The gain the opcode list 2 maps give pixel ([px], [py]) of plane [p]; 1 without any. */
+    private fun Layout.gainAt(px: Int, py: Int, p: Int): Float {
+        var g = 1f
+        for (m in gainMaps) if (m.covers(py, px, p)) g *= m.gain(py, px, p, width, height)
+        return g
     }
 
     /**
@@ -247,7 +272,7 @@ object Dng {
 
     private fun image(l: Layout, r: Reducer, data: java.nio.ShortBuffer) = RawImage(
         r.width, r.height, data, intArrayOf(0, 1, 1, 2), FloatArray(4), 65535f, l.matrix, l.neutral,
-        l.baseline, l.make, l.model, l.orientation, channels = 3,
+        l.baseline, l.make, l.model, l.orientation, channels = 3, opcodes3 = l.opcodes3,
     )
 
     /** 16-bit samples read front to back in the file's byte order. */
@@ -271,11 +296,17 @@ object Dng {
         val r = if (full) null else Reducer(l.width / 2, l.height / 2, maxSide, shares, alloc)
         val mosaic = if (full) alloc.shorts(l.width.toLong() * l.height) else null
         val span = FloatArray(4) { (l.white - l.black[it]).coerceAtLeast(1f) }
+        val gains = l.gainMaps.isNotEmpty()
         fun put(px: Int, py: Int, v: Int) {
             if (px >= l.width || py >= l.height) return
-            if (mosaic != null) { mosaic.put(py * l.width + px, v.toShort()); return }
             val k = ((py and 1) shl 1) or (px and 1)
-            r!!.add(px shr 1, py shr 1, at[k], (v - l.black[k]) / span[k])
+            val g = if (gains) l.gainAt(px, py, 0) else 1f
+            if (mosaic != null) {
+                val gained = if (gains) (l.black[k] + (v - l.black[k]) * g).toInt().coerceIn(0, 65535) else v
+                mosaic.put(py * l.width + px, gained.toShort())
+                return
+            }
+            r!!.add(px shr 1, py shr 1, at[k], (v - l.black[k]) / span[k] * g)
         }
         val across = (l.width + l.tileW - 1) / l.tileW
         for (t in l.offsets.indices) {
@@ -313,7 +344,7 @@ object Dng {
         if (mosaic != null) {
             return RawImage(
                 l.width, l.height, mosaic, at, l.black, l.white, l.matrix, l.neutral,
-                l.baseline, l.make, l.model, l.orientation, channels = 1,
+                l.baseline, l.make, l.model, l.orientation, channels = 1, opcodes3 = l.opcodes3,
             )
         }
         return image(l, r!!, r.finish())
@@ -325,6 +356,8 @@ object Dng {
      */
     private fun readLinear(source: RawSource, l: Layout, maxSide: Int, alloc: Allocator, jxl: JxlDecoder?): RawImage {
         val r = Reducer(l.width, l.height, maxSide, intArrayOf(1, 1, 1), alloc)
+        val gains = l.gainMaps.isNotEmpty()
+        fun add(px: Int, py: Int, c: Int, n: Float) = r.add(px, py, c, if (gains) n * l.gainAt(px, py, c) else n)
         val across = (l.width + l.tileW - 1) / l.tileW
         // JPEG XL data comes as 0..1 of its own range; the levels are scaled to it.
         val jxlBlack = (l.blackLinear / l.whiteLinear).toFloat()
@@ -347,7 +380,7 @@ object Dng {
                                 for (x in 0 until minOf(image.width, l.tileW)) {
                                     val px = x0 + x
                                     if (px >= l.width) break
-                                    for (c in 0 until 3) r.add(px, py, c, ((line[x * 3 + c].toInt() and 0xFFFF) / 65535f - jxlBlack) / jxlSpan)
+                                    for (c in 0 until 3) add(px, py, c, ((line[x * 3 + c].toInt() and 0xFFFF) / 65535f - jxlBlack) / jxlSpan)
                                 }
                             }
                         }
@@ -370,7 +403,7 @@ object Dng {
                                     val px = x0 + x
                                     if (px >= l.width) break
                                     val v = if (ints != null) ints[y][x] / max else floats!![y][x]
-                                    r.add(px, py, c, (v - jxlBlack) / jxlSpan)
+                                    add(px, py, c, (v - jxlBlack) / jxlSpan)
                                 }
                             }
                         }
@@ -382,7 +415,7 @@ object Dng {
                             if (v < 0) break@loop
                             val px = x0 + x
                             val py = y0 + y
-                            if (px < l.width && py < l.height && c < 3) r.add(px, py, c, (v - black) / span)
+                            if (px < l.width && py < l.height && c < 3) add(px, py, c, (v - black) / span)
                         }
                     }
                     else -> throw RawException("Linear raw compression ${l.compression} is not supported")

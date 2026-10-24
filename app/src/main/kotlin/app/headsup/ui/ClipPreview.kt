@@ -235,7 +235,11 @@ fun ClipPreview(
     val pictureAspect = remember { mutableStateListOf<Float?>(null, null) }
     // A raw (DNG) photo is developed by the app, again whenever its development changes.
     val raw = photo && clip.meta.isRaw
-    val photoBitmap by produceState<ImageBitmap?>(null, clip.meta.uri, photo, if (raw) clip.rawDevelop else null) {
+    // The file the picture shown was decoded from: while another is loading, a spinner shows.
+    var photoFrom by remember { mutableStateOf<android.net.Uri?>(null) }
+    // Sharpening and colour noise are applied by the shader: changing them needs no new development.
+    val developKey = if (raw) clip.rawDevelop.copy(sharpen = 0f, colourNoise = 0f) else null
+    val photoBitmap by produceState<ImageBitmap?>(null, clip.meta.uri, photo, developKey) {
         if (!photo) { value = null; return@produceState }
         // Tried again a few times: while a project opens, other reads of the same files may hold
         // the memory or the file for a moment.
@@ -244,9 +248,14 @@ fun ClipPreview(
                 (if (raw) RawPhotos.decode(context, clip.meta.uri, clip.rawDevelop, 2048) { isActive }?.asImageBitmap() else null)
                     ?: if (isActive) decodePhoto(context, clip.meta.uri) else null
             }
-            if (bitmap != null) { value = bitmap; return@produceState }
+            if (bitmap != null) {
+                value = bitmap
+                photoFrom = clip.meta.uri
+                return@produceState
+            }
             delay(400L * (attempt + 1))
         }
+        photoFrom = clip.meta.uri
     }
     fun keyOf(c: ClipState): Any = Triple(sourceOf(c), c.trimStartMs, c.trimEndMs)
     fun clipped(c: ClipState) = MediaItem.Builder()
@@ -721,7 +730,7 @@ fun ClipPreview(
                         tableVersion
                         val frame = if (effects.grain > 0f) (positionMs / 33).toFloat() else 0f
                         val fromWeight = if (fromCube != null) ColourTransition.fromWeight(positionMs, transitionMs) else 0f
-                        renderEffect = previewShader?.effect(effects, zebra, frame, size.width, size.height, masks.map { it.at(fileMs) }, fromWeight)
+                        renderEffect = previewShader?.effect(effects, zebra, frame, size.width, size.height, masks.map { it.at(fileMs) }, fromWeight, if (raw) clip.rawDevelop else null)
                         // Reframing moves the graded picture, as in the export (colour first, then framing).
                         val t = reframeTransform(reframe, geometry)
                         scaleX = t.zoom
@@ -733,6 +742,12 @@ fun ClipPreview(
                 val bitmap = photoBitmap
                 if (photo) {
                     if (bitmap != null) Image(bitmap, contentDescription = clip.meta.name, contentScale = ContentScale.FillBounds, modifier = pictureLayer)
+                    if (photoFrom != clip.meta.uri) {
+                        // The next photo is being developed: the previous one is dimmed under a spinner.
+                        Box(Modifier.matchParentSize().background(Color.Black.copy(alpha = 0.45f)), contentAlignment = Alignment.Center) {
+                            androidx.compose.material3.CircularProgressIndicator(color = Color.White, strokeWidth = 3.dp, modifier = Modifier.size(36.dp))
+                        }
+                    }
                 }
                 // Both players' pictures stay in place; only the one playing is shown (and coloured),
                 // each laid out for the clip whose frame it holds.
