@@ -151,6 +151,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import app.headsup.core.track.ActivityTrack
 
 private val DOWNLOADS_FOLDER: Uri = DocumentsContract.buildDocumentUri("com.android.externalstorage.documents", "primary:Download")
+private val DCIM_FOLDER: Uri = DocumentsContract.buildDocumentUri("com.android.externalstorage.documents", "primary:DCIM")
 
 /** File picker that opens in [initial] instead of the last used folder. */
 private class OpenDocumentsIn(private val initial: Uri) : ActivityResultContracts.OpenMultipleDocuments() {
@@ -174,6 +175,8 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
     // FIT files usually land in Downloads; videos are picked from the gallery.
     val fitPicker = rememberLauncherForActivityResult(OpenDocumentsIn(DOWNLOADS_FOLDER)) { vm.addActivities(it) }
     val videoPicker = rememberLauncherForActivityResult(ActivityResultContracts.PickMultipleVisualMedia()) { vm.addClips(it) }
+    // Raw photos from the files: the gallery's picker hands over only a small JPEG preview of a DNG.
+    val rawPicker = rememberLauncherForActivityResult(OpenDocumentsIn(DCIM_FOLDER)) { vm.addClips(it) }
     val lutPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri -> uri?.let(vm::importLut) }
     // Sound files usually come from Downloads (the picker can go to Music from there).
     val soundPicker = rememberLauncherForActivityResult(OpenDocumentsIn(DOWNLOADS_FOLDER)) { vm.addAudioFiles(it) }
@@ -419,6 +422,7 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
                 when (tool) {
                     Tool.FILES -> FilesPanel(
                         state, vm, onAddVideos = addVideos, onAddFit = addFit, onAddSound = { soundPicker.launch(arrayOf("audio/*")) },
+                        onAddRaw = { rawPicker.launch(arrayOf("image/*")) },
                         onShowClip = { i -> jumpTo(clipStarts[i]) },
                     )
                     Tool.EDIT -> EditPanel(state, vm, playhead, editTab, { editTab = it }, onCutScrub = { cutScrub.value = it }) { f ->
@@ -589,6 +593,7 @@ private fun FilesPanel(
     onAddFit: () -> Unit,
     onAddSound: () -> Unit,
     onShowClip: (Int) -> Unit,
+    onAddRaw: () -> Unit,
 ) {
     // As on the Colour page: a row of sections, one shown. Everything the project uses is copied in
     // here, then used on the other pages.
@@ -610,13 +615,17 @@ private fun FilesPanel(
             if (state.activities.isEmpty()) Hint("The .FIT file(s) from your watch, for the dashboard.")
             state.activities.forEachIndexed { i, a -> ActivityRow(a, onRemove = { vm.removeActivity(i) }) }
         }
-        else -> VideoFiles(state, vm, onAddVideos, onShowClip)
+        else -> VideoFiles(state, vm, onAddVideos, onAddRaw, onShowClip)
     }
 }
 
 @Composable
-private fun VideoFiles(state: UiState, vm: HeadsupViewModel, onAddVideos: () -> Unit, onShowClip: (Int) -> Unit) {
-    AddTile(HeadsupIcons.Video, "Video · photo", onAddVideos, Modifier.fillMaxWidth())
+private fun VideoFiles(state: UiState, vm: HeadsupViewModel, onAddVideos: () -> Unit, onAddRaw: () -> Unit, onShowClip: (Int) -> Unit) {
+    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+        AddTile(HeadsupIcons.Video, "Video · photo", onAddVideos, Modifier.weight(1f))
+        // The gallery's picker gives only a small preview of a raw (DNG) photo; the files give the original.
+        AddTile(HeadsupIcons.Colour, "RAW photo", onAddRaw, Modifier.weight(1f))
+    }
     run {
         if (state.clips.isEmpty()) Hint("From the gallery or the cloud; copied into the project.")
         // One row per file, however many times it is cut on the timeline.
@@ -632,7 +641,7 @@ private fun VideoFiles(state: UiState, vm: HeadsupViewModel, onAddVideos: () -> 
                     Text(m.name, style = MaterialTheme.typography.bodyMedium, maxLines = 1)
                     Hint(
                         listOfNotNull(
-                            if (m.isPhoto) "photo" else Formats.duration(m.durationMs),
+                            if (m.isRaw) "RAW photo" else if (m.isPhoto) "photo" else Formats.duration(m.durationMs),
                             "${m.width}×${m.height}",
                             m.frameRate?.takeIf { !m.isPhoto }?.let { String.format(Locale.US, "%.4g fps", it) },
                             m.format?.toString(),
@@ -1596,7 +1605,7 @@ private fun ColourPage(
     val editingShape = if (target == GradeTarget.MASK && onShapes) shape?.takeIf { it in shapes } ?: shapes.firstOrNull() else null
     // Corrections are grouped into short sections (plus the mask's shape), so each row stays short.
     // A raw (DNG) photo is developed first (exposure, highlights, shadows, white balance on the raw data).
-    val rawPhoto = target == GradeTarget.CLIP && clip.meta.isPhoto && app.headsup.media.RawPhotos.isRaw(clip.meta.name)
+    val rawPhoto = target == GradeTarget.CLIP && clip.meta.isRaw
     var onRaw by rememberSaveable { mutableStateOf(false) }
     val sections = listOfNotNull("RAW".takeIf { rawPhoto }, "Shape".takeIf { shapes.isNotEmpty() }) +
         ColourSection.entries.filter { s -> options.any { it.section == s } }.map { it.label }

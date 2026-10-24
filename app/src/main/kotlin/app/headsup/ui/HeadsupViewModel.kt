@@ -1772,6 +1772,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                         // Texts as they are in the middle of the photo's time on the timeline (after any fade in).
                         texts = s.texts, textMs = start + clip.timelineDurationMs / 2,
                         longSide = s.exportSettings.photoLongSide, quality = s.exportSettings.photoQuality,
+                        raw = clip.meta.isRaw,
                         rawDevelop = clip.rawDevelop,
                     )
                     runCatching { withContext(Dispatchers.Default) { app.headsup.export.PhotoExporter.export(getApplication(), request) } }

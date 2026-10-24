@@ -226,7 +226,7 @@ fun ClipPreview(
     val pictureClip = remember { mutableStateListOf<Long?>(null, null) }
     val pictureAspect = remember { mutableStateListOf<Float?>(null, null) }
     // A raw (DNG) photo is developed by the app, again whenever its development changes.
-    val raw = photo && RawPhotos.isRaw(clip.meta.name)
+    val raw = photo && clip.meta.isRaw
     val photoBitmap by produceState<ImageBitmap?>(null, clip.meta.uri, photo, if (raw) clip.rawDevelop else null) {
         value = if (photo) {
             withContext(Dispatchers.Default) {

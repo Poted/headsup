@@ -17,7 +17,21 @@ object RawPhotos {
     private var cached: Pair<Uri, RawImage>? = null
     private val lock = Any()
 
-    fun isRaw(name: String): Boolean = name.substringAfterLast('.', "").equals("dng", ignoreCase = true)
+    /** Whether [uri] starts like a TIFF/DNG file (whatever its name says). */
+    fun looksRaw(context: Context, uri: Uri): Boolean = runCatching {
+        val head = ByteArray(4)
+        val n = context.contentResolver.openInputStream(uri)?.use { it.read(head) } ?: 0
+        n == 4 && ((head[0] == 'I'.code.toByte() && head[1] == 'I'.code.toByte() && head[2] == 42.toByte() && head[3] == 0.toByte()) ||
+            (head[0] == 'M'.code.toByte() && head[1] == 'M'.code.toByte() && head[2] == 0.toByte() && head[3] == 42.toByte()))
+    }.getOrDefault(false)
+
+    /** Size of the developed picture (upright), or null when the app cannot develop the file. */
+    fun size(context: Context, uri: Uri): Pair<Int, Int>? {
+        val raw = read(context, uri) ?: return null
+        val w = raw.width / 2
+        val h = raw.height / 2
+        return if (raw.orientation == 6 || raw.orientation == 8) h to w else w to h
+    }
 
     /**
      * [uri] developed with [develop], at most about [maxSide] on its long side, upright; null when

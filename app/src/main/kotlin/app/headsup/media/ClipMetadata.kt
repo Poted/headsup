@@ -90,6 +90,8 @@ data class ClipMetadata(
     val info: ClipInfo,
     /** A still photo: shown for a chosen time on the timeline, exported as video. */
     val isPhoto: Boolean = false,
+    /** A raw (DNG) photo, developed by the app; its size is the developed picture's. */
+    val isRaw: Boolean = false,
 )
 
 object ClipMetadataReader {
@@ -143,8 +145,10 @@ object ClipMetadataReader {
 
     /** Size (after EXIF rotation) and the moment it was taken, from EXIF or the file name. */
     private fun readPhoto(context: Context, uri: Uri, name: String): ClipMetadata {
+        // A raw file is recognised by its content (pickers may name it anything); its size is the developed picture's.
+        val rawSize = if (RawPhotos.looksRaw(context, uri)) RawPhotos.size(context, uri) else null
         val bounds = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
-        context.contentResolver.openInputStream(uri)?.use { android.graphics.BitmapFactory.decodeStream(it, null, bounds) }
+        if (rawSize == null) context.contentResolver.openInputStream(uri)?.use { android.graphics.BitmapFactory.decodeStream(it, null, bounds) }
         val exif = runCatching { context.contentResolver.openInputStream(uri)?.use { android.media.ExifInterface(it) } }.getOrNull()
         val orientation = exif?.getAttributeInt(android.media.ExifInterface.TAG_ORIENTATION, android.media.ExifInterface.ORIENTATION_NORMAL)
         val rotated = orientation == android.media.ExifInterface.ORIENTATION_ROTATE_90 || orientation == android.media.ExifInterface.ORIENTATION_ROTATE_270
@@ -159,14 +163,15 @@ object ClipMetadataReader {
             uri = uri,
             name = name,
             durationMs = PHOTO_MAX_MS,
-            width = if (rotated) bounds.outHeight else bounds.outWidth,
-            height = if (rotated) bounds.outWidth else bounds.outHeight,
+            width = rawSize?.first ?: if (rotated) bounds.outHeight else bounds.outWidth,
+            height = rawSize?.second ?: if (rotated) bounds.outWidth else bounds.outHeight,
             bitrate = null,
             frameRate = null,
             format = null,
             // A photo is a moment: matched as a very short clip.
             info = ClipInfo(1_000L, evidence),
             isPhoto = true,
+            isRaw = rawSize != null,
         )
     }
 

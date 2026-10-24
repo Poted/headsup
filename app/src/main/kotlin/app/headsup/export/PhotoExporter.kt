@@ -45,7 +45,8 @@ class PhotoRequest(
     /** Texts as they stand at [textMs] on the timeline. */
     val texts: List<TextItem>,
     val textMs: Long,
-    /** Development of a raw (DNG) photo. */
+    /** A raw (DNG) photo and its development. */
+    val raw: Boolean = false,
     val rawDevelop: RawDevelop = RawDevelop(),
     /** Long side of the file (null = the photo's own), and JPEG quality 0..100. */
     val longSide: Int? = null,
@@ -64,7 +65,7 @@ object PhotoExporter {
 
     fun export(context: Context, request: PhotoRequest): Uri {
         // Raw photos are developed by the app (from the sensor data); others decoded by Android.
-        val photo = (if (RawPhotos.isRaw(request.name)) RawPhotos.decode(context, request.uri, request.rawDevelop, MAX_SIDE) else null)
+        val photo = (if (request.raw) RawPhotos.decode(context, request.uri, request.rawDevelop, MAX_SIDE) else null)
             ?: decodeUpright(context, request.uri) ?: error("Could not read ${request.name}")
         val pw = photo.width.toFloat()
         val ph = photo.height.toFloat()
