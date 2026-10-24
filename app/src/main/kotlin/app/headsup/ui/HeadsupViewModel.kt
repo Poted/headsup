@@ -60,6 +60,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import app.headsup.media.Proxies
 import app.headsup.core.edit.TextItem
+import app.headsup.core.raw.RawDevelop
 import app.headsup.media.ProxyState
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -127,6 +128,8 @@ data class ClipState(
     val fadeOutMs: Long = 0L,
     /** Level of this clip's own sound, on top of the level for all clips. */
     val soundLevel: Float = 1f,
+    /** Development of a raw (DNG) photo: exposure, highlights, shadows and white balance on the raw data. */
+    val rawDevelop: RawDevelop = RawDevelop(),
 ) {
     val look: ClipLook get() = ClipLook(grade, effects, lutName, masks)
 
@@ -406,6 +409,9 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    /** Changes the raw development of clip [index] (a DNG photo). */
+    fun updateRawDevelop(index: Int, transform: (RawDevelop) -> RawDevelop) = updateClip(index) { it.copy(rawDevelop = transform(it.rawDevelop)) }
+
     // Texts
 
     /** Adds a text at timeline time [atMs] (3 s, or up to the video's end) and selects it. */
@@ -545,7 +551,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
             SavedClip(
                 it.meta.uri, it.trimStartMs, it.trimEndMs, it.manualOffsetMs, it.colorGrade, it.lutName,
                 it.manualStart, it.grade, it.effects, it.masks, it.groupId, it.transitionMs, it.reframe, it.speed, it.muteChangedSpeed,
-                it.fadeInMs, it.fadeOutMs, it.soundLevel,
+                it.fadeInMs, it.fadeOutMs, it.soundLevel, it.rawDevelop,
             )
         },
         groups = groups.map { SavedGroup(it.id, it.name, it.grade, it.lutName) },
@@ -608,6 +614,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                     fadeInMs = c.fadeInMs,
                     fadeOutMs = c.fadeOutMs,
                     soundLevel = c.soundLevel,
+                    rawDevelop = c.rawDevelop,
                     groupId = c.groupId,
                 )
             }
@@ -1756,6 +1763,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                         // Texts as they are in the middle of the photo's time on the timeline (after any fade in).
                         texts = s.texts, textMs = start + clip.timelineDurationMs / 2,
                         longSide = s.exportSettings.photoLongSide, quality = s.exportSettings.photoQuality,
+                        rawDevelop = clip.rawDevelop,
                     )
                     runCatching { withContext(Dispatchers.Default) { app.headsup.export.PhotoExporter.export(getApplication(), request) } }
                         .onSuccess { saved += clip.meta.name }

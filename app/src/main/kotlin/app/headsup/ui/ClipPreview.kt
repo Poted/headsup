@@ -93,6 +93,7 @@ import app.headsup.core.frame.Reframe
 import app.headsup.core.edit.Fade
 import app.headsup.core.edit.TextItem
 import app.headsup.render.TextRenderer
+import app.headsup.media.RawPhotos
 import app.headsup.export.AudioClip
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.requiredSize
@@ -222,8 +223,14 @@ fun ClipPreview(
     // the first one): a picture is always laid out for the clip it shows, also while a cut is passed.
     val pictureClip = remember { mutableStateListOf<Long?>(null, null) }
     val pictureAspect = remember { mutableStateListOf<Float?>(null, null) }
-    val photoBitmap by produceState<ImageBitmap?>(null, clip.meta.uri, photo) {
-        value = if (photo) withContext(Dispatchers.IO) { decodePhoto(context, clip.meta.uri) } else null
+    // A raw (DNG) photo is developed by the app, again whenever its development changes.
+    val raw = photo && RawPhotos.isRaw(clip.meta.name)
+    val photoBitmap by produceState<ImageBitmap?>(null, clip.meta.uri, photo, if (raw) clip.rawDevelop else null) {
+        value = if (photo) {
+            withContext(Dispatchers.Default) {
+                (if (raw) RawPhotos.decode(context, clip.meta.uri, clip.rawDevelop, 2048)?.asImageBitmap() else null) ?: decodePhoto(context, clip.meta.uri)
+            }
+        } else null
     }
     fun keyOf(c: ClipState): Any = Triple(sourceOf(c), c.trimStartMs, c.trimEndMs)
     fun clipped(c: ClipState) = MediaItem.Builder()

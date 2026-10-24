@@ -1588,15 +1588,25 @@ private fun ColourPage(
     val shapes = mask?.let { m -> MaskShape.entries.filter { m.kind in it.kinds } }.orEmpty()
     val editingShape = if (target == GradeTarget.MASK && onShapes) shape?.takeIf { it in shapes } ?: shapes.firstOrNull() else null
     // Corrections are grouped into short sections (plus the mask's shape), so each row stays short.
-    val sections = listOfNotNull("Shape".takeIf { shapes.isNotEmpty() }) + ColourSection.entries.filter { s -> options.any { it.section == s } }.map { it.label }
-    val section = if (editingShape != null) "Shape" else adjustment.section.label
+    // A raw (DNG) photo is developed first (exposure, highlights, shadows, white balance on the raw data).
+    val rawPhoto = target == GradeTarget.CLIP && clip.meta.isPhoto && app.headsup.media.RawPhotos.isRaw(clip.meta.name)
+    var onRaw by rememberSaveable { mutableStateOf(false) }
+    val sections = listOfNotNull("RAW".takeIf { rawPhoto }, "Shape".takeIf { shapes.isNotEmpty() }) +
+        ColourSection.entries.filter { s -> options.any { it.section == s } }.map { it.label }
+    val section = if (onRaw && rawPhoto) "RAW" else if (editingShape != null) "Shape" else adjustment.section.label
     SectionTabs(sections, sections.indexOf(section).coerceAtLeast(0)) { i ->
+        onRaw = sections[i] == "RAW"
+        if (sections[i] == "RAW") return@SectionTabs
         if (sections[i] == "Shape") {
             onShapes = true
         } else {
             onShapes = false
             options.firstOrNull { it.section.label == sections[i] }?.let(onAdjustment)
         }
+    }
+    if (onRaw && rawPhoto) {
+        RawControls(clip, index, vm)
+        return
     }
     LazyRow(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
         if (editingShape != null) {
@@ -2545,3 +2555,34 @@ private fun TextPanel(state: UiState, vm: HeadsupViewModel, at: () -> Long) {
         }
     }
 }
+
+/** Development of a raw photo, before the colour corrections: one ruler at a time. */
+private enum class RawControl(val symbol: String, val label: String, val range: ClosedFloatingPointRange<Float>, val step: Float, val format: String,
+    val get: (app.headsup.core.raw.RawDevelop) -> Float, val set: (app.headsup.core.raw.RawDevelop, Float) -> app.headsup.core.raw.RawDevelop) {
+    EXPOSURE("EV", "Exposure", -3f..3f, 0.05f, "%+.2f EV", { it.exposure }, { d, v -> d.copy(exposure = v) }),
+    HIGHLIGHTS("Hl", "Highlights", -1f..1f, 0.02f, "%+.2f", { it.highlights }, { d, v -> d.copy(highlights = v) }),
+    SHADOWS("Sh", "Shadows", -1f..1f, 0.02f, "%+.2f", { it.shadows }, { d, v -> d.copy(shadows = v) }),
+    TEMPERATURE("K", "Temperature", -1f..1f, 0.02f, "%+.2f", { it.temperature }, { d, v -> d.copy(temperature = v) }),
+    TINT("Tn", "Tint", -1f..1f, 0.02f, "%+.2f", { it.tint }, { d, v -> d.copy(tint = v) }),
+}
+
+@Composable
+private fun RawControls(clip: ClipState, index: Int, vm: HeadsupViewModel) {
+    var control by rememberSaveable { mutableStateOf(RawControl.EXPOSURE) }
+    val develop = clip.rawDevelop
+    LazyRow(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+        items(RawControl.entries) { c ->
+            CircleOption(c.symbol, c.label, selected = c == control, modified = c.get(develop) != 0f) { control = c }
+        }
+    }
+    ValueHeader(control.label, String.format(Locale.US, control.format, control.get(develop)))
+    RulerSlider(
+        value = control.get(develop),
+        range = control.range,
+        step = control.step,
+        onChange = { v -> vm.updateRawDevelop(index) { control.set(it, v) } },
+        onReset = { vm.updateRawDevelop(index) { control.set(it, 0f) } },
+    )
+    app.headsup.media.RawPhotos.lastError?.let { Hint("Developed by Android instead: $it") }
+}
+

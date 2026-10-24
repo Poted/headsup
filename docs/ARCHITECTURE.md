@@ -304,3 +304,14 @@ fade, rise, pop, typing and a HUD style that decodes each letter from random cha
 blinking block cursor; out animations mirror the in ones. The Text page edits words, ready looks,
 font, colour, size, glow, animations and time; the picture places a text by dragging and its bar
 on the video track moves it in time.
+
+## Raw photos
+
+DNG photos are developed by the app (`core/raw`): a small TIFF reader finds the raw image (in IFD0
+or a SubIFD), a lossless JPEG (LJ92) decoder unpacks Bayer tiles, and `Dng.develop` turns the
+mosaic into sRGB at half size (each 2×2 filter block one pixel): black/white levels, as-shot white
+balance plus temperature and tint, the camera's D65 colour matrix (dcraw's normalised inverse),
+baseline exposure plus the user's, highlights and shadows in linear light with a soft shoulder
+instead of clipping, then a gentle S-curve. The colour page's RAW section sets these per photo;
+the usual corrections, masks and effects follow on the developed picture. JPEG XL compressed
+DNGs (DNG 1.7, Samsung Expert RAW) are not decoded yet: they fall back to Android's decoder.

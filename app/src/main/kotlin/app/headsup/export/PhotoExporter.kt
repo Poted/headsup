@@ -18,6 +18,8 @@ import app.headsup.color.GradeTables
 import app.headsup.core.color.ColourMask
 import app.headsup.core.edit.TextItem
 import app.headsup.core.frame.Reframe
+import app.headsup.core.raw.RawDevelop
+import app.headsup.media.RawPhotos
 import app.headsup.render.DashboardData
 import app.headsup.render.DashboardRenderer
 import app.headsup.render.DashboardStyle
@@ -43,6 +45,8 @@ class PhotoRequest(
     /** Texts as they stand at [textMs] on the timeline. */
     val texts: List<TextItem>,
     val textMs: Long,
+    /** Development of a raw (DNG) photo. */
+    val rawDevelop: RawDevelop = RawDevelop(),
     /** Long side of the file (null = the photo's own), and JPEG quality 0..100. */
     val longSide: Int? = null,
     val quality: Int = 92,
@@ -59,7 +63,9 @@ object PhotoExporter {
     private const val MAX_SIDE = 6000
 
     fun export(context: Context, request: PhotoRequest): Uri {
-        val photo = decodeUpright(context, request.uri) ?: error("Could not read ${request.name}")
+        // Raw photos are developed by the app (from the sensor data); others decoded by Android.
+        val photo = (if (RawPhotos.isRaw(request.name)) RawPhotos.decode(context, request.uri, request.rawDevelop, MAX_SIDE) else null)
+            ?: decodeUpright(context, request.uri) ?: error("Could not read ${request.name}")
         val pw = photo.width.toFloat()
         val ph = photo.height.toFloat()
         // The largest frame of the timeline's shape inside the photo.
