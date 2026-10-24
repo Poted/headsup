@@ -62,6 +62,7 @@ import app.headsup.core.color.LutBaker
 import app.headsup.render.EffectSettings
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.withContext
 import android.view.TextureView
 import androidx.compose.foundation.gestures.waitForUpOrCancellation
@@ -240,7 +241,8 @@ fun ClipPreview(
         // the memory or the file for a moment.
         for (attempt in 0 until 3) {
             val bitmap = withContext(Dispatchers.Default) {
-                (if (raw) RawPhotos.decode(context, clip.meta.uri, clip.rawDevelop, 2048)?.asImageBitmap() else null) ?: decodePhoto(context, clip.meta.uri)
+                (if (raw) RawPhotos.decode(context, clip.meta.uri, clip.rawDevelop, 2048) { isActive }?.asImageBitmap() else null)
+                    ?: if (isActive) decodePhoto(context, clip.meta.uri) else null
             }
             if (bitmap != null) { value = bitmap; return@produceState }
             delay(400L * (attempt + 1))

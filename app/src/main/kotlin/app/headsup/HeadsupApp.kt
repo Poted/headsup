@@ -15,6 +15,9 @@ class HeadsupApp : Application() {
 
     override fun onCreate() {
         super.onCreate()
+        // The raw reader's own process (see RawService) reports nothing: when it runs out of
+        // memory the app carries on and says so.
+        if (Build.VERSION.SDK_INT >= 28 && Application.getProcessName() != packageName) return
         // Keep the stack trace of a crash so it can be shown (and sent) on the next start.
         val previous = Thread.getDefaultUncaughtExceptionHandler()
         Thread.setDefaultUncaughtExceptionHandler { thread, error ->
@@ -36,8 +39,8 @@ class HeadsupApp : Application() {
         if (Build.VERSION.SDK_INT >= 30) {
             val prefs = getSharedPreferences("diagnostics", MODE_PRIVATE)
             val info = getSystemService(ActivityManager::class.java)
-                .getHistoricalProcessExitReasons(packageName, 0, 1)
-                .firstOrNull()
+                .getHistoricalProcessExitReasons(packageName, 0, 5)
+                .firstOrNull { it.processName == packageName }
             if (info != null && info.timestamp > prefs.getLong("last_exit_seen", 0L)) {
                 prefs.edit().putLong("last_exit_seen", info.timestamp).apply()
                 val reason = when (info.reason) {

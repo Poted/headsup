@@ -188,7 +188,15 @@ data class MatchReference(val clipId: Long, val clipName: String, val stats: Mat
  * The last shot match: what it was applied to (the clip, or its whole group), the corrections
  * before it, the change it found and how much of that is applied.
  */
-data class MatchSession(val clipId: Long, val groupId: Long?, val base: ColorGrade, val delta: ColorGrade, val strength: Float)
+data class MatchSession(
+    val clipId: Long,
+    val groupId: Long?,
+    val base: ColorGrade,
+    val delta: ColorGrade,
+    val strength: Float,
+    /** For a group: each clip's corrections before the match. */
+    val memberBases: Map<Long, ColorGrade> = emptyMap(),
+)
 
 /** A full match often overshoots between different scenes, so it starts at this share. */
 const val MATCH_STRENGTH = 0.6f
@@ -331,8 +339,8 @@ data class UiState(
     /** Corrections the colour page edits: the selected clip's, its mask's, or the global node's. */
     val grade: ColorGrade
         get() = when {
-            // In an album "all photos" and a group set their values on each photo: the photo's are shown.
-            photoProject && (target == GradeTarget.GLOBAL || target == GradeTarget.GROUP) -> selected?.grade ?: defaultGrade
+            // "All" and a group set their values on each clip: the clip's own are shown.
+            target == GradeTarget.GLOBAL || target == GradeTarget.GROUP -> selected?.grade ?: defaultGrade
             else -> gradeOf(target)
         }
 
@@ -351,8 +359,8 @@ data class UiState(
 
     /** [edited] unless it is the grade being compared (held ruler), then [compareGrade]. */
     private fun shown(edited: ColorGrade, which: GradeTarget, clip: ClipState): ColorGrade {
-        // An album's "all photos" and group tabs edit the photo's own values.
-        val target = if (photoProject && (target == GradeTarget.GLOBAL || target == GradeTarget.GROUP)) GradeTarget.CLIP else target
+        // The "all" and group tabs edit the clip's own values.
+        val target = if (target == GradeTarget.GLOBAL || target == GradeTarget.GROUP) GradeTarget.CLIP else target
         if (target != which || compareGrade == null) return edited
         val affected = when (which) {
             GradeTarget.GLOBAL -> true
@@ -395,7 +403,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
         UiState(
             style = stylePrefs.load(),
 
-            globalGrade = gradeStore.loadGrade(GLOBAL),
+            globalGrade = ColorGrade(),
             luts = gradeStore.names(),
             messages = listOfNotNull((app as HeadsupApp).takeCrashReport()),
         ),
@@ -446,7 +454,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
     /** Changes the raw development of clip [index] (a DNG photo). */
     fun updateRawDevelop(index: Int, transform: (RawDevelop) -> RawDevelop) {
         val now = _state.value
-        if (now.photoProject && (now.target == GradeTarget.GLOBAL || now.target == GradeTarget.GROUP)) {
+        if (now.target == GradeTarget.GLOBAL || now.target == GradeTarget.GROUP) {
             val clip = now.clips.getOrNull(index) ?: return
             val before = clip.rawDevelop
             val after = transform(before)
@@ -457,24 +465,24 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
         updateClip(index) { it.copy(rawDevelop = transform(it.rawDevelop)) }
     }
 
-    /** In an album, the photos an edit on "all photos" or a group reaches. */
-    private fun UiState.syncsTo(c: ClipState): Boolean = c.meta.isPhoto && c.colorGrade && when (target) {
+    /** The clips an edit on "all" or a group reaches (those with colour on). */
+    private fun UiState.syncsTo(c: ClipState): Boolean = c.colorGrade && when (target) {
         GradeTarget.GLOBAL -> true
         GradeTarget.GROUP -> selected?.groupId?.let { it == c.groupId } ?: (c.id == selected?.id)
         else -> c.id == selected?.id
     }
 
-    /** In an album: every photo the current tab reaches back to no corrections (and its raw as shot). */
+    /** Every clip the current tab reaches back to no corrections (and a raw as shot). */
     fun resetSyncedPhotos() {
         _state.update { s -> s.copy(clips = s.clips.map { c -> if (s.syncsTo(c)) c.copy(grade = ColorGrade(), rawDevelop = RawDevelop()) else c }) }
         refreshPreview()
     }
 
     /**
-     * An album keeps every correction on the photos themselves: a group's and the global ones
-     * (from projects saved before albums synced) are added into each photo's own.
+     * Every correction lives on the clips themselves: a group's and the global ones (from
+     * projects saved before "all" and groups synced) are added into each clip's own.
      */
-    private fun foldedIntoPhotos(clips: List<ClipState>, project: ProjectData): List<ClipState> = clips.map { c ->
+    private fun foldedIntoClips(clips: List<ClipState>, project: ProjectData): List<ClipState> = clips.map { c ->
         val group = project.groups.firstOrNull { it.id == c.groupId }
         c.copy(grade = c.grade + (group?.grade ?: ColorGrade()) + project.globalGrade, lutName = c.lutName ?: group?.lutName)
     }
@@ -760,16 +768,15 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
             scopeFrame = null
             // Older projects of only photos open as albums.
             val kind = project.kind ?: if (clips.isNotEmpty() && clips.all { it.meta.isPhoto }) ProjectKind.PHOTOS else ProjectKind.VIDEO
-            val album = kind == ProjectKind.PHOTOS
             _state.update { s ->
                 resynced(
                     s.copy(
                         projectName = project.name,
                         projectKind = kind,
                         activities = activities.sortedBy { it.track.startMs },
-                        clips = if (album) foldedIntoPhotos(clips, project) else clips,
-                        groups = project.groups.map { if (album) ClipGroup(it.id, it.name, ColorGrade(), null) else ClipGroup(it.id, it.name, it.grade, it.lutName) },
-                        globalGrade = if (album) ColorGrade() else project.globalGrade,
+                        clips = foldedIntoClips(clips, project),
+                        groups = project.groups.map { ClipGroup(it.id, it.name, ColorGrade(), null) },
+                        globalGrade = ColorGrade(),
                         timelineFps = project.timelineFps,
                         // Older projects kept the shape per clip: one shared by all becomes the frame's.
                         frameAspect = project.frameAspect ?: clips.map { it.reframe.aspect }.distinct().singleOrNull(),
@@ -1270,8 +1277,8 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
             val id = (s.groups.maxOfOrNull { it.id } ?: 0L) + 1
             val number = generateSequence(s.groups.size + 1) { it + 1 }.first { n -> s.groups.none { it.name == "Group $n" } }
             s.copy(
-                groups = s.groups + ClipGroup(id, "Group $number", lutName = clip.lutName),
-                clips = s.clips.mapIndexed { i, c -> if (i == index) c.copy(groupId = id, lutName = null) else c },
+                groups = s.groups + ClipGroup(id, "Group $number"),
+                clips = s.clips.mapIndexed { i, c -> if (i == index) c.copy(groupId = id) else c },
             )
         }
         refreshPreview()
@@ -1288,14 +1295,10 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
 
     fun renameGroup(id: Long, name: String) = updateGroup(id) { it.copy(name = name.trim().ifEmpty { it.name }) }
 
+    /** Sets the LUT on each clip of the group. */
     fun setGroupLut(id: Long, lutName: String?) {
-        if (_state.value.photoProject) {
-            // An album sets the LUT on each photo of the group.
-            _state.update { s -> s.copy(clips = s.clips.map { if (it.groupId == id) it.copy(lutName = lutName) else it }) }
-            refreshPreview()
-            return
-        }
-        updateGroup(id) { it.copy(lutName = lutName) }
+        _state.update { s -> s.copy(clips = s.clips.map { if (it.groupId == id) it.copy(lutName = lutName) else it }) }
+        refreshPreview()
     }
 
     /** Removes the group; its clips keep their own settings. */
@@ -1367,7 +1370,8 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                 saturation = matched.saturation - applied.saturation,
                 skinHue = matched.skinHue - applied.skinHue,
             )
-            val session = MatchSession(clip.id, group?.id, group?.grade ?: clip.grade, delta, MATCH_STRENGTH)
+            val members = if (group == null) emptyMap() else s.clips.filter { it.groupId == group.id }.associate { it.id to it.grade }
+            val session = MatchSession(clip.id, group?.id, clip.grade, delta, MATCH_STRENGTH, members)
             _state.update { it.copy(matching = false, matchSession = session, matchedSkin = delta.skinHue != 0f) }
             applyMatch(session)
         }
@@ -1382,9 +1386,8 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
 
     private fun applyMatch(m: MatchSession) {
         val k = m.strength
-        val b = m.base
         val d = m.delta
-        val grade = b.copy(
+        fun matched(b: ColorGrade) = b.copy(
             exposure = (b.exposure + d.exposure * k).coerceIn(-3f, 3f),
             contrast = (b.contrast + d.contrast * k).coerceIn(-1f, 1f),
             temperature = (b.temperature + d.temperature * k).coerceIn(-1f, 1f),
@@ -1392,8 +1395,11 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
             saturation = (b.saturation + d.saturation * k).coerceIn(-1f, 1f),
             skinHue = (b.skinHue + d.skinHue * k).coerceIn(-30f, 30f),
         )
+        val grade = matched(m.base)
         if (m.groupId != null) {
-            updateGroup(m.groupId) { it.copy(grade = grade) }
+            // The camera's character goes onto each clip of the group.
+            _state.update { s -> s.copy(clips = s.clips.map { c -> m.memberBases[c.id]?.let { c.copy(grade = matched(it)) } ?: c }) }
+            refreshPreview()
         } else {
             val index = _state.value.clips.indexOfFirst { it.id == m.clipId }
             if (index >= 0) updateClip(index) { it.copy(grade = grade) }
@@ -1766,32 +1772,25 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
      */
     fun updateGrade(transform: (ColorGrade) -> ColorGrade) {
         val now = _state.value
-        if (now.photoProject && (now.target == GradeTarget.GLOBAL || now.target == GradeTarget.GROUP)) {
-            // An album syncs: the values changed on the selected photo are set on every photo (or the group's).
+        if (now.target == GradeTarget.GLOBAL || now.target == GradeTarget.GROUP) {
+            // A sync: the values changed on the selected clip are set on every clip (or the group's),
+            // so each clip shows what it really has. Changes for all clips also go to clips added later.
             val selected = now.selected ?: return
             val before = selected.grade
             val after = transform(before)
-            _state.update { s -> s.copy(clips = s.clips.map { c -> if (s.syncsTo(c)) c.copy(grade = c.grade.synced(before, after)) else c }) }
+            _state.update { s ->
+                s.copy(
+                    clips = s.clips.map { c -> if (s.syncsTo(c)) c.copy(grade = c.grade.synced(before, after)) else c },
+                    defaultGrade = if (s.target == GradeTarget.GLOBAL) s.defaultGrade.synced(before, after) else s.defaultGrade,
+                )
+            }
+            gradeStore.saveGrade(_state.value.defaultGrade)
             refreshPreview()
             return
         }
-        when (_state.value.target) {
-            GradeTarget.GLOBAL -> {
-                _state.update { it.copy(globalGrade = transform(it.globalGrade)) }
-                gradeStore.saveGrade(_state.value.globalGrade, GLOBAL)
-                refreshPreview()
-                return
-            }
-            GradeTarget.MASK -> {
-                updateMask { it.copy(grade = transform(it.grade)) }
-                return
-            }
-            GradeTarget.GROUP -> {
-                val id = _state.value.selected?.groupId ?: return
-                updateGroup(id) { it.copy(grade = transform(it.grade)) }
-                return
-            }
-            GradeTarget.CLIP -> Unit
+        if (now.target == GradeTarget.MASK) {
+            updateMask { it.copy(grade = transform(it.grade)) }
+            return
         }
         _state.update { s ->
             val grade = transform(s.grade)

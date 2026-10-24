@@ -27,6 +27,11 @@
         </activity>
 
         <service
+            android:name=".media.RawService"
+            android:exported="false"
+            android:process=":raw" />
+
+        <service
             android:name=".export.ExportService"
             android:exported="false"
             android:foregroundServiceType="dataSync|mediaProcessing" />

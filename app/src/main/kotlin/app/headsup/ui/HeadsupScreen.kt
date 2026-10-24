@@ -1628,13 +1628,12 @@ private fun ColourPage(
         GradeTarget.GROUP -> GroupControls(state, clip, index, group, vm)
         GradeTarget.MASK -> MaskList(state, clip, vm, playhead, onSeek)
         GradeTarget.GLOBAL -> Row(verticalAlignment = Alignment.CenterVertically) {
-            if (album) {
-                Hint("A change here is set on every photo: each shows it under This photo.", Modifier.weight(1f))
-                SmallAction("Reset all", { vm.resetSyncedPhotos() })
-            } else {
-                Hint("Added on top of every clip's own corrections.", Modifier.weight(1f))
-                if (state.grade != ColorGrade()) SmallAction("Reset", { vm.updateGrade { ColorGrade() } })
-            }
+            Hint(
+                if (album) "A change here is set on every photo: each shows it under This photo."
+                else "A change here is set on every clip: each shows it under This clip.",
+                Modifier.weight(1f),
+            )
+            SmallAction("Reset all", { vm.resetSyncedPhotos() })
         }
     }
     if (target != GradeTarget.GLOBAL && !clip.colorGrade) {
@@ -1664,8 +1663,8 @@ private fun ColourPage(
     val editingShape = if (target == GradeTarget.MASK && onShapes) shape?.takeIf { it in shapes } ?: shapes.firstOrNull() else null
     // Corrections are grouped into short sections (plus the mask's shape), so each row stays short.
     // A raw (DNG) photo is developed first (exposure, highlights, shadows, white balance on the raw data).
-    // In an album the raw development syncs like the rest from "all photos" and groups.
-    val rawPhoto = clip.meta.isRaw && (target == GradeTarget.CLIP || album && (target == GradeTarget.GLOBAL || target == GradeTarget.GROUP))
+    // The raw development syncs like the rest from "all" and groups.
+    val rawPhoto = clip.meta.isRaw && target != GradeTarget.MASK
     var onRaw by rememberSaveable { mutableStateOf(false) }
     val sections = listOfNotNull("RAW".takeIf { rawPhoto }, "Shape".takeIf { shapes.isNotEmpty() }) +
         ColourSection.entries.filter { s -> options.any { it.section == s } }.map { it.label }
@@ -1737,7 +1736,7 @@ private fun ColourPage(
     }
     if (adjustment == Adjustment.LUT) {
         if (target == GradeTarget.GROUP && group != null) {
-            LutControls(state, if (state.photoProject) clip.lutName else group.lutName, "None", { vm.setGroupLut(group.id, it) }, null, vm, onAddLut)
+            LutControls(state, clip.lutName, "None", { vm.setGroupLut(group.id, it) }, null, vm, onAddLut)
         } else {
             val inherited = group?.lutName
             LutControls(
@@ -1993,7 +1992,7 @@ private fun GroupControls(state: UiState, clip: ClipState, index: Int, group: Cl
     if (group == null) {
         Hint(
             if (state.photoProject) "Photos shot the same way (e.g. drone) get the same LUT and corrections: a change here is set on each photo of the group."
-            else "Clips shot the same way (e.g. drone) share a LUT and corrections. Long-press a clip to add it.",
+            else "Clips shot the same way (e.g. drone) get the same LUT and corrections: a change here is set on each clip of the group.",
         )
     }
     FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -2013,8 +2012,7 @@ private fun GroupControls(state: UiState, clip: ClipState, index: Int, group: Cl
             SmallAction("Leave", { vm.setClipGroup(index, null) })
             SmallAction("Delete group", { vm.deleteGroup(group.id) })
             Spacer(Modifier.weight(1f))
-            if (state.photoProject) SmallAction("Reset group", { vm.resetSyncedPhotos() })
-            else if (group.grade != ColorGrade()) SmallAction("Reset", { vm.updateGrade { ColorGrade() } })
+            SmallAction("Reset group", { vm.resetSyncedPhotos() })
         }
         if (renaming) RenameDialog(group.name, onDismiss = { renaming = false }) { vm.renameGroup(group.id, it); renaming = false }
     }

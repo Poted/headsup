@@ -9,12 +9,10 @@ import app.headsup.core.raw.Dng
 import app.headsup.core.raw.RawDevelop
 import app.headsup.core.raw.RawImage
 import app.headsup.core.raw.RawSource
-import app.headsup.core.raw.Allocator
 import app.headsup.core.raw.Developer
 import android.graphics.Canvas
 import android.graphics.ColorSpace
 import android.graphics.Rect
-import android.os.SharedMemory
 import android.util.Half
 import java.nio.ByteOrder
 import app.headsup.core.raw.BytesSource
@@ -29,7 +27,7 @@ import java.nio.channels.FileChannel
  * read stays in memory, so moving a slider only develops it again.
  */
 object RawPhotos {
-    private var cached: Triple<Uri, Int, RawImage>? = null
+    private var cached: Triple<Uri, Int, RemoteRaw>? = null
     private val lock = Any()
 
     /** Whether [uri] starts like a TIFF/DNG file (whatever its name says). */
@@ -58,17 +56,31 @@ object RawPhotos {
      * [uri] developed with [develop], at most about [maxSide] on its long side, upright; null when
      * the file is not one the app can develop (the reason in [lastError]), so callers fall back.
      */
-    fun decode(context: Context, uri: Uri, develop: RawDevelop, maxSide: Int): Bitmap? = try {
-        developed(context, uri, develop, maxSide)
-    } catch (e: OutOfMemoryError) {
-        // Too large for the memory left: the caller falls back to Android's decoder.
-        synchronized(lock) { cached = null }
-        lastError = "Not enough memory to develop this file"
-        null
+    /**
+     * One development at a time (slider moves come quickly; each needs its own picture), and one
+     * no longer [wanted] by the time its turn comes is skipped.
+     */
+    fun decode(context: Context, uri: Uri, develop: RawDevelop, maxSide: Int, wanted: () -> Boolean = { true }): Bitmap? = synchronized(lock) {
+        if (!wanted()) return null
+        try {
+            developed(context, uri, develop, maxSide)
+        } catch (e: OutOfMemoryError) {
+            // Too large for the memory left: the caller falls back to Android's decoder.
+            lastError = "Not enough memory to develop this file"
+            null
+        }
     }
 
     private fun developed(context: Context, uri: Uri, develop: RawDevelop, maxSide: Int): Bitmap? {
-        val raw = read(context, uri, maxSide) ?: return null
+        val remote = read(context, uri, maxSide) ?: return null
+        try {
+            return developed(remote.image, develop, maxSide)
+        } finally {
+            if (cached?.third !== remote) remote.release()
+        }
+    }
+
+    private fun developed(raw: RawImage, develop: RawDevelop, maxSide: Int): Bitmap {
         val full = maxOf(raw.developedWidth, raw.developedHeight)
         val step = ((full + maxSide - 1) / maxSide).coerceAtLeast(1)
         val out = Dng.develop(raw, develop, step)
@@ -93,9 +105,10 @@ object RawPhotos {
      * develop the file.
      */
     fun developFull(context: Context, uri: Uri, develop: RawDevelop): FullPicture? {
-        val memory = NativeMemory()
+        var remote: RemoteRaw? = null
         return try {
-            val raw = withSource(context, uri) { Dng.read(it, mosaic = true, alloc = memory) }
+            remote = RawReader.read(context, uri, 0, mosaic = true)
+            val raw = remote.image
             val dev = Developer(raw, develop)
             val w = dev.width
             val space = ColorSpace.get(ColorSpace.Named.EXTENDED_SRGB)
@@ -137,26 +150,7 @@ object RawPhotos {
             lastError = if (e is OutOfMemoryError) "Not enough memory to develop this file at full size" else e.message
             null
         } finally {
-            memory.release()
-        }
-    }
-
-    /** Memory mapped outside the Java heap (shared memory), unmapped together when done. */
-    private class NativeMemory : Allocator {
-        private val maps = ArrayList<ByteBuffer>()
-
-        override fun allocate(bytes: Long): ByteBuffer {
-            val shared = SharedMemory.create("raw", Math.toIntExact(bytes))
-            try {
-                return shared.mapReadWrite().also { synchronized(maps) { maps += it } }
-            } finally {
-                shared.close() // the mapping stays until unmapped
-            }
-        }
-
-        fun release() = synchronized(maps) {
-            maps.forEach { SharedMemory.unmap(it) }
-            maps.clear()
+            remote?.release()
         }
     }
 
@@ -182,7 +176,7 @@ object RawPhotos {
     }.getOrNull()
 
     /** The file read in parts through its descriptor; a stream that cannot seek (e.g. from the cloud) is read whole. */
-    private fun <T> withSource(context: Context, uri: Uri, block: (RawSource) -> T): T {
+    internal fun <T> withSource(context: Context, uri: Uri, block: (RawSource) -> T): T {
         val pfd = runCatching { context.contentResolver.openFileDescriptor(uri, "r") }.getOrNull()
         if (pfd != null) {
             val channel = FileInputStream(pfd.fileDescriptor).channel
@@ -240,12 +234,15 @@ object RawPhotos {
      * full sensor data is held. The preview's size (the last one asked) stays for slider moves;
      * an export's larger read is not kept.
      */
-    private fun read(context: Context, uri: Uri, maxSide: Int): RawImage? = synchronized(lock) {
+    private fun read(context: Context, uri: Uri, maxSide: Int): RemoteRaw? {
         cached?.takeIf { it.first == uri && it.second == maxSide }?.let { return it.third }
         return runCatching {
-            if (maxSide <= KEEP_SIDE) cached = null
-            withSource(context, uri) { Dng.read(it, maxSide) }
-        }.onFailure { lastError = if (it is OutOfMemoryError) "Not enough memory to develop this file" else it.message }.getOrNull()?.also {
+            if (maxSide <= KEEP_SIDE) {
+                cached?.third?.release()
+                cached = null
+            }
+            RawReader.read(context, uri, maxSide, mosaic = false)
+        }.onFailure { lastError = it.message }.getOrNull()?.also {
             lastError = null
             if (maxSide <= KEEP_SIDE) cached = Triple(uri, maxSide, it)
         }
