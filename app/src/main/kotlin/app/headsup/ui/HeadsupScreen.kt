@@ -2723,6 +2723,7 @@ private fun RawControls(clip: ClipState, index: Int, vm: HeadsupViewModel) {
 }
 
 /** The photos of a photo project as thumbnails: tap one to edit it. */
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
 private fun PhotoStrip(state: UiState, vm: HeadsupViewModel, onAdd: () -> Unit) {
     val onSelect: (Int) -> Unit = vm::selectClip
