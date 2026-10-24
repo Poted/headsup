@@ -43,6 +43,9 @@ class PhotoRequest(
     /** Texts as they stand at [textMs] on the timeline. */
     val texts: List<TextItem>,
     val textMs: Long,
+    /** Long side of the file (null = the photo's own), and JPEG quality 0..100. */
+    val longSide: Int? = null,
+    val quality: Int = 92,
 )
 
 /**
@@ -94,10 +97,16 @@ object PhotoExporter {
             TextRenderer.draw(c, fw.toFloat(), fh.toFloat(), request.texts, request.textMs)
             endRecording()
         }
-        val bitmap = render(root, fw, fh)
+        val full = render(root, fw, fh)
         photo.recycle()
+        // Smaller on request (never larger than the photo).
+        val target = request.longSide?.takeIf { it < maxOf(fw, fh) }
+        val bitmap = if (target == null) full else {
+            val k = target.toFloat() / maxOf(fw, fh)
+            Bitmap.createScaledBitmap(full, (fw * k).toInt().coerceAtLeast(2), (fh * k).toInt().coerceAtLeast(2), true).also { full.recycle() }
+        }
         val name = request.name.substringBeforeLast('.') + "_edit.jpg"
-        return MediaStoreOutput.savePhoto(context, name) { out -> bitmap.compress(Bitmap.CompressFormat.JPEG, 95, out) }.also { bitmap.recycle() }
+        return MediaStoreOutput.savePhoto(context, name) { out -> bitmap.compress(Bitmap.CompressFormat.JPEG, request.quality.coerceIn(1, 100), out) }.also { bitmap.recycle() }
     }
 
     /** Draws [root] off screen on the GPU and reads it back. */

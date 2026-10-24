@@ -23,8 +23,13 @@ data class ExportSettings(
     val hlg: Boolean = false,
     /** HLG signal level where the picture's white goes in an HLG export. */
     val hdrWhite: Float = HdrRoute.DEFAULT_WHITE,
+    /** Photos: long side in pixels (null = the photo's own) and JPEG quality. */
+    val photoLongSide: Int? = null,
+    val photoQuality: Int = 92,
 ) {
     companion object {
+        val PHOTO_SIZES: List<Pair<Int?, String>> = listOf(null to "Full", 4096 to "4096 px", 2048 to "2048 px", 1080 to "1080 px")
+        val PHOTO_QUALITIES: List<Pair<Int, String>> = listOf(80 to "Small file", 92 to "High", 100 to "Max")
         val HEIGHTS: List<Pair<Int?, String>> = listOf(null to "Source", 2160 to "4K", 1440 to "1440p", 1080 to "1080p", 720 to "720p")
         val QUALITIES: List<Pair<Float, String>> = listOf(1f to "Like source", 1.5f to "High", 2f to "Max")
         val FRAME_RATES: List<Float> = listOf(24f, 25f, 30f, 50f, 60f)

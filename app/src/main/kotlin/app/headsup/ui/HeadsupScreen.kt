@@ -2325,6 +2325,16 @@ private fun ExportControls(
     // Photos on the timeline, each as a JPEG at its own resolution in the timeline's frame.
     val photoCount = state.clips.count { it.meta.isPhoto }
     if (photoCount > 0) {
+        SettingRow("Photo size") {
+            for ((side, label) in ExportSettings.PHOTO_SIZES) {
+                FilterChip(selected = settings.photoLongSide == side, onClick = { vm.updateExportSettings { it.copy(photoLongSide = side) } }, label = { Text(label) })
+            }
+        }
+        SettingRow("JPEG") {
+            for ((q, label) in ExportSettings.PHOTO_QUALITIES) {
+                FilterChip(selected = settings.photoQuality == q, onClick = { vm.updateExportSettings { it.copy(photoQuality = q) } }, label = { Text(label) })
+            }
+        }
         OutlinedButton(onClick = vm::exportPhotos, enabled = !state.busy, modifier = Modifier.fillMaxWidth()) {
             Text(if (photoCount == 1) "Export the photo (JPEG)" else "Export $photoCount photos (JPEG)")
         }

@@ -1755,6 +1755,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                         reframe = s.framing(clip), style = s.style, dashboard = dashboard,
                         // Texts as they are in the middle of the photo's time on the timeline (after any fade in).
                         texts = s.texts, textMs = start + clip.timelineDurationMs / 2,
+                        longSide = s.exportSettings.photoLongSide, quality = s.exportSettings.photoQuality,
                     )
                     runCatching { withContext(Dispatchers.Default) { app.headsup.export.PhotoExporter.export(getApplication(), request) } }
                         .onSuccess { saved += clip.meta.name }
