@@ -55,7 +55,7 @@ class RawService : Service() {
                 val shared = SharedMemory.create("raw", Math.toIntExact(bytes))
                 shared.mapReadWrite().also { regions += shared to it }
             }
-            val raw = RawPhotos.withSource(this, uri) { Dng.read(it, request.getInt(KEY_MAX_SIDE), request.getBoolean(KEY_MOSAIC), alloc) }
+            val raw = RawPhotos.withSource(this, uri) { Dng.read(it, request.getInt(KEY_MAX_SIDE), request.getBoolean(KEY_MOSAIC), alloc, NativeJxl.decoder) }
             // The image's data is the last region of its size (earlier ones were working sums).
             val bytes = raw.data.capacity().toLong() * 2
             val region = regions.last { it.first.size.toLong() == bytes }.first

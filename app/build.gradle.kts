@@ -18,6 +18,22 @@ android {
         targetSdk = 35
         versionCode = 1
         versionName = "0.2.0"
+        // Native code (libjxl) for the phones the app is for.
+        ndk { abiFilters += "arm64-v8a" }
+        externalNativeBuild {
+            cmake {
+                // libjxl is built optimised also in debug builds: unoptimised it decodes many times slower.
+                arguments += listOf("-DCMAKE_BUILD_TYPE=Release", "-DANDROID_STL=c++_static")
+                cppFlags += "-O2"
+            }
+        }
+    }
+
+    externalNativeBuild {
+        cmake {
+            path = file("src/main/cpp/CMakeLists.txt")
+            version = "3.22.1"
+        }
     }
 
     // A fixed debug key (not a secret) so each CI-built APK installs over the previous one.

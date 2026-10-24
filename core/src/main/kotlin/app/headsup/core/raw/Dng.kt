@@ -142,9 +142,15 @@ object Dng {
      * side, so only the reduced picture is ever held: the file is read in parts from [source].
      * The result holds camera colours normalised to 0..65535 (levels applied, not yet balanced).
      */
-    fun read(source: RawSource, maxSide: Int = 0, mosaic: Boolean = false, alloc: Allocator = Allocator.HEAP): RawImage {
+    fun read(
+        source: RawSource,
+        maxSide: Int = 0,
+        mosaic: Boolean = false,
+        alloc: Allocator = Allocator.HEAP,
+        jxl: JxlDecoder? = null,
+    ): RawImage {
         val layout = layoutOf(source)
-        return if (layout.cfa) readMosaic(source, layout, maxSide, mosaic, alloc) else readLinear(source, layout, maxSide, alloc)
+        return if (layout.cfa) readMosaic(source, layout, maxSide, mosaic, alloc) else readLinear(source, layout, maxSide, alloc, jxl)
     }
 
     /** What is needed from the directories, read from the start of the file (the whole file if a value lies further). */
@@ -317,7 +323,7 @@ object Dng {
      * A linear (already demosaiced) raw image: three channels per pixel, in strips or tiles, each
      * compressed with JPEG XL (DNG 1.7) or stored as 16-bit samples.
      */
-    private fun readLinear(source: RawSource, l: Layout, maxSide: Int, alloc: Allocator): RawImage {
+    private fun readLinear(source: RawSource, l: Layout, maxSide: Int, alloc: Allocator, jxl: JxlDecoder?): RawImage {
         val r = Reducer(l.width, l.height, maxSide, intArrayOf(1, 1, 1), alloc)
         val across = (l.width + l.tileW - 1) / l.tileW
         // JPEG XL data comes as 0..1 of its own range; the levels are scaled to it.
@@ -329,8 +335,24 @@ object Dng {
             val x0 = (t % across) * l.tileW
             val y0 = (t / across) * l.tileH
             source.stream(l.offsets[t], l.counts[t]).use { stream ->
-                when (l.compression) {
-                    Tags.COMPRESSION_JPEG_XL -> {
+                when {
+                    l.compression == Tags.COMPRESSION_JPEG_XL && jxl != null -> {
+                        // The native decoder: linear 16-bit RGB outside the Java heap, read row by row.
+                        jxl.decode(source.read(l.offsets[t], l.counts[t].toInt())).use { image ->
+                            val line = ShortArray(image.width * 3)
+                            for (y in 0 until minOf(image.height, l.tileH)) {
+                                val py = y0 + y
+                                if (py >= l.height) break
+                                image.rgb.duplicate().apply { position(y * image.width * 3) }.get(line)
+                                for (x in 0 until minOf(image.width, l.tileW)) {
+                                    val px = x0 + x
+                                    if (px >= l.width) break
+                                    for (c in 0 until 3) r.add(px, py, c, ((line[x * 3 + c].toInt() and 0xFFFF) / 65535f - jxlBlack) / jxlSpan)
+                                }
+                            }
+                        }
+                    }
+                    l.compression == Tags.COMPRESSION_JPEG_XL -> {
                         var image = com.traneptora.jxlatte.JXLDecoder(stream).decode()
                         if (image.transfer != com.traneptora.jxlatte.color.ColorFlags.TF_LINEAR) {
                             image = image.transfer(com.traneptora.jxlatte.color.ColorFlags.TF_LINEAR, com.traneptora.jxlatte.JXLOptions.PEAK_DETECT_OFF)
@@ -353,7 +375,7 @@ object Dng {
                             }
                         }
                     }
-                    Tags.COMPRESSION_NONE -> {
+                    l.compression == Tags.COMPRESSION_NONE -> {
                         val samples = Samples(stream, l.littleEndian)
                         loop@ for (y in 0 until l.tileH) for (x in 0 until l.tileW) for (c in 0 until l.spp) {
                             val v = samples.next()

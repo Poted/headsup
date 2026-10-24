@@ -232,6 +232,15 @@ class DngTest {
         assertTrue(e.message!!.contains("JPEG XL"))
     }
 
+    @Test
+    fun `a linear jpeg xl dng goes through the given decoder`() {
+        // A stand-in decoder: a 2x2 picture, grey at half of white (linear).
+        val decoder = JxlDecoder { JxlImage(2, 2, java.nio.ShortBuffer.wrap(ShortArray(12) { 32768.toShort() })) }
+        val image = Dng.read(BytesSource(buildLinearJxlDng(ByteArray(16), 2, 2)), jxl = decoder)
+        assertEquals(2, image.width)
+        assertTrue(abs((image.data.get(0).toInt() and 0xFFFF) - 32768) <= 1)
+    }
+
     /** A DNG whose IFD0 holds a linear raw image in one JPEG XL strip (as Samsung Expert RAW writes). */
     private fun buildLinearJxlDng(jxl: ByteArray, width: Int, height: Int): ByteArray {
         val buf = java.nio.ByteBuffer.allocate(4096 + jxl.size).order(java.nio.ByteOrder.LITTLE_ENDIAN)
