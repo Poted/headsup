@@ -321,13 +321,7 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
                         photoMode = state.photoProject,
                         // Read here so arriving place names redraw the texts.
                         textValues = state.placesVersion.let { _ -> { pos -> vm.textValues(state, selected, pos) } },
-                        routeOverlay = state.routeMap.takeIf { it.enabled }?.let { map ->
-                            val track = vm.mapTrack(state, selected)
-                            { canvas: android.graphics.Canvas, w: Float, h: Float, pos: Long ->
-                                val at = vm.mapMarker(state, selected, pos)
-                                app.headsup.render.RouteMapRenderer.draw(canvas, w, h, map, track, at?.first, at?.second)
-                            }
-                        },
+                        routeOverlay = if (state.routeMap.enabled) routeOverlayFor(vm, state, selected) else null,
                         // A finger on the picture places the text being edited, or the route map.
                         onMoveText = state.selectedText?.takeIf { editingTexts }?.let { id -> { x, y -> vm.updateText(id) { it.copy(x = x, y = y) } } }
                             ?: if (tool == Tool.EFFECTS && effectKind == EffectKind.MAP && state.routeMap.enabled) { x: Float, y: Float -> vm.updateRouteMap { it.copy(x = x, y = y) } } else null,
@@ -2776,5 +2770,15 @@ private fun RouteMapControls(state: UiState, vm: HeadsupViewModel) {
         FilterChip(selected = map.marker, onClick = { vm.updateRouteMap { it.copy(marker = !it.marker) } }, label = { Text("Where it is") })
     }
     Hint("Drag on the picture to place it. The dot shows where the clip or photo is: the photo's GPS, or the watch's position at that moment.")
+}
+
+/** Draws the route map for [clip] at a position in it (the marker follows the clip). */
+private fun routeOverlayFor(vm: HeadsupViewModel, state: UiState, clip: ClipState): (android.graphics.Canvas, Float, Float, Long) -> Unit {
+    val track = vm.mapTrack(state, clip)
+    val map = state.routeMap
+    return { canvas, w, h, pos ->
+        val at = vm.mapMarker(state, clip, pos)
+        app.headsup.render.RouteMapRenderer.draw(canvas, w, h, map, track, at?.first, at?.second)
+    }
 }
 
