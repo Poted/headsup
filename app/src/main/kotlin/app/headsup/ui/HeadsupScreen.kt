@@ -2322,6 +2322,13 @@ private fun ExportControls(
     Label("Dashboard")
     val canOverlay = state.clips.any { it.sync != null }
     OutlinedButton(onClick = onExportOverlays, enabled = canOverlay, modifier = Modifier.fillMaxWidth()) { Text("Export dashboard only (PNG)") }
+    // Photos on the timeline, each as a JPEG at its own resolution in the timeline's frame.
+    val photoCount = state.clips.count { it.meta.isPhoto }
+    if (photoCount > 0) {
+        OutlinedButton(onClick = vm::exportPhotos, enabled = !state.busy, modifier = Modifier.fillMaxWidth()) {
+            Text(if (photoCount == 1) "Export the photo (JPEG)" else "Export $photoCount photos (JPEG)")
+        }
+    }
     Hint(
         if (canOverlay) "Transparent PNG frames (ZIP) per clip, for DaVinci → ${MediaStoreOutput.OVERLAY_FOLDER}"
         else "Needs a FIT file matched to the clips.",

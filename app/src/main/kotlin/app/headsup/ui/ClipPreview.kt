@@ -945,18 +945,18 @@ private fun decodePhoto(context: android.content.Context, uri: android.net.Uri):
     upright.asImageBitmap()
 }.getOrNull()
 
-private class ReframeTransform(val zoom: Float, val translation: Offset)
+internal class ReframeTransform(val zoom: Float, val translation: Offset)
 
 /** The preview frame ([boxW]×[boxH], the output shape) and the picture laid out centred under it, just covering it. */
 private class GeometryRef(var value: FrameGeometry)
 
-private data class FrameGeometry(val boxW: Float, val boxH: Float, val pictureW: Float, val pictureH: Float)
+internal data class FrameGeometry(val boxW: Float, val boxH: Float, val pictureW: Float, val pictureH: Float)
 
 /**
  * Layer transform (around the picture's centre) that shows the picture as [reframe] describes:
  * the source point at the reframe centre lands in the middle of the frame.
  */
-private fun reframeTransform(reframe: Reframe, g: FrameGeometry): ReframeTransform {
+internal fun reframeTransform(reframe: Reframe, g: FrameGeometry): ReframeTransform {
     val width = g.pictureW
     val height = g.pictureH
     if (reframe.isIdentity || width <= 0f || height <= 0f) return ReframeTransform(1f, Offset.Zero)

@@ -19,6 +19,12 @@ object MediaStoreOutput {
         }
     }
 
+    /** A JPEG in the camera's folder, next to the exported videos. */
+    fun savePhoto(context: Context, displayName: String, block: (OutputStream) -> Unit): Uri {
+        val collection = MediaStore.Images.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
+        return write(context, collection, displayName, "image/jpeg", VIDEO_FOLDER, block)
+    }
+
     fun <T> writeDownload(context: Context, displayName: String, mime: String, block: (OutputStream) -> T): Uri =
         write(context, MediaStore.Downloads.EXTERNAL_CONTENT_URI, displayName, mime, OVERLAY_FOLDER) { block(it) }
 

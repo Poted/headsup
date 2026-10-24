@@ -57,7 +57,18 @@ class GradePreviewShader {
         height: Float,
         masks: List<ColourMask>,
         fromWeight: Float,
-    ): androidx.compose.ui.graphics.RenderEffect {
+    ): androidx.compose.ui.graphics.RenderEffect = nativeEffect(effects, zebra, frame, width, height, masks, fromWeight).asComposeRenderEffect()
+
+    /** The same, for drawing outside Compose (a photo export). */
+    fun nativeEffect(
+        effects: EffectSettings,
+        zebra: Boolean,
+        frame: Float,
+        width: Float,
+        height: Float,
+        masks: List<ColourMask>,
+        fromWeight: Float,
+    ): RenderEffect {
         shader.setFloatUniform("n", tableSize.toFloat())
         shader.setFloatUniform("zebra", if (zebra) 1f else 0f)
         shader.setFloatUniform("time", frame)
@@ -75,7 +86,7 @@ class GradePreviewShader {
         shader.setFloatUniform("glow", effects.glow)
         shader.setFloatUniform("threshold", effects.glowThreshold)
         shader.setFloatUniform("halation", effects.halation)
-        return RenderEffect.createRuntimeShaderEffect(shader, "image").asComposeRenderEffect()
+        return RenderEffect.createRuntimeShaderEffect(shader, "image")
     }
 
     private companion object {

@@ -1720,6 +1720,56 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
 
     fun exportOverlays() = enqueue(ExportKind.PNG_SEQUENCE, state.value.clips.indices.toList())
 
+    /** Each photo on the timeline as a JPEG with its colours, framing, effects, dashboard and texts. */
+    fun exportPhotos() {
+        val s = state.value.copy(compareGrade = null)
+        val photos = s.clips.withIndex().filter { it.value.meta.isPhoto }
+        if (photos.isEmpty()) return
+        if (android.os.Build.VERSION.SDK_INT < 33) {
+            _state.update { it.copy(messages = it.messages + "Photo export needs Android 13 or newer.") }
+            return
+        }
+        loadJob = viewModelScope.launch {
+            val saved = mutableListOf<String>()
+            val failed = mutableListOf<String>()
+            try {
+                for ((n, entry) in photos.withIndex()) {
+                    val (i, clip) = entry
+                    _state.update { it.copy(busy = true, loadingMessage = "Exporting photo ${n + 1} of ${photos.size}", loadingProgress = n.toFloat() / photos.size) }
+                    val graded = clip.colorGrade
+                    val lut = s.lutFor(clip)
+                    val wide = clip.wideGamut
+                    val cube = if (graded) bake(lut, s.appliedGrade(clip), wide) else if (wide) bake(null, ColorGrade(), true) else null
+                    val maskCubes = if (graded) s.maskedGrades(clip).map { bakeAlways(lut, it, wide) } else emptyList()
+                    val start = s.clips.take(i).sumOf { it.timelineDurationMs }
+                    val dashboard = clip.telemetryUtc(0L)?.let { utc ->
+                        val track = clip.sync?.let { s.activities.getOrNull(it.trackIndex) }?.track ?: return@let null
+                        val frame = app.headsup.core.track.TelemetrySampler(track).frameAt(utc) ?: return@let null
+                        val zone = track.utcOffsetSeconds ?: java.time.ZoneId.systemDefault().rules.getOffset(java.time.Instant.ofEpochMilli(utc)).totalSeconds
+                        app.headsup.render.DashboardData(track, frame, utc, zone)
+                    }
+                    val request = app.headsup.export.PhotoRequest(
+                        uri = clip.meta.uri, name = clip.meta.name, cube = cube,
+                        masks = if (graded) clip.masks.map { it.at(clip.trimStartMs) } else emptyList(), maskCubes = maskCubes,
+                        effects = clip.effects, vignette = if (graded) s.appliedGrade(clip).vignette else 0f,
+                        reframe = s.framing(clip), style = s.style, dashboard = dashboard,
+                        // Texts as they are in the middle of the photo's time on the timeline (after any fade in).
+                        texts = s.texts, textMs = start + clip.timelineDurationMs / 2,
+                    )
+                    runCatching { withContext(Dispatchers.Default) { app.headsup.export.PhotoExporter.export(getApplication(), request) } }
+                        .onSuccess { saved += clip.meta.name }
+                        .onFailure { failed += "${clip.meta.name}: ${it.message ?: it.javaClass.simpleName}" }
+                }
+            } finally {
+                val message = buildString {
+                    if (saved.isNotEmpty()) append("Saved ${saved.size} photo(s) to ${app.headsup.export.MediaStoreOutput.VIDEO_FOLDER}.")
+                    if (failed.isNotEmpty()) append(" Failed: " + failed.joinToString("; "))
+                }
+                _state.update { it.copy(busy = false, loadingMessage = null, loadingProgress = null, messages = it.messages + message.trim()) }
+            }
+        }
+    }
+
     /** Why a 10-bit (HLG) export can't be made of this timeline, or null when it can. */
     fun tenBitBlocker(s: UiState = state.value): String? = when {
         !HdrRoute.deviceSupported -> "This phone's encoder can't do 10-bit HDR editing."
