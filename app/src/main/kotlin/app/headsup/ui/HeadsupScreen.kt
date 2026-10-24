@@ -323,14 +323,14 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
                         textValues = state.placesVersion.let { _ -> { pos -> vm.textValues(state, selected, pos) } },
                         routeOverlay = state.routeMap.takeIf { it.enabled }?.let { map ->
                             val track = vm.mapTrack(state, selected)
-                            { canvas, w, h, pos ->
+                            { canvas: android.graphics.Canvas, w: Float, h: Float, pos: Long ->
                                 val at = vm.mapMarker(state, selected, pos)
                                 app.headsup.render.RouteMapRenderer.draw(canvas, w, h, map, track, at?.first, at?.second)
                             }
                         },
                         // A finger on the picture places the text being edited, or the route map.
                         onMoveText = state.selectedText?.takeIf { editingTexts }?.let { id -> { x, y -> vm.updateText(id) { it.copy(x = x, y = y) } } }
-                            ?: if (tool == Tool.EFFECTS && effectKind == EffectKind.MAP && state.routeMap.enabled) { x, y -> vm.updateRouteMap { it.copy(x = x, y = y) } } else null,
+                            ?: if (tool == Tool.EFFECTS && effectKind == EffectKind.MAP && state.routeMap.enabled) { x: Float, y: Float -> vm.updateRouteMap { it.copy(x = x, y = y) } } else null,
                         cutScrub = cutScrub,
                         onFrameSource = { frameSource.value = it },
                         reframe = state.framing(selected),
