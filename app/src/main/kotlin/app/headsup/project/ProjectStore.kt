@@ -330,6 +330,9 @@ internal object Json {
         .put("shadowHue", g.shadowHue)
         .put("highlightHue", g.highlightHue)
         .put("tame", g.tame)
+        .put("mixer", JSONArray(g.mixer.map { it.toDouble() }))
+        .putOpt("look", g.look)
+        .put("lookAmount", g.lookAmount)
 
     fun grade(o: JSONObject?): ColorGrade {
         if (o == null) return ColorGrade()
@@ -353,6 +356,10 @@ internal object Json {
             shadowHue = f("shadowHue", ColorGrade.DEFAULT_SHADOW_HUE),
             highlightHue = f("highlightHue", ColorGrade.DEFAULT_HIGHLIGHT_HUE),
             tame = f("tame"),
+            mixer = o.optJSONArray("mixer")?.let { a -> List(app.headsup.core.color.ColourMixer.SIZE) { a.optDouble(it, 0.0).toFloat() } }
+                ?: app.headsup.core.color.ColourMixer.NEUTRAL,
+            look = o.optStringOrNull("look"),
+            lookAmount = f("lookAmount", 1f),
         )
     }
 

@@ -72,6 +72,10 @@ class GradeStore(private val context: Context) {
         shadowHue = prefs.getFloat(prefix + "shadow_hue", ColorGrade.DEFAULT_SHADOW_HUE),
         highlightHue = prefs.getFloat(prefix + "highlight_hue", ColorGrade.DEFAULT_HIGHLIGHT_HUE),
         tame = prefs.getFloat(prefix + "tame", 0f),
+        mixer = prefs.getString(prefix + "mixer", null)?.split(',')?.mapNotNull { it.toFloatOrNull() }
+            ?.takeIf { it.size == app.headsup.core.color.ColourMixer.SIZE } ?: app.headsup.core.color.ColourMixer.NEUTRAL,
+        look = prefs.getString(prefix + "look", null),
+        lookAmount = prefs.getFloat(prefix + "look_amount", 1f),
     )
 
     fun saveGrade(g: ColorGrade, prefix: String = "") {
@@ -94,6 +98,9 @@ class GradeStore(private val context: Context) {
             .putFloat(prefix + "shadow_hue", g.shadowHue)
             .putFloat(prefix + "highlight_hue", g.highlightHue)
             .putFloat(prefix + "tame", g.tame)
+            .putString(prefix + "mixer", g.mixer.joinToString(","))
+            .putString(prefix + "look", g.look)
+            .putFloat(prefix + "look_amount", g.lookAmount)
             .apply()
     }
 

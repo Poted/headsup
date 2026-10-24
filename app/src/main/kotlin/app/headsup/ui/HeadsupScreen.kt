@@ -1534,7 +1534,7 @@ private fun LookActions(state: UiState, vm: HeadsupViewModel) {
 }
 
 /** Sections of the colour corrections, so the picker row stays short. */
-private enum class ColourSection(val label: String) { LIGHT("Light"), COLOUR("Colour"), FILM("Film"), TOOLS("Tools") }
+private enum class ColourSection(val label: String) { LIGHT("Light"), COLOUR("Colour"), MIXER("Mixer"), FILM("Film"), LOOKS("Looks"), TOOLS("Tools") }
 
 private val Adjustment.section: ColourSection
     get() = when (this) {
@@ -1543,6 +1543,8 @@ private val Adjustment.section: ColourSection
         Adjustment.TEMPERATURE, Adjustment.TINT, Adjustment.SATURATION, Adjustment.VIBRANCE, Adjustment.SKIN -> ColourSection.COLOUR
         Adjustment.SPLIT, Adjustment.SHADOW_HUE, Adjustment.HIGHLIGHT_HUE, Adjustment.TAME, Adjustment.VIGNETTE -> ColourSection.FILM
         Adjustment.CINE, Adjustment.LUT, Adjustment.MATCH, Adjustment.BLEND -> ColourSection.TOOLS
+        Adjustment.MIXER -> ColourSection.MIXER
+        Adjustment.LOOK -> ColourSection.LOOKS
     }
 
 /** A row of text tabs: the selected one white and underlined, the others muted. */
@@ -1606,6 +1608,12 @@ internal enum class Adjustment(
 
     /** Not a ruler value: how the clip blends in from the previous clip's look. */
     BLEND("⇢", "Blend in", 0f..1f, 1f, "", { 0f }, { g, _ -> g }),
+
+    /** Not a single ruler: hue, saturation and luminance per hue band. */
+    MIXER("HSL", "Colour mixer", 0f..1f, 1f, "", { 0f }, { g, _ -> g }),
+
+    /** Not a single ruler: a look (profile) under the corrections, with its amount. */
+    LOOK("Look", "Looks", 0f..1f, 1f, "", { 0f }, { g, _ -> g }),
 }
 
 private val BLEND_LENGTHS = listOf(0L to "Cut", 500L to "0.5 s", 1000L to "1 s", 2000L to "2 s", 4000L to "4 s", 8000L to "8 s")
@@ -1669,7 +1677,7 @@ private fun ColourPage(
         GradeTarget.GROUP -> Adjustment.entries - Adjustment.BLEND - Adjustment.CINE - Adjustment.MATCH
         GradeTarget.GLOBAL -> Adjustment.entries - Adjustment.LUT - Adjustment.BLEND - Adjustment.CINE - Adjustment.MATCH
         GradeTarget.MASK -> Adjustment.entries - Adjustment.LUT - Adjustment.SKIN - Adjustment.VIGNETTE - Adjustment.BLEND -
-            Adjustment.CINE - Adjustment.MATCH
+            Adjustment.CINE - Adjustment.MATCH - Adjustment.LOOK
     }
     val adjustment = if (adjustment in options) adjustment else Adjustment.EXPOSURE
     // On the Masks tab the ruler edits either a shape control or a correction.
@@ -1712,6 +1720,8 @@ private fun ColourPage(
                 Adjustment.BLEND -> clip.transitionMs > 0
                 Adjustment.CINE -> state.cine != null
                 Adjustment.MATCH -> state.matchReference?.clipId == clip.id
+                Adjustment.MIXER -> state.grade.mixer.any { it != 0f }
+                Adjustment.LOOK -> state.grade.look != null
                 else -> a.get(state.grade) != a.neutral
             }
             CircleOption(a.symbol, a.label, selected = editingShape == null && a == adjustment, modified = modified) {
@@ -1762,6 +1772,14 @@ private fun ColourPage(
         }
         return
     }
+    if (adjustment == Adjustment.MIXER) {
+        MixerControls(state, vm)
+        return
+    }
+    if (adjustment == Adjustment.LOOK) {
+        LookControls(state, vm)
+        return
+    }
     if (adjustment == Adjustment.SKIN) SkinToneTool(state.scope, onMatch = vm::matchSkinLine)
     // Double-tap the ruler to reset, hold it to see the picture without this correction.
     ValueHeader(adjustment.label, String.format(Locale.US, adjustment.format, adjustment.get(state.grade)))
@@ -1773,6 +1791,76 @@ private fun ColourPage(
         onReset = { vm.updateGrade { adjustment.set(it, adjustment.neutral) } },
         onHold = { held -> vm.setCompareGrade(if (held) adjustment.set(state.grade, adjustment.neutral) else null) },
     )
+}
+
+/** Colour mixer: a hue band, which of its hue, saturation and luminance, and a ruler for it. */
+@Composable
+private fun MixerControls(state: UiState, vm: HeadsupViewModel) {
+    var band by rememberSaveable { mutableStateOf(app.headsup.core.color.ColourMixer.Band.RED) }
+    var property by rememberSaveable { mutableStateOf(app.headsup.core.color.ColourMixer.Property.SATURATION) }
+    val mixer = state.grade.mixer
+    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        for (p in app.headsup.core.color.ColourMixer.Property.entries) {
+            FilterChip(selected = p == property, onClick = { property = p }, label = { Text(p.label) })
+        }
+    }
+    LazyRow(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+        items(app.headsup.core.color.ColourMixer.Band.entries) { b ->
+            val changed = app.headsup.core.color.ColourMixer.Property.entries.any { mixer.getOrElse(app.headsup.core.color.ColourMixer.index(b, it)) { 0f } != 0f }
+            Box(
+                Modifier
+                    .size(38.dp)
+                    .clip(CircleShape)
+                    .background(Color(b.swatch))
+                    .border(if (b == band) 3.dp else 1.dp, if (b == band) Color.White else HeadsupColors.Outline, CircleShape)
+                    .clickable { band = b },
+                contentAlignment = Alignment.Center,
+            ) { if (changed) Box(Modifier.size(7.dp).clip(CircleShape).background(Color.White)) }
+        }
+    }
+    val i = app.headsup.core.color.ColourMixer.index(band, property)
+    val value = mixer.getOrElse(i) { 0f }
+    fun set(g: ColorGrade, v: Float) = g.copy(mixer = g.mixer.toMutableList().also { m -> while (m.size < app.headsup.core.color.ColourMixer.SIZE) m += 0f; m[i] = v })
+    ValueHeader("${band.label} · ${property.label.lowercase()}", String.format(Locale.US, "%+.0f", value * 100))
+    RulerSlider(
+        value = value,
+        range = -1f..1f,
+        step = 0.02f,
+        onChange = { v -> vm.updateGrade { set(it, v) } },
+        onReset = { vm.updateGrade { set(it, 0f) } },
+        onHold = { held -> vm.setCompareGrade(if (held) set(state.grade, 0f) else null) },
+    )
+    if (mixer.any { it != 0f }) {
+        Row {
+            Spacer(Modifier.weight(1f))
+            SmallAction("Reset mixer", { vm.updateGrade { it.copy(mixer = app.headsup.core.color.ColourMixer.NEUTRAL) } })
+        }
+    }
+}
+
+/** Looks (profiles): a starting rendering under the corrections, and how strongly. */
+@Composable
+private fun LookControls(state: UiState, vm: HeadsupViewModel) {
+    val current = app.headsup.core.color.Look.of(state.grade.look)
+    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        FilterChip(selected = current == null, onClick = { vm.updateGrade { it.copy(look = null) } }, label = { Text("None") })
+        for (look in app.headsup.core.color.Look.entries) {
+            FilterChip(selected = look == current, onClick = { vm.updateGrade { it.copy(look = look.name) } }, label = { Text(look.label) })
+        }
+    }
+    if (current != null) {
+        ValueHeader("Amount", String.format(Locale.US, "%.0f %%", state.grade.lookAmount * 100))
+        RulerSlider(
+            value = state.grade.lookAmount,
+            range = 0f..1.5f,
+            step = 0.05f,
+            onChange = { v -> vm.updateGrade { it.copy(lookAmount = v) } },
+            onReset = { vm.updateGrade { it.copy(lookAmount = 1f) } },
+            onHold = { held -> vm.setCompareGrade(if (held) state.grade.copy(look = null) else null) },
+        )
+    } else {
+        Hint("A look is the starting point; your corrections go on top of it.")
+    }
 }
 
 /**

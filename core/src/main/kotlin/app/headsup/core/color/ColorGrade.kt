@@ -35,18 +35,24 @@ data class ColorGrade(
     val highlightHue: Float = DEFAULT_HIGHLIGHT_HUE,
     /** Calms loud colours (strong greens and blues most), sparing skin, 0..1. */
     val tame: Float = 0f,
+    /** Colour mixer: hue, saturation and luminance per hue band, −1..1 ([ColourMixer]). */
+    val mixer: List<Float> = ColourMixer.NEUTRAL,
+    /** A look ([Look] name) under the corrections, and how strongly (0..1.5). */
+    val look: String? = null,
+    val lookAmount: Float = 1f,
 ) {
     val isNeutralColour: Boolean
         get() = exposure == 0f && brightness == 0f && contrast == 0f && shadows == 0f &&
             highlights == 0f && saturation == 0f && temperature == 0f &&
             blacks == 0f && whites == 0f && vibrance == 0f && tint == 0f && skinHue == 0f &&
-            rolloff == 0f && toneAmount == 0f && tame == 0f
+            rolloff == 0f && toneAmount == 0f && tame == 0f && mixer.all { it == 0f } && look == null
 
     /** The corrections scaled by [k] (hues stay), e.g. a suggestion at partial strength. */
     operator fun times(k: Float) = ColorGrade(
         exposure * k, brightness * k, contrast * k, shadows * k, highlights * k, saturation * k, temperature * k,
         vignette * k, blacks * k, whites * k, vibrance * k, tint * k, skinHue * k,
         rolloff * k, toneAmount * k, shadowHue, highlightHue, tame * k,
+        mixer.map { it * k }, look, lookAmount,
     )
 
     /**
@@ -73,6 +79,10 @@ data class ColorGrade(
         shadowHue = if (other.toneAmount > toneAmount) other.shadowHue else shadowHue,
         highlightHue = if (other.toneAmount > toneAmount) other.highlightHue else highlightHue,
         tame = (tame + other.tame).coerceIn(0f, 1f),
+        mixer = List(ColourMixer.SIZE) { i -> (mixer.getOrElse(i) { 0f } + other.mixer.getOrElse(i) { 0f }).coerceIn(-1f, 1f) },
+        // Looks cannot be added; one set on top wins.
+        look = other.look ?: look,
+        lookAmount = if (other.look != null) other.lookAmount else lookAmount,
     )
 
     /**
@@ -98,6 +108,12 @@ data class ColorGrade(
         shadowHue = if (after.shadowHue != before.shadowHue) after.shadowHue else shadowHue,
         highlightHue = if (after.highlightHue != before.highlightHue) after.highlightHue else highlightHue,
         tame = if (after.tame != before.tame) after.tame else tame,
+        mixer = List(ColourMixer.SIZE) { i ->
+            val a = after.mixer.getOrElse(i) { 0f }
+            if (a != before.mixer.getOrElse(i) { 0f }) a else mixer.getOrElse(i) { 0f }
+        },
+        look = if (after.look != before.look) after.look else look,
+        lookAmount = if (after.lookAmount != before.lookAmount) after.lookAmount else lookAmount,
     )
 
     companion object {
@@ -147,17 +163,23 @@ object LutBaker {
      * camera's own values (log LUTs do their own gamut conversion).
      */
     fun apply(lut: CubeLut?, grade: ColorGrade, rgb: FloatArray, wideGamut: Boolean = false) {
+        val look = Look.of(grade.look)
         if (lut == null) {
             if (wideGamut) Gamut.bt2020ToBt709(rgb)
+            // The look is the starting rendering; the corrections go on top of it.
+            Looks.apply(look, grade.lookAmount, rgb)
             displayCorrections(grade, rgb)
         } else {
             logCorrections(grade, rgb)
             for (i in 0..2) rgb[i] = rgb[i].coerceIn(0f, 1f)
             lut.sample(rgb[0], rgb[1], rgb[2], rgb)
+            Looks.apply(look, grade.lookAmount, rgb)
         }
         for (i in 0..2) rgb[i] = rgb[i].coerceIn(0f, 1f)
         // Film look and the skin line work on display-referred (Rec.709) colours, so they run last.
         FilmLook.apply(grade, rgb)
+        ColourMixer.apply(grade.mixer, rgb)
+        for (i in 0..2) rgb[i] = rgb[i].coerceIn(0f, 1f)
         if (grade.skinHue != 0f) {
             SkinTone.rotate(rgb, grade.skinHue)
             for (i in 0..2) rgb[i] = rgb[i].coerceIn(0f, 1f)
