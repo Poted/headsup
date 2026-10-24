@@ -198,6 +198,12 @@ class ExportManager(private val context: Context) {
                 // The moment's values, then the clip's own (a photo's place and time win over the watch's).
                 app.headsup.render.TextValues.moment(data?.frame, data?.utcMs, data?.zoneOffsetSeconds) + request.textValues
             },
+            drawMap = if (request.routeMap.enabled && request.mapTrack != null) { canvas, w, h, data ->
+                val (lat, lon) = request.mapMarker ?: markerOf(data)
+                app.headsup.render.RouteMapRenderer.draw(canvas, w, h, request.routeMap, request.mapTrack, lat, lon)
+            } else null,
+            // The marker moves in steps of ~1 m of latitude, so the bitmap is redrawn only when it moves.
+            mapKey = { data -> if (request.routeMap.enabled) markerOf(data).let { (a, b) -> "m${a?.let { String.format(java.util.Locale.US, "%.5f", it) }},${b?.let { String.format(java.util.Locale.US, "%.5f", it) }}" } else "" },
         ) { positionMs -> request.dataAt(positionMs, sampler) }
 
         val effects = mutableListOf<Effect>()
@@ -303,6 +309,9 @@ class ExportManager(private val context: Context) {
             }
             if (any) builder.build() else null
         }
+
+    private fun markerOf(data: app.headsup.render.DashboardData?): Pair<Double?, Double?> =
+        data?.frame?.get(app.headsup.core.track.Metric.LATITUDE) to data?.frame?.get(app.headsup.core.track.Metric.LONGITUDE)
 
     private fun runVideo(job: ExportJob) {
         val spec = job.spec

@@ -321,7 +321,16 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
                         photoMode = state.photoProject,
                         // Read here so arriving place names redraw the texts.
                         textValues = state.placesVersion.let { _ -> { pos -> vm.textValues(state, selected, pos) } },
-                        onMoveText = state.selectedText?.takeIf { editingTexts }?.let { id -> { x, y -> vm.updateText(id) { it.copy(x = x, y = y) } } },
+                        routeOverlay = state.routeMap.takeIf { it.enabled }?.let { map ->
+                            val track = vm.mapTrack(state, selected)
+                            { canvas, w, h, pos ->
+                                val at = vm.mapMarker(state, selected, pos)
+                                app.headsup.render.RouteMapRenderer.draw(canvas, w, h, map, track, at?.first, at?.second)
+                            }
+                        },
+                        // A finger on the picture places the text being edited, or the route map.
+                        onMoveText = state.selectedText?.takeIf { editingTexts }?.let { id -> { x, y -> vm.updateText(id) { it.copy(x = x, y = y) } } }
+                            ?: if (tool == Tool.EFFECTS && effectKind == EffectKind.MAP && state.routeMap.enabled) { x, y -> vm.updateRouteMap { it.copy(x = x, y = y) } } else null,
                         cutScrub = cutScrub,
                         onFrameSource = { frameSource.value = it },
                         reframe = state.framing(selected),
@@ -2082,6 +2091,7 @@ private fun EffectKinds(state: UiState, kind: EffectKind, onKind: (EffectKind) -
         items(EffectKind.entries) { e ->
             val active = when (e) {
                 EffectKind.TEXT -> state.texts.isNotEmpty()
+                EffectKind.MAP -> state.routeMap.enabled
                 EffectKind.DASHBOARD -> state.style.enabled
                 EffectKind.GRAPH -> effects.graph != null
                 EffectKind.GRAIN -> effects.grain > 0f
@@ -2096,6 +2106,7 @@ private fun EffectKinds(state: UiState, kind: EffectKind, onKind: (EffectKind) -
 
 private enum class EffectKind(val symbol: String, val label: String) {
     TEXT("T", "Text"),
+    MAP("Map", "Route map"),
     DASHBOARD("HUD", "Dashboard"),
     GRAPH("Gr", "Graph"),
     GRAIN("Gn", "Grain"),
@@ -2121,6 +2132,7 @@ private fun EffectsPanel(state: UiState, vm: HeadsupViewModel, kind: EffectKind,
     EffectKinds(state, kind, onKind)
     when (kind) {
         EffectKind.TEXT -> Unit
+        EffectKind.MAP -> RouteMapControls(state, vm)
         EffectKind.DASHBOARD -> {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text("Dashboard", Modifier.weight(1f), style = MaterialTheme.typography.labelLarge)
@@ -2728,5 +2740,41 @@ private fun PhotoCrop(state: UiState, clip: ClipState, vm: HeadsupViewModel) {
     RulerSlider(r.zoom, 1f..4f, 0.02f, { v -> vm.updateReframe { it.copy(zoom = v) } }, onReset = { vm.updateReframe { it.copy(zoom = 1f) } })
     ValueHeader("Straighten", String.format(Locale.US, "%+.1f°", r.angleDegrees))
     RulerSlider(r.angleDegrees, -15f..15f, 0.1f, { v -> vm.updateReframe { it.copy(angleDegrees = v) } }, onReset = { vm.updateReframe { it.copy(angleDegrees = 0f) } })
+}
+
+/** The activity's route over the picture: on or off, size, colour, background and the "you are here" dot. */
+@Composable
+private fun RouteMapControls(state: UiState, vm: HeadsupViewModel) {
+    val map = state.routeMap
+    val hasRoute = state.activities.any { it.track.has(app.headsup.core.track.Metric.LATITUDE) }
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Text("Route map", Modifier.weight(1f), style = MaterialTheme.typography.labelLarge)
+        Switch(checked = map.enabled, onCheckedChange = { on -> vm.updateRouteMap { it.copy(enabled = on) } }, enabled = hasRoute)
+    }
+    if (!hasRoute) {
+        Hint("Needs a FIT file with GPS (Files → Watch).")
+        return
+    }
+    if (!map.enabled) return
+    ValueHeader("Size", String.format(Locale.US, "%.0f %%", map.size * 100))
+    RulerSlider(map.size, 0.12f..0.6f, 0.01f, { v -> vm.updateRouteMap { it.copy(size = v) } }, onReset = { vm.updateRouteMap { it.copy(size = 0.3f) } })
+    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+        for (c in TEXT_COLOURS) {
+            Box(
+                Modifier
+                    .size(28.dp)
+                    .clip(CircleShape)
+                    .background(Color(c))
+                    .border(if (map.colour == c) 3.dp else 1.dp, if (map.colour == c) HeadsupColors.Accent else HeadsupColors.Outline, CircleShape)
+                    .clickable { vm.updateRouteMap { it.copy(colour = c) } },
+            )
+        }
+    }
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        FilterChip(selected = map.background, onClick = { vm.updateRouteMap { it.copy(background = !it.background) } }, label = { Text("Background") })
+        Spacer(Modifier.width(8.dp))
+        FilterChip(selected = map.marker, onClick = { vm.updateRouteMap { it.copy(marker = !it.marker) } }, label = { Text("Where it is") })
+    }
+    Hint("Drag on the picture to place it. The dot shows where the clip or photo is: the photo's GPS, or the watch's position at that moment.")
 }
 

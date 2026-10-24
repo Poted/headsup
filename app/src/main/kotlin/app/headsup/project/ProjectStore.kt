@@ -5,6 +5,7 @@ import app.headsup.core.edit.TextAnim
 import app.headsup.core.edit.TextFont
 import app.headsup.core.edit.TextItem
 import app.headsup.core.raw.RawDevelop
+import app.headsup.render.RouteMap
 
 import android.content.Context
 import android.net.Uri
@@ -72,6 +73,7 @@ data class ProjectData(
     val texts: List<TextItem> = emptyList(),
     /** Null in projects saved before albums existed. */
     val kind: ProjectKind? = null,
+    val routeMap: RouteMap = RouteMap(),
 ) {
     /** Every media file the project uses. */
     val mediaUris: List<Uri> get() = activities + clips.map { it.uri } + audioFiles.map { it.uri } + audioClips.map { it.uri }
@@ -145,6 +147,8 @@ internal object Json {
         .put("clipSound", p.clipSound)
         .put("texts", JSONArray(p.texts.map(::text)))
         .putOpt("kind", p.kind?.name)
+        .put("routeMap", JSONObject().put("enabled", p.routeMap.enabled).put("x", p.routeMap.x.toDouble()).put("y", p.routeMap.y.toDouble())
+            .put("size", p.routeMap.size.toDouble()).put("colour", p.routeMap.colour).put("background", p.routeMap.background).put("marker", p.routeMap.marker))
 
     fun project(o: JSONObject) = ProjectData(
         name = o.optString("name", "Project"),
@@ -161,6 +165,12 @@ internal object Json {
         clipSound = o.optDouble("clipSound", o.optJSONObject("music")?.optDouble("originalVolume", 1.0) ?: 1.0).toFloat(),
         texts = o.optJSONArray("texts").objects().map(::text),
         kind = runCatching { ProjectKind.valueOf(o.optString("kind")) }.getOrNull(),
+        routeMap = o.optJSONObject("routeMap")?.let { m ->
+            RouteMap(
+                m.optBoolean("enabled", false), m.optDouble("x", 0.8).toFloat(), m.optDouble("y", 0.18).toFloat(),
+                m.optDouble("size", 0.3).toFloat(), m.optInt("colour", -1), m.optBoolean("background", true), m.optBoolean("marker", true),
+            )
+        } ?: RouteMap(),
     )
 
     private fun text(t: TextItem) = JSONObject()

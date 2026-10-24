@@ -199,6 +199,8 @@ fun ClipPreview(
     photoMode: Boolean = false,
     /** Values of the texts' data fields at a position in this clip. */
     textValues: (Long) -> Map<String, String> = { emptyMap() },
+    /** Draws the route map at a position in this clip (under the texts), or null. */
+    routeOverlay: ((android.graphics.Canvas, Float, Float, Long) -> Unit)? = null,
 ) {
     val context = LocalContext.current
     // Two players: one shows the clip, the other holds the next one ready (a different shape or
@@ -888,6 +890,7 @@ fun ClipPreview(
                         },
                     ),
                 ) {
+                    routeOverlay?.let { draw -> drawIntoCanvas { draw(it.nativeCanvas, size.width, size.height, positionMs) } }
                     if (texts.isNotEmpty()) {
                         val values = if (texts.any { app.headsup.core.edit.TextFields.hasFields(it.text) }) textValues(positionMs) else emptyMap()
                         drawIntoCanvas { TextRenderer.draw(it.nativeCanvas, size.width, size.height, texts, timelineOffsetMs + clipTimelineMs, values) }

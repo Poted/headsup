@@ -215,6 +215,7 @@ private data class EditSnapshot(
     val audioClips: List<AudioClip>,
     val clipSound: Float,
     val texts: List<TextItem>,
+    val routeMap: app.headsup.render.RouteMap,
 )
 
 /** What the colour page edits; the order is that of its tabs. */
@@ -302,6 +303,8 @@ data class UiState(
     /** Texts on the timeline, and the one being edited on the Text page. */
     val texts: List<TextItem> = emptyList(),
     val selectedText: Long? = null,
+    /** The activity's route drawn over the picture. */
+    val routeMap: app.headsup.render.RouteMap = app.headsup.render.RouteMap(),
     /** Bumped when place names arrive, so texts showing `{place}` redraw. */
     val placesVersion: Int = 0,
 ) {
@@ -465,6 +468,25 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
         return app.headsup.render.TextValues.activity(track) + app.headsup.render.TextValues.moment(frame, utc, offset) + app.headsup.render.TextValues.photo(photo)
     }
 
+    fun updateRouteMap(transform: (app.headsup.render.RouteMap) -> app.headsup.render.RouteMap) = _state.update { it.copy(routeMap = transform(it.routeMap)) }
+
+    /** The activity whose route the map shows for clip [c]. */
+    fun mapTrack(s: UiState, c: ClipState) = activityOf(s, c)
+
+    /** Where clip [c] is on the route at [positionMs]: the photo's GPS, or the watch's position then. */
+    fun mapMarker(s: UiState, c: ClipState, positionMs: Long): Pair<Double, Double>? {
+        if (c.meta.isPhoto) {
+            val info = app.headsup.media.PhotoInfo.read(getApplication(), c.meta.uri)
+            if (info.latitude != null && info.longitude != null) return info.latitude to info.longitude
+        }
+        val track = activityOf(s, c) ?: return null
+        val utc = c.telemetryUtc(positionMs) ?: return null
+        val f = synchronized(samplers) { samplers.getOrPut(track) { app.headsup.core.track.TelemetrySampler(track) } }.frameAt(utc)
+        val lat = f[app.headsup.core.track.Metric.LATITUDE] ?: return null
+        val lon = f[app.headsup.core.track.Metric.LONGITUDE] ?: return null
+        return lat to lon
+    }
+
     /** The values that do not change within a clip (for the export, which adds the moment's). */
     private fun staticTextValues(s: UiState, c: ClipState): Map<String, String> {
         val photo = if (c.meta.isPhoto) app.headsup.media.PhotoInfo.read(getApplication(), c.meta.uri) else null
@@ -507,7 +529,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
     private val history = ArrayList<EditSnapshot>()
     private var historyIndex = -1
 
-    private fun UiState.snapshot() = EditSnapshot(projectName, activities, clips, groups, globalGrade, style, timelineFps, frameAspect, exportSettings, audioFiles, audioClips, clipSound, texts)
+    private fun UiState.snapshot() = EditSnapshot(projectName, activities, clips, groups, globalGrade, style, timelineFps, frameAspect, exportSettings, audioFiles, audioClips, clipSound, texts, routeMap)
 
     /**
      * Records a step a moment after the edit settles, so a slider drag or a widget move is one
@@ -571,6 +593,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                 audioClips = snapshot.audioClips,
                 clipSound = snapshot.clipSound,
                 texts = snapshot.texts,
+                routeMap = snapshot.routeMap,
                 selectedText = s.selectedText?.takeIf { id -> snapshot.texts.any { it.id == id } },
                 selectedClip = s.selectedClip?.coerceAtMost(snapshot.clips.lastIndex)?.takeIf { it >= 0 } ?: snapshot.clips.indices.firstOrNull(),
                 compareGrade = null,
@@ -625,6 +648,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
         clipSound = clipSound,
         texts = texts,
         kind = projectKind,
+        routeMap = routeMap,
     )
 
     fun refreshProjects() = _state.update {
@@ -699,6 +723,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                         audioClips = compactLanes(project.audioClips),
                         clipSound = project.clipSound,
                         texts = project.texts,
+                        routeMap = project.routeMap,
                         selectedText = null,
                         selectedAudio = null,
                         selectedClip = clips.indices.firstOrNull(),
@@ -743,6 +768,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                 audioClips = emptyList(),
                 texts = emptyList(),
                 selectedText = null,
+                routeMap = app.headsup.render.RouteMap(),
                 clipSound = 1f,
                 selectedAudio = null,
                 selectedClip = null,
@@ -1833,6 +1859,9 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                             s.texts.map { t -> t.copy(text = app.headsup.core.edit.TextFields.fill(t.text, values)) }
                         },
                         textMs = start + clip.timelineDurationMs / 2,
+                        routeMap = s.routeMap,
+                        mapTrack = if (s.routeMap.enabled) mapTrack(s, clip) else null,
+                        mapMarker = if (s.routeMap.enabled) withContext(Dispatchers.IO) { mapMarker(s, clip, 0L) } else null,
                         longSide = s.exportSettings.photoLongSide, quality = s.exportSettings.photoQuality,
                         raw = clip.meta.isRaw,
                         rawDevelop = clip.rawDevelop,
@@ -1917,6 +1946,10 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                         s.texts.filter { it.startMs < start + clip.timelineDurationMs && it.endMs > start }
                     } else emptyList(),
                     textValues = if (kind == ExportKind.VIDEO && s.texts.isNotEmpty()) withContext(Dispatchers.IO) { staticTextValues(s, clip) } else emptyMap(),
+                    routeMap = if (kind == ExportKind.VIDEO) s.routeMap else app.headsup.render.RouteMap(),
+                    mapTrack = if (kind == ExportKind.VIDEO && s.routeMap.enabled) mapTrack(s, clip) else null,
+                    // A photo's place is fixed; a video's follows the watch frame by frame.
+                    mapMarker = if (kind == ExportKind.VIDEO && s.routeMap.enabled && clip.meta.isPhoto) withContext(Dispatchers.IO) { mapMarker(s, clip, 0L) } else null,
                 )
             }
             if (requests.isEmpty()) {

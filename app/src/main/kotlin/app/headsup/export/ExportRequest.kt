@@ -71,6 +71,10 @@ data class ExportRequest(
     val texts: List<TextItem> = emptyList(),
     /** Text field values that do not change within the clip (activity summary, photo data). */
     val textValues: Map<String, String> = emptyMap(),
+    /** The route map, the activity it shows and (for a photo) its fixed place on it. */
+    val routeMap: app.headsup.render.RouteMap = app.headsup.render.RouteMap(),
+    val mapTrack: ActivityTrack? = null,
+    val mapMarker: Pair<Double, Double>? = null,
 ) {
     /** Size of the exported frame: the source's, or the largest frame of the reframe's shape inside it (even numbers for encoders). */
     val frameWidth: Int get() = (reframe.outputSize(width.toFloat(), height.toFloat()).first.toInt() / 2 * 2).coerceAtLeast(2)

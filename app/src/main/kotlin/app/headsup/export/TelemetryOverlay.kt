@@ -35,6 +35,9 @@ class TelemetryOverlay(
     private val timelineMsOf: (positionMs: Long) -> Long = { it },
     /** Values of the texts' data fields at a moment (with the watch data there, if any). */
     private val textValues: (DashboardData?) -> Map<String, String> = { emptyMap() },
+    /** Draws the route map (under the texts); its content key at the same moment. */
+    private val drawMap: ((Canvas, Float, Float, DashboardData?) -> Unit)? = null,
+    private val mapKey: (DashboardData?) -> String = { "" },
     private val dataAt: (positionMs: Long) -> DashboardData?,
 ) : BitmapOverlay() {
     private var width = fallbackWidth
@@ -68,7 +71,7 @@ class TelemetryOverlay(
         val timelineMs = timelineMsOf(positionMs)
         val values = if (texts.isEmpty()) emptyMap() else textValues(data)
         val textKey = if (texts.isEmpty()) "" else TextRenderer.key(texts, timelineMs, values)
-        val key = "${width}x$height " + (data?.let { renderer.contentKey(style, it, w, h, effects) } ?: "-") + textKey
+        val key = "${width}x$height " + (data?.let { renderer.contentKey(style, it, w, h, effects) } ?: "-") + textKey + mapKey(data)
         buffers[current]?.let { if (key == lastKey) return it }
 
         current = 1 - current
@@ -78,6 +81,7 @@ class TelemetryOverlay(
         val canvas = Canvas(bitmap)
         renderer.drawVignette(canvas, w, h, vignette)
         if (data != null) renderer.draw(canvas, w, h, style, data, effects) else renderer.drawBars(canvas, w, h, effects)
+        drawMap?.invoke(canvas, w, h, data)
         if (texts.isNotEmpty()) TextRenderer.draw(canvas, w, h, texts, timelineMs, values)
         lastKey = key
         return bitmap

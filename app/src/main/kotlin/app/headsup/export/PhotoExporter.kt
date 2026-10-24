@@ -45,6 +45,10 @@ class PhotoRequest(
     /** Texts as they stand at [textMs] on the timeline. */
     val texts: List<TextItem>,
     val textMs: Long,
+    /** The route map, the activity it shows and where the photo is on it. */
+    val routeMap: app.headsup.render.RouteMap = app.headsup.render.RouteMap(),
+    val mapTrack: app.headsup.core.track.ActivityTrack? = null,
+    val mapMarker: Pair<Double, Double>? = null,
     /** A raw (DNG) photo and its development. */
     val raw: Boolean = false,
     val rawDevelop: RawDevelop = RawDevelop(),
@@ -101,6 +105,7 @@ object PhotoExporter {
             renderer.drawVignette(c, fw.toFloat(), fh.toFloat(), request.vignette)
             val data = request.dashboard
             if (data != null) renderer.draw(c, fw.toFloat(), fh.toFloat(), request.style, data, request.effects) else renderer.drawBars(c, fw.toFloat(), fh.toFloat(), request.effects)
+            app.headsup.render.RouteMapRenderer.draw(c, fw.toFloat(), fh.toFloat(), request.routeMap, request.mapTrack, request.mapMarker?.first, request.mapMarker?.second)
             TextRenderer.draw(c, fw.toFloat(), fh.toFloat(), request.texts, request.textMs)
             endRecording()
         }
