@@ -667,7 +667,10 @@ fun ClipPreview(
                         .pointerInput(Unit) {
                             detectTransformGestures { _, pan, zoomChange, _ ->
                                 viewZoom = (viewZoom * zoomChange).coerceIn(1f, 8f)
-                                viewPan = if (viewZoom <= 1.001f) Offset.Zero else viewPan + pan
+                                // The zoomed picture never leaves the frame.
+                                val maxX = size.width * (viewZoom - 1f) / 2f
+                                val maxY = size.height * (viewZoom - 1f) / 2f
+                                viewPan = if (viewZoom <= 1.001f) Offset.Zero else (viewPan + pan).let { Offset(it.x.coerceIn(-maxX, maxX), it.y.coerceIn(-maxY, maxY)) }
                             }
                         }
                         .pointerInput(Unit) { detectTapGestures(onDoubleTap = { viewZoom = if (viewZoom > 1.01f) 1f else 3f; viewPan = Offset.Zero }) }

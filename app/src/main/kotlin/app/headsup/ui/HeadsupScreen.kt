@@ -212,7 +212,8 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
     var adjustment by rememberSaveable { mutableStateOf(Adjustment.EXPOSURE) }
     var effectKind by rememberSaveable { mutableStateOf(EffectKind.DASHBOARD) }
     var editTab by rememberSaveable { mutableStateOf(EditTab.CUT) }
-    val framing = tool == Tool.EDIT && editTab == EditTab.FRAME
+    // An album's Edit page is its crop; a film's Frame tool.
+    val framing = tool == Tool.EDIT && (editTab == EditTab.FRAME || state.photoProject)
     // Texts are edited among the effects.
     val editingTexts = tool == Tool.EFFECTS && effectKind == EffectKind.TEXT
     // Set when a clip ended during playback, so the next one starts playing on its own.
@@ -2565,9 +2566,6 @@ private fun TextPanel(state: UiState, vm: HeadsupViewModel, at: () -> Long) {
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
             Text("On", style = MaterialTheme.typography.labelMedium, color = HeadsupColors.TextMuted)
             FilterChip(selected = item.onlyClip != null, onClick = { update { it.copy(onlyClip = photo.id, onlyGroup = null) } }, label = { Text("This photo") })
-            photo.groupId?.let { g ->
-                FilterChip(selected = item.onlyGroup == g && item.onlyClip == null, onClick = { update { it.copy(onlyClip = null, onlyGroup = g) } }, label = { Text("Group") })
-            }
             FilterChip(selected = item.onlyClip == null && item.onlyGroup == null, onClick = { update { it.copy(onlyClip = null, onlyGroup = null) } }, label = { Text("All photos") })
         }
     }
