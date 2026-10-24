@@ -2131,6 +2131,7 @@ private fun EffectsPanel(state: UiState, vm: HeadsupViewModel, kind: EffectKind,
                     FilterChip(selected = effects.barsRatio == ratio, onClick = { updateEffects { it.copy(barsRatio = ratio) } }, label = { Text(label) })
                 }
             }
+            if (state.timelineAspect < 16f / 9f - 0.01f) Hint("On this frame the bars take as much of the height as they would on 16:9, for the same look.")
         }
     }
 }

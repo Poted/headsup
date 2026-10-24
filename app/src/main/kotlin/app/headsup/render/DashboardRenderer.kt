@@ -277,7 +277,11 @@ class DashboardRenderer(private val assets: AssetManager) {
 
     private fun barHeight(width: Float, height: Float, effects: EffectSettings): Float {
         val ratio = effects.barsRatio ?: return 0f
-        return if (width / height >= ratio) 0f else (height - width / ratio) / 2
+        val aspect = width / height
+        // Frames narrower than 16:9 (square, vertical) take the share of the height the bars take
+        // on 16:9: a true 2.39:1 crop of a vertical frame would leave only a thin strip.
+        if (aspect < WIDE) return height * ((1f - WIDE / ratio) / 2f).coerceAtLeast(0f)
+        return if (aspect >= ratio) 0f else (height - width / ratio) / 2
     }
 
     /** Black bars that crop the picture to a wider (cinema) aspect ratio; drawn even without watch data. */
@@ -459,3 +463,6 @@ class DashboardRenderer(private val assets: AssetManager) {
         }
     }
 }
+
+/** 16:9, the frame the bars' ratios are made for. */
+private const val WIDE = 16f / 9f
