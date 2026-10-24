@@ -59,7 +59,16 @@ data class RawDevelop(
     /** -1..1: warmer / cooler than as shot, and green / magenta. */
     val temperature: Float = 0f,
     val tint: Float = 0f,
-)
+) {
+    /** These settings with the ones changed from [before] to [after] set as in [after]. */
+    fun synced(before: RawDevelop, after: RawDevelop) = RawDevelop(
+        exposure = if (after.exposure != before.exposure) after.exposure else exposure,
+        highlights = if (after.highlights != before.highlights) after.highlights else highlights,
+        shadows = if (after.shadows != before.shadows) after.shadows else shadows,
+        temperature = if (after.temperature != before.temperature) after.temperature else temperature,
+        tint = if (after.tint != before.tint) after.tint else tint,
+    )
+}
 
 /** A raw file read in parts, so a large one need not be held in memory whole. */
 interface RawSource {

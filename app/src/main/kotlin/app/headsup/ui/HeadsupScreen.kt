@@ -1607,12 +1607,16 @@ private fun ColourPage(
 ) {
     val index = state.selectedClip
     val clip = state.selected
+    val album = state.photoProject
     if (index == null || clip == null) {
-        Hint("Select a clip first.")
+        Hint(if (album) "Select a photo first." else "Select a clip first.")
         return
     }
     val target = state.target
-    PillTabs(listOf("This clip", "Group", "Masks", "All clips"), target.ordinal) { vm.setTarget(GradeTarget.entries[it]) }
+    PillTabs(
+        if (album) listOf("This photo", "Group", "Masks", "All photos") else listOf("This clip", "Group", "Masks", "All clips"),
+        target.ordinal,
+    ) { vm.setTarget(GradeTarget.entries[it]) }
     val group = state.groupOf(clip)
     when (target) {
         GradeTarget.CLIP -> Row(verticalAlignment = Alignment.CenterVertically) {
@@ -1624,12 +1628,17 @@ private fun ColourPage(
         GradeTarget.GROUP -> GroupControls(state, clip, index, group, vm)
         GradeTarget.MASK -> MaskList(state, clip, vm, playhead, onSeek)
         GradeTarget.GLOBAL -> Row(verticalAlignment = Alignment.CenterVertically) {
-            Hint("Added on top of every clip's own corrections.", Modifier.weight(1f))
-            if (state.grade != ColorGrade()) SmallAction("Reset", { vm.updateGrade { ColorGrade() } })
+            if (album) {
+                Hint("A change here is set on every photo: each shows it under This photo.", Modifier.weight(1f))
+                SmallAction("Reset all", { vm.resetSyncedPhotos() })
+            } else {
+                Hint("Added on top of every clip's own corrections.", Modifier.weight(1f))
+                if (state.grade != ColorGrade()) SmallAction("Reset", { vm.updateGrade { ColorGrade() } })
+            }
         }
     }
     if (target != GradeTarget.GLOBAL && !clip.colorGrade) {
-        Hint("Colour off: the clip keeps its own colours (for already graded files, e.g. Mimo exports).")
+        Hint(if (album) "Colour off: the photo keeps its own colours." else "Colour off: the clip keeps its own colours (for already graded files, e.g. Mimo exports).")
         return
     }
     if (target == GradeTarget.GROUP && group == null) return
@@ -1655,7 +1664,8 @@ private fun ColourPage(
     val editingShape = if (target == GradeTarget.MASK && onShapes) shape?.takeIf { it in shapes } ?: shapes.firstOrNull() else null
     // Corrections are grouped into short sections (plus the mask's shape), so each row stays short.
     // A raw (DNG) photo is developed first (exposure, highlights, shadows, white balance on the raw data).
-    val rawPhoto = target == GradeTarget.CLIP && clip.meta.isRaw
+    // In an album the raw development syncs like the rest from "all photos" and groups.
+    val rawPhoto = clip.meta.isRaw && (target == GradeTarget.CLIP || album && (target == GradeTarget.GLOBAL || target == GradeTarget.GROUP))
     var onRaw by rememberSaveable { mutableStateOf(false) }
     val sections = listOfNotNull("RAW".takeIf { rawPhoto }, "Shape".takeIf { shapes.isNotEmpty() }) +
         ColourSection.entries.filter { s -> options.any { it.section == s } }.map { it.label }
@@ -1727,7 +1737,7 @@ private fun ColourPage(
     }
     if (adjustment == Adjustment.LUT) {
         if (target == GradeTarget.GROUP && group != null) {
-            LutControls(state, group.lutName, "None", { vm.setGroupLut(group.id, it) }, null, vm, onAddLut)
+            LutControls(state, if (state.photoProject) clip.lutName else group.lutName, "None", { vm.setGroupLut(group.id, it) }, null, vm, onAddLut)
         } else {
             val inherited = group?.lutName
             LutControls(
@@ -1812,8 +1822,11 @@ private fun ShotMatchPanel(state: UiState, clip: ClipState, vm: HeadsupViewModel
     var wholeGroup by rememberSaveable(group?.id) { mutableStateOf(group != null) }
     Hint(
         when {
+            reference == null && state.photoProject -> "1. Select the photo whose colours you like and set it as the reference."
             reference == null -> "1. Pause on a good frame of the clip whose colours you like and set it as the reference."
+            reference.clipId == clip.id && state.photoProject -> "Reference set. Now select another photo and match."
             reference.clipId == clip.id -> "Reference set. Now select another clip, pause on a similar frame and match."
+            state.photoProject -> "Reference: ${reference.clipName}. Match this photo to it."
             else -> "Reference: ${reference.clipName}. Pause on a similar frame and match this clip to it."
         },
     )
@@ -1832,13 +1845,13 @@ private fun ShotMatchPanel(state: UiState, clip: ClipState, vm: HeadsupViewModel
     if (group != null) {
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             FilterChip(selected = wholeGroup, onClick = { wholeGroup = true }, label = { Text("Group: ${group.name}") })
-            FilterChip(selected = !wholeGroup, onClick = { wholeGroup = false }, label = { Text("This clip") })
+            FilterChip(selected = !wholeGroup, onClick = { wholeGroup = false }, label = { Text(if (state.photoProject) "This photo" else "This clip") })
         }
         Hint(
             if (wholeGroup) {
-                "Matches the camera's colour (white balance, tint, saturation, skin) for every clip in ${group.name}; each keeps its own brightness."
+                "Matches the camera's colour (white balance, tint, saturation, skin) for every ${if (state.photoProject) "photo" else "clip"} in ${group.name}; each keeps its own brightness."
             } else {
-                "Matches this clip completely, brightness included."
+                "Matches this ${if (state.photoProject) "photo" else "clip"} completely, brightness included."
             },
         )
     }
@@ -1964,7 +1977,7 @@ private fun LutControls(
         FilterChip(selected = false, onClick = onAddLut, label = { Text("+ .cube") })
     }
     Row {
-        if (onAll != null) SmallAction("Use for all clips", { onAll(current) })
+        if (onAll != null) SmallAction(if (state.photoProject) "Use for all photos" else "Use for all clips", { onAll(current) })
         Spacer(Modifier.weight(1f))
         current?.let { name -> SmallAction("Delete $name", { vm.deleteLut(name) }) }
     }
@@ -1977,7 +1990,12 @@ private fun LutControls(
 @Composable
 private fun GroupControls(state: UiState, clip: ClipState, index: Int, group: ClipGroup?, vm: HeadsupViewModel) {
     var renaming by remember { mutableStateOf(false) }
-    if (group == null) Hint("Clips shot the same way (e.g. drone) share a LUT and corrections. Long-press a clip to add it.")
+    if (group == null) {
+        Hint(
+            if (state.photoProject) "Photos shot the same way (e.g. drone) get the same LUT and corrections: a change here is set on each photo of the group."
+            else "Clips shot the same way (e.g. drone) share a LUT and corrections. Long-press a clip to add it.",
+        )
+    }
     FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         for (g in state.groups) {
             val count = state.clips.count { it.groupId == g.id }
@@ -1995,7 +2013,8 @@ private fun GroupControls(state: UiState, clip: ClipState, index: Int, group: Cl
             SmallAction("Leave", { vm.setClipGroup(index, null) })
             SmallAction("Delete group", { vm.deleteGroup(group.id) })
             Spacer(Modifier.weight(1f))
-            if (group.grade != ColorGrade()) SmallAction("Reset", { vm.updateGrade { ColorGrade() } })
+            if (state.photoProject) SmallAction("Reset group", { vm.resetSyncedPhotos() })
+            else if (group.grade != ColorGrade()) SmallAction("Reset", { vm.updateGrade { ColorGrade() } })
         }
         if (renaming) RenameDialog(group.name, onDismiss = { renaming = false }) { vm.renameGroup(group.id, it); renaming = false }
     }
@@ -2064,7 +2083,7 @@ private fun VectorscopeView(scope: ScopeResult?, modifier: Modifier) {
 private fun FramePanel(state: UiState, vm: HeadsupViewModel) {
     val clip = state.selected
     if (clip == null) {
-        Hint("Select a clip first.")
+        Hint(if (state.photoProject) "Select a photo first." else "Select a clip first.")
         return
     }
     if (state.photoProject) {
@@ -2154,7 +2173,7 @@ private fun EffectsPanel(state: UiState, vm: HeadsupViewModel, kind: EffectKind,
     val updateEffects = vm::updateEffects
     if (state.selected != null) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Text("Effects of this clip", Modifier.weight(1f), style = MaterialTheme.typography.labelLarge, color = HeadsupColors.TextMuted)
+            Text(if (state.photoProject) "Effects of this photo" else "Effects of this clip", Modifier.weight(1f), style = MaterialTheme.typography.labelLarge, color = HeadsupColors.TextMuted)
             LookActions(state, vm)
         }
     }

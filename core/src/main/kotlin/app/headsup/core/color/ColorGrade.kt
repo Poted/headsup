@@ -75,6 +75,31 @@ data class ColorGrade(
         tame = (tame + other.tame).coerceIn(0f, 1f),
     )
 
+    /**
+     * This grade with the values that changed from [before] to [after] set as in [after] (the
+     * others kept): one edit carried over to other photos, as a sync does.
+     */
+    fun synced(before: ColorGrade, after: ColorGrade) = ColorGrade(
+        exposure = if (after.exposure != before.exposure) after.exposure else exposure,
+        brightness = if (after.brightness != before.brightness) after.brightness else brightness,
+        contrast = if (after.contrast != before.contrast) after.contrast else contrast,
+        shadows = if (after.shadows != before.shadows) after.shadows else shadows,
+        highlights = if (after.highlights != before.highlights) after.highlights else highlights,
+        saturation = if (after.saturation != before.saturation) after.saturation else saturation,
+        temperature = if (after.temperature != before.temperature) after.temperature else temperature,
+        vignette = if (after.vignette != before.vignette) after.vignette else vignette,
+        blacks = if (after.blacks != before.blacks) after.blacks else blacks,
+        whites = if (after.whites != before.whites) after.whites else whites,
+        vibrance = if (after.vibrance != before.vibrance) after.vibrance else vibrance,
+        tint = if (after.tint != before.tint) after.tint else tint,
+        skinHue = if (after.skinHue != before.skinHue) after.skinHue else skinHue,
+        rolloff = if (after.rolloff != before.rolloff) after.rolloff else rolloff,
+        toneAmount = if (after.toneAmount != before.toneAmount) after.toneAmount else toneAmount,
+        shadowHue = if (after.shadowHue != before.shadowHue) after.shadowHue else shadowHue,
+        highlightHue = if (after.highlightHue != before.highlightHue) after.highlightHue else highlightHue,
+        tame = if (after.tame != before.tame) after.tame else tame,
+    )
+
     companion object {
         const val DEFAULT_SHADOW_HUE = 283f
         const val DEFAULT_HIGHLIGHT_HUE = 142f

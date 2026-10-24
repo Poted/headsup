@@ -330,7 +330,14 @@ data class UiState(
 
     /** Corrections the colour page edits: the selected clip's, its mask's, or the global node's. */
     val grade: ColorGrade
-        get() = when (target) {
+        get() = when {
+            // In an album "all photos" and a group set their values on each photo: the photo's are shown.
+            photoProject && (target == GradeTarget.GLOBAL || target == GradeTarget.GROUP) -> selected?.grade ?: defaultGrade
+            else -> gradeOf(target)
+        }
+
+    private fun gradeOf(target: GradeTarget): ColorGrade =
+        when (target) {
             GradeTarget.GLOBAL -> globalGrade
             GradeTarget.GROUP -> selected?.let(::groupOf)?.grade ?: ColorGrade()
             GradeTarget.MASK -> selected?.masks?.getOrNull(selectedMask)?.grade ?: ColorGrade()
@@ -344,6 +351,8 @@ data class UiState(
 
     /** [edited] unless it is the grade being compared (held ruler), then [compareGrade]. */
     private fun shown(edited: ColorGrade, which: GradeTarget, clip: ClipState): ColorGrade {
+        // An album's "all photos" and group tabs edit the photo's own values.
+        val target = if (photoProject && (target == GradeTarget.GLOBAL || target == GradeTarget.GROUP)) GradeTarget.CLIP else target
         if (target != which || compareGrade == null) return edited
         val affected = when (which) {
             GradeTarget.GLOBAL -> true
@@ -435,7 +444,40 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /** Changes the raw development of clip [index] (a DNG photo). */
-    fun updateRawDevelop(index: Int, transform: (RawDevelop) -> RawDevelop) = updateClip(index) { it.copy(rawDevelop = transform(it.rawDevelop)) }
+    fun updateRawDevelop(index: Int, transform: (RawDevelop) -> RawDevelop) {
+        val now = _state.value
+        if (now.photoProject && (now.target == GradeTarget.GLOBAL || now.target == GradeTarget.GROUP)) {
+            val clip = now.clips.getOrNull(index) ?: return
+            val before = clip.rawDevelop
+            val after = transform(before)
+            _state.update { s -> s.copy(clips = s.clips.map { c -> if (c.meta.isRaw && s.syncsTo(c)) c.copy(rawDevelop = c.rawDevelop.synced(before, after)) else c }) }
+            refreshPreview()
+            return
+        }
+        updateClip(index) { it.copy(rawDevelop = transform(it.rawDevelop)) }
+    }
+
+    /** In an album, the photos an edit on "all photos" or a group reaches. */
+    private fun UiState.syncsTo(c: ClipState): Boolean = c.meta.isPhoto && c.colorGrade && when (target) {
+        GradeTarget.GLOBAL -> true
+        GradeTarget.GROUP -> selected?.groupId?.let { it == c.groupId } ?: (c.id == selected?.id)
+        else -> c.id == selected?.id
+    }
+
+    /** In an album: every photo the current tab reaches back to no corrections (and its raw as shot). */
+    fun resetSyncedPhotos() {
+        _state.update { s -> s.copy(clips = s.clips.map { c -> if (s.syncsTo(c)) c.copy(grade = ColorGrade(), rawDevelop = RawDevelop()) else c }) }
+        refreshPreview()
+    }
+
+    /**
+     * An album keeps every correction on the photos themselves: a group's and the global ones
+     * (from projects saved before albums synced) are added into each photo's own.
+     */
+    private fun foldedIntoPhotos(clips: List<ClipState>, project: ProjectData): List<ClipState> = clips.map { c ->
+        val group = project.groups.firstOrNull { it.id == c.groupId }
+        c.copy(grade = c.grade + (group?.grade ?: ColorGrade()) + project.globalGrade, lutName = c.lutName ?: group?.lutName)
+    }
 
     /** Marks or unmarks an album photo for export. */
     fun togglePicked(index: Int) = updateClip(index) { it.copy(picked = !it.picked) }
@@ -716,16 +758,18 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                 )
             }
             scopeFrame = null
+            // Older projects of only photos open as albums.
+            val kind = project.kind ?: if (clips.isNotEmpty() && clips.all { it.meta.isPhoto }) ProjectKind.PHOTOS else ProjectKind.VIDEO
+            val album = kind == ProjectKind.PHOTOS
             _state.update { s ->
                 resynced(
                     s.copy(
                         projectName = project.name,
-                        // Older projects of only photos open as albums.
-                        projectKind = project.kind ?: if (clips.isNotEmpty() && clips.all { it.meta.isPhoto }) ProjectKind.PHOTOS else ProjectKind.VIDEO,
+                        projectKind = kind,
                         activities = activities.sortedBy { it.track.startMs },
-                        clips = clips,
-                        groups = project.groups.map { ClipGroup(it.id, it.name, it.grade, it.lutName) },
-                        globalGrade = project.globalGrade,
+                        clips = if (album) foldedIntoPhotos(clips, project) else clips,
+                        groups = project.groups.map { if (album) ClipGroup(it.id, it.name, ColorGrade(), null) else ClipGroup(it.id, it.name, it.grade, it.lutName) },
+                        globalGrade = if (album) ColorGrade() else project.globalGrade,
                         timelineFps = project.timelineFps,
                         // Older projects kept the shape per clip: one shared by all becomes the frame's.
                         frameAspect = project.frameAspect ?: clips.map { it.reframe.aspect }.distinct().singleOrNull(),
@@ -1245,6 +1289,12 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
     fun renameGroup(id: Long, name: String) = updateGroup(id) { it.copy(name = name.trim().ifEmpty { it.name }) }
 
     fun setGroupLut(id: Long, lutName: String?) {
+        if (_state.value.photoProject) {
+            // An album sets the LUT on each photo of the group.
+            _state.update { s -> s.copy(clips = s.clips.map { if (it.groupId == id) it.copy(lutName = lutName) else it }) }
+            refreshPreview()
+            return
+        }
         updateGroup(id) { it.copy(lutName = lutName) }
     }
 
@@ -1715,6 +1765,16 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
      * later), or the global node's.
      */
     fun updateGrade(transform: (ColorGrade) -> ColorGrade) {
+        val now = _state.value
+        if (now.photoProject && (now.target == GradeTarget.GLOBAL || now.target == GradeTarget.GROUP)) {
+            // An album syncs: the values changed on the selected photo are set on every photo (or the group's).
+            val selected = now.selected ?: return
+            val before = selected.grade
+            val after = transform(before)
+            _state.update { s -> s.copy(clips = s.clips.map { c -> if (s.syncsTo(c)) c.copy(grade = c.grade.synced(before, after)) else c }) }
+            refreshPreview()
+            return
+        }
         when (_state.value.target) {
             GradeTarget.GLOBAL -> {
                 _state.update { it.copy(globalGrade = transform(it.globalGrade)) }
