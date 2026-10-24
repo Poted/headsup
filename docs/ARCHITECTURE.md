@@ -315,3 +315,10 @@ baseline exposure plus the user's, highlights and shadows in linear light with a
 instead of clipping, then a gentle S-curve. The colour page's RAW section sets these per photo;
 the usual corrections, masks and effects follow on the developed picture. JPEG XL compressed
 DNGs (DNG 1.7, Samsung Expert RAW) are not decoded yet: they fall back to Android's decoder.
+
+Texts can show data: `{ascent}`, `{distance}`, `{place}`, `{exposure}`… (`TextField`). Values come
+from the activity's summary (`ActivitySummary`), its values at the clip's or photo's moment, and
+the photo's EXIF (`PhotoInfo`: GPS, date, camera, exposure), the photo winning for place and time.
+Place names come from the phone's geocoder when online (`Places`), else coordinates. The preview
+fills them per frame; the export adds the moment's values in the overlay; photo exports fill them
+before drawing.

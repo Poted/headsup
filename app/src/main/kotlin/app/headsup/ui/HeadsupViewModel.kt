@@ -302,6 +302,8 @@ data class UiState(
     /** Texts on the timeline, and the one being edited on the Text page. */
     val texts: List<TextItem> = emptyList(),
     val selectedText: Long? = null,
+    /** Bumped when place names arrive, so texts showing `{place}` redraw. */
+    val placesVersion: Int = 0,
 ) {
     /** What the preview plays for [c]: its light preview file when ready, else the clip itself. */
     fun previewSource(c: ClipState): Uri = (proxies[c.meta.uri] as? ProxyState.Ready)?.file ?: c.meta.uri
@@ -411,6 +413,17 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             _state.map { s -> s.clips.map { it.meta } }.distinctUntilChanged().collect { proxies.request(it) }
         }
+        // Place names for photos with GPS and clips with watch positions, for texts showing {place}.
+        viewModelScope.launch {
+            _state.map { s -> s.clips.map { it.id } to s.activities.size }.distinctUntilChanged().collect {
+                val s = _state.value
+                val spots = s.clips.mapNotNull { c -> placeOf(s, c) }.distinct()
+                for ((lat, lon) in spots) {
+                    if (app.headsup.media.Places.known(lat, lon) != null) continue
+                    if (app.headsup.media.Places.lookUp(getApplication(), lat, lon) != null) _state.update { it.copy(placesVersion = it.placesVersion + 1) }
+                }
+            }
+        }
         viewModelScope.launch {
             proxies.states.collect { states -> _state.update { it.copy(proxies = states) } }
         }
@@ -420,6 +433,43 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
     fun updateRawDevelop(index: Int, transform: (RawDevelop) -> RawDevelop) = updateClip(index) { it.copy(rawDevelop = transform(it.rawDevelop)) }
 
     // Texts
+
+    private val samplers = java.util.WeakHashMap<app.headsup.core.track.ActivityTrack, app.headsup.core.track.TelemetrySampler>()
+
+    private fun activityOf(s: UiState, c: ClipState) = (c.sync?.let { s.activities.getOrNull(it.trackIndex) } ?: s.activities.firstOrNull())?.track
+
+    /** Where [c] was: the photo's GPS, or the watch's position at its start. */
+    private suspend fun placeOf(s: UiState, c: ClipState): Pair<Double, Double>? {
+        if (c.meta.isPhoto) {
+            val info = withContext(Dispatchers.IO) { app.headsup.media.PhotoInfo.read(getApplication(), c.meta.uri) }
+            if (info.latitude != null && info.longitude != null) return info.latitude to info.longitude
+        }
+        val track = activityOf(s, c) ?: return null
+        val utc = c.telemetryUtc(0L) ?: return null
+        val f = synchronized(samplers) { samplers.getOrPut(track) { app.headsup.core.track.TelemetrySampler(track) } }.frameAt(utc)
+        val lat = f[app.headsup.core.track.Metric.LATITUDE] ?: return null
+        val lon = f[app.headsup.core.track.Metric.LONGITUDE] ?: return null
+        return lat to lon
+    }
+
+    /**
+     * Values of the text fields for clip [c] at [positionMs] into it: the activity's summary, its
+     * values at that moment and the photo's own data (which wins for place, date and time).
+     */
+    fun textValues(s: UiState, c: ClipState, positionMs: Long): Map<String, String> {
+        val track = activityOf(s, c)
+        val utc = c.telemetryUtc(positionMs)
+        val frame = if (track != null && utc != null) synchronized(samplers) { samplers.getOrPut(track) { app.headsup.core.track.TelemetrySampler(track) } }.frameAt(utc) else null
+        val offset = track?.utcOffsetSeconds ?: utc?.let { java.time.ZoneId.systemDefault().rules.getOffset(java.time.Instant.ofEpochMilli(it)).totalSeconds }
+        val photo = if (c.meta.isPhoto) app.headsup.media.PhotoInfo.read(getApplication(), c.meta.uri) else null
+        return app.headsup.render.TextValues.activity(track) + app.headsup.render.TextValues.moment(frame, utc, offset) + app.headsup.render.TextValues.photo(photo)
+    }
+
+    /** The values that do not change within a clip (for the export, which adds the moment's). */
+    private fun staticTextValues(s: UiState, c: ClipState): Map<String, String> {
+        val photo = if (c.meta.isPhoto) app.headsup.media.PhotoInfo.read(getApplication(), c.meta.uri) else null
+        return app.headsup.render.TextValues.activity(activityOf(s, c)) + app.headsup.render.TextValues.photo(photo)
+    }
 
     /** Adds a text at timeline time [atMs] (3 s, or up to the video's end) and selects it. */
     fun addText(atMs: Long) = _state.update { s ->
@@ -1778,7 +1828,11 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                         effects = clip.effects, vignette = if (graded) s.appliedGrade(clip).vignette else 0f,
                         reframe = s.framing(clip), style = s.style, dashboard = dashboard,
                         // Texts as they are in the middle of the photo's time on the timeline (after any fade in).
-                        texts = s.texts, textMs = start + clip.timelineDurationMs / 2,
+                        // Data fields filled in for this photo.
+                        texts = withContext(Dispatchers.IO) { textValues(s, clip, 0L) }.let { values ->
+                            s.texts.map { t -> t.copy(text = app.headsup.core.edit.TextFields.fill(t.text, values)) }
+                        },
+                        textMs = start + clip.timelineDurationMs / 2,
                         longSide = s.exportSettings.photoLongSide, quality = s.exportSettings.photoQuality,
                         raw = clip.meta.isRaw,
                         rawDevelop = clip.rawDevelop,
@@ -1862,6 +1916,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                         val start = s.clips.take(i).sumOf { it.timelineDurationMs }
                         s.texts.filter { it.startMs < start + clip.timelineDurationMs && it.endMs > start }
                     } else emptyList(),
+                    textValues = if (kind == ExportKind.VIDEO && s.texts.isNotEmpty()) withContext(Dispatchers.IO) { staticTextValues(s, clip) } else emptyMap(),
                 )
             }
             if (requests.isEmpty()) {

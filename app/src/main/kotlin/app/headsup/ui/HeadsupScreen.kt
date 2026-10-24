@@ -98,6 +98,8 @@ import app.headsup.core.edit.TextAnim
 import app.headsup.core.edit.TextAnimation
 import app.headsup.core.edit.TextFont
 import app.headsup.core.edit.TextItem
+import app.headsup.core.edit.TextField
+import app.headsup.core.edit.FieldSource
 import app.headsup.core.color.ColourMask
 import app.headsup.core.color.MaskKind
 import app.headsup.core.frame.Reframe
@@ -317,6 +319,8 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
                         neighbourCubes = state.previewNeighbourCubes,
                         texts = state.texts,
                         photoMode = state.photoProject,
+                        // Read here so arriving place names redraw the texts.
+                        textValues = state.placesVersion.let { _ -> { pos -> vm.textValues(state, selected, pos) } },
                         onMoveText = state.selectedText?.takeIf { editingTexts }?.let { id -> { x, y -> vm.updateText(id) { it.copy(x = x, y = y) } } },
                         cutScrub = cutScrub,
                         onFrameSource = { frameSource.value = it },
@@ -2456,6 +2460,7 @@ private fun shareVideo(context: Context, uri: Uri) {
 /** Tools of the Text page, as on the Colour page. */
 private enum class TextTool(val symbol: String, val label: String) {
     LOOK("Aa", "Look"),
+    DATA("{ }", "Data"),
     FONT("F", "Font"),
     COLOUR("●", "Colour"),
     SIZE("Sz", "Size"),
@@ -2536,6 +2541,27 @@ private fun TextPanel(state: UiState, vm: HeadsupViewModel, at: () -> Long) {
                     label = { Text(look.label) },
                 )
             }
+        }
+        TextTool.DATA -> {
+            // Values from the watch and the photo, written into the text as {field}; tap to add one.
+            val clip = state.selected
+            val values = clip?.let { vm.textValues(state, it, 0L) }.orEmpty()
+            for (source in FieldSource.entries) {
+                val fields = TextField.entries.filter { it.source == source }
+                Text(source.label, style = MaterialTheme.typography.labelMedium, color = HeadsupColors.TextMuted)
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    for (f in fields) {
+                        val v = values[f.key]
+                        FilterChip(
+                            selected = item.text.contains("{${f.key}}"),
+                            onClick = { update { it.copy(text = if (it.text == "Text") "{${f.key}}" else it.text + " {${f.key}}") } },
+                            label = { Text(if (v != null) "${f.label}: $v" else f.label, maxLines = 1) },
+                            enabled = v != null,
+                        )
+                    }
+                }
+            }
+            Hint("Fields show as {name} in the text; type around them, e.g. \"↑ {ascent} · {distance}\". Values come from the selected clip or photo.")
         }
         TextTool.FONT -> {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {

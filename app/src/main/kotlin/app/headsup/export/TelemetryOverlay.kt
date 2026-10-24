@@ -33,6 +33,8 @@ class TelemetryOverlay(
     /** Texts drawn over the dashboard, at their timeline time. */
     private val texts: List<TextItem> = emptyList(),
     private val timelineMsOf: (positionMs: Long) -> Long = { it },
+    /** Values of the texts' data fields at a moment (with the watch data there, if any). */
+    private val textValues: (DashboardData?) -> Map<String, String> = { emptyMap() },
     private val dataAt: (positionMs: Long) -> DashboardData?,
 ) : BitmapOverlay() {
     private var width = fallbackWidth
@@ -64,7 +66,8 @@ class TelemetryOverlay(
         val positionMs = (presentationTimeUs - firstUs).coerceAtLeast(0L) / 1000
         val data = dataAt(positionMs)
         val timelineMs = timelineMsOf(positionMs)
-        val textKey = if (texts.isEmpty()) "" else TextRenderer.key(texts, timelineMs)
+        val values = if (texts.isEmpty()) emptyMap() else textValues(data)
+        val textKey = if (texts.isEmpty()) "" else TextRenderer.key(texts, timelineMs, values)
         val key = "${width}x$height " + (data?.let { renderer.contentKey(style, it, w, h, effects) } ?: "-") + textKey
         buffers[current]?.let { if (key == lastKey) return it }
 
@@ -75,7 +78,7 @@ class TelemetryOverlay(
         val canvas = Canvas(bitmap)
         renderer.drawVignette(canvas, w, h, vignette)
         if (data != null) renderer.draw(canvas, w, h, style, data, effects) else renderer.drawBars(canvas, w, h, effects)
-        if (texts.isNotEmpty()) TextRenderer.draw(canvas, w, h, texts, timelineMs)
+        if (texts.isNotEmpty()) TextRenderer.draw(canvas, w, h, texts, timelineMs, values)
         lastKey = key
         return bitmap
     }

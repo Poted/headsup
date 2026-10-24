@@ -6,6 +6,7 @@ import android.graphics.Paint
 import android.graphics.Typeface
 import app.headsup.core.edit.TextAlign
 import app.headsup.core.edit.TextAnimation
+import app.headsup.core.edit.TextFields
 import app.headsup.core.edit.TextFont
 import app.headsup.core.edit.TextFrame
 import app.headsup.core.edit.TextItem
@@ -26,11 +27,16 @@ object TextRenderer {
     }
 
     /** Changes whenever what [draw] would draw changes (for reusing an export overlay's bitmap). */
-    fun key(items: List<TextItem>, timelineMs: Long): String =
-        items.mapNotNull { item -> TextAnimation.frame(item, timelineMs)?.let { "${item.hashCode()}:$it" } }.joinToString("|")
+    fun key(items: List<TextItem>, timelineMs: Long, values: Map<String, String> = emptyMap()): String =
+        items.mapNotNull { raw -> val item = filled(raw, values); TextAnimation.frame(item, timelineMs)?.let { "${item.hashCode()}:$it" } }.joinToString("|")
 
-    fun draw(canvas: Canvas, width: Float, height: Float, items: List<TextItem>, timelineMs: Long) {
-        for (item in items) {
+    /** [item] with its data fields (`{ascent}`, `{place}`…) filled in from [values]. */
+    private fun filled(item: TextItem, values: Map<String, String>) =
+        if (TextFields.hasFields(item.text)) item.copy(text = TextFields.fill(item.text, values)) else item
+
+    fun draw(canvas: Canvas, width: Float, height: Float, items: List<TextItem>, timelineMs: Long, values: Map<String, String> = emptyMap()) {
+        for (raw in items) {
+            val item = filled(raw, values)
             val f = TextAnimation.frame(item, timelineMs) ?: continue
             if (f.alpha <= 0.003f) continue
             drawItem(canvas, width, height, item, f)

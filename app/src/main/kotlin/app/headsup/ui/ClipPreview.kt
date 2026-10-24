@@ -197,6 +197,8 @@ fun ClipPreview(
     onMoveText: ((Float, Float) -> Unit)? = null,
     /** Only photos in the project: no play button or time. */
     photoMode: Boolean = false,
+    /** Values of the texts' data fields at a position in this clip. */
+    textValues: (Long) -> Map<String, String> = { emptyMap() },
 ) {
     val context = LocalContext.current
     // Two players: one shows the clip, the other holds the next one ready (a different shape or
@@ -886,7 +888,10 @@ fun ClipPreview(
                         },
                     ),
                 ) {
-                    if (texts.isNotEmpty()) drawIntoCanvas { TextRenderer.draw(it.nativeCanvas, size.width, size.height, texts, timelineOffsetMs + clipTimelineMs) }
+                    if (texts.isNotEmpty()) {
+                        val values = if (texts.any { app.headsup.core.edit.TextFields.hasFields(it.text) }) textValues(positionMs) else emptyMap()
+                        drawIntoCanvas { TextRenderer.draw(it.nativeCanvas, size.width, size.height, texts, timelineOffsetMs + clipTimelineMs, values) }
+                    }
                 }
                 if (fadeGain < 1f) Box(Modifier.matchParentSize().background(Color.Black.copy(alpha = 1f - fadeGain)))
                 if (showGrid) Canvas(Modifier.matchParentSize()) { drawThirds() }

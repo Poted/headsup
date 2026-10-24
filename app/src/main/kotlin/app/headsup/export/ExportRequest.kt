@@ -69,6 +69,8 @@ data class ExportRequest(
     /** Where the clip starts on the timeline, and the timeline's texts shown over it. */
     val timelineStartMs: Long = 0L,
     val texts: List<TextItem> = emptyList(),
+    /** Text field values that do not change within the clip (activity summary, photo data). */
+    val textValues: Map<String, String> = emptyMap(),
 ) {
     /** Size of the exported frame: the source's, or the largest frame of the reframe's shape inside it (even numbers for encoders). */
     val frameWidth: Int get() = (reframe.outputSize(width.toFloat(), height.toFloat()).first.toInt() / 2 * 2).coerceAtLeast(2)
