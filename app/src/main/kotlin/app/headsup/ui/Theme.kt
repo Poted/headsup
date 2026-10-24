@@ -111,6 +111,9 @@ object HeadsupIcons {
         }
     }
 
+    /** A letter T: text. */
+    val Text = icon("text") { stroke { moveTo(5f, 6f); lineTo(19f, 6f); moveTo(12f, 6f); lineTo(12f, 19f) } }
+
     val Add = icon("add") { stroke { moveTo(12f, 5f); lineTo(12f, 19f); moveTo(5f, 12f); lineTo(19f, 12f) } }
 
     /** Clock: synchronisation. */

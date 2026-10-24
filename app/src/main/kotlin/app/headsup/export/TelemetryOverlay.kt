@@ -12,6 +12,8 @@ import app.headsup.render.DashboardData
 import app.headsup.render.DashboardRenderer
 import app.headsup.render.DashboardStyle
 import app.headsup.render.EffectSettings
+import app.headsup.render.TextRenderer
+import app.headsup.core.edit.TextItem
 
 /**
  * Media3 overlay that draws the dashboard (and vignette) for each exported frame.
@@ -28,6 +30,9 @@ class TelemetryOverlay(
     private val vignette: Float,
     fallbackWidth: Int,
     fallbackHeight: Int,
+    /** Texts drawn over the dashboard, at their timeline time. */
+    private val texts: List<TextItem> = emptyList(),
+    private val timelineMsOf: (positionMs: Long) -> Long = { it },
     private val dataAt: (positionMs: Long) -> DashboardData?,
 ) : BitmapOverlay() {
     private var width = fallbackWidth
@@ -56,8 +61,11 @@ class TelemetryOverlay(
         val w = width.toFloat()
         val h = height.toFloat()
         if (firstUs == Long.MIN_VALUE) firstUs = presentationTimeUs
-        val data = dataAt((presentationTimeUs - firstUs).coerceAtLeast(0L) / 1000)
-        val key = "${width}x$height " + (data?.let { renderer.contentKey(style, it, w, h, effects) } ?: "-")
+        val positionMs = (presentationTimeUs - firstUs).coerceAtLeast(0L) / 1000
+        val data = dataAt(positionMs)
+        val timelineMs = timelineMsOf(positionMs)
+        val textKey = if (texts.isEmpty()) "" else TextRenderer.key(texts, timelineMs)
+        val key = "${width}x$height " + (data?.let { renderer.contentKey(style, it, w, h, effects) } ?: "-") + textKey
         buffers[current]?.let { if (key == lastKey) return it }
 
         current = 1 - current
@@ -67,6 +75,7 @@ class TelemetryOverlay(
         val canvas = Canvas(bitmap)
         renderer.drawVignette(canvas, w, h, vignette)
         if (data != null) renderer.draw(canvas, w, h, style, data, effects) else renderer.drawBars(canvas, w, h, effects)
+        if (texts.isNotEmpty()) TextRenderer.draw(canvas, w, h, texts, timelineMs)
         lastKey = key
         return bitmap
     }

@@ -191,6 +191,9 @@ class ExportManager(private val context: Context) {
         val hdr = out.tenBit
         val overlay = TelemetryOverlay(
             DashboardRenderer(context.assets), request.style, request.effects, request.grade?.vignette ?: 0f, out.width, out.height,
+            texts = request.texts,
+            // The overlay counts the clip's own time (before the speed change); texts are placed on the timeline.
+            timelineMsOf = { positionMs -> request.timelineStartMs + if (request.isPhoto) positionMs else (positionMs / request.speed).toLong() },
         ) { positionMs -> request.dataAt(positionMs, sampler) }
 
         val effects = mutableListOf<Effect>()

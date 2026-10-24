@@ -1,5 +1,10 @@
 package app.headsup.project
 
+import app.headsup.core.edit.TextAlign
+import app.headsup.core.edit.TextAnim
+import app.headsup.core.edit.TextFont
+import app.headsup.core.edit.TextItem
+
 import android.content.Context
 import android.net.Uri
 import app.headsup.core.color.ColorGrade
@@ -59,6 +64,7 @@ data class ProjectData(
     val audioClips: List<AudioClip> = emptyList(),
     /** Level of the video clips' own sound. */
     val clipSound: Float = 1f,
+    val texts: List<TextItem> = emptyList(),
 ) {
     /** Every media file the project uses. */
     val mediaUris: List<Uri> get() = activities + clips.map { it.uri } + audioFiles.map { it.uri } + audioClips.map { it.uri }
@@ -130,6 +136,7 @@ internal object Json {
         .put("audioFiles", JSONArray(p.audioFiles.map { JSONObject().put("uri", it.uri.toString()).put("name", it.name).put("durationMs", it.durationMs) }))
         .put("audioClips", JSONArray(p.audioClips.map(::audioClip)))
         .put("clipSound", p.clipSound)
+        .put("texts", JSONArray(p.texts.map(::text)))
 
     fun project(o: JSONObject) = ProjectData(
         name = o.optString("name", "Project"),
@@ -144,6 +151,31 @@ internal object Json {
         } + listOfNotNull(o.optJSONObject("music")?.let { m -> AudioFile(Uri.parse(m.getString("uri")), m.optString("name", "Music"), m.optLong("durationMs", 0L)) }),
         audioClips = o.optJSONArray("audioClips").objects().map(::audioClip) + oldMusic(o.optJSONObject("music")),
         clipSound = o.optDouble("clipSound", o.optJSONObject("music")?.optDouble("originalVolume", 1.0) ?: 1.0).toFloat(),
+        texts = o.optJSONArray("texts").objects().map(::text),
+    )
+
+    private fun text(t: TextItem) = JSONObject()
+        .put("id", t.id).put("text", t.text).put("startMs", t.startMs).put("lengthMs", t.lengthMs)
+        .put("x", t.x.toDouble()).put("y", t.y.toDouble()).put("size", t.size.toDouble())
+        .put("font", t.font.name).put("colour", t.colour).put("glow", t.glow.toDouble()).put("shadow", t.shadow)
+        .put("align", t.align.name).put("animIn", t.animIn.name).put("animOut", t.animOut.name).put("animMs", t.animMs)
+
+    private fun text(o: JSONObject) = TextItem(
+        id = o.optLong("id"),
+        text = o.optString("text", ""),
+        startMs = o.optLong("startMs", 0L),
+        lengthMs = o.optLong("lengthMs", 3_000L),
+        x = o.optDouble("x", 0.5).toFloat(),
+        y = o.optDouble("y", 0.8).toFloat(),
+        size = o.optDouble("size", 0.07).toFloat(),
+        font = runCatching { TextFont.valueOf(o.optString("font")) }.getOrDefault(TextFont.SANS),
+        colour = o.optInt("colour", -1),
+        glow = o.optDouble("glow", 0.0).toFloat(),
+        shadow = o.optBoolean("shadow", true),
+        align = runCatching { TextAlign.valueOf(o.optString("align")) }.getOrDefault(TextAlign.CENTER),
+        animIn = runCatching { TextAnim.valueOf(o.optString("animIn")) }.getOrDefault(TextAnim.FADE),
+        animOut = runCatching { TextAnim.valueOf(o.optString("animOut")) }.getOrDefault(TextAnim.FADE),
+        animMs = o.optLong("animMs", 500L),
     )
 
     private fun audioClip(c: AudioClip) = JSONObject()

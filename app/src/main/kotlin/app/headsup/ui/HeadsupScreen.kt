@@ -89,6 +89,11 @@ import androidx.compose.ui.unit.IntSize
 import app.headsup.color.ScopeResult
 import app.headsup.color.Vectorscope
 import app.headsup.core.color.ColorGrade
+import app.headsup.core.edit.TextAlign
+import app.headsup.core.edit.TextAnim
+import app.headsup.core.edit.TextAnimation
+import app.headsup.core.edit.TextFont
+import app.headsup.core.edit.TextItem
 import app.headsup.core.color.ColourMask
 import app.headsup.core.color.MaskKind
 import app.headsup.core.frame.Reframe
@@ -157,6 +162,7 @@ private enum class Tool(val label: String, val icon: ImageVector) {
     EDIT("Edit", HeadsupIcons.Cut),
     COLOUR("Colour", HeadsupIcons.Colour),
     EFFECTS("Effects", HeadsupIcons.Dashboard),
+    TEXT("Text", HeadsupIcons.Text),
     AUDIO("Audio", HeadsupIcons.Music),
     EXPORT("Export", HeadsupIcons.Export),
 }
@@ -299,6 +305,8 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
                         framingOf = { state.framing(it) },
                         sourceOf = { state.previewSource(it) },
                         neighbourCubes = state.previewNeighbourCubes,
+                        texts = state.texts,
+                        onMoveText = state.selectedText?.takeIf { tool == Tool.TEXT }?.let { id -> { x, y -> vm.updateText(id) { it.copy(x = x, y = y) } } },
                         cutScrub = cutScrub,
                         onFrameSource = { frameSource.value = it },
                         reframe = state.framing(selected),
@@ -365,6 +373,9 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
                     },
                     onAdd = addVideos,
                     onAddSound = { addingSound = true },
+                    texts = if (tool == Tool.TEXT) state.texts else emptyList(),
+                    onSelectText = vm::selectText,
+                    onMoveText = { id, start -> vm.updateText(id) { it.copy(startMs = start) } },
                     showAudio = tool == Tool.AUDIO,
                     playing = { previewPlaying.value },
                 ) {}
@@ -423,6 +434,7 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
                         playhead, onSeek = { seekRequest = it },
                     )
                     Tool.EFFECTS -> EffectsPanel(state, vm, effectKind, playhead) { effectKind = it }
+                    Tool.TEXT -> TextPanel(state, vm, at = { scrubT.value ?: timelineOf(playhead.longValue) })
                     Tool.EXPORT -> ExportControls(
                         state = state,
                         vm = vm,
@@ -2354,3 +2366,148 @@ private fun shareVideo(context: Context, uri: Uri) {
     context.startActivity(Intent.createChooser(send, "Share video").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
 }
 
+
+/** Tools of the Text page, as on the Colour page. */
+private enum class TextTool(val symbol: String, val label: String) {
+    LOOK("Aa", "Look"),
+    FONT("F", "Font"),
+    COLOUR("●", "Colour"),
+    SIZE("Sz", "Size"),
+    GLOW("Gl", "Glow"),
+    IN("In", "In"),
+    OUT("Out", "Out"),
+    TIME("⏱", "Time"),
+}
+
+/** Ready looks: one tap sets font, colour, glow, placement and animations. */
+private enum class TextLook(val label: String, val apply: (TextItem) -> TextItem) {
+    TITLE("Title", { it.copy(font = TextFont.SANS, colour = 0xFFFFFFFF.toInt(), size = 0.09f, glow = 0f, shadow = true, align = TextAlign.CENTER, x = 0.5f, y = 0.5f, animIn = TextAnim.POP, animOut = TextAnim.FADE) }),
+    SUBTITLE("Subtitle", { it.copy(font = TextFont.SANS, colour = 0xFFFFFFFF.toInt(), size = 0.045f, glow = 0f, shadow = true, align = TextAlign.CENTER, x = 0.5f, y = 0.85f, animIn = TextAnim.FADE, animOut = TextAnim.FADE) }),
+    LOWER_THIRD("Lower third", { it.copy(font = TextFont.SANS, colour = 0xFFFFFFFF.toInt(), size = 0.05f, glow = 0f, shadow = true, align = TextAlign.LEFT, x = 0.08f, y = 0.8f, animIn = TextAnim.RISE, animOut = TextAnim.FADE) }),
+    HUD("HUD", { it.copy(font = TextFont.MONO, colour = 0xFF00FF66.toInt(), size = 0.07f, glow = 0.6f, shadow = false, align = TextAlign.LEFT, x = 0.08f, y = 0.78f, animIn = TextAnim.HUD, animOut = TextAnim.HUD) }),
+    TYPED("Typed", { it.copy(font = TextFont.MONO, colour = 0xFFFFFFFF.toInt(), size = 0.055f, glow = 0f, shadow = true, align = TextAlign.CENTER, animIn = TextAnim.TYPE, animOut = TextAnim.FADE) }),
+    HAND("Note", { it.copy(font = TextFont.HAND, colour = 0xFFFFE08A.toInt(), size = 0.08f, glow = 0.2f, shadow = true, align = TextAlign.CENTER, animIn = TextAnim.RISE, animOut = TextAnim.FADE) }),
+}
+
+private val TEXT_COLOURS = listOf(
+    0xFFFFFFFF.toInt(), 0xFF000000.toInt(), 0xFFFFD60A.toInt(), 0xFFFF9F0A.toInt(), 0xFFFF453A.toInt(),
+    0xFF00FF66.toInt(), 0xFF64D2FF.toInt(), 0xFFBF5AF2.toInt(),
+)
+
+/**
+ * Texts over the video: add one at the playhead, then its words, a ready look, font, colour,
+ * size, glow, how it comes in and goes out, and its time. Drag it on the picture to place it;
+ * on the timeline its bar moves it in time.
+ */
+@Composable
+private fun TextPanel(state: UiState, vm: HeadsupViewModel, at: () -> Long) {
+    var tool by rememberSaveable { mutableStateOf(TextTool.LOOK) }
+    val item = state.texts.firstOrNull { it.id == state.selectedText }
+    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        SmallAction("+ Text", { vm.addText(at()) })
+        if (item != null) {
+            SmallAction("Delete", { vm.removeText(item.id) })
+            SmallAction("Done", { vm.selectText(null) })
+        }
+    }
+    if (item == null) {
+        if (state.texts.isEmpty()) {
+            Hint("Adds a text at the playhead. Drag it on the picture to place it; its bar on the timeline moves it in time.")
+        } else {
+            Hint("Tap a text's bar on the timeline to edit it.")
+            Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                for (t in state.texts) FilterChip(selected = false, onClick = { vm.selectText(t.id) }, label = { Text(t.text.replace('\n', ' ').take(18)) })
+            }
+        }
+        return
+    }
+    val update: ((TextItem) -> TextItem) -> Unit = { vm.updateText(item.id, it) }
+    OutlinedTextField(
+        value = item.text,
+        onValueChange = { v -> update { it.copy(text = v) } },
+        modifier = Modifier.fillMaxWidth(),
+        maxLines = 3,
+        textStyle = MaterialTheme.typography.bodyLarge,
+    )
+    LazyRow(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+        items(TextTool.entries) { t ->
+            val modified = when (t) {
+                TextTool.GLOW -> item.glow > 0f
+                TextTool.IN -> item.animIn != TextAnim.NONE
+                TextTool.OUT -> item.animOut != TextAnim.NONE
+                else -> false
+            }
+            CircleOption(t.symbol, t.label, selected = t == tool, modified = modified) { tool = t }
+        }
+    }
+    when (tool) {
+        TextTool.LOOK -> FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            for (look in TextLook.entries) FilterChip(selected = false, onClick = { update(look.apply) }, label = { Text(look.label) })
+        }
+        TextTool.FONT -> {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                for (f in TextFont.entries) FilterChip(selected = item.font == f, onClick = { update { it.copy(font = f) } }, label = { Text(f.label) })
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                FilterChip(selected = item.align == TextAlign.LEFT, onClick = { update { it.copy(align = TextAlign.LEFT) } }, label = { Text("Left") })
+                FilterChip(selected = item.align == TextAlign.CENTER, onClick = { update { it.copy(align = TextAlign.CENTER) } }, label = { Text("Centre") })
+            }
+        }
+        TextTool.COLOUR -> Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            for (c in TEXT_COLOURS) {
+                Box(
+                    Modifier
+                        .size(32.dp)
+                        .clip(CircleShape)
+                        .background(Color(c))
+                        .border(if (item.colour == c) 3.dp else 1.dp, if (item.colour == c) HeadsupColors.Accent else HeadsupColors.Outline, CircleShape)
+                        .clickable { update { it.copy(colour = c) } },
+                )
+            }
+        }
+        TextTool.SIZE -> {
+            ValueHeader("Size", String.format(Locale.US, "%.0f %%", item.size * 100))
+            RulerSlider(item.size, 0.02f..0.25f, 0.005f, { v -> update { it.copy(size = v) } }, onReset = { update { it.copy(size = 0.07f) } })
+        }
+        TextTool.GLOW -> {
+            ValueHeader("Glow", String.format(Locale.US, "%.2f", item.glow))
+            RulerSlider(item.glow, 0f..1f, 0.02f, { v -> update { it.copy(glow = v) } }, onReset = { update { it.copy(glow = 0f) } })
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("Shadow", Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
+                Switch(checked = item.shadow, onCheckedChange = { on -> update { it.copy(shadow = on) } })
+            }
+        }
+        TextTool.IN, TextTool.OUT -> {
+            val current = if (tool == TextTool.IN) item.animIn else item.animOut
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                for (a in TextAnim.entries) {
+                    FilterChip(
+                        selected = current == a,
+                        onClick = { update { if (tool == TextTool.IN) it.copy(animIn = a) else it.copy(animOut = a) } },
+                        label = { Text(a.label) },
+                    )
+                }
+            }
+            if (current == TextAnim.FADE || current == TextAnim.RISE || current == TextAnim.POP) {
+                ValueHeader("Animation", String.format(Locale.US, "%.1f s", item.animMs / 1000f))
+                RulerSlider(item.animMs / 1000f, 0.1f..3f, 0.1f, { v -> update { it.copy(animMs = (v * 1000).toLong()) } }, onReset = { update { it.copy(animMs = 500L) } })
+            } else if (current == TextAnim.TYPE || current == TextAnim.HUD) {
+                Hint("Types one letter every ${TextAnimation.CHAR_MS} ms.")
+            }
+        }
+        TextTool.TIME -> {
+            val end = state.clips.sumOf { it.timelineDurationMs }
+            ValueHeader("On screen", String.format(Locale.US, "%.1f s", item.lengthMs / 1000f))
+            RulerSlider(
+                item.lengthMs / 1000f, 0.5f..(((end - item.startMs) / 1000f).coerceAtLeast(0.5f)), 0.1f,
+                { v -> update { it.copy(lengthMs = (v * 1000).toLong()) } },
+                onReset = { update { it.copy(lengthMs = 3_000L.coerceAtMost((end - it.startMs).coerceAtLeast(500L))) } },
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                SmallAction("Start here", { val t = at(); update { it.copy(startMs = t.coerceIn(0L, (end - it.lengthMs).coerceAtLeast(0L))) } })
+                SmallAction("End here", { val t = at(); update { it.copy(lengthMs = (t - it.startMs).coerceAtLeast(500L)) } })
+            }
+            Hint("From ${Formats.duration(item.startMs)} to ${Formats.duration(item.endMs)}.")
+        }
+    }
+}

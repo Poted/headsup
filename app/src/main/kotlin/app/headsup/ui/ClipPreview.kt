@@ -91,6 +91,8 @@ import app.headsup.core.color.ColourTransition
 import app.headsup.core.color.MaskKind
 import app.headsup.core.frame.Reframe
 import app.headsup.core.edit.Fade
+import app.headsup.core.edit.TextItem
+import app.headsup.render.TextRenderer
 import app.headsup.export.AudioClip
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.requiredSize
@@ -187,6 +189,10 @@ fun ClipPreview(
     sourceOf: (ClipState) -> android.net.Uri = { it.meta.uri },
     /** Colour tables of the clips next to [clip] (null: untouched), for a picture still showing one at a cut. */
     neighbourCubes: Map<Long, Array<Array<IntArray>>?> = emptyMap(),
+    /** The timeline's texts, drawn over the picture at the timeline's time. */
+    texts: List<TextItem> = emptyList(),
+    /** Set while a text is edited: a finger on the picture places it (0..1 of the frame). */
+    onMoveText: ((Float, Float) -> Unit)? = null,
 ) {
     val context = LocalContext.current
     // Two players: one shows the clip, the other holds the next one ready (a different shape or
@@ -823,6 +829,29 @@ fun ClipPreview(
                         ?: ZoneId.systemDefault().rules.getOffset(Instant.ofEpochMilli(utc)).totalSeconds
                     val data = DashboardData(track, frame, utc, zone)
                     drawIntoCanvas { renderer.draw(it.nativeCanvas, size.width, size.height, style, data, effects) }
+                }
+                // Texts sit on the frame (not the picture), over the dashboard, as in the export.
+                val textMover by rememberUpdatedState(onMoveText)
+                Canvas(
+                    Modifier.matchParentSize().then(
+                        if (onMoveText == null) {
+                            Modifier
+                        } else {
+                            Modifier.pointerInput(Unit) {
+                                awaitEachGesture {
+                                    val down = awaitFirstDown()
+                                    down.consume()
+                                    textMover?.invoke(down.position.x / size.width, down.position.y / size.height)
+                                    drag(down.id) { change ->
+                                        change.consume()
+                                        textMover?.invoke((change.position.x / size.width).coerceIn(0f, 1f), (change.position.y / size.height).coerceIn(0f, 1f))
+                                    }
+                                }
+                            }
+                        },
+                    ),
+                ) {
+                    if (texts.isNotEmpty()) drawIntoCanvas { TextRenderer.draw(it.nativeCanvas, size.width, size.height, texts, timelineOffsetMs + clipTimelineMs) }
                 }
                 if (fadeGain < 1f) Box(Modifier.matchParentSize().background(Color.Black.copy(alpha = 1f - fadeGain)))
                 if (showGrid) Canvas(Modifier.matchParentSize()) { drawThirds() }

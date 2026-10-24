@@ -59,6 +59,7 @@ import app.headsup.render.Widget
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import app.headsup.media.Proxies
+import app.headsup.core.edit.TextItem
 import app.headsup.media.ProxyState
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -208,6 +209,7 @@ private data class EditSnapshot(
     val audioFiles: List<AudioFile>,
     val audioClips: List<AudioClip>,
     val clipSound: Float,
+    val texts: List<TextItem>,
 )
 
 /** What the colour page edits; the order is that of its tabs. */
@@ -290,6 +292,9 @@ data class UiState(
     val copiedLook: ClipLook? = null,
     /** Preview files of large clips, by source. */
     val proxies: Map<Uri, ProxyState> = emptyMap(),
+    /** Texts on the timeline, and the one being edited on the Text page. */
+    val texts: List<TextItem> = emptyList(),
+    val selectedText: Long? = null,
 ) {
     /** What the preview plays for [c]: its light preview file when ready, else the clip itself. */
     fun previewSource(c: ClipState): Uri = (proxies[c.meta.uri] as? ProxyState.Ready)?.file ?: c.meta.uri
@@ -401,6 +406,24 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    // Texts
+
+    /** Adds a text at timeline time [atMs] (3 s, or up to the video's end) and selects it. */
+    fun addText(atMs: Long) = _state.update { s ->
+        val end = s.clips.sumOf { it.timelineDurationMs }
+        val start = atMs.coerceIn(0L, (end - 500L).coerceAtLeast(0L))
+        val id = (s.texts.maxOfOrNull { it.id } ?: 0L) + 1
+        val item = TextItem(id = id, text = "Text", startMs = start, lengthMs = minOf(3_000L, (end - start).coerceAtLeast(500L)))
+        s.copy(texts = s.texts + item, selectedText = id)
+    }
+
+    fun selectText(id: Long?) = _state.update { it.copy(selectedText = id) }
+
+    fun updateText(id: Long, transform: (TextItem) -> TextItem) =
+        _state.update { s -> s.copy(texts = s.texts.map { if (it.id == id) transform(it) else it }) }
+
+    fun removeText(id: Long) = _state.update { s -> s.copy(texts = s.texts.filter { it.id != id }, selectedText = null) }
+
     /** The preview plays: preview files wait, so their decoding does not take the player's decoder. */
     fun setPreviewPlaying(playing: Boolean) {
         proxies.held = playing
@@ -416,7 +439,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
     private val history = ArrayList<EditSnapshot>()
     private var historyIndex = -1
 
-    private fun UiState.snapshot() = EditSnapshot(projectName, activities, clips, groups, globalGrade, style, timelineFps, frameAspect, exportSettings, audioFiles, audioClips, clipSound)
+    private fun UiState.snapshot() = EditSnapshot(projectName, activities, clips, groups, globalGrade, style, timelineFps, frameAspect, exportSettings, audioFiles, audioClips, clipSound, texts)
 
     /**
      * Records a step a moment after the edit settles, so a slider drag or a widget move is one
@@ -479,6 +502,8 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                 audioFiles = snapshot.audioFiles,
                 audioClips = snapshot.audioClips,
                 clipSound = snapshot.clipSound,
+                texts = snapshot.texts,
+                selectedText = s.selectedText?.takeIf { id -> snapshot.texts.any { it.id == id } },
                 selectedClip = s.selectedClip?.coerceAtMost(snapshot.clips.lastIndex)?.takeIf { it >= 0 } ?: snapshot.clips.indices.firstOrNull(),
                 compareGrade = null,
                 cine = null,
@@ -530,6 +555,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
         audioFiles = audioFiles,
         audioClips = audioClips,
         clipSound = clipSound,
+        texts = texts,
     )
 
     fun refreshProjects() = _state.update {
@@ -600,6 +626,8 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                         audioFiles = project.audioFiles.distinctBy { it.uri },
                         audioClips = compactLanes(project.audioClips),
                         clipSound = project.clipSound,
+                        texts = project.texts,
+                        selectedText = null,
                         selectedAudio = null,
                         selectedClip = clips.indices.firstOrNull(),
                         highlights = null,
@@ -640,6 +668,8 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                 frameAspect = null,
                 audioFiles = emptyList(),
                 audioClips = emptyList(),
+                texts = emptyList(),
+                selectedText = null,
                 clipSound = 1f,
                 selectedAudio = null,
                 selectedClip = null,
@@ -1750,6 +1780,11 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                     fadeInMs = clip.fadeInMs,
                     fadeOutMs = clip.fadeOutMs,
                     soundLevel = clip.soundLevel,
+                    timelineStartMs = s.clips.take(i).sumOf { it.timelineDurationMs },
+                    texts = if (kind == ExportKind.VIDEO) {
+                        val start = s.clips.take(i).sumOf { it.timelineDurationMs }
+                        s.texts.filter { it.startMs < start + clip.timelineDurationMs && it.endMs > start }
+                    } else emptyList(),
                 )
             }
             if (requests.isEmpty()) {

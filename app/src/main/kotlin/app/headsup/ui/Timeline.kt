@@ -59,6 +59,7 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import app.headsup.core.edit.TextItem
 import app.headsup.core.sync.Confidence
 import app.headsup.export.AudioClip
 import app.headsup.render.Formats
@@ -99,6 +100,10 @@ fun Timeline(
     onAdd: () -> Unit,
     /** Adds a sound (the + after the video on the first sound track). */
     onAddSound: () -> Unit = {},
+    /** Texts shown as bars on top of the video track (on the Text page); tap selects, drag moves the selected one. */
+    texts: List<TextItem> = emptyList(),
+    onSelectText: (Long?) -> Unit = {},
+    onMoveText: (Long, Long) -> Unit = { _, _ -> },
     /** Whether the audio tracks are shown (on the Audio page; elsewhere they only take room). */
     showAudio: Boolean,
     /** Whether the preview plays (or was just asked to): a glide after a flick stops, thumbnails wait. */
@@ -153,6 +158,10 @@ fun Timeline(
     val deselect by rememberUpdatedState(onDeselect)
     val add by rememberUpdatedState(onAdd)
     val addSound by rememberUpdatedState(onAddSound)
+    val textsNow by rememberUpdatedState(texts)
+    val selectText by rememberUpdatedState(onSelectText)
+    val moveText by rememberUpdatedState(onMoveText)
+    val selectedTextNow by rememberUpdatedState(state.selectedText)
     val lanesNow by rememberUpdatedState(lanes)
     val videoEndNow by rememberUpdatedState(videoEnd)
     val contentEndNow by rememberUpdatedState(contentEnd)
@@ -185,6 +194,7 @@ fun Timeline(
                             val g = Geometry(
                                 width = size.width.toFloat(), t = playhead(), zoom = zoom, starts = startsNow, clips = clipsNow,
                                 audio = audioNow, lanes = if (lanesNow > 0) (lanesNow + 1).coerceAtMost(MAX_LANES) else 0, d = this,
+                                texts = textsNow,
                             )
                             val hit = g.hit(down.position, selectedNow.takeIf { videoSelectedNow }, audioSelectedNow)
                             val t0 = System.currentTimeMillis()
@@ -220,6 +230,7 @@ fun Timeline(
                                     if (!held) when (hit) {
                                         is Hit.Clip -> selectVideo(hit.index)
                                         is Hit.Sound -> selectAudio(hit.id)
+                                        is Hit.Text -> selectText(hit.id)
                                         Hit.Add -> add()
                                         Hit.AddSound -> addSound()
                                         Hit.Empty -> deselect()
@@ -251,6 +262,7 @@ fun Timeline(
                                 is Hit.FadeIn -> Mode.FADE_IN
                                 is Hit.FadeOut -> Mode.FADE_OUT
                                 is Hit.Sound -> if (hit.id == audioSelectedNow || held) (if (slipNow) Mode.SLIP else Mode.MOVE) else Mode.SCROLL
+                                is Hit.Text -> if (hit.id == selectedTextNow || held) Mode.MOVE_TEXT else Mode.SCROLL
                                 else -> if (held) Mode.NONE else Mode.SCROLL
                             }
                             val zoomPx = g.zoom
@@ -271,6 +283,7 @@ fun Timeline(
                                 else -> null
                             }
                             val sound0 = soundId?.let { id -> audioNow.firstOrNull { it.id == id } }
+                            val text0 = (hit as? Hit.Text)?.let { h -> textsNow.firstOrNull { it.id == h.id } }
                             val others = audioNow.filter { it.id != soundId }
                             val snaps = startsNow + others.flatMap { listOf(it.piece.startOnTimelineMs, it.piece.endOnTimelineMs) } + t
                             var leftTrim: Long? = null
@@ -350,6 +363,11 @@ fun Timeline(
                                         val p = s0.piece
                                         vm.updateAudio(s0.id) { s0.copy(fadeOutMs = (p.fadeOut - d).coerceIn(0L, p.lengthMs - p.fadeIn)) }
                                     }
+                                    Mode.MOVE_TEXT -> {
+                                        val t0 = text0 ?: return@drag
+                                        val startMs = snapped(t0.startMs + d).coerceIn(0L, (videoEndNow - t0.lengthMs).coerceAtLeast(0L))
+                                        moveText(t0.id, startMs)
+                                    }
                                     Mode.NONE -> Unit
                                 }
                             }
@@ -398,9 +416,22 @@ fun Timeline(
             ) {
                 val tNow = playhead()
                 filmstrip.version.intValue
-                val g = Geometry(size.width, tNow, zoom.takeIf { it > 0f } ?: 0.05f, starts, clips, audio, lanes, this)
+                val g = Geometry(size.width, tNow, zoom.takeIf { it > 0f } ?: 0.05f, starts, clips, audio, lanes, this, texts)
                 drawRuler(g, muted, text)
                 drawVideo(g, state, ghost, filmstrip, text, maskKeys, videoSelected)
+                // Texts as bars along the top of the video track.
+                for (item in texts) {
+                    val l = g.x(item.startMs)
+                    val r = g.x(item.endMs)
+                    if (r < 0f || l > size.width) continue
+                    val top = g.videoTop + 2.dp.toPx()
+                    val selected = item.id == state.selectedText
+                    drawRoundRect(accent.copy(alpha = 0.9f), Offset(l, top), Size(r - l, g.textH), CornerRadius(4.dp.toPx()))
+                    if (selected) drawRoundRect(Color.White, Offset(l, top), Size(r - l, g.textH), CornerRadius(4.dp.toPx()), style = Stroke(2.dp.toPx()))
+                    clipRect(l.coerceAtLeast(0f), top, r.coerceAtMost(size.width), top + g.textH) {
+                        drawLabel(text, "T  " + item.text.replace('\n', ' '), Offset(l + 4.dp.toPx(), top + 1.dp.toPx()), TextStyle(color = Color.Black, fontSize = 10.sp))
+                    }
+                }
                 drawAudio(g, state, text, accent, laneColour)
                 // Strong accents of the selected sound run up through the clips, for cutting on them.
                 state.audioClips.firstOrNull { it.id == state.selectedAudio }?.let { s ->
@@ -445,6 +476,7 @@ fun Timeline(
 
 private val RULER = 18.dp
 private val VIDEO = 52.dp
+private val TEXT_BAR = 16.dp
 private val GAP = 6.dp
 private val LANE = 40.dp
 private val HANDLE = 14.dp
@@ -455,7 +487,7 @@ private const val MAX_ZOOM_DP = 0.4f
 /** Zoomed out at most to the whole content across half the width (the playhead can be at its end). */
 private fun minZoom(width: Float, videoEnd: Long) = (width * 0.5f / videoEnd.coerceAtLeast(1000L)).coerceAtMost(0.002f)
 
-private enum class Mode { SCROLL, NONE, TRIM_CLIP_START, TRIM_CLIP_END, MOVE, SLIP, TRIM_SOUND_START, TRIM_SOUND_END, FADE_IN, FADE_OUT }
+private enum class Mode { SCROLL, NONE, MOVE_TEXT, TRIM_CLIP_START, TRIM_CLIP_END, MOVE, SLIP, TRIM_SOUND_START, TRIM_SOUND_END, FADE_IN, FADE_OUT }
 
 /** What a finger landed on. */
 private sealed interface Hit {
@@ -470,6 +502,7 @@ private sealed interface Hit {
     data class SoundEnd(val id: Long) : Hit
     data class FadeIn(val id: Long) : Hit
     data class FadeOut(val id: Long) : Hit
+    data class Text(val id: Long) : Hit
 }
 
 /** Where things are on screen for playhead [t] (in the middle) and [zoom] (px per ms). */
@@ -482,7 +515,9 @@ private class Geometry(
     val audio: List<AudioClip>,
     val lanes: Int,
     d: androidx.compose.ui.unit.Density,
+    val texts: List<TextItem> = emptyList(),
 ) {
+    val textH = with(d) { TEXT_BAR.toPx() }
     val rulerH = with(d) { RULER.toPx() }
     val videoTop = rulerH
     val videoH = with(d) { VIDEO.toPx() }
@@ -518,6 +553,10 @@ private class Geometry(
                     if (abs(p.x - x(pc.endOnTimelineMs - pc.fadeOut)) < dot) return Hit.FadeOut(sel.id)
                 }
             }
+        }
+        if (texts.isNotEmpty() && p.y in videoTop..(videoTop + textH * 1.6f)) {
+            val at = ms(p.x)
+            texts.lastOrNull { at >= it.startMs && at < it.endMs }?.let { return Hit.Text(it.id) }
         }
         if (p.y in videoTop..(videoTop + videoH)) {
             val at = ms(p.x)

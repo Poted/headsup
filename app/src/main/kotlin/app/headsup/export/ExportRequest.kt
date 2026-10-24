@@ -3,6 +3,7 @@ package app.headsup.export
 import android.net.Uri
 import app.headsup.core.color.ColourMask
 import app.headsup.core.frame.Reframe
+import app.headsup.core.edit.TextItem
 import app.headsup.core.track.ActivityTrack
 import app.headsup.core.track.TelemetrySampler
 import app.headsup.media.VideoFormatInfo
@@ -65,6 +66,9 @@ data class ExportRequest(
     val soundLevel: Float = 1f,
     /** A still photo shown for [durationMs]; its dashboard stays at the moment it was taken. */
     val isPhoto: Boolean = false,
+    /** Where the clip starts on the timeline, and the timeline's texts shown over it. */
+    val timelineStartMs: Long = 0L,
+    val texts: List<TextItem> = emptyList(),
 ) {
     /** Size of the exported frame: the source's, or the largest frame of the reframe's shape inside it (even numbers for encoders). */
     val frameWidth: Int get() = (reframe.outputSize(width.toFloat(), height.toFloat()).first.toInt() / 2 * 2).coerceAtLeast(2)

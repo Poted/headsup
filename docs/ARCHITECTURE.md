@@ -294,3 +294,13 @@ draws each clip straight into a frame of that shape at the export size (a `Matri
 working in normalised coordinates, with its own output size), so no oversized or downscaled
 frame is drawn in between; the resolution setting is the frame's short side.
 
+
+## Text
+
+Texts live on the timeline (`TextItem`, timeline time), drawn over the frame by `TextRenderer`
+in both the preview (a canvas over the picture) and the export (the clip overlay, which maps the
+clip's own time to timeline time). Animations are pure maths in `TextAnimation` (core, tested):
+fade, rise, pop, typing and a HUD style that decodes each letter from random characters with a
+blinking block cursor; out animations mirror the in ones. The Text page edits words, ready looks,
+font, colour, size, glow, animations and time; the picture places a text by dragging and its bar
+on the video track moves it in time.
