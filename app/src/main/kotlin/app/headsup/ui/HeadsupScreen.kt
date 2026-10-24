@@ -2400,8 +2400,8 @@ private enum class TextLook(val label: String, val apply: (TextItem) -> TextItem
     SUBTITLE("Subtitle", { it.copy(font = TextFont.SANS, colour = 0xFFFFFFFF.toInt(), size = 0.045f, glow = 0f, shadow = true, align = TextAlign.CENTER, x = 0.5f, y = 0.85f, animIn = TextAnim.FADE, animOut = TextAnim.FADE) }),
     LOWER_THIRD("Lower third", { it.copy(font = TextFont.SANS, colour = 0xFFFFFFFF.toInt(), size = 0.05f, glow = 0f, shadow = true, align = TextAlign.LEFT, x = 0.08f, y = 0.8f, animIn = TextAnim.RISE, animOut = TextAnim.FADE) }),
     HUD("HUD", { it.copy(font = TextFont.MONO, colour = 0xFF00FF66.toInt(), size = 0.07f, glow = 0.6f, shadow = false, align = TextAlign.LEFT, x = 0.08f, y = 0.78f, animIn = TextAnim.HUD, animOut = TextAnim.HUD) }),
-    TYPED("Typed", { it.copy(font = TextFont.MONO, colour = 0xFFFFFFFF.toInt(), size = 0.055f, glow = 0f, shadow = true, align = TextAlign.CENTER, animIn = TextAnim.TYPE, animOut = TextAnim.FADE) }),
-    HAND("Note", { it.copy(font = TextFont.HAND, colour = 0xFFFFE08A.toInt(), size = 0.08f, glow = 0.2f, shadow = true, align = TextAlign.CENTER, animIn = TextAnim.RISE, animOut = TextAnim.FADE) }),
+    TYPED("Typed", { it.copy(font = TextFont.MONO, colour = 0xFFFFFFFF.toInt(), size = 0.055f, glow = 0f, shadow = true, align = TextAlign.CENTER, x = 0.5f, y = 0.5f, animIn = TextAnim.TYPE, animOut = TextAnim.FADE) }),
+    HAND("Note", { it.copy(font = TextFont.HAND, colour = 0xFFFFE08A.toInt(), size = 0.08f, glow = 0.2f, shadow = true, align = TextAlign.CENTER, x = 0.5f, y = 0.35f, animIn = TextAnim.RISE, animOut = TextAnim.FADE) }),
 }
 
 private val TEXT_COLOURS = listOf(
@@ -2464,8 +2464,9 @@ private fun TextPanel(state: UiState, vm: HeadsupViewModel, at: () -> Long) {
                 for (f in TextFont.entries) FilterChip(selected = item.font == f, onClick = { update { it.copy(font = f) } }, label = { Text(f.label) })
             }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                FilterChip(selected = item.align == TextAlign.LEFT, onClick = { update { it.copy(align = TextAlign.LEFT) } }, label = { Text("Left") })
-                FilterChip(selected = item.align == TextAlign.CENTER, onClick = { update { it.copy(align = TextAlign.CENTER) } }, label = { Text("Centre") })
+                // Left starts at the frame's left margin, centre sits in the middle.
+                FilterChip(selected = item.align == TextAlign.LEFT, onClick = { update { it.copy(align = TextAlign.LEFT, x = 0.08f) } }, label = { Text("Left") })
+                FilterChip(selected = item.align == TextAlign.CENTER, onClick = { update { it.copy(align = TextAlign.CENTER, x = 0.5f) } }, label = { Text("Centre") })
             }
         }
         TextTool.COLOUR -> Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
