@@ -60,6 +60,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import app.headsup.media.Proxies
 import app.headsup.core.edit.TextItem
+import app.headsup.core.edit.TextAnim
 import app.headsup.core.raw.RawDevelop
 import app.headsup.media.ProxyState
 import kotlinx.coroutines.flow.StateFlow
@@ -304,6 +305,9 @@ data class UiState(
 
     val selected: ClipState? get() = selectedClip?.let { clips.getOrNull(it) }
 
+    /** Only photos: the app works as a photo editor (no playback, sound, timing or text animation). */
+    val photoProject: Boolean get() = clips.isNotEmpty() && clips.all { it.meta.isPhoto }
+
     /** The timeline's frame rate: chosen, or the first clip's, or 30. */
     val effectiveTimelineFps: Float get() = timelineFps ?: clips.firstOrNull()?.meta?.frameRate ?: 30f
 
@@ -419,7 +423,12 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
         val end = s.clips.sumOf { it.timelineDurationMs }
         val start = atMs.coerceIn(0L, (end - 500L).coerceAtLeast(0L))
         val id = (s.texts.maxOfOrNull { it.id } ?: 0L) + 1
-        val item = TextItem(id = id, text = "Text", startMs = start, lengthMs = minOf(3_000L, (end - start).coerceAtLeast(500L)))
+        // On photos a text simply stays: over the whole project, without animation.
+        val item = if (s.photoProject) {
+            TextItem(id = id, text = "Text", startMs = 0L, lengthMs = end.coerceAtLeast(500L), animIn = TextAnim.NONE, animOut = TextAnim.NONE)
+        } else {
+            TextItem(id = id, text = "Text", startMs = start, lengthMs = minOf(3_000L, (end - start).coerceAtLeast(500L)))
+        }
         s.copy(texts = s.texts + item, selectedText = id)
     }
 

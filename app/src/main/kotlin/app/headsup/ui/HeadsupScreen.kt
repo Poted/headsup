@@ -307,6 +307,7 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
                         sourceOf = { state.previewSource(it) },
                         neighbourCubes = state.previewNeighbourCubes,
                         texts = state.texts,
+                        photoMode = state.photoProject,
                         onMoveText = state.selectedText?.takeIf { editingTexts }?.let { id -> { x, y -> vm.updateText(id) { it.copy(x = x, y = y) } } },
                         cutScrub = cutScrub,
                         onFrameSource = { frameSource.value = it },
@@ -449,7 +450,10 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
                     )
                 }
             }
-            BottomToolbar(tool) { tool = it }
+            // Photos have no sound.
+            val tools = Tool.entries.filter { !(state.photoProject && it == Tool.AUDIO) }
+            LaunchedEffect(state.photoProject) { if (tool !in tools) tool = Tool.COLOUR }
+            BottomToolbar(tool, tools) { tool = it }
     }
 
     Box(Modifier.fillMaxSize().background(HeadsupColors.BackgroundGradient)) {
@@ -469,7 +473,7 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
 }
 
 @Composable
-private fun BottomToolbar(selected: Tool, onSelect: (Tool) -> Unit) {
+private fun BottomToolbar(selected: Tool, tools: List<Tool>, onSelect: (Tool) -> Unit) {
     val shape = RoundedCornerShape(32.dp)
     Row(
         Modifier
@@ -481,7 +485,7 @@ private fun BottomToolbar(selected: Tool, onSelect: (Tool) -> Unit) {
             .padding(6.dp),
         horizontalArrangement = Arrangement.spacedBy(2.dp),
     ) {
-        for (t in Tool.entries) {
+        for (t in tools) {
             val on = t == selected
             Column(
                 Modifier
@@ -672,7 +676,7 @@ private fun EditPanel(
 ) {
     val clip = state.selected
     LazyRow(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
-        items(EditTab.entries.filter { !(it == EditTab.SPEED && clip?.meta?.isPhoto == true) }) { t ->
+        items(EditTab.entries.filter { t -> if (state.photoProject) t == EditTab.FRAME else !(t == EditTab.SPEED && clip?.meta?.isPhoto == true) }) { t ->
             val modified = when (t) {
                 EditTab.CUT -> clip?.isTrimmed == true
                 EditTab.SPEED -> clip != null && clip.speed != 1f
@@ -684,6 +688,8 @@ private fun EditPanel(
         }
     }
     val index = state.selectedClip
+    // Photos only: the frame (crop, shape, straightening) is what editing means.
+    val tab = if (state.photoProject) EditTab.FRAME else tab
     val needsClip = tab == EditTab.CUT || tab == EditTab.SPEED || tab == EditTab.FADE
     if (needsClip && (index == null || clip == null)) {
         Hint("Select a clip.")
@@ -1585,7 +1591,7 @@ private fun ColourPage(
     // On the Masks tab the ruler edits either a shape control or a correction.
     var shape by rememberSaveable { mutableStateOf<MaskShape?>(null) }
     var onShapes by rememberSaveable { mutableStateOf(true) }
-    val shapes = mask?.let { m -> MaskShape.entries.filter { m.kind in it.kinds } }.orEmpty()
+    val shapes = mask?.takeIf { target == GradeTarget.MASK }?.let { m -> MaskShape.entries.filter { m.kind in it.kinds } }.orEmpty()
     val editingShape = if (target == GradeTarget.MASK && onShapes) shape?.takeIf { it in shapes } ?: shapes.firstOrNull() else null
     // Corrections are grouped into short sections (plus the mask's shape), so each row stays short.
     // A raw (DNG) photo is developed first (exposure, highlights, shadows, white balance on the raw data).
@@ -2250,6 +2256,10 @@ private fun ExportControls(
     onExportOverlays: () -> Unit,
 ) {
     val settings = state.exportSettings
+    if (state.photoProject) {
+        PhotoExport(state, vm)
+        return
+    }
     Label("Video")
     val active = vm.activePreset(state)
     SettingRow("Quick presets") {
@@ -2332,9 +2342,29 @@ private fun ExportControls(
     Label("Dashboard")
     val canOverlay = state.clips.any { it.sync != null }
     OutlinedButton(onClick = onExportOverlays, enabled = canOverlay, modifier = Modifier.fillMaxWidth()) { Text("Export dashboard only (PNG)") }
-    // Photos on the timeline, each as a JPEG at its own resolution in the timeline's frame.
+    Hint(
+        if (canOverlay) "Transparent PNG frames (ZIP) per clip, for DaVinci → ${MediaStoreOutput.OVERLAY_FOLDER}"
+        else "Needs a FIT file matched to the clips.",
+    )
+    if (state.clips.any { it.meta.isPhoto }) PhotoExport(state, vm)
+
+    if (jobs.isNotEmpty()) {
+        jobs.forEach { JobRow(it) }
+        if (jobs.any { it.status == JobStatus.QUEUED || it.status == JobStatus.RUNNING }) {
+            SmallAction("Cancel all", vm::cancelExports)
+        } else {
+            SmallAction("Clear list", vm::clearFinishedExports)
+        }
+    }
+}
+
+/** Photos on the timeline, each as a JPEG at its own resolution in the timeline's frame. */
+@Composable
+private fun PhotoExport(state: UiState, vm: HeadsupViewModel) {
+    val settings = state.exportSettings
     val photoCount = state.clips.count { it.meta.isPhoto }
-    if (photoCount > 0) {
+    Label("Photos")
+    run {
         SettingRow("Photo size") {
             for ((side, label) in ExportSettings.PHOTO_SIZES) {
                 FilterChip(selected = settings.photoLongSide == side, onClick = { vm.updateExportSettings { it.copy(photoLongSide = side) } }, label = { Text(label) })
@@ -2347,19 +2377,6 @@ private fun ExportControls(
         }
         OutlinedButton(onClick = vm::exportPhotos, enabled = !state.busy, modifier = Modifier.fillMaxWidth()) {
             Text(if (photoCount == 1) "Export the photo (JPEG)" else "Export $photoCount photos (JPEG)")
-        }
-    }
-    Hint(
-        if (canOverlay) "Transparent PNG frames (ZIP) per clip, for DaVinci → ${MediaStoreOutput.OVERLAY_FOLDER}"
-        else "Needs a FIT file matched to the clips.",
-    )
-
-    if (jobs.isNotEmpty()) {
-        jobs.forEach { JobRow(it) }
-        if (jobs.any { it.status == JobStatus.QUEUED || it.status == JobStatus.RUNNING }) {
-            SmallAction("Cancel all", vm::cancelExports)
-        } else {
-            SmallAction("Clear list", vm::clearFinishedExports)
         }
     }
 }
@@ -2473,7 +2490,7 @@ private fun TextPanel(state: UiState, vm: HeadsupViewModel, at: () -> Long) {
         textStyle = MaterialTheme.typography.bodyLarge,
     )
     LazyRow(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
-        items(TextTool.entries) { t ->
+        items(TextTool.entries.filter { !state.photoProject || it !in setOf(TextTool.IN, TextTool.OUT, TextTool.TIME) }) { t ->
             val modified = when (t) {
                 TextTool.GLOW -> item.glow > 0f
                 TextTool.IN -> item.animIn != TextAnim.NONE
@@ -2485,7 +2502,14 @@ private fun TextPanel(state: UiState, vm: HeadsupViewModel, at: () -> Long) {
     }
     when (tool) {
         TextTool.LOOK -> FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            for (look in TextLook.entries) FilterChip(selected = false, onClick = { update(look.apply) }, label = { Text(look.label) })
+            // On photos the looks keep the text still.
+            for (look in TextLook.entries) {
+                FilterChip(
+                    selected = false,
+                    onClick = { update { look.apply(it).let { l -> if (state.photoProject) l.copy(animIn = TextAnim.NONE, animOut = TextAnim.NONE) else l } } },
+                    label = { Text(look.label) },
+                )
+            }
         }
         TextTool.FONT -> {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {

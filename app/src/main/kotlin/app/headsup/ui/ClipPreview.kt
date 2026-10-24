@@ -194,6 +194,8 @@ fun ClipPreview(
     texts: List<TextItem> = emptyList(),
     /** Set while a text is edited: a finger on the picture places it (0..1 of the frame). */
     onMoveText: ((Float, Float) -> Unit)? = null,
+    /** Only photos in the project: no play button or time. */
+    photoMode: Boolean = false,
 ) {
     val context = LocalContext.current
     // Two players: one shows the clip, the other holds the next one ready (a different shape or
@@ -880,7 +882,7 @@ fun ClipPreview(
             Modifier.fillMaxWidth().clip(RoundedCornerShape(50)).background(HeadsupColors.CardGradient).border(1.dp, HeadsupColors.Outline, RoundedCornerShape(50)).padding(horizontal = 6.dp, vertical = 5.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Box(
+            if (!photoMode) Box(
                 Modifier
                     .size(36.dp)
                     .clip(CircleShape)
@@ -900,7 +902,9 @@ fun ClipPreview(
                 Icon(if (wantsPlay) HeadsupIcons.Pause else HeadsupIcons.Play, contentDescription = if (wantsPlay) "Pause" else "Play", tint = HeadsupColors.OnAccent)
             }
             // Timeline time (the timeline below is scrubbed by dragging it); file time while a cut handle moves.
-            Text(
+            if (photoMode) {
+                Text("  ${clip.meta.width} × ${clip.meta.height}", Modifier.weight(1f), style = MaterialTheme.typography.labelMedium.copy(fontFamily = FontFamily.Monospace), maxLines = 1)
+            } else Text(
                 "  " + (if (scrubbing) timecode(playerMs, clip.meta.frameRate) else timecode(timelineOffsetMs + clipTimelineMs, clip.meta.frameRate)) +
                     "  /  " + Formats.duration(timelineTotalMs),
                 Modifier.weight(1f),
@@ -908,7 +912,7 @@ fun ClipPreview(
                 maxLines = 1,
             )
             // The shown clip's own frame rate (the export's is chosen on the Export page).
-            clip.meta.frameRate?.takeIf { !photo }?.let { fps ->
+            clip.meta.frameRate?.takeIf { !photo && !photoMode }?.let { fps ->
                 Text(
                     String.format(java.util.Locale.US, "%.4g fps", fps) + if (clip.speed != 1f) " · ${String.format(java.util.Locale.US, "%.3g", clip.speed)}×" else "",
                     Modifier.padding(end = 8.dp),
