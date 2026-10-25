@@ -266,6 +266,8 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
     // starts larger: no timeline under it); full screen hides everything else.
     var filmShare by rememberSaveable { mutableStateOf(0.32f) }
     var albumShare by rememberSaveable { mutableStateOf(0.5f) }
+    // The album's thumbnails while editing a photo: folded by default.
+    var albumOpen by rememberSaveable { mutableStateOf(false) }
     var fullscreen by rememberSaveable { mutableStateOf(false) }
     val density = LocalDensity.current
     androidx.activity.compose.BackHandler(enabled = fullscreen) { fullscreen = false }
@@ -404,7 +406,14 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
                 // Photos only: no timeline; the album's photos are arranged on the Edit page.
                 // The album's photos stay under the picture on every page (to move between them); arranging
                 // them (mark, move, remove) is on the Project page.
-                if (state.clips.isNotEmpty() && tool != Tool.EXPORT) PhotoStrip(state, vm, onAdd = addPhotos, arrange = tool == Tool.FILES)
+                // Elsewhere it folds into a slim bar (previous, next) to leave room for the picture.
+                if (state.clips.isNotEmpty() && tool != Tool.EXPORT) {
+                    if (tool == Tool.FILES || albumOpen) {
+                        PhotoStrip(state, vm, onAdd = addPhotos, arrange = tool == Tool.FILES, onFold = if (tool == Tool.FILES) null else ({ albumOpen = false }))
+                    } else {
+                        AlbumBar(state, vm) { albumOpen = true }
+                    }
+                }
             } else if (state.clips.isNotEmpty()) {
                 Timeline(
                     state = state,
@@ -666,24 +675,36 @@ private fun FilesPanel(
     onShowClip: (Int) -> Unit,
     onAddPhotos: () -> Unit,
 ) {
-    // As on the Colour page: a row of sections, one shown. Everything the project uses is copied in
-    // here, then used on the other pages.
+    // Two levels: all projects, and the open project with its files (pictures, sound, activity),
+    // going back and forth between them. Everything the project uses is copied in here.
+    var browsing by rememberSaveable { mutableStateOf(false) }
     var section by rememberSaveable { mutableStateOf("Video") }
-    // The project worked on, whichever section is open.
-    ProjectHeader(state, vm)
+    if (browsing) {
+        ProjectRow(
+            state, vm,
+            onOpen = { browsing = false },
+            onNew = { kind ->
+                // A new project goes straight to its files, and to the picker.
+                vm.newProject(kind)
+                browsing = false
+                section = "Video"
+                if (kind == ProjectKind.PHOTOS) onAddPhotos() else onAddVideos()
+            },
+        )
+        return
+    }
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        SmallAction("‹ Projects", { browsing = true })
+        Spacer(Modifier.width(8.dp))
+        Box(Modifier.weight(1f)) { ProjectHeader(state, vm) }
+    }
+    // The project's files, by kind.
     LazyRow(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
-        item { CircleOption("▣", "Projects", selected = section == "Project", modified = false) { section = "Project" } }
-        item { CircleOption("▶", "Files", selected = section == "Video", modified = state.clips.isNotEmpty()) { section = "Video" } }
+        item { CircleOption("▶", if (state.photoProject) "Photos" else "Video", selected = section == "Video", modified = state.clips.isNotEmpty()) { section = "Video" } }
         if (!state.photoProject) item { CircleOption("♪", "Sound", selected = section == "Sound", modified = state.audioFiles.isNotEmpty()) { section = "Sound" } }
         item { CircleOption("FIT", "Activity", selected = section == "FIT", modified = state.activities.isNotEmpty()) { section = "FIT" } }
     }
     when (section) {
-        "Project" -> ProjectRow(state, vm) { kind ->
-            // A new project goes straight to its files, and to the picker.
-            vm.newProject(kind)
-            section = "Video"
-            if (kind == ProjectKind.PHOTOS) onAddPhotos() else onAddVideos()
-        }
         "Sound" -> {
             AddTile(HeadsupIcons.Music, "Sound", onAddSound, Modifier.fillMaxWidth())
             SoundLibrary(state, vm)
@@ -1163,7 +1184,8 @@ private fun ProjectHeader(state: UiState, vm: HeadsupViewModel) {
 
 /** The saved projects (films and albums) and new ones. */
 @Composable
-private fun ProjectRow(state: UiState, vm: HeadsupViewModel, onNew: (ProjectKind) -> Unit) {
+private fun ProjectRow(state: UiState, vm: HeadsupViewModel, onOpen: () -> Unit, onNew: (ProjectKind) -> Unit) {
+    Label("Projects")
     // A project from the list being renamed.
     var renamingOther by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(Unit) { vm.refreshProjects() }
@@ -1179,10 +1201,7 @@ private fun ProjectRow(state: UiState, vm: HeadsupViewModel, onNew: (ProjectKind
         AddTile(HeadsupIcons.Video, "New film", { onNew(ProjectKind.VIDEO) }, Modifier.weight(1f))
         AddTile(HeadsupIcons.Colour, "New album", { onNew(ProjectKind.PHOTOS) }, Modifier.weight(1f))
     }
-    if (state.projects.isEmpty()) {
-        Label("Projects")
-        Hint("No saved projects yet. A project is saved once it has files.")
-    }
+    if (state.projects.isEmpty()) Hint("No saved projects yet. A project is saved once it has files.")
     // Films and albums listed apart, the kind open now first.
     val first = if (state.photoProject) ProjectKind.PHOTOS else ProjectKind.VIDEO
     val listed = state.projects.sortedBy { it.kind != first }
@@ -1194,7 +1213,11 @@ private fun ProjectRow(state: UiState, vm: HeadsupViewModel, onNew: (ProjectKind
                 .fillMaxWidth()
                 .clip(RoundedCornerShape(12.dp))
                 .background(if (current) HeadsupColors.SurfaceHigh else Color.Transparent)
-                .clickable { if (!current) vm.openProject(p.name) }
+                // Opening one (or tapping the open one) goes on to its files.
+                .clickable {
+                    if (!current) vm.openProject(p.name)
+                    onOpen()
+                }
                 .padding(horizontal = 8.dp, vertical = 6.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
@@ -2875,7 +2898,26 @@ private fun RawControls(clip: ClipState, index: Int, vm: HeadsupViewModel) {
 /** The photos of a photo project as thumbnails: tap one to edit it. */
 @OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
-private fun PhotoStrip(state: UiState, vm: HeadsupViewModel, onAdd: () -> Unit, arrange: Boolean) {
+private fun AlbumBar(state: UiState, vm: HeadsupViewModel, onOpen: () -> Unit) {
+    val i = state.selectedClip ?: 0
+    Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 2.dp), verticalAlignment = Alignment.CenterVertically) {
+        SmallAction("‹", { vm.selectClip(i - 1) }, enabled = i > 0)
+        Hint("${i + 1} of ${state.clips.size}", Modifier.padding(horizontal = 6.dp))
+        SmallAction("›", { vm.selectClip(i + 1) }, enabled = i < state.clips.lastIndex)
+        Spacer(Modifier.weight(1f))
+        SmallAction("Album ▾", onOpen)
+    }
+}
+
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
+@Composable
+private fun PhotoStrip(state: UiState, vm: HeadsupViewModel, onAdd: () -> Unit, arrange: Boolean, onFold: (() -> Unit)? = null) {
+    if (onFold != null) {
+        Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
+            Spacer(Modifier.weight(1f))
+            SmallAction("Album ▴", onFold)
+        }
+    }
     val onSelect: (Int) -> Unit = vm::selectClip
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
