@@ -168,9 +168,11 @@ private class OpenDocumentsIn(private val initial: Uri) : ActivityResultContract
 }
 
 private enum class Tool(val label: String, val icon: ImageVector) {
-    FILES("Files", HeadsupIcons.Video),
+    // The project holds the files: it comes first and is named for it.
+    FILES("Project", HeadsupIcons.Video),
     EDIT("Edit", HeadsupIcons.Cut),
-    COLOUR("Colour", HeadsupIcons.Colour),
+    // Light, colour, mixer, looks… : adjustments, not only colour.
+    COLOUR("Adjust", HeadsupIcons.Colour),
     EFFECTS("Effects", HeadsupIcons.Dashboard),
     AUDIO("Audio", HeadsupIcons.Music),
     EXPORT("Export", HeadsupIcons.Export),
@@ -267,7 +269,9 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
     var fullscreen by rememberSaveable { mutableStateOf(false) }
     val density = LocalDensity.current
     androidx.activity.compose.BackHandler(enabled = fullscreen) { fullscreen = false }
-    val share = if (wide) 0.45f else if (state.photoProject) albumShare else filmShare
+    // Held sideways the picture's size is set by the width of its column (dragged left and right).
+    val share = if (wide) 0.72f else if (state.photoProject) albumShare else filmShare
+    var wideShare by rememberSaveable { mutableStateOf(0.56f) }
     val previewMaxHeight = if (fullscreen) configuration.screenHeightDp.dp else (configuration.screenHeightDp * share).dp
     // Full screen hides the status and navigation bars too (a swipe from the edge shows them for a moment).
     val activityWindow = (LocalContext.current as? android.app.Activity)?.window
@@ -387,7 +391,7 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
                     ) { Text(if (fullscreen) "✕" else "⤢", color = Color.White, style = MaterialTheme.typography.titleMedium) }
                 }
             }
-            if (!fullscreen && state.clips.isNotEmpty()) {
+            if (!fullscreen && !wide && state.clips.isNotEmpty()) {
                 // Dragging this moves the line between the picture and the tools.
                 PreviewHandle { dy ->
                     val d = dy / (configuration.screenHeightDp * density.density)
@@ -398,7 +402,9 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
                 // Nothing under the picture.
             } else if (state.photoProject) {
                 // Photos only: no timeline; the album's photos are arranged on the Edit page.
-                if (state.clips.isNotEmpty() && tool == Tool.EDIT) PhotoStrip(state, vm, onAdd = addPhotos)
+                // The album's photos stay under the picture on every page (to move between them); arranging
+                // them (mark, move, remove) is on the Project page.
+                if (state.clips.isNotEmpty() && tool != Tool.EXPORT) PhotoStrip(state, vm, onAdd = addPhotos, arrange = tool == Tool.FILES)
             } else if (state.clips.isNotEmpty()) {
                 Timeline(
                     state = state,
@@ -519,18 +525,24 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
             // Photos have no sound.
             val tools = Tool.entries.filter { !(state.photoProject && it == Tool.AUDIO) }
             LaunchedEffect(state.photoProject) { if (tool !in tools) tool = Tool.COLOUR }
-            BottomToolbar(tool, tools) { tool = it }
+            // In an album the Edit page only crops: it is named so.
+            BottomToolbar(tool, tools, labelOf = { t -> if (state.photoProject && t == Tool.EDIT) "Crop" else t.label }) { tool = it }
     }
 
     Box(Modifier.fillMaxSize().background(HeadsupColors.BackgroundGradient)) {
-        // No title bar: the picture starts at the top, adding files lives in the Files tool.
+        // No title bar: the picture starts at the top, adding files lives in the Project tool.
         if (fullscreen) {
             // The picture alone on black, centred, whichever way the phone is held.
             Column(Modifier.fillMaxSize().background(Color.Black), verticalArrangement = Arrangement.Center, content = pictureAndTimeline)
         } else if (wide) {
-            Row(Modifier.fillMaxSize().systemBarsPadding().padding(top = 8.dp)) {
-                Column(Modifier.weight(1.3f).fillMaxHeight(), content = pictureAndTimeline)
-                Column(Modifier.weight(1f).fillMaxHeight(), content = tools)
+            androidx.compose.foundation.layout.BoxWithConstraints(Modifier.fillMaxSize().systemBarsPadding().padding(top = 8.dp)) {
+                val total = constraints.maxWidth.toFloat().coerceAtLeast(1f)
+                Row(Modifier.fillMaxSize()) {
+                    Column(Modifier.weight(wideShare).fillMaxHeight(), content = pictureAndTimeline)
+                    // Dragging this moves the line between the picture and the tools, left and right.
+                    SideHandle { dx -> wideShare = (wideShare + dx / total).coerceIn(0.35f, 0.75f) }
+                    Column(Modifier.weight(1f - wideShare).fillMaxHeight(), content = tools)
+                }
             }
         } else {
             Column(Modifier.fillMaxSize().systemBarsPadding().padding(top = 8.dp)) {
@@ -542,7 +554,7 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
 }
 
 @Composable
-private fun BottomToolbar(selected: Tool, tools: List<Tool>, onSelect: (Tool) -> Unit) {
+private fun BottomToolbar(selected: Tool, tools: List<Tool>, labelOf: (Tool) -> String, onSelect: (Tool) -> Unit) {
     val shape = RoundedCornerShape(32.dp)
     Row(
         Modifier
@@ -565,8 +577,8 @@ private fun BottomToolbar(selected: Tool, tools: List<Tool>, onSelect: (Tool) ->
                     .padding(vertical = 8.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {
-                Icon(t.icon, contentDescription = t.label, Modifier.size(22.dp), tint = if (on) HeadsupColors.OnHighlight else HeadsupColors.TextMuted)
-                Text(t.label, style = MaterialTheme.typography.labelSmall, color = if (on) HeadsupColors.OnHighlight else HeadsupColors.TextMuted, maxLines = 1, softWrap = false)
+                Icon(t.icon, contentDescription = labelOf(t), Modifier.size(22.dp), tint = if (on) HeadsupColors.OnHighlight else HeadsupColors.TextMuted)
+                Text(labelOf(t), style = MaterialTheme.typography.labelSmall, color = if (on) HeadsupColors.OnHighlight else HeadsupColors.TextMuted, maxLines = 1, softWrap = false)
             }
         }
     }
@@ -657,14 +669,21 @@ private fun FilesPanel(
     // As on the Colour page: a row of sections, one shown. Everything the project uses is copied in
     // here, then used on the other pages.
     var section by rememberSaveable { mutableStateOf("Video") }
+    // The project worked on, whichever section is open.
+    ProjectHeader(state, vm)
     LazyRow(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
-        item { CircleOption("▣", "Project", selected = section == "Project", modified = false) { section = "Project" } }
-        item { CircleOption("▶", if (state.photoProject) "Photos" else "Video", selected = section == "Video", modified = state.clips.isNotEmpty()) { section = "Video" } }
+        item { CircleOption("▣", "Projects", selected = section == "Project", modified = false) { section = "Project" } }
+        item { CircleOption("▶", "Files", selected = section == "Video", modified = state.clips.isNotEmpty()) { section = "Video" } }
         if (!state.photoProject) item { CircleOption("♪", "Sound", selected = section == "Sound", modified = state.audioFiles.isNotEmpty()) { section = "Sound" } }
         item { CircleOption("FIT", "Activity", selected = section == "FIT", modified = state.activities.isNotEmpty()) { section = "FIT" } }
     }
     when (section) {
-        "Project" -> ProjectRow(state, vm)
+        "Project" -> ProjectRow(state, vm) { kind ->
+            // A new project goes straight to its files, and to the picker.
+            vm.newProject(kind)
+            section = "Video"
+            if (kind == ProjectKind.PHOTOS) onAddPhotos() else onAddVideos()
+        }
         "Sound" -> {
             AddTile(HeadsupIcons.Music, "Sound", onAddSound, Modifier.fillMaxWidth())
             SoundLibrary(state, vm)
@@ -742,7 +761,7 @@ private fun EditPanel(
     val clip = state.selected
     // An album's Edit page: the photos (above) and the selected one's crop.
     if (state.photoProject) {
-        if (clip != null) PhotoCrop(state, clip, vm) else Hint("Add photos in Files.")
+        if (clip != null) PhotoCrop(state, clip, vm) else Hint("Add photos in Project → Files.")
         return
     }
     LazyRow(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
@@ -1115,11 +1134,8 @@ private fun formatBytes(bytes: Long): String =
 
 /** The open project (saved automatically) and the list of saved ones. */
 @Composable
-private fun ProjectRow(state: UiState, vm: HeadsupViewModel) {
+private fun ProjectHeader(state: UiState, vm: HeadsupViewModel) {
     var renaming by remember { mutableStateOf(false) }
-    // A project from the list being renamed.
-    var renamingOther by remember { mutableStateOf<String?>(null) }
-    LaunchedEffect(Unit) { vm.refreshProjects() }
     Row(verticalAlignment = Alignment.CenterVertically) {
         Column(Modifier.weight(1f)) {
             val album = state.photoProject
@@ -1140,6 +1156,17 @@ private fun ProjectRow(state: UiState, vm: HeadsupViewModel) {
         }
         SmallAction("Rename", { renaming = true })
     }
+    if (renaming) {
+        RenameDialog(state.projectName, onDismiss = { renaming = false }, title = "Project name") { vm.renameProject(it); renaming = false }
+    }
+}
+
+/** The saved projects (films and albums) and new ones. */
+@Composable
+private fun ProjectRow(state: UiState, vm: HeadsupViewModel, onNew: (ProjectKind) -> Unit) {
+    // A project from the list being renamed.
+    var renamingOther by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(Unit) { vm.refreshProjects() }
     val external = with(vm) { state.externalMedia }
     if (external.isNotEmpty() && !state.busy) {
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -1149,8 +1176,8 @@ private fun ProjectRow(state: UiState, vm: HeadsupViewModel) {
     }
     // New: a film (timeline of clips and photos) or an album (photos edited one by one).
     Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-        AddTile(HeadsupIcons.Video, "New film", { vm.newProject(ProjectKind.VIDEO) }, Modifier.weight(1f))
-        AddTile(HeadsupIcons.Colour, "New album", { vm.newProject(ProjectKind.PHOTOS) }, Modifier.weight(1f))
+        AddTile(HeadsupIcons.Video, "New film", { onNew(ProjectKind.VIDEO) }, Modifier.weight(1f))
+        AddTile(HeadsupIcons.Colour, "New album", { onNew(ProjectKind.PHOTOS) }, Modifier.weight(1f))
     }
     if (state.projects.isEmpty()) {
         Label("Projects")
@@ -1184,9 +1211,6 @@ private fun ProjectRow(state: UiState, vm: HeadsupViewModel) {
         }
     }
     if (state.projects.isNotEmpty()) Hint("Projects keep their own copies of their files. Deleting a project frees that space; the gallery is never touched.")
-    if (renaming) {
-        RenameDialog(state.projectName, onDismiss = { renaming = false }, title = "Project name") { vm.renameProject(it); renaming = false }
-    }
     renamingOther?.let { old ->
         RenameDialog(old, onDismiss = { renamingOther = null }, title = "Project name") { vm.renameProject(it, old); renamingOther = null }
     }
@@ -2851,7 +2875,7 @@ private fun RawControls(clip: ClipState, index: Int, vm: HeadsupViewModel) {
 /** The photos of a photo project as thumbnails: tap one to edit it. */
 @OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
-private fun PhotoStrip(state: UiState, vm: HeadsupViewModel, onAdd: () -> Unit) {
+private fun PhotoStrip(state: UiState, vm: HeadsupViewModel, onAdd: () -> Unit, arrange: Boolean) {
     val onSelect: (Int) -> Unit = vm::selectClip
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -2895,7 +2919,7 @@ private fun PhotoStrip(state: UiState, vm: HeadsupViewModel, onAdd: () -> Unit) 
     }
     // The selected photo: its place in the album, or out of it.
     val i = state.selectedClip
-    if (i != null && i in state.clips.indices) {
+    if (arrange && i != null && i in state.clips.indices) {
         Row(Modifier.padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
             Hint("${i + 1} of ${state.clips.size}" + state.clips.count { it.picked }.let { if (it > 0) " · $it marked" else "" }, Modifier.weight(1f).padding(start = 4.dp))
             SmallAction(if (state.clips[i].picked) "✓ Marked" else "Mark", { vm.togglePicked(i) })
@@ -2943,7 +2967,7 @@ private fun RouteMapControls(state: UiState, vm: HeadsupViewModel) {
         Switch(checked = map.enabled, onCheckedChange = { on -> vm.updateRouteMap { it.copy(enabled = on) } }, enabled = hasRoute)
     }
     if (!hasRoute) {
-        Hint("Needs a FIT file with GPS (Files → Activity).")
+        Hint("Needs a FIT file with GPS (Project → Activity).")
         return
     }
     if (!map.enabled) return
@@ -2980,6 +3004,20 @@ private fun routeOverlayFor(vm: HeadsupViewModel, state: UiState, clip: ClipStat
 }
 
 /** A grip under the picture: dragging it up or down gives the picture or the tools more room. */
+@Composable
+private fun SideHandle(onDrag: (Float) -> Unit) {
+    val state = androidx.compose.foundation.gestures.rememberDraggableState(onDrag)
+    Box(
+        Modifier
+            .fillMaxHeight()
+            .width(18.dp)
+            .draggable(state, Orientation.Horizontal),
+        contentAlignment = Alignment.Center,
+    ) {
+        Box(Modifier.width(4.dp).height(40.dp).clip(RoundedCornerShape(2.dp)).background(HeadsupColors.Outline))
+    }
+}
+
 @Composable
 private fun PreviewHandle(onDrag: (Float) -> Unit) {
     val state = androidx.compose.foundation.gestures.rememberDraggableState(onDrag)
