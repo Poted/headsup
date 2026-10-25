@@ -34,6 +34,21 @@ marked photos, texts per photo, activity data and the photo's GPS in texts and t
 - export: developed into a half-float picture, graded on the GPU at that precision, drawn at
   10 bits and dithered into the JPEG.
 
+## Now: UI/UX fixes before testers (reported 2026-10-25)
+
+- [ ] Landscape: the timeline falls below the screen; the Adjust section tabs (Light, Colour…)
+      squeeze off screen when the tools column is narrowed: make them scroll left/right.
+- [ ] Film: changing the crop breaks undo (the crop disappears, undoing resets it).
+- [ ] Undo can go back past adding a file (to its removal): adding files should not be undoable
+      that way, or should be a clear step.
+- [ ] Adjust: move the colour on/off switch and Copy / Copy to all out of the top (too much room).
+- [ ] Adjust: the scope tabs (This clip / Group / Masks / All clips) and Copy move to a small
+      menu that pops up with a light animation above the Adjust button; the page starts with
+      Light, Colour, Mixer… as Edit does. The same for Effects and for albums.
+- [ ] Remove "Colour off" from Adjust; holding a finger on the picture shows the original.
+- [ ] Dashboard on/off per clip (now it is on for all clips whose time the activity covers, or
+      for none).
+
 ## Next (in this order)
 
 1. **Photo tools:** colour mixer (HSL per hue band), looks (profiles: vivid, warm, vintage,
