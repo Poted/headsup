@@ -34,6 +34,8 @@ class GradeSetup(
     val presence: Presence = Presence.NONE,
     /** Perspective correction, before the colours. */
     val warp: DoubleArray? = null,
+    /** How far into the clip this part starts (file time), for the blend from the previous clip. */
+    val timeOffsetMs: Long = 0L,
 ) {
     /** True when a single colour table is not enough. */
     val needsGradeEffect: Boolean get() = masks.isNotEmpty() || (fromCube != null && transitionMs > 0) || !presence.isNeutral || warp != null
@@ -80,6 +82,8 @@ data class ExportRequest(
     val routeMap: app.headsup.render.RouteMap = app.headsup.render.RouteMap(),
     val mapTrack: ActivityTrack? = null,
     val mapMarker: Pair<Double, Double>? = null,
+    /** Set on the steady-speed pieces of one ramped clip ([app.headsup.core.edit.SpeedCurve.pieces]): its id, so they make one file. */
+    val pieceOf: Long? = null,
 ) {
     /** Size of the exported frame: the source's, or the largest frame of the reframe's shape inside it (even numbers for encoders). */
     val frameWidth: Int get() = (reframe.outputSize(width.toFloat(), height.toFloat()).first.toInt() / 2 * 2).coerceAtLeast(2)

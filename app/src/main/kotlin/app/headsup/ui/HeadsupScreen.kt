@@ -256,14 +256,14 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
     fun timelineOf(clipMs: Long): Long {
         val i = state.selectedClip ?: return 0L
         val c = state.clips.getOrNull(i) ?: return 0L
-        return clipStarts[i] + if (c.meta.isPhoto) clipMs else (clipMs / c.speed).toLong()
+        return clipStarts[i] + c.timelineOfSource(clipMs)
     }
     /** The clip under timeline position [t] and the position in it (file time from its cut). */
     fun locate(t: Long): Pair<Int, Long> {
         val i = clipStarts.indexOfLast { it <= t }.coerceIn(0, (state.clips.size - 1).coerceAtLeast(0))
         val c = state.clips.getOrNull(i) ?: return 0 to 0L
         val local = (t - clipStarts[i]).coerceIn(0L, c.timelineDurationMs)
-        return i to if (c.meta.isPhoto) local else (local * c.speed).toLong()
+        return i to c.sourceOfTimeline(local)
     }
     fun jumpTo(t: Long) {
         val (i, pos) = locate(t)
@@ -1054,7 +1054,7 @@ private fun EditPanel(
         items(EditTab.entries.filter { t -> if (state.photoProject) t == EditTab.FRAME else !(t == EditTab.SPEED && clip?.meta?.isPhoto == true) }) { t ->
             val modified = when (t) {
                 EditTab.CUT -> clip?.isTrimmed == true
-                EditTab.SPEED -> clip != null && clip.speed != 1f
+                EditTab.SPEED -> clip != null && clip.speedChanged
                 EditTab.FADE -> clip != null && (clip.fadeInMs > 0 || clip.fadeOutMs > 0)
                 EditTab.RATE -> state.timelineFps != null
                 else -> false
@@ -1074,6 +1074,7 @@ private fun EditPanel(
         EditTab.CUT -> CutTool(state, vm, playhead, onCutScrub)
         EditTab.SPEED -> if (clip != null && index != null && !clip.meta.isPhoto) {
             SpeedControls(clip, state.effectiveTimelineFps, onSpeed = { vm.setSpeed(index, it) }, onMute = { vm.setMuteChangedSpeed(index, it) })
+            if (!clip.meta.isPhoto) SpeedRamp(clip) { vm.setSpeedCurve(index, it) }
         }
         EditTab.FADE -> if (clip != null && index != null) FadeTool(clip, index, vm)
         EditTab.FRAME -> FramePanel(state, vm)
@@ -1110,8 +1111,8 @@ private fun RateNotes(state: UiState, fps: Float) {
     // One line per clip, by its place on the timeline and file name.
     val notes = state.clips.withIndex().filter { !it.value.meta.isPhoto && it.value.meta.frameRate != null }.map { (i, c) ->
         val rate = c.meta.frameRate ?: fps
-        val speed = c.speed
-        val name = "${i + 1}. ${c.meta.name} · ${OutputSpec.formatFps(rate)} fps" + if (speed != 1f) " at ${String.format(Locale.US, "%.3g", speed)}×" else ""
+        val speed = c.averageSpeed
+        val name = "${i + 1}. ${c.meta.name} · ${OutputSpec.formatFps(rate)} fps" + if (speed != 1f) " at ${String.format(Locale.US, "%.3g", speed)}×" + (if (c.speedCurve.isNotEmpty()) " on average" else "") else ""
         val r = rate * speed / fps
         when {
             kotlin.math.abs(r - 1f) < 0.02f -> "$name: every frame used"
@@ -1531,7 +1532,7 @@ private fun SpeedControls(clip: ClipState, timelineFps: Float, onSpeed: (Float) 
             FilterChip(selected = clip.speed == speed, onClick = { onSpeed(speed) }, label = { Text(label) })
         }
     }
-    if (clip.speed == 1f) return
+    if (!clip.speedChanged) return
     val sourceFps = clip.meta.frameRate
     if (sourceFps != null && clip.speed < 1f) {
         val effective = sourceFps * clip.speed
@@ -1551,6 +1552,97 @@ private fun SpeedControls(clip: ClipState, timelineFps: Float, onSpeed: (Float) 
         Spacer(Modifier.width(8.dp))
         FilterChip(selected = clip.muteChangedSpeed, onClick = { onMute(true) }, label = { Text("Mute") })
     }
+}
+
+/**
+ * A speed ramp over the clip: a ready-made one, or points dragged on a graph (across: the cut,
+ * up: faster, down: slower, on a scale of ratios from 0.1× to 8×); double-tap a point to remove it.
+ */
+@Composable
+private fun SpeedRamp(clip: ClipState, onCurve: (List<Float>) -> Unit) {
+    val SC = app.headsup.core.edit.SpeedCurve
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Text("Speed ramp", Modifier.weight(1f), style = MaterialTheme.typography.labelLarge)
+        if (clip.speedCurve.isNotEmpty()) SmallAction("Steady", { onCurve(emptyList()) })
+    }
+    Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        for (p in SC.Preset.entries) {
+            FilterChip(selected = clip.speedCurve == p.points, onClick = { onCurve(p.points) }, label = { Text(p.label) })
+        }
+    }
+    // Ratios on a log scale: 0.1× at the bottom, 1× a little below the middle, 8× at the top.
+    val lo = kotlin.math.ln(SC.MIN)
+    val hi = kotlin.math.ln(SC.MAX)
+    fun yOf(f: Float) = 1f - (kotlin.math.ln(f.coerceIn(SC.MIN, SC.MAX)) - lo) / (hi - lo)
+    fun fOf(y: Float) = kotlin.math.exp(lo + (1f - y.coerceIn(0f, 1f)) * (hi - lo))
+    val points = SC.points(clip.speedCurve).ifEmpty { listOf(0f to 1f, 1f to 1f) }
+    val current by rememberUpdatedState(points)
+    val store by rememberUpdatedState(onCurve)
+    androidx.compose.foundation.Canvas(
+        Modifier
+            .fillMaxWidth()
+            .height(120.dp)
+            .clip(RoundedCornerShape(12.dp))
+            .background(Color.Black.copy(alpha = 0.35f))
+            .pointerInput(Unit) {
+                var lastTap = 0L
+                awaitEachGesture {
+                    val down = awaitFirstDown()
+                    down.consume()
+                    val w = size.width.toFloat()
+                    val h = size.height.toFloat()
+                    fun at(p: Pair<Float, Float>) = Offset(p.first * w, yOf(p.second) * h)
+                    val work = current.toMutableList()
+                    var i = work.indices.minByOrNull { (at(work[it]) - down.position).getDistance() } ?: return@awaitEachGesture
+                    val near = (at(work[i]) - down.position).getDistance() < 28.dp.toPx()
+                    if (near && down.uptimeMillis - lastTap < 300 && work.size > 2) {
+                        // A double tap on a point removes it.
+                        work.removeAt(i)
+                        store(work.flatMap { listOf(it.first, it.second) })
+                        lastTap = 0L
+                        return@awaitEachGesture
+                    }
+                    lastTap = down.uptimeMillis
+                    if (!near) {
+                        val u = (down.position.x / w).coerceIn(0f, 1f)
+                        work += u to fOf(down.position.y / h)
+                        work.sortBy { it.first }
+                        i = work.indexOfFirst { it.first == u }
+                        store(work.flatMap { listOf(it.first, it.second) })
+                    }
+                    while (true) {
+                        val event = awaitPointerEvent()
+                        val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                        if (!change.pressed) break
+                        change.consume()
+                        val lo2 = if (i == 0) 0f else work[i - 1].first + 0.01f
+                        val hi2 = if (i == work.lastIndex) 1f else work[i + 1].first - 0.01f
+                        val u = (change.position.x / w).coerceIn(lo2, hi2)
+                        // A ratio near 1× snaps to it.
+                        var f = fOf(change.position.y / h)
+                        if (kotlin.math.abs(kotlin.math.ln(f)) < 0.08f) f = 1f
+                        work[i] = u to f
+                        store(work.flatMap { listOf(it.first, it.second) })
+                    }
+                }
+            },
+    ) {
+        val w = size.width
+        val h = size.height
+        // 1× and the doubling lines for reference.
+        for (f in listOf(0.25f, 0.5f, 2f, 4f)) drawLine(Color.White.copy(alpha = 0.1f), Offset(0f, yOf(f) * h), Offset(w, yOf(f) * h))
+        drawLine(Color.White.copy(alpha = 0.3f), Offset(0f, yOf(1f) * h), Offset(w, yOf(1f) * h))
+        val flat = points.flatMap { listOf(it.first, it.second) }
+        val path = androidx.compose.ui.graphics.Path()
+        for (k in 0..100) {
+            val u = k / 100f
+            val y = yOf(SC.factor(flat, u)) * h
+            if (k == 0) path.moveTo(0f, y) else path.lineTo(u * w, y)
+        }
+        drawPath(path, HeadsupColors.Accent, style = androidx.compose.ui.graphics.drawscope.Stroke(2.dp.toPx()))
+        for ((u, f) in points) drawCircle(Color.White, 5.dp.toPx(), Offset(u * w, yOf(f) * h))
+    }
+    Hint("Across: the clip; up: faster, down: slower (the line is 1×, on top of the speed above). Touch to add a point and drag it; double-tap one to remove it.")
 }
 
 /** Trimming and splitting; the watch data follows every cut because the app knows where it was made. */

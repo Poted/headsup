@@ -217,6 +217,7 @@ class ExportManager(private val context: Context) {
                 fileStartMs = request.trimStartMs,
                 presence = grade?.presence ?: app.headsup.core.color.Presence.NONE,
                 warp = grade?.warp,
+                timeOffsetMs = grade?.timeOffsetMs ?: 0L,
             )
         } else {
             grade?.cube?.let { effects += SingleColorLut.createFromCube(it) }

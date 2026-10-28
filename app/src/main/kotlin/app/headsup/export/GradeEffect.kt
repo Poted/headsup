@@ -39,6 +39,8 @@ class GradeEffect(
     private val presence: Presence = Presence.NONE,
     /** Perspective correction ([app.headsup.core.frame.Perspective.sourceOf]), row by row; null for none. */
     private val warp: DoubleArray? = null,
+    /** How far into the clip this part starts, for the blend from the previous clip (a ramped clip's piece). */
+    private val timeOffsetMs: Long = 0L,
 ) : GlEffect {
     override fun toGlShaderProgram(context: Context, useHdr: Boolean): GlShaderProgram = Program(context.applicationContext, useHdr)
 
@@ -118,7 +120,7 @@ class GradeEffect(
                     val p = masks.getOrNull(i)?.grade?.presence ?: Presence.NONE
                     program.setFloatsUniform("uMp$i", floatArrayOf(p.texture, p.clarity, p.dehaze))
                 }
-                val fromWeight = if (from != null) ColourTransition.fromWeight(positionMs, transitionMs) else 0f
+                val fromWeight = if (from != null) ColourTransition.fromWeight(positionMs + timeOffsetMs, transitionMs) else 0f
                 program.setFloatUniform("uFromWeight", fromWeight)
                 program.setIntUniform("uHdrIn", if (hdrInput == HdrInput.HLG) 2 else if (hdrInput != null) 1 else 0)
                 program.setFloatsUniform("uHlgFix", if (hdrInput == HdrInput.RELABELLED_BT709) HdrRoute.HLG_FIX else HdrRoute.IDENTITY)

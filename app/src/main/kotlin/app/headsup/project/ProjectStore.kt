@@ -45,6 +45,7 @@ data class SavedClip(
     val soundLevel: Float = 1f,
     val rawDevelop: RawDevelop = RawDevelop(),
     val picked: Boolean = false,
+    val speedCurve: List<Float> = emptyList(),
 )
 
 /** A film made on a timeline, or an album of photos edited one by one. */
@@ -249,6 +250,7 @@ internal object Json {
         .putOpt("groupId", c.groupId)
         .put("transitionMs", c.transitionMs)
         .put("speed", c.speed)
+        .put("speedCurve", JSONArray(c.speedCurve.map { it.toDouble() }))
         .put("muteChangedSpeed", c.muteChangedSpeed)
         .put("fadeInMs", c.fadeInMs)
         .put("fadeOutMs", c.fadeOutMs)
@@ -275,6 +277,7 @@ internal object Json {
         groupId = if (o.has("groupId")) o.getLong("groupId") else null,
         transitionMs = o.optLong("transitionMs", 0L),
         speed = o.optDouble("speed", 1.0).toFloat(),
+        speedCurve = o.optJSONArray("speedCurve")?.let { a -> List(a.length()) { a.optDouble(it, 1.0).toFloat() } } ?: emptyList(),
         muteChangedSpeed = o.optBoolean("muteChangedSpeed", false),
         fadeInMs = o.optLong("fadeInMs", 0L),
         fadeOutMs = o.optLong("fadeOutMs", 0L),

@@ -310,7 +310,7 @@ fun Timeline(
                                         if (c0.meta.isPhoto) {
                                             vm.setTrim(i, 0L, length)
                                         } else {
-                                            val end = (c0.trimStartMs + (length * c0.speed).toLong()).coerceAtMost(c0.meta.durationMs)
+                                            val end = (c0.trimStartMs + (length * c0.averageSpeed).toLong()).coerceAtMost(c0.meta.durationMs)
                                             vm.setTrim(i, c0.trimStartMs, end)
                                             trimPreview(end)
                                         }
@@ -323,8 +323,8 @@ fun Timeline(
                                             ghost = i to (c0.timelineDurationMs - length)
                                             leftTrim = length
                                         } else {
-                                            val newStart = (c0.trimStartMs + (d * c0.speed).toLong()).coerceIn(0L, c0.trimEndMs - (MIN_MS * c0.speed).toLong())
-                                            ghost = i to ((newStart - c0.trimStartMs) / c0.speed).toLong()
+                                            val newStart = (c0.trimStartMs + (d * c0.averageSpeed).toLong()).coerceIn(0L, c0.trimEndMs - (MIN_MS * c0.averageSpeed).toLong())
+                                            ghost = i to ((newStart - c0.trimStartMs) / c0.averageSpeed).toLong()
                                             leftTrim = newStart
                                             trimPreview(newStart)
                                         }
@@ -621,14 +621,14 @@ private fun DrawScope.drawVideo(
         // Frames: tiles of the clip's shape, each showing the moment at its left edge.
         val aspect = if (c.meta.width > 0 && c.meta.height > 0) (c.meta.width.toFloat() / c.meta.height).coerceIn(0.5f, 2f) else 16f / 9f
         val tileW = h * aspect
-        val tileMs = tileW / g.zoom * c.speed
+        val tileMs = tileW / g.zoom * c.averageSpeed
         val stepMs = listOf(500L, 1_000L, 2_000L, 5_000L, 10_000L, 30_000L, 60_000L).firstOrNull { it >= tileMs } ?: 120_000L
         clipRect(l.coerceAtLeast(0f), top, r.coerceAtMost(size.width), top + h) {
             var x = l
             while (x < r) {
                 if (x + tileW > 0f && x < size.width) {
                     val tl = g.starts[i] + shift + ((x - l) / g.zoom).toLong()
-                    val fileMs = c.trimStartMs + ((tl - g.starts[i]) * c.speed).toLong()
+                    val fileMs = c.trimStartMs + c.sourceOfTimeline(tl - g.starts[i])
                     filmstrip.frame(state.previewSource(c), fileMs, stepMs, c.meta.isPhoto)?.let { img ->
                         // Centre crop of the frame into the tile.
                         val srcAspect = img.width.toFloat() / img.height
@@ -645,7 +645,8 @@ private fun DrawScope.drawVideo(
                 x += tileW
             }
             // Duration and speed, the group, how well it matches the watch data.
-            val label = Formats.duration(c.timelineDurationMs) + if (c.speed != 1f) " · ${if (c.speed % 1f == 0f) c.speed.toInt() else c.speed}×" else ""
+            val label = Formats.duration(c.timelineDurationMs) + (if (c.speed != 1f) " · ${if (c.speed % 1f == 0f) c.speed.toInt() else c.speed}×" else "") +
+                (if (c.speedCurve.isNotEmpty()) " · ramp" else "")
             drawLabel(text, label, Offset(l + 5.dp.toPx(), top + h - 15.dp.toPx()), TextStyle(color = Color.White, fontSize = 10.sp, background = Color.Black.copy(alpha = 0.5f)))
             state.groups.firstOrNull { it.id == c.groupId }?.let {
                 drawLabel(text, it.name, Offset(l + 5.dp.toPx(), top + 3.dp.toPx()), TextStyle(color = HeadsupColors.OnHighlight, fontSize = 10.sp, background = HeadsupColors.Highlight.copy(alpha = 0.9f)))
@@ -678,7 +679,7 @@ private fun DrawScope.drawVideo(
             }
             // Keys of the mask being edited.
             for (k in maskKeys) {
-                val x = g.x(g.starts[i] + ((k - c.trimStartMs) / c.speed).toLong())
+                val x = g.x(g.starts[i] + c.timelineOfSource(k - c.trimStartMs))
                 if (x < l || x > r) continue
                 val y = top + h - 6.dp.toPx()
                 val s = 5.dp.toPx()

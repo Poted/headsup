@@ -11,6 +11,7 @@ import app.headsup.color.ScopeResult
 import app.headsup.color.Vectorscope
 import app.headsup.core.color.SkinTone
 import app.headsup.core.color.ColorGrade
+import app.headsup.core.edit.SpeedCurve
 import app.headsup.core.color.ColourMask
 import app.headsup.core.color.MaskKind
 import app.headsup.core.frame.Reframe
@@ -123,6 +124,8 @@ data class ClipState(
     val groupId: Long? = null,
     /** Playback speed: 0.5 = half speed (slow motion), 2 = double. */
     val speed: Float = 1f,
+    /** Speed ramp over the cut on top of [speed] ([SpeedCurve]); empty = steady. */
+    val speedCurve: List<Float> = emptyList(),
     /** Silence the sound while the speed is changed; otherwise it is stretched, keeping its pitch. */
     val muteChangedSpeed: Boolean = false,
     /** Fade from black at the start and to black at the end (picture and sound), timeline time. */
@@ -145,8 +148,23 @@ data class ClipState(
 
     val durationMs: Long get() = trimEndMs - trimStartMs
 
-    /** Length on the timeline, after the speed change. */
-    val timelineDurationMs: Long get() = (durationMs / speed).toLong()
+    /** Length on the timeline, after the speed change (and ramp). */
+    val timelineDurationMs: Long get() = timelineOfSource(durationMs)
+
+    /** Timeline time [ms] of file time into the cut (photos: the same). */
+    fun timelineOfSource(ms: Long): Long = if (meta.isPhoto) ms else SpeedCurve.timelineOf(ms, durationMs, speed, speedCurve)
+
+    /** File time into the cut at timeline time [ms] into the clip. */
+    fun sourceOfTimeline(ms: Long): Long = if (meta.isPhoto) ms else SpeedCurve.sourceOf(ms, durationMs, speed, speedCurve)
+
+    /** Speed at file time [ms] into the cut. */
+    fun speedAt(ms: Long): Float = if (speedCurve.isEmpty()) speed else SpeedCurve.speedAt(speed, speedCurve, ms.toFloat() / durationMs.coerceAtLeast(1L))
+
+    /** The clip's speed on average (file time per timeline time). */
+    val averageSpeed: Float get() = if (meta.isPhoto) 1f else durationMs.toFloat() / timelineDurationMs.coerceAtLeast(1L)
+
+    /** Speed changed at all (steady or ramped). */
+    val speedChanged: Boolean get() = speed != 1f || speedCurve.isNotEmpty()
     val isTrimmed: Boolean get() = trimStartMs > 0 || trimEndMs < meta.durationMs
 
     /** BT.2020 footage that isn't HDR (e.g. Samsung Log): shown in BT.709 unless a LUT takes it. */
@@ -763,7 +781,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
             SavedClip(
                 it.meta.uri, it.trimStartMs, it.trimEndMs, it.manualOffsetMs, it.colorGrade, it.lutName,
                 it.manualStart, it.grade, it.effects, it.masks, it.groupId, it.transitionMs, it.reframe, it.speed, it.muteChangedSpeed,
-                it.fadeInMs, it.fadeOutMs, it.soundLevel, it.rawDevelop, it.picked,
+                it.fadeInMs, it.fadeOutMs, it.soundLevel, it.rawDevelop, it.picked, it.speedCurve,
             )
         },
         groups = groups.map { SavedGroup(it.id, it.name, it.grade, it.lutName) },
@@ -825,6 +843,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                     transitionMs = c.transitionMs,
                     reframe = c.reframe,
                     speed = c.speed,
+                    speedCurve = c.speedCurve,
                     muteChangedSpeed = c.muteChangedSpeed,
                     fadeInMs = c.fadeInMs,
                     fadeOutMs = c.fadeOutMs,
@@ -2129,6 +2148,14 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
 
     fun setMuteChangedSpeed(index: Int, mute: Boolean) = updateClip(index) { it.copy(muteChangedSpeed = mute) }
 
+    /** A speed ramp for the clip (empty: steady); sound is muted by default where it gets very slow. */
+    fun setSpeedCurve(index: Int, curve: List<Float>) = updateClip(index) { c ->
+        if (c.meta.isPhoto) c else c.copy(
+            speedCurve = curve,
+            muteChangedSpeed = if (curve.isEmpty()) c.speed < 0.5f else SpeedCurve.points(curve).any { it.second * c.speed < 0.5f },
+        )
+    }
+
     /** Fades, kept within the clip's length on the timeline. */
     fun setFades(index: Int, fadeInMs: Long, fadeOutMs: Long) = updateClip(index) {
         val max = it.timelineDurationMs
@@ -2235,11 +2262,52 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
             val cubes = HashMap<Pair<ClipLook?, Boolean>, Array<Array<IntArray>>?>()
             val requests = indices.mapNotNull { i ->
                 val clip = s.clips.getOrNull(i) ?: return@mapNotNull null
+                clip to (exportRequest(kind, s, i, clip, cubes) ?: return@mapNotNull null)
+            }.flatMap { (clip, r) -> rampPieces(clip, r) }
+            if (requests.isEmpty()) {
+                val why = if (kind == ExportKind.PNG_SEQUENCE) "the dashboard needs activity data, and no clip is matched to an activity." else "no clips."
+                _state.update { it.copy(messages = it.messages + "Nothing to export: $why") }
+            } else {
+                exportManager.enqueue(jobsFor(kind, requests, s))
+            }
+        }
+    }
+
+    /**
+     * A ramped clip as pieces of steady speed, one after another in the export (which changes speed
+     * in steps): each its own cut, speed, place on the timeline and watch-data start; fades at the ends.
+     */
+    private fun rampPieces(clip: ClipState, r: ExportRequest): List<ExportRequest> {
+        if (clip.speedCurve.isEmpty() || clip.meta.isPhoto || r.kind != ExportKind.VIDEO) return listOf(r)
+        val pieces = SpeedCurve.pieces(clip.durationMs, clip.speed, clip.speedCurve)
+        return pieces.mapIndexed { k, (from, to, speed) ->
+            r.copy(
+                durationMs = to - from,
+                trimStartMs = clip.trimStartMs + from,
+                trimEndMs = clip.trimStartMs + to,
+                speed = speed,
+                fadeInMs = if (k == 0) r.fadeInMs else 0L,
+                fadeOutMs = if (k == pieces.lastIndex) r.fadeOutMs else 0L,
+                timelineStartMs = r.timelineStartMs + clip.timelineOfSource(from),
+                telemetry = r.telemetry?.let { Telemetry(it.track, it.startUtcMs + from) },
+                grade = r.grade?.let { g ->
+                    GradeSetup(g.cube, g.vignette, g.masks, g.maskCubes, g.fromCube, g.transitionMs, g.presence, g.warp, timeOffsetMs = from)
+                },
+                pieceOf = clip.id,
+            )
+        }
+    }
+
+    private suspend fun exportRequest(
+        kind: ExportKind, s: UiState, i: Int, clip: ClipState,
+        cubes: HashMap<Pair<ClipLook?, Boolean>, Array<Array<IntArray>>?>,
+    ): ExportRequest? {
+        return run {
                 // The dashboard is one effect among others: without watch data the video still exports.
                 val telemetry = clip.sync?.let { sync ->
                     s.activities.getOrNull(sync.trackIndex)?.let { Telemetry(it.track, sync.startUtcMs + clip.trimStartMs + clip.manualOffsetMs) }
                 }
-                if (kind == ExportKind.PNG_SEQUENCE && telemetry == null) return@mapNotNull null
+                if (kind == ExportKind.PNG_SEQUENCE && telemetry == null) return null
                 val graded = kind != ExportKind.PNG_SEQUENCE && clip.colorGrade
                 val applied = s.appliedGrade(clip)
                 val lutName = s.lutFor(clip)
@@ -2289,13 +2357,6 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                     // A photo's place is fixed; a video's follows the watch frame by frame.
                     mapMarker = if (kind == ExportKind.VIDEO && s.routeMap.enabled && clip.meta.isPhoto) withContext(Dispatchers.IO) { mapMarker(s, clip, 0L) } else null,
                 )
-            }
-            if (requests.isEmpty()) {
-                val why = if (kind == ExportKind.PNG_SEQUENCE) "the dashboard needs activity data, and no clip is matched to an activity." else "no clips."
-                _state.update { it.copy(messages = it.messages + "Nothing to export: $why") }
-            } else {
-                exportManager.enqueue(jobsFor(kind, requests, s))
-            }
         }
     }
 
@@ -2342,7 +2403,15 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                 val name = s.projectName.replace(Regex("[^\\p{L}\\p{N} ._-]"), "_")
                 listOf(JobSpec(kind, s.projectName, requests, spec(requests, "${name}_sweetspot.mp4"), s.audioClips, s.clipSound))
             }
-            else -> requests.map { JobSpec(kind, it.name, listOf(it), spec(listOf(it), "${it.baseName}_sweetspot.mp4"), clipSound = s.clipSound) }
+            else -> {
+                // One file per clip: a ramped clip's pieces go into the same one.
+                val files = mutableListOf<MutableList<ExportRequest>>()
+                for (r in requests) {
+                    val last = files.lastOrNull()
+                    if (r.pieceOf != null && last != null && last.first().pieceOf == r.pieceOf) last += r else files += mutableListOf(r)
+                }
+                files.map { parts -> JobSpec(kind, parts.first().name, parts, spec(parts, "${parts.first().baseName}_sweetspot.mp4"), clipSound = s.clipSound) }
+            }
         }
     }
 

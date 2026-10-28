@@ -332,7 +332,7 @@ fun ClipPreview(
                 players[active].seekTo(0L)
             } else {
                 // Only the used part of the file plays; positions count from the cut.
-                exoPlayer.setPlaybackSpeed(clip.speed)
+                exoPlayer.setPlaybackSpeed(clip.speedAt(0L))
                 exoPlayer.setMediaItem(clipped(clip))
                 exoPlayer.prepare()
                 holds[active] = key
@@ -384,13 +384,14 @@ fun ClipPreview(
         standby.playWhenReady = false
         standby.volume = 0f
         standby.setMediaItem(clipped(next))
-        standby.setPlaybackSpeed(next.speed)
+        standby.setPlaybackSpeed(next.speedAt(0L))
         standby.prepare()
         holds[1 - active] = nextKey
     }
     // Slow motion plays slowed down in the preview too; the dashboard follows the picture's own time.
-    LaunchedEffect(clip.speed) { players[active].setPlaybackSpeed(clip.speed) }
-    val clipVolume = if (clip.speed != 1f && clip.muteChangedSpeed) 0f else clipSound * clip.soundLevel
+    // A ramp is followed as the clip plays (in the frame loop below).
+    LaunchedEffect(clip.speed, clip.speedCurve) { players[active].setPlaybackSpeed(clip.speedAt(players[active].currentPosition)) }
+    val clipVolume = if (clip.speedChanged && clip.muteChangedSpeed) 0f else clipSound * clip.soundLevel
     // One player per audio clip, kept while the clip exists.
     val audioPlayers = remember { HashMap<Long, Pair<android.net.Uri, ExoPlayer>>() }
     DisposableEffect(Unit) { onDispose { audioPlayers.values.forEach { it.second.release() }; audioPlayers.clear() } }
@@ -580,7 +581,7 @@ fun ClipPreview(
     LaunchedEffect(marker) { markerStale = false }
     val photoNow by rememberUpdatedState(photo)
     val clipLength by rememberUpdatedState(clip.durationMs)
-    val speedNow by rememberUpdatedState(clip.speed)
+    val clipNow by rememberUpdatedState(clip)
     LaunchedEffect(exoPlayer) {
         var lastFrame = 0L
         while (true) withFrameMillis { t ->
@@ -606,6 +607,11 @@ fun ClipPreview(
                 playerMs = exoPlayer.currentPosition
                 if (!fileTime) reportPosition(playerMs)
             }
+            // A speed ramp: the player's speed follows the curve (in small steps, which it plays smoothly).
+            if (clipNow.speedCurve.isNotEmpty() && exoPlayer.isPlaying) {
+                val s = clipNow.speedAt(playerMs)
+                if (kotlin.math.abs(s - exoPlayer.playbackParameters.speed) > 0.02f) exoPlayer.setPlaybackSpeed(s)
+            }
             playing = exoPlayer.isPlaying
             wantsPlay = exoPlayer.playWhenReady && exoPlayer.playbackState.let { it == Player.STATE_READY || it == Player.STATE_BUFFERING }
             // At a cut: the next clip starts (hidden, silent) a moment before, so it is already moving
@@ -613,7 +619,7 @@ fun ClipPreview(
             val other = players[1 - active]
             val nextReady = nextKeyNow != null && holds[1 - active] == nextKeyNow && other.playbackState == Player.STATE_READY
             if (exoPlayer.isPlaying && !fileTime && nextReady) {
-                val remaining = ((clipLength - exoPlayer.currentPosition) / speedNow).toLong()
+                val remaining = clipNow.timelineOfSource(clipLength) - clipNow.timelineOfSource(exoPlayer.currentPosition)
                 if (remaining <= HANDOVER_LEAD_MS && !handover[0]) {
                     other.volume = 0f
                     if (other.currentPosition != 0L) other.seekTo(0L)
@@ -679,7 +685,7 @@ fun ClipPreview(
     // Masks that move are placed for this moment of the file.
     val fileMs = clip.trimStartMs + positionMs
     // Position on the timeline within this clip, for fades and music.
-    val clipTimelineMs = if (photo) positionMs else (positionMs / clip.speed).toLong()
+    val clipTimelineMs = if (photo) positionMs else clip.timelineOfSource(positionMs)
     val fadeGain = Fade.gain(clipTimelineMs, clip.timelineDurationMs, clip.fadeInMs, clip.fadeOutMs)
     SideEffect { exoPlayer.volume = clipVolume * fadeGain }
     // Audio clips follow the timeline: each plays where it is placed, faded as in the export.
@@ -1251,7 +1257,8 @@ fun ClipPreview(
             // The shown clip's own frame rate (the export's is chosen on the Export page).
             clip.meta.frameRate?.takeIf { !photo && !photoMode }?.let { fps ->
                 Text(
-                    String.format(java.util.Locale.US, "%.4g fps", fps) + if (clip.speed != 1f) " · ${String.format(java.util.Locale.US, "%.3g", clip.speed)}×" else "",
+                    String.format(java.util.Locale.US, "%.4g fps", fps) + (if (clip.speed != 1f) " · ${String.format(java.util.Locale.US, "%.3g", clip.speed)}×" else "") +
+                        (if (clip.speedCurve.isNotEmpty()) " · ramp" else ""),
                     Modifier.padding(end = 8.dp),
                     style = MaterialTheme.typography.labelSmall,
                     color = HeadsupColors.TextMuted,
