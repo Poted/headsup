@@ -65,7 +65,7 @@ data class ColorGrade(
             highlights == 0f && saturation == 0f && temperature == 0f &&
             blacks == 0f && whites == 0f && vibrance == 0f && tint == 0f && skinHue == 0f &&
             rolloff == 0f && toneAmount == 0f && tame == 0f && mixer.all { it == 0f } && look == null && curves.all { it.isEmpty() } && wheels.all { it == 0f } &&
-            channelMix.all { it == 0f } && bw.all { it == 0f } && calibration.all { it == 0f }
+            channelMix.all { it == 0f } && bw.all { it == 0f } && calibration.all { it == 0f } && dehaze == 0f
 
     /** The corrections scaled by [k] (hues stay), e.g. a suggestion at partial strength. */
     operator fun times(k: Float) = ColorGrade(
@@ -244,6 +244,7 @@ object LutBaker {
             Looks.apply(look, grade.lookAmount, rgb)
         }
         for (i in 0..2) rgb[i] = rgb[i].coerceIn(0f, 1f)
+        Dehaze.apply(grade.dehaze, rgb)
         // Calibration and the channel mixer first, as the starting colours the rest works on.
         Calibration.apply(calibrationMatrix(grade.calibration), rgb)
         ChannelMixer.apply(grade.channelMix, rgb)

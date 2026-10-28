@@ -8,7 +8,9 @@ class PresenceTest {
     @Test
     fun `presence is not a colour change`() {
         val g = ColorGrade(texture = 0.3f, clarity = -0.2f, dehaze = 0.5f)
-        assertTrue(g.isNeutralColour)
+        // Dehaze is a colour change (in the table); texture and clarity are not.
+        assertTrue(!g.isNeutralColour)
+        assertTrue(ColorGrade(texture = 0.3f, clarity = -0.2f).isNeutralColour)
         assertEquals(Presence(0.3f, -0.2f, 0.5f), g.presence)
         assertTrue(ColorGrade().presence.isNeutral)
     }

@@ -149,3 +149,27 @@ object Calibration {
         return DoubleArray(3) { a[it][3] / a[it][it] }
     }
 }
+
+/**
+ * Dehaze, per colour (no halos, works in masks): haze lifts the darkest channel towards a pale
+ * airlight, so a share of it proportional to that channel is taken out (the dark-channel model with
+ * a white airlight) and the colours it washed out are deepened. White stays white, deep shadows
+ * hardly move. Negative adds haze: everything drawn towards a pale grey-blue.
+ */
+object Dehaze {
+    fun apply(amount: Float, rgb: FloatArray) {
+        if (amount == 0f) return
+        if (amount > 0f) {
+            val dark = min(rgb[0], min(rgb[1], rgb[2])).coerceIn(0f, 1f)
+            val h = (amount * 0.55f * dark).coerceIn(0f, 0.85f)
+            for (i in 0..2) rgb[i] = (rgb[i] - h) / (1f - h)
+            val l = 0.2126f * rgb[0] + 0.7152f * rgb[1] + 0.0722f * rgb[2]
+            val k = 1f + 0.3f * amount
+            for (i in 0..2) rgb[i] = (l + (rgb[i] - l) * k).coerceIn(0f, 1f)
+        } else {
+            val t = -amount * 0.45f
+            val air = floatArrayOf(0.78f, 0.8f, 0.84f)
+            for (i in 0..2) rgb[i] = rgb[i] * (1f - t) + air[i] * t
+        }
+    }
+}

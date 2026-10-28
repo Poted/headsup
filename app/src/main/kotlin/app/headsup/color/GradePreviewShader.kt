@@ -212,6 +212,8 @@ class GradePreviewShader {
 
             // The picture, through the perspective correction (Perspective.sourceOf) when there is one.
             half4 img(float2 p) {
+                // Never outside the picture (empty there): the edges would glow.
+                p = clamp(p, float2(0.5), size - 0.5);
                 if (hasWarp < 0.5) return image.eval(p);
                 float3 q = warp * float3(p / size, 1.0);
                 return image.eval(clamp(q.xy / q.z, float2(0.0), float2(1.0)) * size);
@@ -295,42 +297,39 @@ class GradePreviewShader {
                 return clamp(c, 0.0, 1.0);
             }
 
-            // The brightness averaged over a ring of radius r around p.
-            float ringLuma(float2 p, float r) {
-                float acc = 0.0;
-                for (int i = 0; i < 8; i++) {
-                    float a = float(i) * 0.7854 + 0.3927;
-                    acc += luma(float3(img(p + float2(cos(a), sin(a)) * r).rgb));
+            // The brightness around p over a disc of radius r, counting mostly pixels of a brightness
+            // like this one's (an edge-aware mean), so a bright sky does not glow round a dark tree.
+            float localMean(float2 p, float r, float l) {
+                float acc = l;
+                float sum = 1.0;
+                for (int k = 1; k <= 2; k++) {
+                    float rr = r * float(k) * 0.5;
+                    for (int i = 0; i < 12; i++) {
+                        float a = float(i) * 0.5236 + float(k) * 0.2618;
+                        float s = luma(float3(img(p + float2(cos(a), sin(a)) * rr).rgb));
+                        float d = s - l;
+                        float w = exp(-d * d * 22.0);
+                        acc += s * w;
+                        sum += w;
+                    }
                 }
-                return acc / 8.0;
+                return acc / sum;
             }
 
             // Presence: texture and clarity add the difference from the surroundings' brightness
-            // (small and wider), clarity mostly in the midtones; dehaze takes out the haze, i.e. how
-            // far the darkest channel is lifted over a wide area (negative adds haze).
+            // (small and wider), softly limited so edges do not ring; clarity mostly in the midtones.
+            // Dehaze is in the colour table (LutBaker), per pixel, so it never leaves halos.
             float3 presence(float2 p, float3 c, float3 pr) {
                 float l = luma(c);
                 if (pr.x != 0.0) {
-                    float m = ringLuma(p, max(1.5, shortSide * 0.003));
-                    c += (l - m) * pr.x * 1.5;
+                    float d = l - localMean(p, max(2.0, shortSide * 0.004), l);
+                    d = d / (1.0 + abs(d) * 4.0);
+                    c += d * pr.x * 1.6;
                 }
                 if (pr.y != 0.0) {
-                    float r = shortSide * 0.025;
-                    float m = (ringLuma(p, r) * 2.0 + ringLuma(p, r * 0.5)) / 3.0;
-                    c += (l - m) * pr.y * 6.0 * l * (1.0 - l);
-                }
-                if (pr.z > 0.0) {
-                    float r = shortSide * 0.05;
-                    float dark = min(c.r, min(c.g, c.b));
-                    for (int i = 0; i < 8; i++) {
-                        float a = float(i) * 0.7854;
-                        float3 s = float3(img(p + float2(cos(a), sin(a)) * r).rgb);
-                        dark += min(s.r, min(s.g, s.b));
-                    }
-                    float h = clamp(dark / 9.0 * pr.z * 0.95, 0.0, 0.9);
-                    c = (c - h) / (1.0 - h);
-                } else if (pr.z < 0.0) {
-                    c = mix(c, float3(0.82), -pr.z * 0.45);
+                    float d = l - localMean(p, shortSide * 0.03, l);
+                    d = d / (1.0 + abs(d) * 3.0);
+                    c += d * pr.y * 6.0 * l * (1.0 - l);
                 }
                 return clamp(c, 0.0, 1.0);
             }
@@ -346,7 +345,7 @@ class GradePreviewShader {
                     w$i = m${i}a.x > 1.5 ? brushWeight(m${i}a, m${i}b, coord, $i.0) : maskWeight(m${i}a, m${i}b, coord);
                     pr += mp$i * w$i;
                 }""" }.joinToString("")}
-                if (pr != float3(0.0)) src = half4(half3(presence(coord, float3(src.rgb), pr)), src.a);
+                if (pr.x != 0.0 || pr.y != 0.0) src = half4(half3(presence(coord, float3(src.rgb), pr)), src.a);
                 float3 c = float3(grade_lut(src.rgb));
                 ${List(ColourMask.MAX_PER_CLIP) { i -> """
                 if (w$i > 0.0) c = mix(c, float3(grade_lutM$i(src.rgb)), w$i);""" }.joinToString("")}

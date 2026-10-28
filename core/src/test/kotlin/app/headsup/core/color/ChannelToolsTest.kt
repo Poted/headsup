@@ -43,4 +43,15 @@ class ChannelToolsTest {
         assertTrue(kotlin.math.abs(red[1] - 0.1f) > 0.02f || kotlin.math.abs(red[2] - 0.1f) > 0.02f)
         assertEquals(null, Calibration.matrix(Calibration.NEUTRAL))
     }
+
+    @Test
+    fun `dehaze deepens a hazy colour and keeps white and black`() {
+        val haze = floatArrayOf(0.62f, 0.68f, 0.78f)
+        Dehaze.apply(0.6f, haze)
+        assertTrue(haze[0] < 0.55f && haze[2] - haze[0] > 0.16f)
+        val white = floatArrayOf(1f, 1f, 1f).also { Dehaze.apply(1f, it) }
+        for (v in white) assertEquals(1f, v, 1e-4f)
+        val black = floatArrayOf(0.02f, 0.02f, 0.02f).also { Dehaze.apply(1f, it) }
+        assertTrue(black[0] < 0.02f && black[0] >= 0f)
+    }
 }

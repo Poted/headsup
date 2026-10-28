@@ -7,7 +7,8 @@ package app.headsup.core.color
  * The preview and export shaders draw them on the picture before its colour table.
  */
 data class Presence(val texture: Float = 0f, val clarity: Float = 0f, val dehaze: Float = 0f) {
-    val isNeutral: Boolean get() = texture == 0f && clarity == 0f && dehaze == 0f
+    /** Nothing for the shaders to do: dehaze works per colour, in the colour table ([Dehaze]). */
+    val isNeutral: Boolean get() = texture == 0f && clarity == 0f
 
     companion object {
         val NONE = Presence()

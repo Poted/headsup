@@ -247,6 +247,8 @@ class GradeEffect(
 
             // The file's values as the colour tables expect them.
             vec3 source(vec2 uv) {
+                // Never outside the frame: the edges would glow.
+                uv = clamp(uv, 0.5 / uSize, 1.0 - 0.5 / uSize);
                 // Perspective correction, on fractions measured from the top (as the preview's).
                 if (uHasWarp > 0.5) {
                     vec3 q = uWarp * vec3(uv.x, 1.0 - uv.y, 1.0);
@@ -270,41 +272,37 @@ class GradeEffect(
 
             float luma(vec3 c) { return dot(c, vec3(0.2126, 0.7152, 0.0722)); }
 
-            // The brightness averaged over a ring of radius r pixels around uv.
-            float ringLuma(vec2 uv, float r) {
-                float acc = 0.0;
-                for (int i = 0; i < 8; i++) {
-                    float a = float(i) * 0.7854 + 0.3927;
-                    acc += luma(source(uv + vec2(cos(a), sin(a)) * r / uSize));
+            // As the preview shader's localMean(): an edge-aware mean brightness over a disc of r pixels.
+            float localMean(vec2 uv, float r, float l) {
+                float acc = l;
+                float sum = 1.0;
+                for (int k = 1; k <= 2; k++) {
+                    float rr = r * float(k) * 0.5;
+                    for (int i = 0; i < 12; i++) {
+                        float a = float(i) * 0.5236 + float(k) * 0.2618;
+                        float s = luma(source(uv + vec2(cos(a), sin(a)) * rr / uSize));
+                        float d = s - l;
+                        float w = exp(-d * d * 22.0);
+                        acc += s * w;
+                        sum += w;
+                    }
                 }
-                return acc / 8.0;
+                return acc / sum;
             }
 
-            // As the preview shader's presence(): texture, clarity, dehaze.
+            // As the preview shader's presence(): texture and clarity (dehaze is in the colour table).
             vec3 presence(vec2 uv, vec3 c, vec3 pr) {
                 float shortSide = min(uSize.x, uSize.y);
                 float l = luma(c);
                 if (pr.x != 0.0) {
-                    float m = ringLuma(uv, max(1.5, shortSide * 0.003));
-                    c += (l - m) * pr.x * 1.5;
+                    float d = l - localMean(uv, max(2.0, shortSide * 0.004), l);
+                    d = d / (1.0 + abs(d) * 4.0);
+                    c += d * pr.x * 1.6;
                 }
                 if (pr.y != 0.0) {
-                    float r = shortSide * 0.025;
-                    float m = (ringLuma(uv, r) * 2.0 + ringLuma(uv, r * 0.5)) / 3.0;
-                    c += (l - m) * pr.y * 6.0 * l * (1.0 - l);
-                }
-                if (pr.z > 0.0) {
-                    float r = shortSide * 0.05;
-                    float dark = min(c.r, min(c.g, c.b));
-                    for (int i = 0; i < 8; i++) {
-                        float a = float(i) * 0.7854;
-                        vec3 s = source(uv + vec2(cos(a), sin(a)) * r / uSize);
-                        dark += min(s.r, min(s.g, s.b));
-                    }
-                    float h = clamp(dark / 9.0 * pr.z * 0.95, 0.0, 0.9);
-                    c = (c - h) / (1.0 - h);
-                } else if (pr.z < 0.0) {
-                    c = mix(c, vec3(0.82), -pr.z * 0.45);
+                    float d = l - localMean(uv, shortSide * 0.03, l);
+                    d = d / (1.0 + abs(d) * 3.0);
+                    c += d * pr.y * 6.0 * l * (1.0 - l);
                 }
                 return clamp(c, 0.0, 1.0);
             }
@@ -321,7 +319,7 @@ class GradeEffect(
                     w$i = uM${i}a.x > 1.5 ? brushWeight(uM${i}a, uM${i}b, px, $i.0) : maskWeight(uM${i}a, uM${i}b, px);
                     pr += uMp$i * w$i;
                 }""" }.joinToString("")}
-                if (pr != vec3(0.0)) srcRgb = presence(vTexSamplingCoord, srcRgb, pr);
+                if (pr.x != 0.0 || pr.y != 0.0) srcRgb = presence(vTexSamplingCoord, srcRgb, pr);
                 vec3 c = grade(uLut, srcRgb);
                 ${List(ColourMask.MAX_PER_CLIP) { i -> """
                 if (w$i > 0.0) c = mix(c, grade(uLutM$i, srcRgb), w$i);""" }.joinToString("")}
