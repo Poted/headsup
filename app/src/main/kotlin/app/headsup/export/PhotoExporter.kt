@@ -186,9 +186,13 @@ object PhotoExporter {
      * and dithered down (smooth skies stay smooth), or at 8 bits where 10 cannot be drawn.
      */
     private fun render(root: RenderNode, w: Int, h: Int): Bitmap =
-        runCatching { draw(root, w, h, PixelFormat.RGBA_1010102)?.let { tenBits -> dither(tenBits).also { tenBits.recycle() } } }.getOrNull()
+        runCatching { draw(root, w, h, PixelFormat.RGBA_1010102)?.let { deep -> dithered(deep).also { deep.recycle() } } }.getOrNull()
             ?: draw(root, w, h, PixelFormat.RGBA_8888) ?: error("Nothing was drawn")
 
+    /**
+     * Draws [root] into a buffer of [format] and reads it back: a 10-bit picture as half floats
+     * (a layout Android defines, unlike the packed 10-bit one), an 8-bit one as it is.
+     */
     private fun draw(root: RenderNode, w: Int, h: Int, format: Int): Bitmap? {
         val reader = ImageReader.newInstance(w, h, format, 1, HardwareBuffer.USAGE_GPU_SAMPLED_IMAGE or HardwareBuffer.USAGE_GPU_COLOR_OUTPUT)
         val hw = HardwareRenderer()
@@ -201,7 +205,7 @@ object PhotoExporter {
                 val buffer = it.hardwareBuffer ?: return null
                 buffer.use { b ->
                     val wrapped = Bitmap.wrapHardwareBuffer(b, ColorSpace.get(ColorSpace.Named.SRGB)) ?: return null
-                    val config = if (format == PixelFormat.RGBA_1010102) Bitmap.Config.RGBA_1010102 else Bitmap.Config.ARGB_8888
+                    val config = if (format == PixelFormat.RGBA_1010102) Bitmap.Config.RGBA_F16 else Bitmap.Config.ARGB_8888
                     return wrapped.copy(config, false)
                 }
             }
@@ -211,14 +215,19 @@ object PhotoExporter {
         }
     }
 
-    /** A 10-bit picture to 8 bits with a little noise below the last bit, in strips. */
-    private fun dither(src: Bitmap): Bitmap {
+    /**
+     * A deep (half-float) picture to 8 bits with a little noise below the last bit, in strips.
+     * Checked against Android's own conversion at a grid of points; if they disagree, that one is
+     * used (a picture is never saved wrong because of an unexpected pixel layout).
+     */
+    private fun dithered(src: Bitmap): Bitmap {
         val w = src.width
         val h = src.height
         val out = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
-        val rows = 64
-        val bytes = java.nio.ByteBuffer.allocate(w * rows * 4).order(java.nio.ByteOrder.nativeOrder())
+        val rows = 32
+        val bytes = java.nio.ByteBuffer.allocate(w * rows * 8).order(java.nio.ByteOrder.nativeOrder())
         val ints = IntArray(w * rows)
+        val linear = src.colorSpace.let { it == ColorSpace.get(ColorSpace.Named.LINEAR_EXTENDED_SRGB) || it == ColorSpace.get(ColorSpace.Named.LINEAR_SRGB) }
         var y0 = 0
         while (y0 < h) {
             val n = minOf(rows, h - y0)
@@ -227,22 +236,35 @@ object PhotoExporter {
             part.copyPixelsToBuffer(bytes)
             if (part !== src) part.recycle()
             bytes.rewind()
-            val packed = bytes.asIntBuffer()
+            val halves = bytes.asShortBuffer()
             for (i in 0 until w * n) {
-                val v = packed.get(i)
                 var seed = (y0 + i / w) * 7919 + (i % w) * 104729
-                fun channel(ten: Int): Int {
+                var argb = 0xFF shl 24
+                for (c in 0 until 3) {
                     seed = seed * 1103515245 + 12345
                     val noise = ((seed ushr 8) and 0xFFFF) / 65536f
-                    return (ten * (255f / 1023f) + noise).toInt().coerceIn(0, 255)
+                    var v = android.util.Half.toFloat(halves.get(i * 4 + c))
+                    // A linear half-float picture is encoded to sRGB first.
+                    if (linear) v = if (v <= 0.0031308f) 12.92f * v else 1.055f * Math.pow(v.toDouble(), 1 / 2.4).toFloat() - 0.055f
+                    argb = argb or ((v.coerceIn(0f, 1f) * 255f + noise).toInt().coerceIn(0, 255) shl (16 - 8 * c))
                 }
-                val r = channel(v and 0x3FF)
-                val g = channel((v shr 10) and 0x3FF)
-                val b = channel((v shr 20) and 0x3FF)
-                ints[i] = (0xFF shl 24) or (r shl 16) or (g shl 8) or b
+                ints[i] = argb
             }
             out.setPixels(ints, 0, w, 0, y0, w, n)
             y0 += n
+        }
+        // The check: at most one step apart (the noise) on a grid of points.
+        var worst = 0
+        for (gy in 1..9) for (gx in 1..9) {
+            val x = w * gx / 10
+            val y = h * gy / 10
+            val a = src.getPixel(x, y)
+            val b = out.getPixel(x, y)
+            for (shift in intArrayOf(16, 8, 0)) worst = maxOf(worst, kotlin.math.abs(((a shr shift) and 0xFF) - ((b shr shift) and 0xFF)))
+        }
+        if (worst > 3) {
+            out.recycle()
+            return src.copy(Bitmap.Config.ARGB_8888, false)
         }
         return out
     }
