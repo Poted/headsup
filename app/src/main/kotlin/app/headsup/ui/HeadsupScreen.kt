@@ -362,6 +362,10 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
                         onBrush = if (editingMasks && !fullscreen && editingBrush && state.brush.mode != BrushMode.MOVE) vm::brushStroke else null,
                         guideIndex = state.selectedMask,
                         lassoPath = state.lassoPath,
+                        paintPath = state.paintPath,
+                        paintRadius = state.brush.radius,
+                        paintStrength = state.brush.flow,
+                        paintErase = state.brush.mode == BrushMode.ERASE,
                         vignette = if (selected.colorGrade && !showOriginal) state.appliedGrade(selected).vignette else 0f,
                         presence = if (selected.colorGrade && !showOriginal) state.appliedGrade(selected).presence else app.headsup.core.color.Presence.NONE,
                         effects = if (showOriginal) app.headsup.render.EffectSettings(dashboard = false) else state.compareEffects ?: state.effects,
@@ -2493,7 +2497,7 @@ private fun ShotMatchPanel(state: UiState, clip: ClipState, vm: HeadsupViewModel
 private enum class BrushSetting(val symbol: String, val label: String, val range: ClosedFloatingPointRange<Float>, val default: Float) {
     SIZE("●", "Size", 0.005f..0.3f, BrushSettings().radius),
     SOFTNESS("◐", "Softness", 0f..1f, ColourMask(MaskKind.BRUSH).softness),
-    FLOW("≋", "Flow", 0.05f..1f, BrushSettings().flow),
+    FLOW("≋", "Strength", 0.05f..1f, BrushSettings().flow),
 }
 
 /**
@@ -2504,8 +2508,8 @@ private enum class BrushSetting(val symbol: String, val label: String, val range
 private fun BrushControls(state: UiState, vm: HeadsupViewModel) {
     val mask = state.selected?.masks?.getOrNull(state.selectedMask) ?: return
     val brush = state.brush
-    // Selecting an object needs no brush: only the edge's softness.
-    val settings = if (brush.mode == BrushMode.SELECT) listOf(BrushSetting.SOFTNESS) else BrushSetting.entries
+    // Always the same settings (Size and Strength are for painting; Select uses only Softness).
+    val settings = BrushSetting.entries
     var chosen by rememberSaveable { mutableStateOf(BrushSetting.SIZE) }
     val setting = chosen.takeIf { it in settings } ?: settings.first()
     Row(verticalAlignment = Alignment.CenterVertically) {
@@ -2535,8 +2539,8 @@ private fun BrushControls(state: UiState, vm: HeadsupViewModel) {
     ValueHeader(setting.label, String.format(Locale.US, "%.0f %%", value * 100f))
     RulerSlider(value = value, range = setting.range, step = 0.005f, onChange = { set(it) }, onReset = { set(setting.default) })
     Hint(
-        if (brush.mode == BrushMode.SELECT) "Tap an object to select it (found on the phone by a small AI model). Or draw round an object and lift the finger: the object inside is found by its colours (as an oval: Invert for the outside). Or draw a line across (e.g. along the horizon, round a tree): the side above it is selected and the split follows the edges near the line (as a line mask: Invert for the other side). Touch up with Paint and Erase."
-        else "Paint where the mask's corrections go; Erase takes them away. Two fingers move, turn and scale the painting.",
+        if (brush.mode == BrushMode.SELECT) "Tap an object to select it (found on the phone by a small AI model). Or draw round an object and lift the finger: the object inside is found by its colours (as an oval: Invert for the outside). Or draw a line across (e.g. along the horizon, round a tree): the side above it is selected and the split follows the edges near the line (as a line mask: Invert for the other side). Touch up with Paint and Erase (Size and Strength are theirs; Softness also softens what Select finds)."
+        else "Paint where the mask's corrections go; Erase takes them away. Strength: how much one stroke adds (at 50 % a stroke gives half the effect, going over again adds more). Softness: the painting's edge. Two fingers move, turn and scale the painting.",
     )
 }
 

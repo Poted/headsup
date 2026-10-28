@@ -156,6 +156,11 @@ fun ClipPreview(
     guideIndex: Int = 0,
     /** An outline being drawn around an object (x, y pairs, fractions of the picture). */
     lassoPath: List<Float> = emptyList(),
+    /** A brush stroke being painted (fractions of the picture), its radius (of the picture's height), strength, and whether it erases. */
+    paintPath: List<Float> = emptyList(),
+    paintRadius: Float = 0f,
+    paintStrength: Float = 1f,
+    paintErase: Boolean = false,
     vignette: Float,
     /** Texture, clarity and dehaze of the selected clip. */
     presence: app.headsup.core.color.Presence = app.headsup.core.color.Presence.NONE,
@@ -1021,6 +1026,19 @@ fun ClipPreview(
                         }) {
                             if (m.kind == MaskKind.BRUSH) {
                                 brushAtlas?.let { atlas -> drawIntoCanvas { drawBrushOverlay(it.nativeCanvas, atlas, guideIndex, m, geometry.pictureW, geometry.pictureH) } }
+                                if (paintPath.size >= 2) {
+                                    // The stroke as it is painted, the brush's width, before the mask is drawn again.
+                                    val path = androidx.compose.ui.graphics.Path()
+                                    paintPath.chunked(2).forEachIndexed { k, (x, y) ->
+                                        if (k == 0) path.moveTo(x * geometry.pictureW, y * geometry.pictureH) else path.lineTo(x * geometry.pictureW, y * geometry.pictureH)
+                                    }
+                                    if (paintPath.size == 2) path.lineTo(paintPath[0] * geometry.pictureW + 0.01f, paintPath[1] * geometry.pictureH)
+                                    drawPath(
+                                        path,
+                                        if (paintErase) Color.Black.copy(alpha = 0.45f * paintStrength) else Color(0xFFFF2828).copy(alpha = 0.45f * paintStrength),
+                                        style = Stroke(2f * paintRadius * geometry.pictureH, cap = androidx.compose.ui.graphics.StrokeCap.Round, join = androidx.compose.ui.graphics.StrokeJoin.Round),
+                                    )
+                                }
                                 if (lassoPath.size >= 4) {
                                     val path = androidx.compose.ui.graphics.Path()
                                     lassoPath.chunked(2).forEachIndexed { k, (x, y) ->

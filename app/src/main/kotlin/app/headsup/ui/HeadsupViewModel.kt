@@ -276,6 +276,8 @@ data class UiState(
     val brush: BrushSettings = BrushSettings(),
     /** An outline being drawn around an object (x, y pairs, fractions of the picture), until the finger lifts. */
     val lassoPath: List<Float> = emptyList(),
+    /** A brush stroke being painted (x, y pairs, fractions of the picture), until the finger lifts. */
+    val paintPath: List<Float> = emptyList(),
     /** Cine assistant for the selected clip, while it is open. */
     val cine: CineSession? = null,
     /** Result of the last highlight search; null until searched. */
@@ -1739,24 +1741,29 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
             selectStroke(phase, x, y, grab, clip, index, mask, placed, aspect)
             return
         }
-        if (phase == 2) return
-        val (px, py) = app.headsup.core.color.BrushMask.unmove(x, y, placed, aspect)
-        val b = s.brush
-        // Radius in the strokes' own frame: as big as it looks on the mask now.
-        val radius = b.radius / placed.sizeX.coerceAtLeast(0.05f)
-        val strokes = if (phase == 0 || mask.strokes.isEmpty()) {
-            mask.strokes + app.headsup.core.color.BrushStroke(listOf(px, py), radius, b.flow, b.mode == BrushMode.ERASE)
-        } else {
-            val last = mask.strokes.last()
-            val lx = last.points[last.points.size - 2]
-            val ly = last.points.last()
-            // Points closer than a fraction of the brush add nothing but work.
-            if (kotlin.math.hypot((px - lx) * aspect, py - ly) < last.radius * 0.15f) return
-            mask.strokes.dropLast(1) + last.copy(points = last.points + px + py)
-        }
-        val m = s.selectedMask
-        _state.update { st ->
-            st.copy(clips = st.clips.mapIndexed { i, c -> if (i == index) c.copy(masks = c.masks.mapIndexed { j, mm -> if (j == m) mm.copy(strokes = strokes) else mm }) else c })
+        // While the finger paints, the stroke shows as drawn (on the picture, at once); the mask
+        // itself is drawn again once, when the finger lifts.
+        when (phase) {
+            0 -> _state.update { it.copy(paintPath = listOf(x, y)) }
+            1 -> _state.update { st ->
+                val p = st.paintPath
+                // Points closer than a fraction of the brush add nothing but work.
+                if (p.size >= 2 && kotlin.math.hypot((x - p[p.size - 2]) * aspect, y - p.last()) < st.brush.radius * 0.15f) st else st.copy(paintPath = p + x + y)
+            }
+            else -> {
+                val path = s.paintPath
+                _state.update { it.copy(paintPath = emptyList()) }
+                if (path.size < 2) return
+                val b = s.brush
+                val points = path.chunked(2).flatMap { (px, py) -> app.headsup.core.color.BrushMask.unmove(px, py, placed, aspect).toList() }
+                // Radius in the strokes' own frame: as big as it looks on the mask now.
+                val radius = b.radius / placed.sizeX.coerceAtLeast(0.05f)
+                val stroke = app.headsup.core.color.BrushStroke(points, radius, b.flow, b.mode == BrushMode.ERASE)
+                val m = s.selectedMask
+                _state.update { st ->
+                    st.copy(clips = st.clips.mapIndexed { i, c -> if (i == index) c.copy(masks = c.masks.mapIndexed { j, mm -> if (j == m) mm.copy(strokes = mm.strokes + stroke) else mm }) else c })
+                }
+            }
         }
     }
 
