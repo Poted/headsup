@@ -278,8 +278,6 @@ data class UiState(
     val lassoPath: List<Float> = emptyList(),
     /** A brush stroke being painted (x, y pairs, fractions of the picture), until the finger lifts. */
     val paintPath: List<Float> = emptyList(),
-    /** The brush's size is being set: it shows on the picture. */
-    val brushSizeShown: Boolean = false,
     /** Cine assistant for the selected clip, while it is open. */
     val cine: CineSession? = null,
     /** Result of the last highlight search; null until searched. */
@@ -1768,8 +1766,6 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun updateBrush(transform: (BrushSettings) -> BrushSettings) = _state.update { it.copy(brush = transform(it.brush)) }
-
-    fun showBrushSize(shown: Boolean) = _state.update { it.copy(brushSizeShown = shown) }
 
     /**
      * Paints the selected (brush) mask at a point of the picture (fractions): [phase] 0 starts a

@@ -366,7 +366,6 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
                         paintRadius = state.brush.radius,
                         paintStrength = state.brush.flow,
                         paintErase = state.brush.mode == BrushMode.ERASE,
-                        brushCursor = state.brush.radius.takeIf { state.brushSizeShown && editingBrush && editingMasks },
                         vignette = if (selected.colorGrade && !showOriginal) state.appliedGrade(selected).vignette else 0f,
                         presence = if (selected.colorGrade && !showOriginal) state.appliedGrade(selected).presence else app.headsup.core.color.Presence.NONE,
                         effects = if (showOriginal) app.headsup.render.EffectSettings(dashboard = false) else state.compareEffects ?: state.effects,
@@ -2659,9 +2658,6 @@ private fun BrushControls(state: UiState, vm: HeadsupViewModel) {
             CircleOption(b.symbol, b.label, selected = b == setting, modified = false) { chosen = b }
         }
     }
-    // Choosing Size shows the brush on the picture, as big as it paints.
-    LaunchedEffect(setting) { vm.showBrushSize(setting == BrushSetting.SIZE) }
-    DisposableEffect(Unit) { onDispose { vm.showBrushSize(false) } }
     val value = when (setting) {
         BrushSetting.SIZE -> brush.radius
         BrushSetting.SOFTNESS -> mask.softness
@@ -2673,12 +2669,42 @@ private fun BrushControls(state: UiState, vm: HeadsupViewModel) {
         BrushSetting.SOFTNESS -> vm.updateMask { it.copy(softness = v) }
         BrushSetting.FLOW -> vm.updateBrush { it.copy(flow = v) }
     }
-    ValueHeader(setting.label, String.format(Locale.US, "%.0f %%", value * 100f))
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Box(Modifier.weight(1f)) { ValueHeader(setting.label, String.format(Locale.US, "%.0f %%", value * 100f)) }
+        BrushPreview(brush.radius, mask.softness)
+    }
     RulerSlider(value = value, range = setting.range, step = 0.005f, onChange = { set(it) }, onReset = { set(setting.default) })
     Hint(
         if (brush.mode == BrushMode.SELECT) "Tap an object to select it (found on the phone by a small AI model). Or draw round an object and lift the finger: the object inside is found by its colours (as an oval: Invert for the outside). Or draw a line across (e.g. along the horizon, round a tree): the side above it is selected and the split follows the edges near the line (as a line mask: Invert for the other side). Touch up with Paint and Erase (Size and Strength are theirs; Softness also softens what Select finds)."
         else "Paint where the mask's corrections go; Erase takes them away. Strength: how much one stroke adds (at 50 % a stroke gives half the effect, going over again adds more). Softness: the painting's edge. Two fingers move, turn and scale the painting.",
     )
+}
+
+/**
+ * The brush as it paints, on a small frame of the picture's shape: its size against the picture's
+ * height, and its soft edge.
+ */
+@Composable
+private fun BrushPreview(radius: Float, softness: Float) {
+    androidx.compose.foundation.Canvas(
+        Modifier
+            .size(width = 96.dp, height = 54.dp)
+            .clip(RoundedCornerShape(6.dp))
+            .background(Color.Black.copy(alpha = 0.45f))
+            .border(1.dp, HeadsupColors.Outline, RoundedCornerShape(6.dp)),
+    ) {
+        val r = (radius * size.height).coerceAtLeast(1.5f)
+        val hard = (1f - softness).coerceIn(0f, 0.99f)
+        val red = Color(0xFFFF4A3D)
+        drawCircle(
+            androidx.compose.ui.graphics.Brush.radialGradient(
+                0f to red, hard to red, 1f to red.copy(alpha = 0f),
+                center = center, radius = r,
+            ),
+            radius = r,
+            center = center,
+        )
+    }
 }
 
 /** Shape controls of a mask, edited with the same ruler as the corrections. */
