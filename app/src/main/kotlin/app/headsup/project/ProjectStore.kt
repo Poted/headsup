@@ -371,6 +371,7 @@ internal object Json {
         .put("halation", e.halation)
         .putOpt("barsRatio", e.barsRatio)
         .putOpt("graph", e.graph?.name)
+        .put("dashboard", e.dashboard)
 
     private fun effects(o: JSONObject?): EffectSettings {
         val d = EffectSettings()
@@ -383,6 +384,7 @@ internal object Json {
             halation = o.optDouble("halation", 0.0).toFloat(),
             barsRatio = if (o.has("barsRatio")) o.getDouble("barsRatio").toFloat() else null,
             graph = GraphMetric.entries.firstOrNull { it.name == o.optStringOrNull("graph") },
+            dashboard = o.optBoolean("dashboard", true),
         )
     }
 

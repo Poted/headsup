@@ -141,6 +141,10 @@ fun ClipPreview(
     maxHeight: Dp,
     /** Full screen: the picture edge to edge, no margins or rounded corners. */
     edgeToEdge: Boolean = false,
+    /** A finger held still on the picture: true while it shows the original (as in Lightroom). */
+    onHoldOriginal: ((Boolean) -> Unit)? = null,
+    /** The original is shown (the corrections left out): a label says so. */
+    showingOriginal: Boolean = false,
     onMoveWidget: (Widget, Placement) -> Unit,
     onMoveFinished: () -> Unit,
     /** When set, tapping the picture (away from widgets) grabs the frame for the vectorscope. */
@@ -678,6 +682,31 @@ fun ClipPreview(
     Column(Modifier.padding(horizontal = if (edgeToEdge) 0.dp else 16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Box(
             Modifier.fillMaxWidth().clip(RoundedCornerShape(if (edgeToEdge) 0.dp else 20.dp)).background(Color.Black).then(
+                // Holding a finger still shows the original until it lifts; moving or a second
+                // finger (zoom) is left to the other gestures.
+                if (onHoldOriginal != null) {
+                    Modifier.pointerInput(Unit) {
+                        awaitEachGesture {
+                            val down = awaitFirstDown(requireUnconsumed = false)
+                            val released = withTimeoutOrNull(400L) {
+                                while (true) {
+                                    val e = awaitPointerEvent(androidx.compose.ui.input.pointer.PointerEventPass.Initial)
+                                    val c = e.changes.firstOrNull { it.id == down.id } ?: break
+                                    if (!c.pressed || e.changes.size > 1 || (c.position - down.position).getDistance() > viewConfiguration.touchSlop) break
+                                }
+                                true
+                            }
+                            if (released == null) {
+                                onHoldOriginal(true)
+                                do {
+                                    val e = awaitPointerEvent(androidx.compose.ui.input.pointer.PointerEventPass.Initial)
+                                } while (e.changes.any { it.pressed })
+                                onHoldOriginal(false)
+                            }
+                        }
+                    }
+                } else Modifier,
+            ).then(
                 // A photo can be looked at closely: pinch to zoom the view, double tap to fit again
                 // (only when the picture is not being framed, masked or written on).
                 if (inspect) {
@@ -951,6 +980,15 @@ fun ClipPreview(
                 }
                 if (fadeGain < 1f) Box(Modifier.matchParentSize().background(Color.Black.copy(alpha = 1f - fadeGain)))
                 if (showGrid) Canvas(Modifier.matchParentSize()) { drawThirds() }
+                if (showingOriginal) {
+                    Text(
+                        "Original",
+                        Modifier.align(Alignment.TopCenter).padding(top = 10.dp).clip(RoundedCornerShape(50))
+                            .background(Color.Black.copy(alpha = 0.6f)).padding(horizontal = 12.dp, vertical = 4.dp),
+                        color = Color.White,
+                        style = MaterialTheme.typography.labelLarge,
+                    )
+                }
                 playerError?.takeIf { !photo }?.let { e ->
                     Text(
                         "Playback stopped: $e",

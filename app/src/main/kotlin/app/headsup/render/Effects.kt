@@ -28,6 +28,8 @@ data class EffectSettings(
     val barsRatio: Float? = null,
     /** Activity profile drawn along the bottom edge, or null for none. */
     val graph: GraphMetric? = null,
+    /** Whether this clip shows the dashboard (its layout and widgets are the project's). */
+    val dashboard: Boolean = true,
 ) {
     val changesPixels: Boolean get() = grain > 0f || glow > 0f || halation > 0f
 }

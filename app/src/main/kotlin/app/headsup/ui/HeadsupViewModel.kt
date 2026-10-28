@@ -608,8 +608,9 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
     private fun record(snapshot: EditSnapshot) {
         val current = history.getOrNull(historyIndex)
         if (snapshot == current) return
-        if (current == null || current.project != snapshot.project) {
-            // Another project opened: its history starts here.
+        if (current == null || current.project != snapshot.project || current.media().containsAll(snapshot.media()).not()) {
+            // Another project opened, or files added: history starts here (undo never takes
+            // files out of the project; removing one is done on purpose).
             history.clear()
             history += snapshot
             historyIndex = 0
@@ -620,6 +621,13 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
             historyIndex = history.lastIndex
         }
         updateHistoryFlags()
+    }
+
+    /** The files a snapshot uses. */
+    private fun EditSnapshot.media(): Set<Any> = buildSet {
+        clips.forEach { add(it.meta.uri) }
+        audioFiles.forEach { add(it.uri) }
+        activities.forEach { a -> a.uri?.let { add(it) } }
     }
 
     fun undo() {

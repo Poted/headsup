@@ -68,7 +68,7 @@ class DashboardRenderer(private val assets: AssetManager) {
         boxes.clear()
         drawBars(canvas, width, height, effects)
         drawGraph(canvas, width, height, style, effects, data)
-        if (!style.enabled) return
+        if (!style.enabled || !effects.dashboard) return
         val shown = Widget.entries.filter { it in style.widgets && it.isAvailableIn(data.track) }
         if (shown.isEmpty()) return
 
