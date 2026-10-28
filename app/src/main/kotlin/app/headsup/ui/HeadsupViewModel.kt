@@ -1783,7 +1783,13 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
             else -> {
                 val path = _state.value.lassoPath
                 _state.update { it.copy(lassoPath = emptyList()) }
-                // An outline needs some area; a tap or a short line selects nothing.
+                val xs = path.filterIndexed { i, _ -> i % 2 == 0 }
+                val ys = path.filterIndexed { i, _ -> i % 2 == 1 }
+                val tap = path.size < 6 || maxOf(xs.max() - xs.min(), ys.max() - ys.min()) < 0.02f
+                if (tap && path.size >= 2) {
+                    selectObjectAt(path[0], path[1], grab, clip, index, placed)
+                    return
+                }
                 if (path.size < 6) return
                 val points = path.chunked(2).flatMap { (px, py) -> app.headsup.core.color.BrushMask.unmove(px, py, placed, aspect).toList() }
                 val stroke = app.headsup.core.color.BrushStroke(points, radius = 0.01f, flow = 1f, reference = lassoReference, lasso = true)
@@ -1791,6 +1797,35 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                 _state.update { st ->
                     st.copy(clips = st.clips.mapIndexed { i, c -> if (i == index) c.copy(masks = c.masks.mapIndexed { j, mm -> if (j == m) mm.copy(strokes = mm.strokes + stroke) else mm }) else c })
                 }
+            }
+        }
+    }
+
+    /**
+     * A tap in Select: the object under the finger is found ([app.headsup.color.ObjectSelector]) in
+     * the picture as it is now and added to the mask.
+     */
+    private fun selectObjectAt(x: Float, y: Float, grab: (Int) -> android.graphics.Bitmap?, clip: ClipState, index: Int, placed: ColourMask) {
+        val picture = grab(512) ?: return
+        val placement = MaskKey.of(placed, 0L)
+        val m = _state.value.selectedMask
+        viewModelScope.launch {
+            _state.update { it.copy(busy = true, loadingMessage = "Finding the object", loadingProgress = null) }
+            try {
+                val found = withContext(Dispatchers.Default) {
+                    runCatching { app.headsup.color.ObjectSelector.select(getApplication(), picture, x, y) }.getOrNull()
+                }
+                if (found == null) {
+                    _state.update { it.copy(messages = it.messages + "No object found there: tap its middle, or draw round it.") }
+                    return@launch
+                }
+                val id = app.headsup.color.BrushReferences.create(getApplication(), picture.width, picture.height, found, placement)
+                val stroke = app.headsup.core.color.BrushStroke(listOf(x, y), radius = 0.01f, flow = 1f, reference = id, segment = true)
+                _state.update { st ->
+                    st.copy(clips = st.clips.mapIndexed { i, c -> if (i == index && c.id == clip.id) c.copy(masks = c.masks.mapIndexed { j, mm -> if (j == m) mm.copy(strokes = mm.strokes + stroke) else mm }) else c })
+                }
+            } finally {
+                _state.update { it.copy(busy = false, loadingMessage = null) }
             }
         }
     }

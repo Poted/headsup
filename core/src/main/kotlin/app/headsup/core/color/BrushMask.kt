@@ -28,6 +28,11 @@ data class BrushStroke(
      * the object inside is found from the colours of the [reference] picture ([BrushMask.select]).
      */
     val lasso: Boolean = false,
+    /**
+     * Not painted but an object found in the picture (a tap on it): [reference] holds how sure the
+     * finder is, per pixel, that it is the object (grey, 0..1).
+     */
+    val segment: Boolean = false,
 )
 
 /**
@@ -69,8 +74,8 @@ object BrushMask {
             val pts = stroke.points.chunked(2).filter { it.size == 2 }.map { it[0] * width to it[1] * height }
             if (pts.isEmpty()) continue
             // The part of the grid the stroke can reach (an outline: with some background around it).
-            // A line splits the whole picture.
-            val pad = if (stroke.lasso && !isLoop(pts)) {
+            // A line splits the whole picture, and a found object may be anywhere in it.
+            val pad = if (stroke.segment || (stroke.lasso && !isLoop(pts))) {
                 (width + height).toFloat()
             } else if (stroke.lasso) {
                 max(8f, 0.12f * max(pts.maxOf { it.first } - pts.minOf { it.first }, pts.maxOf { it.second } - pts.minOf { it.second }))
@@ -127,7 +132,15 @@ object BrushMask {
                     }
                 }
             }
-            if (stroke.lasso) {
+            if (stroke.segment) {
+                // The finder's certainty, sharpened a little around its middle: a clean edge.
+                if (colours != null) {
+                    for (y in y0..y1) for (x in x0..x1) {
+                        val c = colours[((y - y0) * spanW + (x - x0)) * 3]
+                        layer[y * width + x] = smoothstep(0.3f, 0.7f, c)
+                    }
+                }
+            } else if (stroke.lasso) {
                 val found = select(pts, colours, x0, x1, y0, y1, softness)
                 for (y in y0..y1) for (x in x0..x1) layer[y * width + x] = found[(y - y0) * spanW + (x - x0)]
             } else {

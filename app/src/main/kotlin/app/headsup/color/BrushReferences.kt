@@ -58,6 +58,15 @@ object BrushReferences {
         return id
     }
 
+    /** Keeps coverage ([values], 0..1, [width]×[height]) as a grey picture, e.g. an object found in a frame. */
+    fun create(context: Context, width: Int, height: Int, values: FloatArray, placement: MaskKey): String {
+        val pixels = IntArray(width * height) { i ->
+            val v = (values[i] * 255f + 0.5f).toInt().coerceIn(0, 255)
+            (0xFF shl 24) or (v shl 16) or (v shl 8) or v
+        }
+        return create(context, Bitmap.createBitmap(pixels, width, height, Bitmap.Config.ARGB_8888), placement)
+    }
+
     /** The picture kept as [id], or null when it is gone. */
     fun get(context: Context, id: String): BrushReference? {
         synchronized(cache) { if (id in cache) return cache[id] }

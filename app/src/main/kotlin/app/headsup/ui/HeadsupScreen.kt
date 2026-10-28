@@ -672,7 +672,8 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
             }
         } else {
             Column(Modifier.fillMaxSize().systemBarsPadding().padding(top = 8.dp)) {
-                pictureAndTimeline()
+                // Upright, a swipe up on the picture goes full screen (down in full screen leaves it).
+                Column(Modifier.freeSwipe(pictureFree) { if (it == Swipe.UP) fullscreen = true }, content = pictureAndTimeline)
                 tools()
             }
         }
@@ -2528,7 +2529,7 @@ private fun BrushControls(state: UiState, vm: HeadsupViewModel) {
     ValueHeader(setting.label, String.format(Locale.US, "%.0f %%", value * 100f))
     RulerSlider(value = value, range = setting.range, step = 0.005f, onChange = { set(it) }, onReset = { set(setting.default) })
     Hint(
-        if (brush.mode == BrushMode.SELECT) "Draw round an object and lift the finger: the object inside is found by its colours (as an oval: Invert for the outside). Or draw a line across (e.g. along the horizon, round a tree): the side above it is selected and the split follows the edges near the line (as a line mask: Invert for the other side). Touch up with Paint and Erase."
+        if (brush.mode == BrushMode.SELECT) "Tap an object to select it (found on the phone by a small AI model). Or draw round an object and lift the finger: the object inside is found by its colours (as an oval: Invert for the outside). Or draw a line across (e.g. along the horizon, round a tree): the side above it is selected and the split follows the edges near the line (as a line mask: Invert for the other side). Touch up with Paint and Erase."
         else "Paint where the mask's corrections go; Erase takes them away. Two fingers move, turn and scale the painting.",
     )
 }

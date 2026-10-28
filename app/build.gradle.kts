@@ -29,6 +29,11 @@ android {
         }
     }
 
+    // The segmentation model is read straight from the APK, so it is stored uncompressed.
+    androidResources {
+        noCompress += "tflite"
+    }
+
     externalNativeBuild {
         cmake {
             path = file("src/main/cpp/CMakeLists.txt")
@@ -76,4 +81,6 @@ dependencies {
     implementation("androidx.media3:media3-ui:$media3")
     implementation("androidx.media3:media3-effect:$media3")
     implementation("androidx.media3:media3-transformer:$media3")
+    // Selecting an object with a tap (Interactive Segmenter, on the phone).
+    implementation("com.google.mediapipe:tasks-vision:0.10.14")
 }

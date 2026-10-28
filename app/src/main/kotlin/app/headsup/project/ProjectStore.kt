@@ -425,6 +425,7 @@ internal object Json {
                 m.strokes.map {
                     JSONObject().put("p", JSONArray(it.points.map { v -> v.toDouble() })).put("r", it.radius)
                         .put("f", it.flow).put("e", it.erase).put("ref", it.reference).put("tol", it.tolerance)
+                        .put("lasso", it.lasso).put("seg", it.segment)
                 },
             ),
         )
@@ -459,6 +460,8 @@ internal object Json {
                     erase = it.optBoolean("e", false),
                     reference = it.optStringOrNull("ref"),
                     tolerance = it.optDouble("tol", 0.15).toFloat(),
+                    lasso = it.optBoolean("lasso", false),
+                    segment = it.optBoolean("seg", false),
                 )
             },
         )

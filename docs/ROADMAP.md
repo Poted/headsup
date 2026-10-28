@@ -76,7 +76,8 @@ project's files), the preview resized left/right when held sideways, Edit called
 - [x] Mask brush (paint, erase, move; size, softness, flow), tracking that follows the painted
       area, keys as in other masks. Select: draw round an object (it is found by colour, like an
       oval mask) or a line across (the side above it, split along edges near the line, like a line
-      mask).
+      mask). Tap: the object under the finger, found by MediaPipe's Interactive
+      Segmenter on the phone.
 - [ ] Skin tones struggle in odd light.
 - [ ] Intro slides: thanks for choosing Sweet Spot, what the app can do, how to make cinematic
       films and professional photos, so a newcomer feels welcome and wants to go further.

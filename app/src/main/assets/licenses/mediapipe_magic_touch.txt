@@ -1,0 +1,4 @@
+MediaPipe Interactive Segmenter model "magic_touch.tflite" and the MediaPipe Tasks library,
+by Google, used under the Apache License, Version 2.0:
+https://www.apache.org/licenses/LICENSE-2.0
+Model card: https://storage.googleapis.com/mediapipe-assets/Model%20Card%20MagicTouch.pdf

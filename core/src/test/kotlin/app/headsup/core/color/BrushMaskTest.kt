@@ -132,4 +132,16 @@ class BrushMaskTest {
         assertTrue(at(map, w, 30, 90) < 0.05f, "ground")
         assertTrue(at(map, w, 66, 50) > 0.6f, "sky beside the tree, inside the drawn bulge")
     }
+
+    @Test
+    fun `a found object covers what the finder was sure of`() {
+        val w = 50
+        val h = 50
+        val rgb = FloatArray(w * h * 3) { i -> val p = i / 3; if (p % w in 10..20 && p / w in 30..40) 0.95f else 0.05f }
+        val ref = BrushReference(w, h, rgb, BrushMask.BASE)
+        val stroke = BrushStroke(listOf(0.3f, 0.7f), radius = 0.01f, reference = "o", segment = true)
+        val map = BrushMask.rasterize(listOf(stroke), w, h, references = mapOf("o" to ref))
+        assertTrue(at(map, w, 15, 35) > 0.95f)
+        assertTrue(at(map, w, 35, 10) < 0.05f)
+    }
 }
