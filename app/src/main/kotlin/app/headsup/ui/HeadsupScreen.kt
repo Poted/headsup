@@ -3135,10 +3135,19 @@ private fun PhotoExport(state: UiState, vm: HeadsupViewModel) {
                 FilterChip(selected = settings.photoLongSide == side, onClick = { vm.updateExportSettings { it.copy(photoLongSide = side) } }, label = { Text(label) })
             }
         }
-        SettingRow("JPEG") {
-            for ((q, label) in ExportSettings.PHOTO_QUALITIES) {
-                FilterChip(selected = settings.photoQuality == q, onClick = { vm.updateExportSettings { it.copy(photoQuality = q) } }, label = { Text(label) })
+        SettingRow("Format") {
+            for (f in app.headsup.export.PhotoFormat.entries) {
+                FilterChip(selected = settings.photoFormat == f, onClick = { vm.updateExportSettings { it.copy(photoFormat = f) } }, label = { Text(f.label) })
             }
+        }
+        if (settings.photoFormat == app.headsup.export.PhotoFormat.JPEG) {
+            SettingRow("JPEG") {
+                for ((q, label) in ExportSettings.PHOTO_QUALITIES) {
+                    FilterChip(selected = settings.photoQuality == q, onClick = { vm.updateExportSettings { it.copy(photoQuality = q) } }, label = { Text(label) })
+                }
+            }
+        } else {
+            Hint("16 bits per colour, uncompressed: for further editing (Lightroom, Photoshop, DaVinci). Large files.")
         }
         val selectedPhoto = state.selected?.meta?.isPhoto == true
         val picked = state.clips.count { it.meta.isPhoto && it.picked }

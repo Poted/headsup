@@ -7,6 +7,9 @@ enum class VideoCodec(val label: String, val mimeType: String) {
     H264("H.264", MimeTypes.VIDEO_H264),
 }
 
+/** How photos are saved: JPEG (8 bits, dithered from the 10-bit drawing) or TIFF with 16 bits per colour. */
+enum class PhotoFormat(val label: String) { JPEG("JPEG"), TIFF16("TIFF 16-bit") }
+
 enum class ExportPreset(val label: String) { VERTICAL("Reels · TikTok · Shorts"), YOUTUBE("YouTube") }
 
 /** Video export choices from the export panel. The frame rate is the timeline's (a project setting). */
@@ -26,6 +29,7 @@ data class ExportSettings(
     /** Photos: long side in pixels (null = the photo's own) and JPEG quality. */
     val photoLongSide: Int? = null,
     val photoQuality: Int = 92,
+    val photoFormat: PhotoFormat = PhotoFormat.JPEG,
 ) {
     companion object {
         val PHOTO_SIZES: List<Pair<Int?, String>> = listOf(null to "Full", 4096 to "4096 px", 2048 to "2048 px", 1080 to "1080 px")

@@ -2154,6 +2154,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                         mapTrack = if (s.routeMap.enabled) mapTrack(s, clip) else null,
                         mapMarker = if (s.routeMap.enabled) withContext(Dispatchers.IO) { mapMarker(s, clip, 0L) } else null,
                         longSide = s.exportSettings.photoLongSide, quality = s.exportSettings.photoQuality,
+                        format = s.exportSettings.photoFormat,
                         raw = clip.meta.isRaw,
                         rawDevelop = clip.rawDevelop,
                     )

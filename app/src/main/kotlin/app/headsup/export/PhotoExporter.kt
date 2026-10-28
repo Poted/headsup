@@ -59,6 +59,7 @@ class PhotoRequest(
     /** Long side of the file (null = the photo's own), and JPEG quality 0..100. */
     val longSide: Int? = null,
     val quality: Int = 92,
+    val format: PhotoFormat = PhotoFormat.JPEG,
 )
 
 /**
@@ -133,6 +134,20 @@ object PhotoExporter {
             app.headsup.render.RouteMapRenderer.draw(c, fw.toFloat(), fh.toFloat(), request.routeMap, request.mapTrack, request.mapMarker?.first, request.mapMarker?.second)
             TextRenderer.draw(c, fw.toFloat(), fh.toFloat(), request.texts, request.textMs)
             endRecording()
+        }
+        if (request.format == PhotoFormat.TIFF16) {
+            // 16 bits per colour from the drawing's half floats, no dithering needed.
+            val deep = runCatching { draw(root, fw, fh, PixelFormat.RGBA_1010102) }.getOrNull()
+                ?: draw(root, fw, fh, PixelFormat.RGBA_8888) ?: error("Nothing was drawn")
+            photo.recycle()
+            onProgress(0.9f)
+            val target = request.longSide?.takeIf { it < maxOf(fw, fh) }
+            val sized = if (target == null) deep else {
+                val k = target.toFloat() / maxOf(fw, fh)
+                Bitmap.createScaledBitmap(deep, (fw * k).toInt().coerceAtLeast(2), (fh * k).toInt().coerceAtLeast(2), true).also { deep.recycle() }
+            }
+            val name = request.name.substringBeforeLast('.') + "_edit.tif"
+            return MediaStoreOutput.savePhoto(context, name, "image/tiff") { out -> writeTiff(sized, out.buffered(1 shl 20)) }.also { sized.recycle() }
         }
         val rendered = render(root, fw, fh)
         photo.recycle()
@@ -273,6 +288,77 @@ object PhotoExporter {
             return src.copy(Bitmap.Config.ARGB_8888, false)
         }
         return out
+    }
+
+    /**
+     * [src] as a 16-bit TIFF: a half-float picture's values as they are (sRGB-encoded first if
+     * linear), an 8-bit one widened. Checked against Android's own conversion at a grid of points,
+     * as [dithered] is; if they disagree, the 8-bit values are used.
+     */
+    private fun writeTiff(src: Bitmap, out: java.io.OutputStream) {
+        val w = src.width
+        val h = src.height
+        val half = src.config == Bitmap.Config.RGBA_F16
+        val linear = src.colorSpace.let { it == ColorSpace.get(ColorSpace.Named.LINEAR_EXTENDED_SRGB) || it == ColorSpace.get(ColorSpace.Named.LINEAR_SRGB) }
+        fun encode(v: Float): Int {
+            val e = if (linear) (if (v <= 0.0031308f) 12.92f * v else 1.055f * Math.pow(v.toDouble(), 1 / 2.4).toFloat() - 0.055f) else v
+            return (e.coerceIn(0f, 1f) * 65535f + 0.5f).toInt()
+        }
+        val rows = 32
+        val bytes = java.nio.ByteBuffer.allocate(w * rows * 8).order(java.nio.ByteOrder.nativeOrder())
+        val ints = IntArray(w * rows)
+        // One block of rows read at a time, as the writer asks for them.
+        var block = -1
+        fun load(y: Int) {
+            val b = y / rows
+            if (b == block) return
+            block = b
+            val y0 = b * rows
+            val n = minOf(rows, h - y0)
+            if (half) {
+                val part = Bitmap.createBitmap(src, 0, y0, w, n)
+                bytes.clear()
+                part.copyPixelsToBuffer(bytes)
+                if (part !== src) part.recycle()
+            } else {
+                src.getPixels(ints, 0, w, 0, y0, w, n)
+            }
+        }
+        var useHalf = half
+        if (half) {
+            // The check: half-float reading against Android's 8-bit view.
+            var worst = 0
+            for (gy in 1..9) for (gx in 1..9) {
+                val x = w * gx / 10
+                val y = h * gy / 10
+                load(y)
+                val i = ((y % rows) * w + x) * 4
+                val a = src.getPixel(x, y)
+                for (c in 0 until 3) {
+                    val v = encode(android.util.Half.toFloat(bytes.getShort(i * 2 + c * 2))) / 257
+                    worst = maxOf(worst, kotlin.math.abs(((a shr (16 - 8 * c)) and 0xFF) - v))
+                }
+            }
+            if (worst > 3) useHalf = false
+            block = -1
+        }
+        val eight = if (!useHalf && half) src.copy(Bitmap.Config.ARGB_8888, false) else null
+        try {
+            app.headsup.core.image.Tiff16.write(out, w, h) { y, rgb ->
+                if (useHalf) {
+                    load(y)
+                    val base = (y % rows) * w * 4
+                    for (x in 0 until w) for (c in 0 until 3) rgb[x * 3 + c] = encode(android.util.Half.toFloat(bytes.getShort((base + x * 4 + c) * 2)))
+                } else {
+                    val from = eight ?: src
+                    from.getPixels(ints, 0, w, 0, y, w, 1)
+                    for (x in 0 until w) for (c in 0 until 3) rgb[x * 3 + c] = ((ints[x] shr (16 - 8 * c)) and 0xFF) * 257
+                }
+            }
+            out.flush()
+        } finally {
+            eight?.recycle()
+        }
     }
 
     /** The photo turned upright by its EXIF orientation, at most [MAX_SIDE] on its long side. */
