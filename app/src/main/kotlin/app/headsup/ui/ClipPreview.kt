@@ -153,6 +153,8 @@ fun ClipPreview(
     onBrush: ((phase: Int, x: Float, y: Float, grab: (Int) -> Bitmap?) -> Unit)? = null,
     /** Which of [masks] [guideMask] is (its slot of the brush atlas). */
     guideIndex: Int = 0,
+    /** An outline being drawn around an object (x, y pairs, fractions of the picture). */
+    lassoPath: List<Float> = emptyList(),
     vignette: Float,
     /** Texture, clarity and dehaze of the selected clip. */
     presence: app.headsup.core.color.Presence = app.headsup.core.color.Presence.NONE,
@@ -1002,6 +1004,14 @@ fun ClipPreview(
                         }) {
                             if (m.kind == MaskKind.BRUSH) {
                                 brushAtlas?.let { atlas -> drawIntoCanvas { drawBrushOverlay(it.nativeCanvas, atlas, guideIndex, m, geometry.pictureW, geometry.pictureH) } }
+                                if (lassoPath.size >= 4) {
+                                    val path = androidx.compose.ui.graphics.Path()
+                                    lassoPath.chunked(2).forEachIndexed { k, (x, y) ->
+                                        if (k == 0) path.moveTo(x * geometry.pictureW, y * geometry.pictureH) else path.lineTo(x * geometry.pictureW, y * geometry.pictureH)
+                                    }
+                                    drawPath(path, Color.Black.copy(alpha = 0.5f), style = Stroke(5.dp.toPx(), cap = androidx.compose.ui.graphics.StrokeCap.Round, join = androidx.compose.ui.graphics.StrokeJoin.Round))
+                                    drawPath(path, Color.White, style = Stroke(2.5.dp.toPx(), cap = androidx.compose.ui.graphics.StrokeCap.Round, join = androidx.compose.ui.graphics.StrokeJoin.Round))
+                                }
                             } else {
                                 drawMaskGuide(m, geometry.pictureW, geometry.pictureH)
                             }

@@ -23,6 +23,11 @@ data class BrushStroke(
     val erase: Boolean = false,
     val reference: String? = null,
     val tolerance: Float = 0.15f,
+    /**
+     * Not painted but a loose outline around an object (closed from its end back to its start):
+     * the object inside is found from the colours of the [reference] picture ([BrushMask.select]).
+     */
+    val lasso: Boolean = false,
 )
 
 /**
@@ -63,11 +68,19 @@ object BrushMask {
             val r = (stroke.radius * height).coerceAtLeast(0.5f)
             val pts = stroke.points.chunked(2).filter { it.size == 2 }.map { it[0] * width to it[1] * height }
             if (pts.isEmpty()) continue
-            // The part of the grid the stroke can reach.
-            val x0 = max(0, floor(pts.minOf { it.first } - r).toInt())
-            val x1 = min(width - 1, ceil(pts.maxOf { it.first } + r).toInt())
-            val y0 = max(0, floor(pts.minOf { it.second } - r).toInt())
-            val y1 = min(height - 1, ceil(pts.maxOf { it.second } + r).toInt())
+            // The part of the grid the stroke can reach (an outline: with some background around it).
+            // A line splits the whole picture.
+            val pad = if (stroke.lasso && !isLoop(pts)) {
+                (width + height).toFloat()
+            } else if (stroke.lasso) {
+                max(8f, 0.12f * max(pts.maxOf { it.first } - pts.minOf { it.first }, pts.maxOf { it.second } - pts.minOf { it.second }))
+            } else {
+                r
+            }
+            val x0 = max(0, floor(pts.minOf { it.first } - pad).toInt())
+            val x1 = min(width - 1, ceil(pts.maxOf { it.first } + pad).toInt())
+            val y0 = max(0, floor(pts.minOf { it.second } - pad).toInt())
+            val y1 = min(height - 1, ceil(pts.maxOf { it.second } + pad).toInt())
             if (x0 > x1 || y0 > y1) continue
             for (y in y0..y1) java.util.Arrays.fill(layer, y * width + x0, y * width + x1 + 1, 0f)
             val ref = stroke.reference?.let { references[it] }
@@ -114,16 +127,21 @@ object BrushMask {
                     }
                 }
             }
-            // Prints close enough together that the edge stays smooth.
-            val spacing = max(0.5f, r * 0.2f)
-            stamp(pts[0].first, pts[0].second)
-            for (k in 1 until pts.size) {
-                val (ax, ay) = pts[k - 1]
-                val (bx, by) = pts[k]
-                val n = ceil(hypot(bx - ax, by - ay) / spacing).toInt()
-                for (j in 1..n) {
-                    val t = j.toFloat() / n
-                    stamp(ax + (bx - ax) * t, ay + (by - ay) * t)
+            if (stroke.lasso) {
+                val found = select(pts, colours, x0, x1, y0, y1, softness)
+                for (y in y0..y1) for (x in x0..x1) layer[y * width + x] = found[(y - y0) * spanW + (x - x0)]
+            } else {
+                // Prints close enough together that the edge stays smooth.
+                val spacing = max(0.5f, r * 0.2f)
+                stamp(pts[0].first, pts[0].second)
+                for (k in 1 until pts.size) {
+                    val (ax, ay) = pts[k - 1]
+                    val (bx, by) = pts[k]
+                    val n = ceil(hypot(bx - ax, by - ay) / spacing).toInt()
+                    for (j in 1..n) {
+                        val t = j.toFloat() / n
+                        stamp(ax + (bx - ax) * t, ay + (by - ay) * t)
+                    }
                 }
             }
             val flow = stroke.flow.coerceIn(0f, 1f)
@@ -137,6 +155,240 @@ object BrushMask {
             }
         }
         return out
+    }
+
+    /**
+     * True when an outline comes back near where it started (a loop around something), false for
+     * a line across the picture.
+     */
+    fun isLoop(points: List<Pair<Float, Float>>): Boolean {
+        if (points.size < 3) return false
+        val extent = max(points.maxOf { it.first } - points.minOf { it.first }, points.maxOf { it.second } - points.minOf { it.second })
+        val gap = hypot(points.last().first - points.first().first, points.last().second - points.first().second)
+        return gap < 0.35f * extent
+    }
+
+    /**
+     * What a drawn [outline] (grid pixels) selects over the area x0..x1, y0..y1, as coverage 0..1 in
+     * rows of that area. A loop selects the object inside it (as an oval mask does): what is outside
+     * is background, inside is decided by colour. A line splits the picture in two (as a line mask
+     * does): it is carried on to the edges, and the side above it (left of it, for a line drawn up
+     * or down) is selected; only near the line is each pixel decided by colour, so the split follows
+     * edges such as a tree against the sky. Deciding by colour is GrabCut without its graph cut:
+     * colour models of both sides, the undecided pixels given to the likelier one a few times over,
+     * smoothed over their neighbours. Then specks are dropped, small holes filled, and the edge
+     * softened by [softness]. Without [colours] (no picture) the plain inside or side.
+     */
+    fun select(outline: List<Pair<Float, Float>>, colours: FloatArray?, x0: Int, x1: Int, y0: Int, y1: Int, softness: Float): FloatArray {
+        val w = x1 - x0 + 1
+        val h = y1 - y0 + 1
+        val n = w * h
+        val pts = outline.map { (x, y) -> x - x0 to y - y0 }
+        // Pixels sure to be in, sure to be out, and the ones colour decides.
+        val sureIn = BooleanArray(n)
+        val sureOut = BooleanArray(n)
+        val side = BooleanArray(n)
+        if (isLoop(pts)) {
+            fillPolygon(pts, w, h, side)
+            for (i in 0 until n) sureOut[i] = !side[i]
+        } else {
+            splitByLine(pts, w, h, side)
+            // Only near the line is anything in doubt.
+            val near = nearLine(pts, w, h, max(6, (0.06f * max(w, h)).toInt()))
+            for (i in 0 until n) {
+                sureIn[i] = side[i] && !near[i]
+                sureOut[i] = !side[i] && !near[i]
+            }
+        }
+        val fg = BooleanArray(n) { side[it] }
+        if (colours != null && side.any { it } && sureOut.any { it }) {
+            // Colours in 8 steps per channel: 512 bins, filled softly into the neighbouring bins.
+            fun bin(i: Int): Int {
+                val r = (colours[i * 3] * 7.999f).toInt().coerceIn(0, 7)
+                val g = (colours[i * 3 + 1] * 7.999f).toInt().coerceIn(0, 7)
+                val b = (colours[i * 3 + 2] * 7.999f).toInt().coerceIn(0, 7)
+                return (r * 8 + g) * 8 + b
+            }
+            val bins = IntArray(n) { bin(it) }
+            fun model(take: (Int) -> Boolean): FloatArray {
+                val hist = FloatArray(512)
+                var total = 0f
+                for (i in 0 until n) if (take(i)) { hist[bins[i]] += 1f; total += 1f }
+                val smooth = FloatArray(512)
+                for (r in 0..7) for (g in 0..7) for (b in 0..7) {
+                    var acc = 0f
+                    for (dr in -1..1) for (dg in -1..1) for (db in -1..1) {
+                        val rr = r + dr
+                        val gg = g + dg
+                        val bb = b + db
+                        if (rr !in 0..7 || gg !in 0..7 || bb !in 0..7) continue
+                        acc += hist[(rr * 8 + gg) * 8 + bb] * if (dr == 0 && dg == 0 && db == 0) 1f else 0.15f
+                    }
+                    smooth[(r * 8 + g) * 8 + b] = (acc + 0.5f) / (total + 256f)
+                }
+                return smooth
+            }
+            val background = model { sureOut[it] }
+            val p = FloatArray(n)
+            repeat(5) {
+                val selected = model { fg[it] }
+                for (i in 0 until n) {
+                    p[i] = when {
+                        sureIn[i] -> 1f
+                        sureOut[i] -> 0f
+                        else -> selected[bins[i]] / (selected[bins[i]] + background[bins[i]])
+                    }
+                }
+                // Neighbours agree: the share is averaged over a small square, twice.
+                blur(p, w, h, 2)
+                blur(p, w, h, 2)
+                for (i in 0 until n) fg[i] = sureIn[i] || (!sureOut[i] && p[i] > 0.5f)
+            }
+            keepLarge(fg, w, h, side.count { it })
+        }
+        val out = FloatArray(n) { if (fg[it]) 1f else 0f }
+        // A slightly soft edge always (no stair steps), more with the mask's softness.
+        blur(out, w, h, 1 + (softness * 6f).toInt())
+        return out
+    }
+
+    /** Even-odd fill of the closed polygon [pts], row by row. */
+    private fun fillPolygon(pts: List<Pair<Float, Float>>, w: Int, h: Int, into: BooleanArray) {
+        val crossings = ArrayList<Float>()
+        for (y in 0 until h) {
+            val cy = y + 0.5f
+            crossings.clear()
+            for (i in pts.indices) {
+                val (ax, ay) = pts[i]
+                val (bx, by) = pts[(i + 1) % pts.size]
+                if ((ay <= cy && by > cy) || (by <= cy && ay > cy)) crossings += ax + (cy - ay) / (by - ay) * (bx - ax)
+            }
+            crossings.sort()
+            var k = 0
+            while (k + 1 < crossings.size) {
+                val from = max(0, ceil(crossings[k] - 0.5f).toInt())
+                val to = min(w - 1, floor(crossings[k + 1] - 0.5f).toInt())
+                for (x in from..to) into[y * w + x] = true
+                k += 2
+            }
+        }
+    }
+
+    /** The line [pts] carried on past the picture's edges along its end directions. */
+    private fun extended(pts: List<Pair<Float, Float>>, w: Int, h: Int): List<Pair<Float, Float>> {
+        val far = (w + h).toFloat() * 2f
+        fun direction(from: Pair<Float, Float>, towards: List<Pair<Float, Float>>): Pair<Float, Float> {
+            // Over a stretch of the line, not its last wobble.
+            val back = towards.firstOrNull { hypot(it.first - from.first, it.second - from.second) > 0.05f * max(w, h) } ?: towards.last()
+            val dx = from.first - back.first
+            val dy = from.second - back.second
+            val len = hypot(dx, dy).coerceAtLeast(1e-3f)
+            return dx / len to dy / len
+        }
+        val (ex, ey) = direction(pts.last(), pts.reversed().drop(1))
+        val (sx, sy) = direction(pts.first(), pts.drop(1))
+        return listOf(pts.first().first + sx * far to pts.first().second + sy * far) + pts +
+            (pts.last().first + ex * far to pts.last().second + ey * far)
+    }
+
+    /** Marks the side of the line [pts] (carried to the edges) above it, or left of it for a line drawn up or down. */
+    private fun splitByLine(pts: List<Pair<Float, Float>>, w: Int, h: Int, into: BooleanArray) {
+        val line = extended(pts, w, h)
+        // The side is a polygon: the line, then round the picture's edge back to its start.
+        val horizontal = kotlin.math.abs(pts.last().first - pts.first().first) >= kotlin.math.abs(pts.last().second - pts.first().second)
+        val far = (w + h).toFloat() * 2f
+        val a = line.first()
+        val b = line.last()
+        val closing = if (horizontal) {
+            // Up and back over the top.
+            listOf(b.first to -far, a.first to -far)
+        } else {
+            listOf(-far to b.second, -far to a.second)
+        }
+        fillPolygon(line + closing, w, h, into)
+    }
+
+    /** Pixels within [band] of the line [pts] (carried to the edges). */
+    private fun nearLine(pts: List<Pair<Float, Float>>, w: Int, h: Int, band: Int): BooleanArray {
+        val near = BooleanArray(w * h)
+        val line = extended(pts, w, h)
+        val b2 = band.toFloat() * band
+        for (k in 1 until line.size) {
+            val (ax, ay) = line[k - 1]
+            val (bx, by) = line[k]
+            val minX = max(0, floor(min(ax, bx) - band).toInt())
+            val maxX = min(w - 1, ceil(max(ax, bx) + band).toInt())
+            val minY = max(0, floor(min(ay, by) - band).toInt())
+            val maxY = min(h - 1, ceil(max(ay, by) + band).toInt())
+            if (minX > maxX || minY > maxY) continue
+            val dx = bx - ax
+            val dy = by - ay
+            val len2 = (dx * dx + dy * dy).coerceAtLeast(1e-6f)
+            for (y in minY..maxY) for (x in minX..maxX) {
+                val i = y * w + x
+                if (near[i]) continue
+                val px = x + 0.5f - ax
+                val py = y + 0.5f - ay
+                val t = ((px * dx + py * dy) / len2).coerceIn(0f, 1f)
+                val qx = px - t * dx
+                val qy = py - t * dy
+                if (qx * qx + qy * qy <= b2) near[i] = true
+            }
+        }
+        return near
+    }
+
+    /** Box blur of radius [r] in place, rows then columns. */
+    private fun blur(v: FloatArray, w: Int, h: Int, r: Int) {
+        if (r <= 0) return
+        val tmp = FloatArray(max(w, h))
+        for (y in 0 until h) {
+            var acc = 0f
+            for (x in -r..r) acc += v[y * w + x.coerceIn(0, w - 1)]
+            for (x in 0 until w) {
+                tmp[x] = acc / (2 * r + 1)
+                acc += v[y * w + (x + r + 1).coerceIn(0, w - 1)] - v[y * w + (x - r).coerceIn(0, w - 1)]
+            }
+            for (x in 0 until w) v[y * w + x] = tmp[x]
+        }
+        for (x in 0 until w) {
+            var acc = 0f
+            for (y in -r..r) acc += v[y.coerceIn(0, h - 1) * w + x]
+            for (y in 0 until h) {
+                tmp[y] = acc / (2 * r + 1)
+                acc += v[(y + r + 1).coerceIn(0, h - 1) * w + x] - v[(y - r).coerceIn(0, h - 1) * w + x]
+            }
+            for (y in 0 until h) v[y * w + x] = tmp[y]
+        }
+    }
+
+    /** Drops pieces of the object smaller than 2 % of the outline's inside, and fills holes smaller than 1 %. */
+    private fun keepLarge(fg: BooleanArray, w: Int, h: Int, insideArea: Int) {
+        val label = IntArray(fg.size) { -1 }
+        val stack = IntArray(fg.size)
+        for (target in listOf(true, false)) {
+            label.fill(-1)
+            for (start in fg.indices) {
+                if (label[start] != -1 || fg[start] != target) continue
+                var top = 0
+                stack[top++] = start
+                label[start] = start
+                val members = ArrayList<Int>()
+                var touchesBorder = false
+                while (top > 0) {
+                    val i = stack[--top]
+                    members += i
+                    val x = i % w
+                    val y = i / w
+                    if (x == 0 || y == 0 || x == w - 1 || y == h - 1) touchesBorder = true
+                    for (j in intArrayOf(if (x > 0) i - 1 else -1, if (x < w - 1) i + 1 else -1, if (y > 0) i - w else -1, if (y < h - 1) i + w else -1)) {
+                        if (j >= 0 && label[j] == -1 && fg[j] == target) { label[j] = start; stack[top++] = j }
+                    }
+                }
+                val small = if (target) members.size < insideArea * 0.02f else !touchesBorder && members.size < insideArea * 0.01f
+                if (small) for (i in members) fg[i] = !target
+            }
+        }
     }
 
     /** [ref]'s colours at the grid pixels x0..x1, y0..y1 (the grid over the mask's own frame), RGB in a row. */

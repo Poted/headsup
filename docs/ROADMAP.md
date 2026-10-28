@@ -67,9 +67,10 @@ project's files), the preview resized left/right when held sideways, Edit called
       each circle placed by the value; to think through (some controls are 0..1, some have
       sub-options).
 - [x] Masks: resize and rotate with two fingers (pinch).
-- [x] Mask brush (paint, erase, move; size, softness, flow), Auto edge (stops at colour edges, as
-      Lightroom's Auto Mask), tracking that follows the painted area, keys as in other masks.
-      Still open: drawing a line or a circle could offer a line/oval mask instead.
+- [x] Mask brush (paint, erase, move; size, softness, flow), tracking that follows the painted
+      area, keys as in other masks. Select: draw round an object (it is found by colour, like an
+      oval mask) or a line across (the side above it, split along edges near the line, like a line
+      mask).
 - [ ] Skin tones struggle in odd light.
 - [ ] Intro slides: thanks for choosing Sweet Spot, what the app can do, how to make cinematic
       films and professional photos, so a newcomer feels welcome and wants to go further.

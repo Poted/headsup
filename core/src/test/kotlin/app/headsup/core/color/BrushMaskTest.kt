@@ -78,4 +78,58 @@ class BrushMaskTest {
         assertEquals(0.7f, x, 1e-4f)
         assertEquals(0.2f, y, 1e-4f)
     }
+
+    @Test
+    fun `an outline around an object selects the object, not the background inside it`() {
+        // A dark stick on a light, slightly noisy table.
+        val w = 120
+        val h = 120
+        val rnd = java.util.Random(1)
+        val rgb = FloatArray(w * h * 3)
+        for (y in 0 until h) for (x in 0 until w) {
+            val i = (y * w + x) * 3
+            val stick = x in 50..62 && y in 20..100
+            val n = (rnd.nextFloat() - 0.5f) * 0.08f
+            if (stick) { rgb[i] = 0.08f + n; rgb[i + 1] = 0.08f + n; rgb[i + 2] = 0.09f + n } else { rgb[i] = 0.85f + n; rgb[i + 1] = 0.78f + n; rgb[i + 2] = 0.6f + n }
+        }
+        val ref = BrushReference(w, h, rgb, BrushMask.BASE)
+        // A loose outline, well around the stick, left open at the top.
+        val outline = listOf(40f, 12f, 38f, 60f, 40f, 108f, 72f, 110f, 74f, 60f, 72f, 14f).map { it / 120f }
+        val stroke = BrushStroke(outline, radius = 0.05f, reference = "r", lasso = true)
+        val map = BrushMask.rasterize(listOf(stroke), w, h, softness = 0f, references = mapOf("r" to ref))
+        assertTrue(at(map, w, 56, 60) > 0.9f, "stick")
+        assertTrue(at(map, w, 56, 25) > 0.9f, "stick top")
+        assertTrue(at(map, w, 44, 60) < 0.1f, "table inside the outline")
+        assertTrue(at(map, w, 68, 90) < 0.1f, "table inside the outline")
+        assertTrue(at(map, w, 20, 60) < 0.01f, "outside")
+    }
+
+    @Test
+    fun `a line splits the picture and follows a tree against the sky`() {
+        // Sky above a horizon at y = 60, a dark tree crown standing up into the sky at x 40..60, y 30..60.
+        val w = 120
+        val h = 120
+        val rnd = java.util.Random(2)
+        val rgb = FloatArray(w * h * 3)
+        for (y in 0 until h) for (x in 0 until w) {
+            val i = (y * w + x) * 3
+            val n = (rnd.nextFloat() - 0.5f) * 0.06f
+            val tree = x in 40..60 && y in 30..60
+            when {
+                tree || y >= 60 -> { rgb[i] = 0.12f + n; rgb[i + 1] = 0.25f + n; rgb[i + 2] = 0.1f + n }
+                else -> { rgb[i] = 0.55f + n; rgb[i + 1] = 0.72f + n; rgb[i + 2] = 0.95f + n }
+            }
+        }
+        val ref = BrushReference(w, h, rgb, BrushMask.BASE)
+        // A rough line along the horizon that goes up round the tree.
+        val line = listOf(5f, 62f, 30f, 60f, 36f, 40f, 42f, 26f, 58f, 26f, 64f, 40f, 68f, 58f, 115f, 61f).map { it / 120f }
+        assertTrue(!BrushMask.isLoop(line.chunked(2).map { it[0] to it[1] }))
+        val stroke = BrushStroke(line, radius = 0.05f, reference = "r", lasso = true)
+        val map = BrushMask.rasterize(listOf(stroke), w, h, softness = 0f, references = mapOf("r" to ref))
+        assertTrue(at(map, w, 10, 20) > 0.9f, "sky")
+        assertTrue(at(map, w, 100, 30) > 0.9f, "sky")
+        assertTrue(at(map, w, 50, 45) < 0.1f, "tree")
+        assertTrue(at(map, w, 30, 90) < 0.05f, "ground")
+        assertTrue(at(map, w, 66, 50) > 0.6f, "sky beside the tree, inside the drawn bulge")
+    }
 }

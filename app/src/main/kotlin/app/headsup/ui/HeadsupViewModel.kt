@@ -274,6 +274,8 @@ data class UiState(
     val selectedMask: Int = 0,
     /** The brush for painted masks. */
     val brush: BrushSettings = BrushSettings(),
+    /** An outline being drawn around an object (x, y pairs, fractions of the picture), until the finger lifts. */
+    val lassoPath: List<Float> = emptyList(),
     /** Cine assistant for the selected clip, while it is open. */
     val cine: CineSession? = null,
     /** Result of the last highlight search; null until searched. */
@@ -1723,16 +1725,19 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
         val index = s.selectedClip ?: return
         val clip = s.selected ?: return
         val mask = clip.masks.getOrNull(s.selectedMask)?.takeIf { it.kind == MaskKind.BRUSH } ?: return
-        if (phase == 2) return
         val aspect = if (clip.meta.width > 0 && clip.meta.height > 0) clip.meta.width.toFloat() / clip.meta.height else 16f / 9f
         val placed = mask.at(playheadFileMs)
+        if (s.brush.mode == BrushMode.SELECT) {
+            selectStroke(phase, x, y, grab, clip, index, mask, placed, aspect)
+            return
+        }
+        if (phase == 2) return
         val (px, py) = app.headsup.core.color.BrushMask.unmove(x, y, placed, aspect)
         val b = s.brush
         // Radius in the strokes' own frame: as big as it looks on the mask now.
         val radius = b.radius / placed.sizeX.coerceAtLeast(0.05f)
         val strokes = if (phase == 0 || mask.strokes.isEmpty()) {
-            val reference = if (b.autoEdge) brushReference(clip, placed, grab) else null
-            mask.strokes + app.headsup.core.color.BrushStroke(listOf(px, py), radius, b.flow, b.mode == BrushMode.ERASE, reference, b.range)
+            mask.strokes + app.headsup.core.color.BrushStroke(listOf(px, py), radius, b.flow, b.mode == BrushMode.ERASE)
         } else {
             val last = mask.strokes.last()
             val lx = last.points[last.points.size - 2]
@@ -1744,6 +1749,41 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
         val m = s.selectedMask
         _state.update { st ->
             st.copy(clips = st.clips.mapIndexed { i, c -> if (i == index) c.copy(masks = c.masks.mapIndexed { j, mm -> if (j == m) mm.copy(strokes = strokes) else mm }) else c })
+        }
+    }
+
+    /** The picture taken when an outline starts, for finding the object in it. */
+    private var lassoReference: String? = null
+
+    /**
+     * Drawing an outline around an object: shown as drawn, and when the finger lifts the object
+     * inside is found ([app.headsup.core.color.BrushMask.select]) and added to the mask.
+     */
+    private fun selectStroke(
+        phase: Int, x: Float, y: Float, grab: (Int) -> android.graphics.Bitmap?,
+        clip: ClipState, index: Int, mask: ColourMask, placed: ColourMask, aspect: Float,
+    ) {
+        when (phase) {
+            0 -> {
+                lassoReference = brushReference(clip, placed, grab)
+                _state.update { it.copy(lassoPath = listOf(x, y)) }
+            }
+            1 -> _state.update { st ->
+                val p = st.lassoPath
+                if (p.size >= 2 && kotlin.math.hypot((x - p[p.size - 2]) * aspect, y - p.last()) < 0.004f) st else st.copy(lassoPath = p + x + y)
+            }
+            else -> {
+                val path = _state.value.lassoPath
+                _state.update { it.copy(lassoPath = emptyList()) }
+                // An outline needs some area; a tap or a short line selects nothing.
+                if (path.size < 6) return
+                val points = path.chunked(2).flatMap { (px, py) -> app.headsup.core.color.BrushMask.unmove(px, py, placed, aspect).toList() }
+                val stroke = app.headsup.core.color.BrushStroke(points, radius = 0.01f, flow = 1f, reference = lassoReference, lasso = true)
+                val m = _state.value.selectedMask
+                _state.update { st ->
+                    st.copy(clips = st.clips.mapIndexed { i, c -> if (i == index) c.copy(masks = c.masks.mapIndexed { j, mm -> if (j == m) mm.copy(strokes = mm.strokes + stroke) else mm }) else c })
+                }
+            }
         }
     }
 
@@ -2300,17 +2340,12 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
     }
 }
 
-/** What a finger does on a painted mask. */
-enum class BrushMode(val label: String) { PAINT("Paint"), ERASE("Erase"), MOVE("Move") }
+/** What a finger does on a painted mask: paint, erase, outline an object to select it, or move the mask. */
+enum class BrushMode(val label: String) { PAINT("Paint"), ERASE("Erase"), SELECT("Select"), MOVE("Move") }
 
-/**
- * The brush: its radius (of the picture's height) and flow, 0..1; with [autoEdge] it stops at
- * edges, reaching colours within [range] of the one under its centre.
- */
+/** The brush: its radius (of the picture's height) and flow, 0..1. */
 data class BrushSettings(
     val mode: BrushMode = BrushMode.PAINT,
     val radius: Float = 0.06f,
     val flow: Float = 1f,
-    val autoEdge: Boolean = false,
-    val range: Float = 0.15f,
 )

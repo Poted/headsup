@@ -332,6 +332,7 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
                         onTransformMask = if (editingMasks && !fullscreen) vm::transformMask else null,
                         onBrush = if (editingMasks && !fullscreen && editingBrush && state.brush.mode != BrushMode.MOVE) vm::brushStroke else null,
                         guideIndex = state.selectedMask,
+                        lassoPath = state.lassoPath,
                         vignette = if (selected.colorGrade && !showOriginal) state.appliedGrade(selected).vignette else 0f,
                         presence = if (selected.colorGrade && !showOriginal) state.appliedGrade(selected).presence else app.headsup.core.color.Presence.NONE,
                         effects = if (showOriginal) app.headsup.render.EffectSettings(dashboard = false) else state.compareEffects ?: state.effects,
@@ -2283,7 +2284,6 @@ private enum class BrushSetting(val symbol: String, val label: String, val range
     SIZE("●", "Size", 0.005f..0.3f, BrushSettings().radius),
     SOFTNESS("◐", "Softness", 0f..1f, ColourMask(MaskKind.BRUSH).softness),
     FLOW("≋", "Flow", 0.05f..1f, BrushSettings().flow),
-    RANGE("≈", "Range", 0.02f..0.6f, BrushSettings().range),
 }
 
 /**
@@ -2294,15 +2294,15 @@ private enum class BrushSetting(val symbol: String, val label: String, val range
 private fun BrushControls(state: UiState, vm: HeadsupViewModel) {
     val mask = state.selected?.masks?.getOrNull(state.selectedMask) ?: return
     val brush = state.brush
-    val settings = BrushSetting.entries.filter { it != BrushSetting.RANGE || brush.autoEdge }
+    // Selecting an object needs no brush: only the edge's softness.
+    val settings = if (brush.mode == BrushMode.SELECT) listOf(BrushSetting.SOFTNESS) else BrushSetting.entries
     var chosen by rememberSaveable { mutableStateOf(BrushSetting.SIZE) }
-    val setting = chosen.takeIf { it in settings } ?: BrushSetting.SIZE
+    val setting = chosen.takeIf { it in settings } ?: settings.first()
     Row(verticalAlignment = Alignment.CenterVertically) {
         FlowRow(Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             for (mode in BrushMode.entries) {
                 FilterChip(selected = brush.mode == mode, onClick = { vm.updateBrush { it.copy(mode = mode) } }, label = { Text(mode.label) })
             }
-            FilterChip(selected = brush.autoEdge, onClick = { vm.updateBrush { it.copy(autoEdge = !it.autoEdge) } }, label = { Text("Auto edge") })
         }
         SmallAction("Clear", { vm.clearBrush() })
     }
@@ -2315,19 +2315,17 @@ private fun BrushControls(state: UiState, vm: HeadsupViewModel) {
         BrushSetting.SIZE -> brush.radius
         BrushSetting.SOFTNESS -> mask.softness
         BrushSetting.FLOW -> brush.flow
-        BrushSetting.RANGE -> brush.range
     }
     fun set(v: Float) = when (setting) {
         BrushSetting.SIZE -> vm.updateBrush { it.copy(radius = v) }
         // The whole painting's edge, at once.
         BrushSetting.SOFTNESS -> vm.updateMask { it.copy(softness = v) }
         BrushSetting.FLOW -> vm.updateBrush { it.copy(flow = v) }
-        BrushSetting.RANGE -> vm.updateBrush { it.copy(range = v) }
     }
     ValueHeader(setting.label, String.format(Locale.US, "%.0f %%", value * 100f))
     RulerSlider(value = value, range = setting.range, step = 0.005f, onChange = { set(it) }, onReset = { set(setting.default) })
     Hint(
-        if (brush.autoEdge) "Auto edge: the brush takes only colours like the one under its centre, so keep the centre on the side you paint (e.g. the sky) and run the edge of the brush along the trees. Range: how alike."
+        if (brush.mode == BrushMode.SELECT) "Draw round an object and lift the finger: the object inside is found by its colours (as an oval: Invert for the outside). Or draw a line across (e.g. along the horizon, round a tree): the side above it is selected and the split follows the edges near the line (as a line mask: Invert for the other side). Touch up with Paint and Erase."
         else "Paint where the mask's corrections go; Erase takes them away. Two fingers move, turn and scale the painting.",
     )
 }
