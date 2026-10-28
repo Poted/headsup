@@ -328,6 +328,7 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
                         transitionMs = selected.transitionMs,
                         guideMask = selected.masks.getOrNull(state.selectedMask).takeIf { editingMasks && !fullscreen },
                         onMoveMask = if (editingMasks && !fullscreen) { x, y -> vm.updateMask { it.copy(centerX = x, centerY = y) } } else null,
+                        onTransformMask = if (editingMasks && !fullscreen) vm::transformMask else null,
                         vignette = if (selected.colorGrade && !showOriginal) state.appliedGrade(selected).vignette else 0f,
                         presence = if (selected.colorGrade && !showOriginal) state.appliedGrade(selected).presence else app.headsup.core.color.Presence.NONE,
                         effects = if (showOriginal) app.headsup.render.EffectSettings(dashboard = false) else state.compareEffects ?: state.effects,
@@ -2296,7 +2297,7 @@ private enum class MaskShape(
 /** The selected clip's masks: pick one to edit, add a line or an oval, invert or remove. */
 @Composable
 private fun MaskList(state: UiState, clip: ClipState, vm: HeadsupViewModel, playhead: LongState, onSeek: (Long) -> Unit) {
-    if (clip.masks.isEmpty()) Hint("Windows with their own corrections: a line for the sky, an oval for a face. Drag on the picture to move one.")
+    if (clip.masks.isEmpty()) Hint("Windows with their own corrections: a line for the sky, an oval for a face. Drag on the picture to move one; two fingers resize and turn it.")
     FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         clip.masks.forEachIndexed { i, m ->
             FilterChip(

@@ -66,7 +66,7 @@ project's files), the preview resized left/right when held sideways, Edit called
 - [ ] Show how far each control is set without opening it (like a guitar amp's knob): the dot on
       each circle placed by the value; to think through (some controls are 0..1, some have
       sub-options).
-- [ ] Masks: resize and rotate with two fingers (pinch).
+- [x] Masks: resize and rotate with two fingers (pinch).
 - [ ] Mask brush; maybe drawing a line or a circle switches to a line/oval mask.
 - [ ] Skin tones struggle in odd light.
 - [ ] Intro slides: thanks for choosing Sweet Spot, what the app can do, how to make cinematic

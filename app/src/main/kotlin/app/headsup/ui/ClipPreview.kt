@@ -3,6 +3,9 @@ package app.headsup.ui
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.calculateCentroid
+import androidx.compose.foundation.gestures.calculateRotation
+import androidx.compose.foundation.gestures.calculateZoom
 import androidx.compose.foundation.gestures.drag
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -67,6 +70,7 @@ import kotlinx.coroutines.withContext
 import android.view.TextureView
 import androidx.compose.foundation.gestures.waitForUpOrCancellation
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.isSpecified
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.graphics.graphicsLayer
@@ -136,6 +140,8 @@ fun ClipPreview(
     /** Mask being edited: its outline is drawn, and dragging on the picture moves it. */
     guideMask: ColourMask? = null,
     onMoveMask: ((Float, Float) -> Unit)? = null,
+    /** Two fingers on the picture while a mask is edited: move (fractions of the picture), scale, turn (degrees). */
+    onTransformMask: ((dx: Float, dy: Float, zoom: Float, degrees: Float) -> Unit)? = null,
     vignette: Float,
     /** Texture, clarity and dehaze of the selected clip. */
     presence: app.headsup.core.color.Presence = app.headsup.core.color.Presence.NONE,
@@ -505,6 +511,7 @@ fun ClipPreview(
     LaunchedEffect(active) { textureView = textureViews[active] }
     val sample by rememberUpdatedState(onSample)
     val maskMover by rememberUpdatedState(onMoveMask)
+    val maskTransformer by rememberUpdatedState(onTransformMask)
     val reframer by rememberUpdatedState(onReframe)
     val currentReframe by rememberUpdatedState(reframe)
     // Sizes of the frame and the picture under it, for gestures (read when they happen).
@@ -875,9 +882,28 @@ fun ClipPreview(
                                     }
                                     down.consume()
                                     move(down.position)
-                                    drag(down.id) { change ->
-                                        change.consume()
-                                        move(change.position)
+                                    // One finger places the mask; two move, scale and turn it. After two,
+                                    // the finger left on the picture no longer jumps it to itself.
+                                    var pinched = false
+                                    while (true) {
+                                        val event = awaitPointerEvent()
+                                        val pressed = event.changes.filter { it.pressed }
+                                        if (pressed.isEmpty()) break
+                                        val transform = maskTransformer
+                                        if (pressed.size >= 2 && transform != null) {
+                                            pinched = true
+                                            val g = geometryRef.value
+                                            val before = event.calculateCentroid(useCurrent = false)
+                                            val after = event.calculateCentroid(useCurrent = true)
+                                            if (before.isSpecified && after.isSpecified) {
+                                                val (ax, ay) = currentReframe.sourceOf(before.x, before.y, g.boxW, g.boxH, g.pictureW, g.pictureH)
+                                                val (bx, by) = currentReframe.sourceOf(after.x, after.y, g.boxW, g.boxH, g.pictureW, g.pictureH)
+                                                transform((bx - ax) / g.pictureW, (by - ay) / g.pictureH, event.calculateZoom(), event.calculateRotation())
+                                            }
+                                        } else if (!pinched) {
+                                            move(pressed.first().position)
+                                        }
+                                        event.changes.forEach { it.consume() }
                                     }
                                     return@awaitEachGesture
                                 }

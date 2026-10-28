@@ -1692,6 +1692,23 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
         if (moved) kept.placedAt(t, edited.centerX, edited.centerY, edited.angleDegrees, edited.sizeX, edited.sizeY) else kept
     }
 
+    /**
+     * Two fingers on the selected mask: moved by ([dx], [dy]) of the picture, scaled by [zoom]
+     * (an oval's size, a line's soft edge) and turned by [degrees].
+     */
+    fun transformMask(dx: Float, dy: Float, zoom: Float, degrees: Float) = updateMask { m ->
+        val turned = m.angleDegrees + degrees
+        m.copy(
+            centerX = (m.centerX + dx).coerceIn(-0.5f, 1.5f),
+            centerY = (m.centerY + dy).coerceIn(-0.5f, 1.5f),
+            // An oval turned by half a turn is the same oval; a line would swap its sides, so it stops.
+            angleDegrees = if (m.kind == MaskKind.ELLIPSE) ((turned + 90f) % 180f + 180f) % 180f - 90f else turned.coerceIn(-90f, 90f),
+            sizeX = if (m.kind == MaskKind.ELLIPSE) (m.sizeX * zoom).coerceIn(0.05f, 2f) else m.sizeX,
+            sizeY = if (m.kind == MaskKind.ELLIPSE) (m.sizeY * zoom).coerceIn(0.05f, 2f) else m.sizeY,
+            softness = if (m.kind == MaskKind.LINEAR) (m.softness * zoom).coerceIn(0.02f, 1f) else m.softness,
+        )
+    }
+
     private fun editSelectedMask(transform: (ColourMask) -> ColourMask) {
         val s = _state.value
         val index = s.selectedClip ?: return
