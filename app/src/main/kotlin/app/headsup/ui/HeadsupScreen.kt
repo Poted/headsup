@@ -768,7 +768,8 @@ private fun UndoRedo(canUndo: Boolean, canRedo: Boolean, onUndo: () -> Unit, onR
                                 if (!enabled) return@pointerInput
                                 awaitEachGesture {
                                     awaitFirstDown().consume()
-                                    val filling = scope.launch { hold.animateTo(1f, androidx.compose.animation.core.tween(UNDO_ALL_HOLD_MS.toInt(), easing = androidx.compose.animation.core.LinearEasing)) }
+                                    // The ring fills in the hold's real time, whatever the system's animation scale.
+                                    val filling = scope.launch(RealTimeMotion) { hold.animateTo(1f, androidx.compose.animation.core.tween(UNDO_ALL_HOLD_MS.toInt(), easing = androidx.compose.animation.core.LinearEasing)) }
                                     val up = withTimeoutOrNull(UNDO_ALL_HOLD_MS) { waitForUpOrCancellation() }
                                     filling.cancel()
                                     scope.launch { hold.snapTo(0f) }
@@ -793,7 +794,12 @@ private fun UndoRedo(canUndo: Boolean, canRedo: Boolean, onUndo: () -> Unit, onR
 
 private data class Quad<A, B, C, D>(val a: A, val b: B, val c: C, val d: D)
 
-private const val UNDO_ALL_HOLD_MS = 3_000L
+private const val UNDO_ALL_HOLD_MS = 2_000L
+
+/** Animations at their written length, whatever the system's animation scale. */
+private object RealTimeMotion : androidx.compose.ui.MotionDurationScale {
+    override val scaleFactor: Float = 1f
+}
 
 private enum class Swipe { LEFT, RIGHT, UP, DOWN }
 

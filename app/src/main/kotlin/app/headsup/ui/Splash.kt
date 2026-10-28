@@ -18,12 +18,10 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.graphics.drawscope.scale
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalDensity
@@ -46,10 +44,10 @@ private object RealTime : androidx.compose.ui.MotionDurationScale {
 private val RECORD_RED = Color(0xFFFF3B30)
 
 /**
- * Start-up animation, about three and a half seconds: "Sweet Spot" unrolls from the left, the "o"
- * being a record button that is pressed once the word is complete; then the overlay fades out.
- * [onRevealed] comes once the word is complete, so heavier work can start without stealing its
- * frames. It plays at its own pace even when the phone's animations are shortened or off.
+ * Start-up animation, about three seconds: "Sweet Spot" fades in from the dark, the "o" being a
+ * record button that is then pressed; then the overlay fades out. [onRevealed] comes once the
+ * word is in, so heavier work can start without stealing its frames. It plays at its own pace
+ * even when the phone's animations are shortened or off.
  */
 @Composable
 fun SplashOverlay(onRevealed: () -> Unit = {}, onFinished: () -> Unit) {
@@ -59,16 +57,16 @@ fun SplashOverlay(onRevealed: () -> Unit = {}, onFinished: () -> Unit) {
     val fade = remember { Animatable(1f) }
     LaunchedEffect(Unit) {
       withContext(RealTime) {
-        delay(250)
-        reveal.animateTo(1f, tween(1400, easing = FastOutSlowInEasing))
+        delay(150)
+        reveal.animateTo(1f, tween(900, easing = FastOutSlowInEasing))
         onRevealed()
         delay(250)
         // Press: the dot sinks, then springs back with a red glow, like starting a recording.
         launch { glow.animateTo(1f, tween(250)); glow.animateTo(0.35f, tween(400)) }
         press.animateTo(0.72f, tween(110, easing = LinearEasing))
         press.animateTo(1f, spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessMedium))
-        delay(1000)
-        fade.animateTo(0f, tween(500))
+        delay(850)
+        fade.animateTo(0f, tween(450))
         onFinished()
       }
     }
@@ -80,12 +78,13 @@ fun SplashOverlay(onRevealed: () -> Unit = {}, onFinished: () -> Unit) {
         contentAlignment = Alignment.Center,
     ) {
         Row(
-            Modifier
-                .graphicsLayer { translationX = (1f - reveal.value) * -60f }
-                .drawWithContent {
-                    // Unrolls from the left with a soft leading edge.
-                    clipRect(right = size.width * reveal.value + 1f) { this@drawWithContent.drawContent() }
-                },
+            // Fades in from the dark, settling from a touch larger.
+            Modifier.graphicsLayer {
+                alpha = reveal.value
+                val s = 1.04f - 0.04f * reveal.value
+                scaleX = s
+                scaleY = s
+            },
         ) {
             LogoText("Sweet Sp", Modifier.alignByBaseline())
             RecordButton(press.value, glow.value, Modifier.alignBy { it.measuredHeight })

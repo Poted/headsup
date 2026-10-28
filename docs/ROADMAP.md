@@ -79,6 +79,10 @@ project's files), the preview resized left/right when held sideways, Edit called
       mask). Tap: the object under the finger, found by MediaPipe's Interactive
       Segmenter on the phone.
 - [ ] Skin tones struggle in odd light.
+- [ ] Masks selected and tracked by an AI model: the tap selection (MediaPipe) works well on clear
+      subjects but struggles on harder ones (thin branches, low contrast), and tracking follows
+      only position, turn and scale. To do: a stronger segmentation model (subject/sky, refined
+      edges), the selection run again on each frame so the mask changes shape with the object.
 - [ ] Intro slides: thanks for choosing Sweet Spot, what the app can do, how to make cinematic
       films and professional photos, so a newcomer feels welcome and wants to go further.
 - [ ] Speed curves: an editable curve per clip and a few presets (ramp in, ramp out, speed up then
