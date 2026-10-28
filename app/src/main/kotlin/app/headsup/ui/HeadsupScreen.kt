@@ -1915,10 +1915,10 @@ private fun ColourPage(
 @Composable
 private fun WheelControls(state: UiState, vm: HeadsupViewModel) {
     val W = app.headsup.core.color.ColourWheels
-    var range by rememberSaveable { mutableStateOf(W.Range.MIDTONES) }
+    var range by rememberSaveable { mutableStateOf(app.headsup.core.color.ColourWheels.Range.MIDTONES) }
     val wheels = state.grade.wheels
     FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        for (rg in W.Range.entries) {
+        for (rg in app.headsup.core.color.ColourWheels.Range.entries) {
             val changed = W.saturation(wheels, rg) != 0f || W.luminance(wheels, rg) != 0f
             FilterChip(selected = rg == range, onClick = { range = rg }, label = { Text(rg.label + if (changed) " •" else "") })
         }
