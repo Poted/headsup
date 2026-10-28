@@ -73,6 +73,9 @@ object PhotoExporter {
     /** Longest side read from the file (larger photos are read at half, quarter… size). */
     private const val MAX_SIDE = 10000
 
+    /** How many stops an Ultra HDR photo's brightest parts are lifted on an HDR screen. */
+    private const val HDR_STOPS = 2f
+
     /** [onProgress] gets 0..1 as reading, developing, drawing and saving go. */
     fun export(context: Context, request: PhotoRequest, onProgress: (Float) -> Unit = {}): Uri {
         // Raw photos are developed by the app at full size in half floats; others decoded by Android.
@@ -159,7 +162,9 @@ object PhotoExporter {
             Bitmap.createScaledBitmap(rendered, (fw * k).toInt().coerceAtLeast(2), (fh * k).toInt().coerceAtLeast(2), true).also { rendered.recycle() }
         }
         val name = request.name.substringBeforeLast('.') + "_edit.jpg"
-        return MediaStoreOutput.savePhoto(context, name) { out -> bitmap.compress(Bitmap.CompressFormat.JPEG, request.quality.coerceIn(1, 100), out) }.also { bitmap.recycle() }
+        val saved = if (request.format == PhotoFormat.ULTRA_HDR && android.os.Build.VERSION.SDK_INT >= 34) withGainmap(bitmap) else bitmap
+        return MediaStoreOutput.savePhoto(context, name) { out -> saved.compress(Bitmap.CompressFormat.JPEG, request.quality.coerceIn(1, 100), out) }
+            .also { saved.recycle(); if (saved !== bitmap) bitmap.recycle() }
     }
 
     /** [photo] ([w] × [h] pixels) sampled through the DNG's WarpRectilinear: each colour from where its lens put it. */
@@ -286,6 +291,43 @@ object PhotoExporter {
         if (worst > 3) {
             out.recycle()
             return src.copy(Bitmap.Config.ARGB_8888, false)
+        }
+        return out
+    }
+
+    /**
+     * [sdr] with a gain map (Ultra HDR): on an HDR screen the brightest parts are lifted up to
+     * [HDR_STOPS] stops, fading in from near white, so lights, sky and reflections shine; ordinary
+     * screens show the JPEG as it is. The map is a quarter of the size, grey, log-encoded.
+     */
+    @androidx.annotation.RequiresApi(34)
+    private fun withGainmap(sdr: Bitmap): Bitmap {
+        val out = if (sdr.isMutable) sdr else sdr.copy(Bitmap.Config.ARGB_8888, true)
+        val gw = (out.width / 4).coerceAtLeast(1)
+        val gh = (out.height / 4).coerceAtLeast(1)
+        val small = Bitmap.createScaledBitmap(out, gw, gh, true)
+        val pixels = IntArray(gw * gh)
+        small.getPixels(pixels, 0, gw, 0, 0, gw, gh)
+        if (small !== out) small.recycle()
+        val maxGain = Math.pow(2.0, HDR_STOPS.toDouble()).toFloat()
+        for (i in pixels.indices) {
+            val p = pixels[i]
+            val m = maxOf((p shr 16) and 0xFF, (p shr 8) and 0xFF, p and 0xFF) / 255f
+            val t = ((m - 0.72f) / 0.28f).coerceIn(0f, 1f)
+            val gain = 1f + (maxGain - 1f) * t * t * (3f - 2f * t)
+            // log2(gain) / log2(maxGain), as the map stores it (ratio min 1, gamma 1).
+            val e = ((kotlin.math.ln(gain) / kotlin.math.ln(maxGain)) * 255f + 0.5f).toInt().coerceIn(0, 255)
+            pixels[i] = (0xFF shl 24) or (e shl 16) or (e shl 8) or e
+        }
+        val map = Bitmap.createBitmap(pixels, gw, gh, Bitmap.Config.ARGB_8888)
+        out.gainmap = android.graphics.Gainmap(map).apply {
+            setRatioMin(1f, 1f, 1f)
+            setRatioMax(maxGain, maxGain, maxGain)
+            setGamma(1f, 1f, 1f)
+            setEpsilonSdr(0f, 0f, 0f)
+            setEpsilonHdr(0f, 0f, 0f)
+            setMinDisplayRatioForHdrTransition(1f)
+            setDisplayRatioForFullHdr(maxGain)
         }
         return out
     }

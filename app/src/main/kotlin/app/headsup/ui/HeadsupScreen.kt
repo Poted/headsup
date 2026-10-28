@@ -3136,11 +3136,15 @@ private fun PhotoExport(state: UiState, vm: HeadsupViewModel) {
             }
         }
         SettingRow("Format") {
-            for (f in app.headsup.export.PhotoFormat.entries) {
+            // Ultra HDR needs Android 14.
+            for (f in app.headsup.export.PhotoFormat.entries.filter { it != app.headsup.export.PhotoFormat.ULTRA_HDR || android.os.Build.VERSION.SDK_INT >= 34 }) {
                 FilterChip(selected = settings.photoFormat == f, onClick = { vm.updateExportSettings { it.copy(photoFormat = f) } }, label = { Text(f.label) })
             }
         }
-        if (settings.photoFormat == app.headsup.export.PhotoFormat.JPEG) {
+        if (settings.photoFormat == app.headsup.export.PhotoFormat.ULTRA_HDR) {
+            Hint("A JPEG with a gain map: on HDR screens (and in Google Photos) the brightest parts shine up to 2 stops brighter; elsewhere it looks like the JPEG.")
+        }
+        if (settings.photoFormat != app.headsup.export.PhotoFormat.TIFF16) {
             SettingRow("JPEG") {
                 for ((q, label) in ExportSettings.PHOTO_QUALITIES) {
                     FilterChip(selected = settings.photoQuality == q, onClick = { vm.updateExportSettings { it.copy(photoQuality = q) } }, label = { Text(label) })

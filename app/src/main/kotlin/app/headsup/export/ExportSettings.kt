@@ -7,8 +7,11 @@ enum class VideoCodec(val label: String, val mimeType: String) {
     H264("H.264", MimeTypes.VIDEO_H264),
 }
 
-/** How photos are saved: JPEG (8 bits, dithered from the 10-bit drawing) or TIFF with 16 bits per colour. */
-enum class PhotoFormat(val label: String) { JPEG("JPEG"), TIFF16("TIFF 16-bit") }
+/**
+ * How photos are saved: JPEG (8 bits, dithered from the 10-bit drawing), Ultra HDR (that JPEG with
+ * a gain map: highlights shine brighter on HDR screens; Android 14+), or TIFF with 16 bits per colour.
+ */
+enum class PhotoFormat(val label: String) { JPEG("JPEG"), ULTRA_HDR("Ultra HDR"), TIFF16("TIFF 16-bit") }
 
 enum class ExportPreset(val label: String) { VERTICAL("Reels · TikTok · Shorts"), YOUTUBE("YouTube") }
 
