@@ -44,7 +44,16 @@ data class ColorGrade(
     val curves: List<List<Float>> = ToneCurve.NEUTRAL,
     /** Colour grading wheels ([ColourWheels]): shadows, midtones, highlights, balance. */
     val wheels: List<Float> = ColourWheels.NEUTRAL,
+    /** Fine detail (−1..1): brings out or smooths small structure; not a colour operation ([Presence]). */
+    val texture: Float = 0f,
+    /** Midtone local contrast (−1..1); not a colour operation ([Presence]). */
+    val clarity: Float = 0f,
+    /** Removes (+) or adds (−) atmospheric haze, −1..1; not a colour operation ([Presence]). */
+    val dehaze: Float = 0f,
 ) {
+    /** The corrections that look at a pixel's surroundings, drawn by the shader before the colour table. */
+    val presence: Presence get() = Presence(texture, clarity, dehaze)
+
     val isNeutralColour: Boolean
         get() = exposure == 0f && brightness == 0f && contrast == 0f && shadows == 0f &&
             highlights == 0f && saturation == 0f && temperature == 0f &&
@@ -59,6 +68,7 @@ data class ColorGrade(
         mixer.map { it * k }, look, lookAmount, curves,
         // Hues stay; strengths scale.
         wheels.mapIndexed { i, v -> if (i % 3 == 0 && i < 9) v else v * k },
+        texture * k, clarity * k, dehaze * k,
     )
 
     /**
@@ -98,6 +108,9 @@ data class ColorGrade(
             else if (i == 9) (wheels.getOrElse(9) { 0f } + other.wheels.getOrElse(9) { 0f }).coerceIn(-1f, 1f)
             else wheels.getOrElse(i) { 0f }
         },
+        texture = (texture + other.texture).coerceIn(-1f, 1f),
+        clarity = (clarity + other.clarity).coerceIn(-1f, 1f),
+        dehaze = (dehaze + other.dehaze).coerceIn(-1f, 1f),
     )
 
     /**
@@ -137,6 +150,9 @@ data class ColorGrade(
             val a = after.wheels.getOrElse(i) { 0f }
             if (a != before.wheels.getOrElse(i) { 0f }) a else wheels.getOrElse(i) { 0f }
         },
+        texture = if (after.texture != before.texture) after.texture else texture,
+        clarity = if (after.clarity != before.clarity) after.clarity else clarity,
+        dehaze = if (after.dehaze != before.dehaze) after.dehaze else dehaze,
     )
 
     companion object {

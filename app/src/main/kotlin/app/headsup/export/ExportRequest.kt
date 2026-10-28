@@ -2,6 +2,7 @@ package app.headsup.export
 
 import android.net.Uri
 import app.headsup.core.color.ColourMask
+import app.headsup.core.color.Presence
 import app.headsup.core.frame.Reframe
 import app.headsup.core.edit.TextItem
 import app.headsup.core.track.ActivityTrack
@@ -29,9 +30,11 @@ class GradeSetup(
     val maskCubes: List<Array<Array<IntArray>>> = emptyList(),
     val fromCube: Array<Array<IntArray>>? = null,
     val transitionMs: Long = 0L,
+    /** Texture, clarity and dehaze, which look at each pixel's surroundings. */
+    val presence: Presence = Presence.NONE,
 ) {
     /** True when a single colour table is not enough. */
-    val needsGradeEffect: Boolean get() = masks.isNotEmpty() || (fromCube != null && transitionMs > 0)
+    val needsGradeEffect: Boolean get() = masks.isNotEmpty() || (fromCube != null && transitionMs > 0) || !presence.isNeutral
 }
 
 data class ExportRequest(

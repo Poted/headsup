@@ -9,6 +9,7 @@ import androidx.compose.ui.graphics.asComposeRenderEffect
 import app.headsup.core.color.ColorGrade
 import app.headsup.core.color.ColourMask
 import app.headsup.core.color.LutBaker
+import app.headsup.core.color.Presence
 import app.headsup.core.raw.RawDevelop
 import app.headsup.render.EffectSettings
 
@@ -59,7 +60,8 @@ class GradePreviewShader {
         masks: List<ColourMask>,
         fromWeight: Float,
         detail: RawDevelop? = null,
-    ): androidx.compose.ui.graphics.RenderEffect = nativeEffect(effects, zebra, frame, width, height, masks, fromWeight, detail).asComposeRenderEffect()
+        presence: Presence = Presence.NONE,
+    ): androidx.compose.ui.graphics.RenderEffect = nativeEffect(effects, zebra, frame, width, height, masks, fromWeight, detail, presence).asComposeRenderEffect()
 
     /** The same, for drawing outside Compose (a photo export). */
     fun nativeEffect(
@@ -71,8 +73,9 @@ class GradePreviewShader {
         masks: List<ColourMask>,
         fromWeight: Float,
         detail: RawDevelop? = null,
+        presence: Presence = Presence.NONE,
     ): RenderEffect {
-        setUniforms(effects, zebra, frame, width, height, masks, fromWeight, detail)
+        setUniforms(effects, zebra, frame, width, height, masks, fromWeight, detail, presence)
         return RenderEffect.createRuntimeShaderEffect(shader, "image")
     }
 
@@ -87,8 +90,9 @@ class GradePreviewShader {
         masks: List<ColourMask>,
         image: Shader,
         detail: RawDevelop? = null,
+        presence: Presence = Presence.NONE,
     ): Shader {
-        setUniforms(effects, false, 0f, width, height, masks, 0f, detail)
+        setUniforms(effects, false, 0f, width, height, masks, 0f, detail, presence)
         shader.setInputShader("image", image)
         return shader
     }
@@ -102,10 +106,15 @@ class GradePreviewShader {
         masks: List<ColourMask>,
         fromWeight: Float,
         detail: RawDevelop?,
+        presence: Presence,
     ) {
         // A raw's sharpening and colour noise removal, on the picture before its colours.
         shader.setFloatUniform("sharpen", detail?.sharpen ?: 0f)
         shader.setFloatUniform("chromaNR", detail?.colourNoise ?: 0f)
+        // Texture, clarity and dehaze: also before the colours, as they look at the neighbourhood.
+        shader.setFloatUniform("lcTexture", presence.texture)
+        shader.setFloatUniform("lcClarity", presence.clarity)
+        shader.setFloatUniform("lcDehaze", presence.dehaze)
         shader.setFloatUniform("n", tableSize.toFloat())
         shader.setFloatUniform("zebra", if (zebra) 1f else 0f)
         shader.setFloatUniform("time", frame)
@@ -169,6 +178,9 @@ class GradePreviewShader {
             uniform float halation;
             uniform float sharpen;
             uniform float chromaNR;
+            uniform float lcTexture;
+            uniform float lcClarity;
+            uniform float lcDehaze;
 
             ${TABLES.joinToString("\n") { lookup(it) }}
 
@@ -229,9 +241,50 @@ class GradePreviewShader {
                 return clamp(c, 0.0, 1.0);
             }
 
+            // The brightness averaged over a ring of radius r around p.
+            float ringLuma(float2 p, float r) {
+                float acc = 0.0;
+                for (int i = 0; i < 8; i++) {
+                    float a = float(i) * 0.7854 + 0.3927;
+                    acc += luma(float3(image.eval(p + float2(cos(a), sin(a)) * r).rgb));
+                }
+                return acc / 8.0;
+            }
+
+            // Presence: texture and clarity add the difference from the surroundings' brightness
+            // (small and wider), clarity mostly in the midtones; dehaze takes out the haze, i.e. how
+            // far the darkest channel is lifted over a wide area (negative adds haze).
+            float3 presence(float2 p, float3 c) {
+                float l = luma(c);
+                if (lcTexture != 0.0) {
+                    float m = ringLuma(p, max(1.5, shortSide * 0.003));
+                    c += (l - m) * lcTexture * 1.5;
+                }
+                if (lcClarity != 0.0) {
+                    float r = shortSide * 0.025;
+                    float m = (ringLuma(p, r) * 2.0 + ringLuma(p, r * 0.5)) / 3.0;
+                    c += (l - m) * lcClarity * 6.0 * l * (1.0 - l);
+                }
+                if (lcDehaze > 0.0) {
+                    float r = shortSide * 0.05;
+                    float dark = min(c.r, min(c.g, c.b));
+                    for (int i = 0; i < 8; i++) {
+                        float a = float(i) * 0.7854;
+                        float3 s = float3(image.eval(p + float2(cos(a), sin(a)) * r).rgb);
+                        dark += min(s.r, min(s.g, s.b));
+                    }
+                    float h = clamp(dark / 9.0 * lcDehaze * 0.95, 0.0, 0.9);
+                    c = (c - h) / (1.0 - h);
+                } else if (lcDehaze < 0.0) {
+                    c = mix(c, float3(0.82), -lcDehaze * 0.45);
+                }
+                return clamp(c, 0.0, 1.0);
+            }
+
             half4 main(float2 coord) {
                 half4 src = image.eval(coord);
                 if (sharpen > 0.0 || chromaNR > 0.0) src = half4(half3(detailed(coord, float3(src.rgb))), src.a);
+                if (lcTexture != 0.0 || lcClarity != 0.0 || lcDehaze != 0.0) src = half4(half3(presence(coord, float3(src.rgb))), src.a);
                 float3 c = float3(grade_lut(src.rgb));
                 ${List(ColourMask.MAX_PER_CLIP) { i -> """
                 if (maskCount > ${i}.5) {

@@ -137,6 +137,8 @@ fun ClipPreview(
     guideMask: ColourMask? = null,
     onMoveMask: ((Float, Float) -> Unit)? = null,
     vignette: Float,
+    /** Texture, clarity and dehaze of the selected clip. */
+    presence: app.headsup.core.color.Presence = app.headsup.core.color.Presence.NONE,
     effects: EffectSettings,
     maxHeight: Dp,
     /** Full screen: the picture edge to edge, no margins or rounded corners. */
@@ -761,7 +763,7 @@ fun ClipPreview(
                         tableVersion
                         val frame = if (effects.grain > 0f) (positionMs / 33).toFloat() else 0f
                         val fromWeight = if (fromCube != null) ColourTransition.fromWeight(positionMs, transitionMs) else 0f
-                        renderEffect = previewShader?.effect(effects, zebra, frame, size.width, size.height, masks.map { it.at(fileMs) }, fromWeight, if (raw) clip.rawDevelop else null)
+                        renderEffect = previewShader?.effect(effects, zebra, frame, size.width, size.height, masks.map { it.at(fileMs) }, fromWeight, if (raw) clip.rawDevelop else null, presence)
                         // Reframing moves the graded picture, as in the export (colour first, then framing).
                         val t = reframeTransform(reframe, geometry)
                         scaleX = t.zoom
@@ -818,7 +820,7 @@ fun ClipPreview(
                                     val frame = if (effects.grain > 0f) (positionMs / 33).toFloat() else 0f
                                     val fromWeight = if (fromCube != null) ColourTransition.fromWeight(positionMs, transitionMs) else 0f
                                     renderEffect = if (pictureClip[i] == null || pictureClip[i] == clip.id) {
-                                        playerShaders?.get(i)?.effect(effects, zebra, frame, this.size.width, this.size.height, masks.map { it.at(fileMs) }, fromWeight)
+                                        playerShaders?.get(i)?.effect(effects, zebra, frame, this.size.width, this.size.height, masks.map { it.at(fileMs) }, fromWeight, presence = presence)
                                     } else {
                                         playerShaders?.get(i)?.effect(effects, zebra, frame, this.size.width, this.size.height, emptyList(), 0f)
                                     }

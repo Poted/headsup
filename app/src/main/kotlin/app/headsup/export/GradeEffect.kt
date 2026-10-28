@@ -15,6 +15,7 @@ import androidx.media3.effect.GlShaderProgram
 import app.headsup.color.LiveColorLut
 import app.headsup.core.color.ColourMask
 import app.headsup.core.color.ColourTransition
+import app.headsup.core.color.Presence
 
 /**
  * Colour for a clip with masks or a colour transition: the frame goes through [base], then each
@@ -33,6 +34,8 @@ class GradeEffect(
     private val hdrInput: HdrInput? = null,
     /** Where the exported part starts in the file, for masks that move ([ColourMask.keys]). */
     private val fileStartMs: Long = 0L,
+    /** Texture, clarity and dehaze, drawn on the frame before its colour tables. */
+    private val presence: Presence = Presence.NONE,
 ) : GlEffect {
     override fun toGlShaderProgram(context: Context, useHdr: Boolean): GlShaderProgram = Program(useHdr)
 
@@ -96,6 +99,7 @@ class GradeEffect(
                 program.setIntUniform("uHdrIn", if (hdrInput == HdrInput.HLG) 2 else if (hdrInput != null) 1 else 0)
                 program.setFloatsUniform("uHlgFix", if (hdrInput == HdrInput.RELABELLED_BT709) HdrRoute.HLG_FIX else HdrRoute.IDENTITY)
                 program.setFloatUniform("uSdrWhite", HdrRoute.SDR_WHITE)
+                program.setFloatsUniform("uPresence", floatArrayOf(presence.texture, presence.clarity, presence.dehaze))
                 program.bindAttributesAndUniforms()
                 GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4)
             } catch (e: GlUtil.GlException) {
@@ -139,6 +143,7 @@ class GradeEffect(
             uniform int uHdrIn;
             uniform mat3 uHlgFix;
             uniform float uSdrWhite;
+            uniform vec3 uPresence;
             const mat3 BT2020_TO_BT709 = mat3(
                 1.6605, -0.1246, -0.0182,
                 -0.5876, 1.1329, -0.1006,
@@ -187,20 +192,68 @@ class GradeEffect(
                 return x <= 1.0 / 12.0 ? sqrt(3.0 * x) : 0.17883277 * log(12.0 * x - 0.28466892) + 0.55991073;
             }
 
-            void main() {
-                vec4 src = texture2D(uTexSampler, vTexSamplingCoord);
-                vec3 srcRgb = src.rgb;
+            // The file's values as the colour tables expect them.
+            vec3 source(vec2 uv) {
+                vec4 src = texture2D(uTexSampler, uv);
                 if (uHdrIn == 1) {
                     // Relabelled SDR/log: back to the file's own code values.
                     vec3 lin = max(src.rgb, 0.0);
-                    srcRgb = clamp(uHlgFix * vec3(hlgOetf(lin.r), hlgOetf(lin.g), hlgOetf(lin.b)), 0.0, 1.0);
+                    return clamp(uHlgFix * vec3(hlgOetf(lin.r), hlgOetf(lin.g), hlgOetf(lin.b)), 0.0, 1.0);
                 } else if (uHdrIn == 2) {
                     // Real HLG: SDR white (75 % HLG) to 1.0, BT.709, highlights rolled off, display gamma.
                     vec3 x = max(BT2020_TO_BT709 * (src.rgb / uSdrWhite), 0.0);
                     vec3 knee = vec3(0.7);
                     vec3 rolled = mix(x, knee + 0.3 * (1.0 - exp(-(x - knee) / 0.3)), step(knee, x));
-                    srcRgb = pow(clamp(rolled, 0.0, 1.0), vec3(1.0 / 2.4));
+                    return pow(clamp(rolled, 0.0, 1.0), vec3(1.0 / 2.4));
                 }
+                return src.rgb;
+            }
+
+            float luma(vec3 c) { return dot(c, vec3(0.2126, 0.7152, 0.0722)); }
+
+            // The brightness averaged over a ring of radius r pixels around uv.
+            float ringLuma(vec2 uv, float r) {
+                float acc = 0.0;
+                for (int i = 0; i < 8; i++) {
+                    float a = float(i) * 0.7854 + 0.3927;
+                    acc += luma(source(uv + vec2(cos(a), sin(a)) * r / uSize));
+                }
+                return acc / 8.0;
+            }
+
+            // As the preview shader's presence(): texture, clarity, dehaze.
+            vec3 presence(vec2 uv, vec3 c) {
+                float shortSide = min(uSize.x, uSize.y);
+                float l = luma(c);
+                if (uPresence.x != 0.0) {
+                    float m = ringLuma(uv, max(1.5, shortSide * 0.003));
+                    c += (l - m) * uPresence.x * 1.5;
+                }
+                if (uPresence.y != 0.0) {
+                    float r = shortSide * 0.025;
+                    float m = (ringLuma(uv, r) * 2.0 + ringLuma(uv, r * 0.5)) / 3.0;
+                    c += (l - m) * uPresence.y * 6.0 * l * (1.0 - l);
+                }
+                if (uPresence.z > 0.0) {
+                    float r = shortSide * 0.05;
+                    float dark = min(c.r, min(c.g, c.b));
+                    for (int i = 0; i < 8; i++) {
+                        float a = float(i) * 0.7854;
+                        vec3 s = source(uv + vec2(cos(a), sin(a)) * r / uSize);
+                        dark += min(s.r, min(s.g, s.b));
+                    }
+                    float h = clamp(dark / 9.0 * uPresence.z * 0.95, 0.0, 0.9);
+                    c = (c - h) / (1.0 - h);
+                } else if (uPresence.z < 0.0) {
+                    c = mix(c, vec3(0.82), -uPresence.z * 0.45);
+                }
+                return clamp(c, 0.0, 1.0);
+            }
+
+            void main() {
+                vec4 src = texture2D(uTexSampler, vTexSamplingCoord);
+                vec3 srcRgb = source(vTexSamplingCoord);
+                if (uPresence != vec3(0.0)) srcRgb = presence(vTexSamplingCoord, srcRgb);
                 vec2 px = vec2(vTexSamplingCoord.x, 1.0 - vTexSamplingCoord.y) * uSize;
                 vec3 c = grade(uLut, srcRgb);
                 ${List(ColourMask.MAX_PER_CLIP) { i -> """

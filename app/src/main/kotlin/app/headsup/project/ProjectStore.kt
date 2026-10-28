@@ -335,6 +335,9 @@ internal object Json {
         .put("lookAmount", g.lookAmount)
         .put("curves", JSONArray(g.curves.map { JSONArray(it.map { v -> v.toDouble() }) }))
         .put("wheels", JSONArray(g.wheels.map { it.toDouble() }))
+        .put("texture", g.texture)
+        .put("clarity", g.clarity)
+        .put("dehaze", g.dehaze)
 
     fun grade(o: JSONObject?): ColorGrade {
         if (o == null) return ColorGrade()
@@ -367,6 +370,9 @@ internal object Json {
             } ?: app.headsup.core.color.ToneCurve.NEUTRAL,
             wheels = o.optJSONArray("wheels")?.let { a -> List(app.headsup.core.color.ColourWheels.SIZE) { a.optDouble(it, 0.0).toFloat() } }
                 ?: app.headsup.core.color.ColourWheels.NEUTRAL,
+            texture = f("texture"),
+            clarity = f("clarity"),
+            dehaze = f("dehaze"),
         )
     }
 

@@ -215,6 +215,7 @@ class ExportManager(private val context: Context) {
                 grade?.fromCube, grade?.transitionMs ?: 0L,
                 hdrInput = if (hdr) HdrRoute.inputOf(request.sourceFormat?.transfer, request.sourceFormat?.primaries) else null,
                 fileStartMs = request.trimStartMs,
+                presence = grade?.presence ?: app.headsup.core.color.Presence.NONE,
             )
         } else {
             grade?.cube?.let { effects += SingleColorLut.createFromCube(it) }

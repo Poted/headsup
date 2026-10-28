@@ -329,6 +329,7 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
                         guideMask = selected.masks.getOrNull(state.selectedMask).takeIf { editingMasks && !fullscreen },
                         onMoveMask = if (editingMasks && !fullscreen) { x, y -> vm.updateMask { it.copy(centerX = x, centerY = y) } } else null,
                         vignette = if (selected.colorGrade && !showOriginal) state.appliedGrade(selected).vignette else 0f,
+                        presence = if (selected.colorGrade && !showOriginal) state.appliedGrade(selected).presence else app.headsup.core.color.Presence.NONE,
                         effects = if (showOriginal) app.headsup.render.EffectSettings(dashboard = false) else state.compareEffects ?: state.effects,
                         onHoldOriginal = if (tool == Tool.COLOUR && !editingMasks && !measuring) { held -> showOriginal = held } else null,
                         showingOriginal = showOriginal,
@@ -1648,7 +1649,7 @@ private fun ScopeMenu(state: UiState, vm: HeadsupViewModel, adjust: Boolean, onD
 }
 
 /** Sections of the colour corrections, so the picker row stays short. */
-private enum class ColourSection(val label: String) { LIGHT("Light"), COLOUR("Colour"), MIXER("Mixer"), FILM("Film"), LOOKS("Looks"), TOOLS("Tools") }
+private enum class ColourSection(val label: String) { LIGHT("Light"), PRESENCE("Presence"), COLOUR("Colour"), MIXER("Mixer"), FILM("Film"), LOOKS("Looks"), TOOLS("Tools") }
 
 private val Adjustment.section: ColourSection
     get() = when (this) {
@@ -1656,6 +1657,7 @@ private val Adjustment.section: ColourSection
         Adjustment.WHITES, Adjustment.BLACKS, Adjustment.ROLLOFF, Adjustment.CURVE -> ColourSection.LIGHT
         Adjustment.TEMPERATURE, Adjustment.TINT, Adjustment.SATURATION, Adjustment.VIBRANCE, Adjustment.SKIN -> ColourSection.COLOUR
         Adjustment.SPLIT, Adjustment.SHADOW_HUE, Adjustment.HIGHLIGHT_HUE, Adjustment.TAME, Adjustment.VIGNETTE, Adjustment.WHEELS -> ColourSection.FILM
+        Adjustment.TEXTURE, Adjustment.CLARITY, Adjustment.DEHAZE -> ColourSection.PRESENCE
         Adjustment.CINE, Adjustment.LUT, Adjustment.MATCH, Adjustment.BLEND -> ColourSection.TOOLS
         Adjustment.MIXER -> ColourSection.MIXER
         Adjustment.LOOK -> ColourSection.LOOKS
@@ -1714,6 +1716,9 @@ internal enum class Adjustment(
         "H°", "Light hue", 0f..360f, 1f, "%.0f°", { it.highlightHue }, { g, v -> g.copy(highlightHue = v) }, ColorGrade.DEFAULT_HIGHLIGHT_HUE,
     ),
     TAME("Tm", "Tame colours", 0f..1f, 0.02f, "%.2f", { it.tame }, { g, v -> g.copy(tame = v) }),
+    TEXTURE("Tx", "Texture", -1f..1f, 0.02f, "%+.2f", { it.texture }, { g, v -> g.copy(texture = v) }),
+    CLARITY("Cl", "Clarity", -1f..1f, 0.02f, "%+.2f", { it.clarity }, { g, v -> g.copy(clarity = v) }),
+    DEHAZE("Dh", "Dehaze", -1f..1f, 0.02f, "%+.2f", { it.dehaze }, { g, v -> g.copy(dehaze = v) }),
 
     /** Not a ruler value: opens the LUT library (the LUT is applied last, after all corrections). */
     LUT("LUT", "LUT", 0f..1f, 1f, "", { 0f }, { g, _ -> g }),
@@ -1787,7 +1792,9 @@ private fun ColourPage(
         GradeTarget.GROUP -> Adjustment.entries - Adjustment.BLEND - Adjustment.CINE - Adjustment.MATCH
         GradeTarget.GLOBAL -> Adjustment.entries - Adjustment.LUT - Adjustment.BLEND - Adjustment.CINE - Adjustment.MATCH
         GradeTarget.MASK -> Adjustment.entries - Adjustment.LUT - Adjustment.SKIN - Adjustment.VIGNETTE - Adjustment.BLEND -
-            Adjustment.CINE - Adjustment.MATCH - Adjustment.LOOK
+            Adjustment.CINE - Adjustment.MATCH - Adjustment.LOOK -
+            // Drawn on the whole picture before its colours, not per mask (yet).
+            Adjustment.TEXTURE - Adjustment.CLARITY - Adjustment.DEHAZE
     }
     val adjustment = if (adjustment in options) adjustment else Adjustment.EXPOSURE
     // On the Masks tab the ruler edits either a shape control or a correction.

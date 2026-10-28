@@ -39,6 +39,8 @@ class PhotoRequest(
     val maskCubes: List<Array<Array<IntArray>>>,
     val effects: EffectSettings,
     val vignette: Float,
+    /** Texture, clarity and dehaze. */
+    val presence: app.headsup.core.color.Presence = app.headsup.core.color.Presence.NONE,
     /** Framing in the timeline's frame (its shape in [Reframe.aspect]). */
     val reframe: Reframe,
     val style: DashboardStyle,
@@ -108,7 +110,7 @@ object PhotoExporter {
             })
         }
         val shader = GradePreviewShader().apply { setTables(GradeTables(request.cube, request.maskCubes)) }
-        val graded = android.graphics.Paint().apply { this.shader = shader.paintShader(request.effects, picW, picH, request.masks, image, request.rawDevelop.takeIf { request.raw }) }
+        val graded = android.graphics.Paint().apply { this.shader = shader.paintShader(request.effects, picW, picH, request.masks, image, request.rawDevelop.takeIf { request.raw }, request.presence) }
         val renderer = DashboardRenderer(context.assets)
         val root = RenderNode("frame").apply {
             setPosition(0, 0, fw, fh)

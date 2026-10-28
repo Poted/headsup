@@ -1968,6 +1968,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                         uri = clip.meta.uri, name = clip.meta.name, cube = cube,
                         masks = if (graded) clip.masks.map { it.at(clip.trimStartMs) } else emptyList(), maskCubes = maskCubes,
                         effects = clip.effects, vignette = if (graded) s.appliedGrade(clip).vignette else 0f,
+                        presence = if (graded) s.appliedGrade(clip).presence else app.headsup.core.color.Presence.NONE,
                         reframe = s.framing(clip), style = s.style, dashboard = dashboard,
                         // Texts as they are in the middle of the photo's time on the timeline (after any fade in).
                         // Data fields filled in for this photo.
@@ -2053,7 +2054,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                     telemetry = telemetry,
                     style = s.style,
                     effects = clip.effects,
-                    grade = if (graded) GradeSetup(cube, applied.vignette, masks, maskCubes, fromCube, clip.transitionMs)
+                    grade = if (graded) GradeSetup(cube, applied.vignette, masks, maskCubes, fromCube, clip.transitionMs, applied.presence)
                         else cube?.let { GradeSetup(it, 0f) },
                     reframe = s.framing(clip),
                     speed = clip.speed,

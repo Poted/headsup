@@ -80,6 +80,9 @@ class GradeStore(private val context: Context) {
             ?.map { c -> c.split(',').mapNotNull { it.toFloatOrNull() } } ?: app.headsup.core.color.ToneCurve.NEUTRAL,
         wheels = prefs.getString(prefix + "wheels", null)?.split(',')?.mapNotNull { it.toFloatOrNull() }
             ?.takeIf { it.size == app.headsup.core.color.ColourWheels.SIZE } ?: app.headsup.core.color.ColourWheels.NEUTRAL,
+        texture = prefs.getFloat(prefix + "texture", 0f),
+        clarity = prefs.getFloat(prefix + "clarity", 0f),
+        dehaze = prefs.getFloat(prefix + "dehaze", 0f),
     )
 
     fun saveGrade(g: ColorGrade, prefix: String = "") {
@@ -107,6 +110,9 @@ class GradeStore(private val context: Context) {
             .putFloat(prefix + "look_amount", g.lookAmount)
             .putString(prefix + "curves", g.curves.joinToString(";") { it.joinToString(",") })
             .putString(prefix + "wheels", g.wheels.joinToString(","))
+            .putFloat(prefix + "texture", g.texture)
+            .putFloat(prefix + "clarity", g.clarity)
+            .putFloat(prefix + "dehaze", g.dehaze)
             .apply()
     }
 
