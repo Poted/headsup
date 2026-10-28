@@ -34,20 +34,48 @@ marked photos, texts per photo, activity data and the photo's GPS in texts and t
 - export: developed into a half-float picture, graded on the GPU at that precision, drawn at
   10 bits and dithered into the JPEG.
 
-## Now: UI/UX fixes before testers (reported 2026-10-25)
+## Test notes (2026-10-25 / 10-28) — UI/UX before testers
 
+Already done in the build of 2026-10-25: Project page in two levels (projects ↔ the open
+project's files), the preview resized left/right when held sideways, Edit called Crop in albums.
+
+### Now
 - [ ] Landscape: the timeline falls below the screen; the Adjust section tabs (Light, Colour…)
       squeeze off screen when the tools column is narrowed: make them scroll left/right.
+- [ ] The handle that resizes the preview is hard to catch (bigger touch area); held sideways
+      only the left/right one.
 - [ ] Film: changing the crop breaks undo (the crop disappears, undoing resets it).
-- [ ] Undo can go back past adding a file (to its removal): adding files should not be undoable
-      that way, or should be a clear step.
+- [ ] Undo can go back past adding a file (to its removal).
+- [ ] Highlights cannot be undone after applying.
 - [ ] Adjust: move the colour on/off switch and Copy / Copy to all out of the top (too much room).
 - [ ] Adjust: the scope tabs (This clip / Group / Masks / All clips) and Copy move to a small
       menu that pops up with a light animation above the Adjust button; the page starts with
       Light, Colour, Mixer… as Edit does. The same for Effects and for albums.
-- [ ] Remove "Colour off" from Adjust; holding a finger on the picture shows the original.
+- [ ] Remove "Colour off" and the Reset buttons from Adjust; holding a finger on the picture
+      shows the original (as in Lightroom).
 - [ ] Dashboard on/off per clip (now it is on for all clips whose time the activity covers, or
-      for none).
+      for none). Without a FIT file: say a file is needed, and no dashboard options on by default.
+- [ ] The playhead jumps to the clip's start (e.g. after a cut) instead of staying at the join.
+
+### Later
+- [ ] Shrinking the preview is not obvious: a short tutorial for users.
+- [ ] Safe point: a moment in the edit history to come back to easily.
+- [ ] A scrollbar at the side wherever a page scrolls, so users know.
+- [ ] Show how far each control is set without opening it (like a guitar amp's knob): the dot on
+      each circle placed by the value; to think through (some controls are 0..1, some have
+      sub-options).
+- [ ] Masks: resize and rotate with two fingers (pinch).
+- [ ] Mask brush; maybe drawing a line or a circle switches to a line/oval mask.
+- [ ] Skin tones struggle in odd light.
+- [ ] Intro slides: thanks for choosing Sweet Spot, what the app can do, how to make cinematic
+      films and professional photos, so a newcomer feels welcome and wants to go further.
+- [ ] Speed curves: editable and presets.
+- [ ] Mixer: RGB channel mixer (each output channel from R, G, B; film looks like Aerochrome,
+      casts), B&W mixer (how bright each colour becomes in black and white), point colour (pick a
+      hue from the picture, widen or narrow its range, change its hue/saturation/luminance),
+      colour grading wheels (shadows, midtones, highlights), selective colour (CMYK per colour
+      family, whites, neutrals, blacks), calibration (hue and saturation of the red, green and
+      blue primaries).
 
 ## Next (in this order)
 
