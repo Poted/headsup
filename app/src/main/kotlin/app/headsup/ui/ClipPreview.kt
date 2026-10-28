@@ -108,6 +108,7 @@ import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.requiredSize
 import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.drawscope.withTransform
 import app.headsup.color.GradeTables
@@ -1116,7 +1117,19 @@ fun ClipPreview(
                 if (showTransport && compactTransport && !photoMode) {
                     // Folded transport: play, the time and unfolding, on the picture.
                     Row(
-                        Modifier.align(Alignment.BottomStart).fillMaxWidth().padding(10.dp),
+                        Modifier
+                            .align(Alignment.BottomStart)
+                            .fillMaxWidth()
+                            // A finger going up here unfolds the transport and the timeline.
+                            .pointerInput(onCompact) {
+                                val unfold = onCompact ?: return@pointerInput
+                                var dy = 0f
+                                detectVerticalDragGestures(onDragStart = { dy = 0f }) { change, amount ->
+                                    dy += amount
+                                    if (dy < -28.dp.toPx()) { change.consume(); unfold(false); dy = 0f }
+                                }
+                            }
+                            .padding(10.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         Box(
@@ -1149,7 +1162,18 @@ fun ClipPreview(
         }
 
         if (showTransport && !compactTransport) Row(
-            Modifier.fillMaxWidth().clip(RoundedCornerShape(50)).background(HeadsupColors.CardGradient).border(1.dp, HeadsupColors.Outline, RoundedCornerShape(50)).padding(horizontal = 6.dp, vertical = 5.dp),
+            Modifier
+                .fillMaxWidth()
+                // Sideways, a finger going down the transport folds it and the timeline away.
+                .pointerInput(onCompact) {
+                    val fold = onCompact ?: return@pointerInput
+                    var dy = 0f
+                    detectVerticalDragGestures(onDragStart = { dy = 0f }) { change, amount ->
+                        dy += amount
+                        if (dy > 28.dp.toPx()) { change.consume(); fold(true); dy = 0f }
+                    }
+                }
+                .clip(RoundedCornerShape(50)).background(HeadsupColors.CardGradient).border(1.dp, HeadsupColors.Outline, RoundedCornerShape(50)).padding(horizontal = 6.dp, vertical = 5.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             if (!photoMode) Box(

@@ -165,6 +165,7 @@ import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.runtime.rememberUpdatedState
 import app.headsup.core.track.ActivityTrack
@@ -449,6 +450,7 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
             } else if (state.clips.isNotEmpty() && folded) {
                 // Folded: the timeline is a line to scrub along.
                 ScrubLine(
+                    onUnfold = { compact = false },
                     totalMs = clipStarts.last(),
                     playheadMs = { scrubT.value ?: timelineOf(playhead.longValue) },
                     onScrub = { t ->
@@ -614,7 +616,8 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
                 val maxShare = minOf(0.75f, 1f - minTools / total).coerceAtLeast(0.36f)
                 val pictureShare = wideShare.coerceIn(0.35f, maxShare)
                 Row(Modifier.fillMaxSize()) {
-                    Column(Modifier.weight(pictureShare).fillMaxHeight(), content = pictureAndTimeline)
+                    // Clipped: the timeline scrolls inside its column, never under the tools.
+                    Column(Modifier.weight(pictureShare).fillMaxHeight().clipToBounds(), content = pictureAndTimeline)
                     // Dragging this moves the line between the picture and the tools, left and right.
                     SideHandle { dx -> wideShare = (pictureShare + dx / total).coerceIn(0.35f, maxShare) }
                     Column(Modifier.weight(1f - pictureShare).fillMaxHeight(), content = tools)
@@ -742,7 +745,7 @@ private val MIN_TOOLS_WIDTH = 248.dp
 
 /** The timeline folded to a line: the playhead's place in it, dragged or tapped to move it. */
 @Composable
-private fun ScrubLine(totalMs: Long, playheadMs: () -> Long, onScrub: (Long?) -> Unit) {
+private fun ScrubLine(totalMs: Long, playheadMs: () -> Long, onScrub: (Long?) -> Unit, onUnfold: () -> Unit) {
     val accent = HeadsupColors.Accent
     Box(
         Modifier
@@ -751,6 +754,7 @@ private fun ScrubLine(totalMs: Long, playheadMs: () -> Long, onScrub: (Long?) ->
             .padding(horizontal = 24.dp)
             .pointerInput(totalMs) {
                 fun at(x: Float) = (x / size.width.coerceAtLeast(1) * totalMs).toLong().coerceIn(0L, totalMs)
+                val swipe = 28.dp.toPx()
                 awaitEachGesture {
                     val down = awaitFirstDown()
                     down.consume()
@@ -760,6 +764,13 @@ private fun ScrubLine(totalMs: Long, playheadMs: () -> Long, onScrub: (Long?) ->
                         val change = event.changes.firstOrNull { it.id == down.id } ?: break
                         if (!change.pressed) break
                         change.consume()
+                        val d = change.position - down.position
+                        // A finger going up (more than sideways) unfolds the timeline.
+                        if (-d.y > swipe && -d.y > abs(d.x)) {
+                            onScrub(null)
+                            onUnfold()
+                            return@awaitEachGesture
+                        }
                         onScrub(at(change.position.x))
                     }
                     onScrub(null)
