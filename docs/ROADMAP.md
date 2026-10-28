@@ -81,9 +81,8 @@ project's files), the preview resized left/right when held sideways, Edit called
 
 ## Next (in this order)
 
-1. **Photo tools:** colour mixer (HSL per hue band), looks (profiles: vivid, warm, vintage,
-   mono…), then point tone curves (RGB and per channel), colour grading wheels (shadows,
-   midtones, highlights), texture / clarity / dehaze.
+1. **Photo tools:** done: colour mixer, looks, point tone curves, colour grading wheels. Next:
+   texture / clarity / dehaze.
 2. **Masks:** a brush to paint where corrections apply; later subject/sky selection.
 3. **Geometry:** perspective correction.
 4. **Export:** 16-bit TIFF, Ultra HDR (JPEG with a gain map).

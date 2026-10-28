@@ -78,6 +78,8 @@ class GradeStore(private val context: Context) {
         lookAmount = prefs.getFloat(prefix + "look_amount", 1f),
         curves = prefs.getString(prefix + "curves", null)?.split(';')?.takeIf { it.size == 4 }
             ?.map { c -> c.split(',').mapNotNull { it.toFloatOrNull() } } ?: app.headsup.core.color.ToneCurve.NEUTRAL,
+        wheels = prefs.getString(prefix + "wheels", null)?.split(',')?.mapNotNull { it.toFloatOrNull() }
+            ?.takeIf { it.size == app.headsup.core.color.ColourWheels.SIZE } ?: app.headsup.core.color.ColourWheels.NEUTRAL,
     )
 
     fun saveGrade(g: ColorGrade, prefix: String = "") {
@@ -104,6 +106,7 @@ class GradeStore(private val context: Context) {
             .putString(prefix + "look", g.look)
             .putFloat(prefix + "look_amount", g.lookAmount)
             .putString(prefix + "curves", g.curves.joinToString(";") { it.joinToString(",") })
+            .putString(prefix + "wheels", g.wheels.joinToString(","))
             .apply()
     }
 

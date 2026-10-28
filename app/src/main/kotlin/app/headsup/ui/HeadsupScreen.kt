@@ -1653,7 +1653,7 @@ private val Adjustment.section: ColourSection
         Adjustment.EXPOSURE, Adjustment.BRIGHTNESS, Adjustment.CONTRAST, Adjustment.HIGHLIGHTS, Adjustment.SHADOWS,
         Adjustment.WHITES, Adjustment.BLACKS, Adjustment.ROLLOFF, Adjustment.CURVE -> ColourSection.LIGHT
         Adjustment.TEMPERATURE, Adjustment.TINT, Adjustment.SATURATION, Adjustment.VIBRANCE, Adjustment.SKIN -> ColourSection.COLOUR
-        Adjustment.SPLIT, Adjustment.SHADOW_HUE, Adjustment.HIGHLIGHT_HUE, Adjustment.TAME, Adjustment.VIGNETTE -> ColourSection.FILM
+        Adjustment.SPLIT, Adjustment.SHADOW_HUE, Adjustment.HIGHLIGHT_HUE, Adjustment.TAME, Adjustment.VIGNETTE, Adjustment.WHEELS -> ColourSection.FILM
         Adjustment.CINE, Adjustment.LUT, Adjustment.MATCH, Adjustment.BLEND -> ColourSection.TOOLS
         Adjustment.MIXER -> ColourSection.MIXER
         Adjustment.LOOK -> ColourSection.LOOKS
@@ -1721,6 +1721,9 @@ internal enum class Adjustment(
 
     /** Not a ruler value: how the clip blends in from the previous clip's look. */
     BLEND("⇢", "Blend in", 0f..1f, 1f, "", { 0f }, { g, _ -> g }),
+
+    /** Not a single ruler: colour wheels for shadows, midtones and highlights. */
+    WHEELS("◎", "Grading", 0f..1f, 1f, "", { 0f }, { g, _ -> g }),
 
     /** Not a single ruler: point tone curves (RGB and per channel). */
     CURVE("∿", "Curve", 0f..1f, 1f, "", { 0f }, { g, _ -> g }),
@@ -1827,6 +1830,7 @@ private fun ColourPage(
                 Adjustment.MATCH -> state.matchReference?.clipId == clip.id
                 Adjustment.MIXER -> state.grade.mixer.any { it != 0f }
                 Adjustment.CURVE -> state.grade.curves.any { it.isNotEmpty() }
+                Adjustment.WHEELS -> state.grade.wheels.any { it != 0f }
                 Adjustment.LOOK -> state.grade.look != null
                 else -> a.get(state.grade) != a.neutral
             }
@@ -1886,6 +1890,10 @@ private fun ColourPage(
         CurveControls(state, vm)
         return
     }
+    if (adjustment == Adjustment.WHEELS) {
+        WheelControls(state, vm)
+        return
+    }
     if (adjustment == Adjustment.LOOK) {
         LookControls(state, vm)
         return
@@ -1900,6 +1908,68 @@ private fun ColourPage(
         onChange = { v -> vm.updateGrade { adjustment.set(it, v) } },
         onReset = { vm.updateGrade { adjustment.set(it, adjustment.neutral) } },
         onHold = { held -> vm.setCompareGrade(if (held) adjustment.set(state.grade, adjustment.neutral) else null) },
+    )
+}
+
+/** Colour grading: a wheel per range (drag to the hue, outwards for more), its brightness, and the balance. */
+@Composable
+private fun WheelControls(state: UiState, vm: HeadsupViewModel) {
+    val W = app.headsup.core.color.ColourWheels
+    var range by rememberSaveable { mutableStateOf(W.Range.MIDTONES) }
+    val wheels = state.grade.wheels
+    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        for (rg in W.Range.entries) {
+            val changed = W.saturation(wheels, rg) != 0f || W.luminance(wheels, rg) != 0f
+            FilterChip(selected = rg == range, onClick = { range = rg }, label = { Text(rg.label + if (changed) " •" else "") })
+        }
+    }
+    val hue = W.hue(wheels, range)
+    val sat = W.saturation(wheels, range)
+    fun set(index: Int, v: Float) = vm.updateGrade { it.copy(wheels = W.with(it.wheels, index, v)) }
+    val hueIndex = range.ordinal * 3
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        androidx.compose.foundation.Canvas(
+            Modifier
+                .size(170.dp)
+                .pointerInput(range) {
+                    fun pick(pos: Offset) {
+                        val cx = size.width / 2f
+                        val cy = size.height / 2f
+                        val dx = pos.x - cx
+                        val dy = cy - pos.y
+                        val a = Math.toDegrees(kotlin.math.atan2(dy.toDouble(), dx.toDouble())).toFloat().let { if (it < 0) it + 360f else it }
+                        val r = (kotlin.math.sqrt(dx * dx + dy * dy) / (minOf(cx, cy))).coerceIn(0f, 1f)
+                        vm.updateGrade { g -> g.copy(wheels = W.with(W.with(g.wheels, hueIndex, a), hueIndex + 1, r)) }
+                    }
+                    detectDragGestures(onDragStart = { pick(it) }) { change, _ -> change.consume(); pick(change.position) }
+                },
+        ) {
+            val radius = size.minDimension / 2f
+            val colours = List(13) { i -> W.swatch(i * 30f).let { (r, g, b) -> Color(r, g, b) } }
+            // The hue goes round anticlockwise from the right (as the angle is measured).
+            drawCircle(androidx.compose.ui.graphics.Brush.sweepGradient(colours.reversed(), center), radius)
+            drawCircle(androidx.compose.ui.graphics.Brush.radialGradient(listOf(Color(0xFF8A8A8A), Color.Transparent), center, radius), radius)
+            val a = Math.toRadians(hue.toDouble())
+            val dot = Offset(center.x + (kotlin.math.cos(a) * sat * radius).toFloat(), center.y - (kotlin.math.sin(a) * sat * radius).toFloat())
+            drawCircle(Color.White, 7.dp.toPx(), dot, style = androidx.compose.ui.graphics.drawscope.Stroke(2.dp.toPx()))
+        }
+        Spacer(Modifier.width(12.dp))
+        Column(Modifier.weight(1f)) {
+            Hint(String.format(Locale.US, "%s: %.0f°, %.0f %%", range.label, hue, sat * 100))
+            if (sat != 0f || W.luminance(wheels, range) != 0f) {
+                SmallAction("Reset ${range.label.lowercase()}", { vm.updateGrade { g -> g.copy(wheels = W.with(W.with(W.with(g.wheels, hueIndex, 0f), hueIndex + 1, 0f), hueIndex + 2, 0f)) } })
+            }
+        }
+    }
+    ValueHeader("${range.label} brightness", String.format(Locale.US, "%+.0f", W.luminance(wheels, range) * 100))
+    RulerSlider(
+        value = W.luminance(wheels, range), range = -1f..1f, step = 0.02f,
+        onChange = { v -> set(hueIndex + 2, v) }, onReset = { set(hueIndex + 2, 0f) },
+    )
+    ValueHeader("Balance", String.format(Locale.US, "%+.0f", W.balance(wheels) * 100))
+    RulerSlider(
+        value = W.balance(wheels), range = -1f..1f, step = 0.02f,
+        onChange = { v -> set(9, v) }, onReset = { set(9, 0f) },
     )
 }
 

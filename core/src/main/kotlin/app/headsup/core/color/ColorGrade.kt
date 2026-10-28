@@ -42,12 +42,14 @@ data class ColorGrade(
     val lookAmount: Float = 1f,
     /** Point tone curves: RGB, red, green, blue, each as x, y pairs ([ToneCurve]); empty is straight. */
     val curves: List<List<Float>> = ToneCurve.NEUTRAL,
+    /** Colour grading wheels ([ColourWheels]): shadows, midtones, highlights, balance. */
+    val wheels: List<Float> = ColourWheels.NEUTRAL,
 ) {
     val isNeutralColour: Boolean
         get() = exposure == 0f && brightness == 0f && contrast == 0f && shadows == 0f &&
             highlights == 0f && saturation == 0f && temperature == 0f &&
             blacks == 0f && whites == 0f && vibrance == 0f && tint == 0f && skinHue == 0f &&
-            rolloff == 0f && toneAmount == 0f && tame == 0f && mixer.all { it == 0f } && look == null && curves.all { it.isEmpty() }
+            rolloff == 0f && toneAmount == 0f && tame == 0f && mixer.all { it == 0f } && look == null && curves.all { it.isEmpty() } && wheels.all { it == 0f }
 
     /** The corrections scaled by [k] (hues stay), e.g. a suggestion at partial strength. */
     operator fun times(k: Float) = ColorGrade(
@@ -55,6 +57,8 @@ data class ColorGrade(
         vignette * k, blacks * k, whites * k, vibrance * k, tint * k, skinHue * k,
         rolloff * k, toneAmount * k, shadowHue, highlightHue, tame * k,
         mixer.map { it * k }, look, lookAmount, curves,
+        // Hues stay; strengths scale.
+        wheels.mapIndexed { i, v -> if (i % 3 == 0 && i < 9) v else v * k },
     )
 
     /**
@@ -87,6 +91,13 @@ data class ColorGrade(
         lookAmount = if (other.look != null) other.lookAmount else lookAmount,
         // Curves cannot be added either; a curve set on top wins, channel by channel.
         curves = List(4) { c -> other.curves.getOrNull(c).orEmpty().ifEmpty { curves.getOrNull(c).orEmpty() } },
+        // A range graded on top wins (hues cannot be added).
+        wheels = List(ColourWheels.SIZE) { i ->
+            val range = i / 3
+            if (i < 9 && other.wheels.getOrElse(range * 3 + 1) { 0f } != 0f || i < 9 && other.wheels.getOrElse(range * 3 + 2) { 0f } != 0f) other.wheels.getOrElse(i) { 0f }
+            else if (i == 9) (wheels.getOrElse(9) { 0f } + other.wheels.getOrElse(9) { 0f }).coerceIn(-1f, 1f)
+            else wheels.getOrElse(i) { 0f }
+        },
     )
 
     /**
@@ -121,6 +132,10 @@ data class ColorGrade(
         curves = List(4) { c ->
             val a = after.curves.getOrNull(c).orEmpty()
             if (a != before.curves.getOrNull(c).orEmpty()) a else curves.getOrNull(c).orEmpty()
+        },
+        wheels = List(ColourWheels.SIZE) { i ->
+            val a = after.wheels.getOrElse(i) { 0f }
+            if (a != before.wheels.getOrElse(i) { 0f }) a else wheels.getOrElse(i) { 0f }
         },
     )
 
@@ -189,6 +204,7 @@ object LutBaker {
         ColourMixer.apply(grade.mixer, rgb)
         for (i in 0..2) rgb[i] = rgb[i].coerceIn(0f, 1f)
         ToneCurve.apply(grade.curves, rgb)
+        ColourWheels.apply(grade.wheels, rgb)
         if (grade.skinHue != 0f) {
             SkinTone.rotate(rgb, grade.skinHue)
             for (i in 0..2) rgb[i] = rgb[i].coerceIn(0f, 1f)
