@@ -293,7 +293,10 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
     // Sideways the transport and timeline can fold away (play on the picture, the timeline a line).
     var compact by rememberSaveable { mutableStateOf(false) }
     val folded = compact && wide && !fullscreen && !state.photoProject
+    // Full screen keeps a line to scrub along under a film's picture, and play on it.
+    val fullscreenFilm = fullscreen && !state.photoProject && state.clips.isNotEmpty()
     val previewMaxHeight = when {
+        fullscreenFilm -> configuration.screenHeightDp.dp - 40.dp
         fullscreen -> configuration.screenHeightDp.dp
         folded -> (configuration.screenHeightDp * 0.84f).dp
         else -> (configuration.screenHeightDp * share).dp
@@ -379,8 +382,8 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
                         // In an album each photo shows only its own texts (or its group's, or all photos').
                         texts = if (state.photoProject) state.texts.filter { it.showsOn(selected.id, selected.groupId) } else state.texts,
                         photoMode = state.photoProject,
-                        showTransport = !fullscreen && (!state.photoProject || tool == Tool.EDIT || tool == Tool.COLOUR),
-                        compactTransport = folded,
+                        showTransport = fullscreenFilm || (!fullscreen && (!state.photoProject || tool == Tool.EDIT || tool == Tool.COLOUR)),
+                        compactTransport = folded || fullscreenFilm,
                         onCompact = if (wide && !fullscreen && !state.photoProject) { c -> compact = c } else null,
                         // Read here so arriving place names redraw the texts.
                         textValues = state.placesVersion.let { _ -> { pos -> vm.textValues(state, selected, pos) } },
@@ -433,7 +436,7 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
                     if (state.photoProject) albumShare = (albumShare + d).coerceIn(0.2f, 0.75f) else filmShare = (filmShare + d).coerceIn(0.18f, 0.6f)
                 }
             }
-            if (fullscreen) {
+            if (fullscreen && !fullscreenFilm) {
                 // Nothing under the picture.
             } else if (state.photoProject) {
                 // Photos only: no timeline; the album's photos are arranged on the Edit page.
@@ -447,10 +450,10 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
                         AlbumBar(state, vm) { albumOpen = true }
                     }
                 }
-            } else if (state.clips.isNotEmpty() && folded) {
+            } else if (state.clips.isNotEmpty() && (folded || fullscreenFilm)) {
                 // Folded: the timeline is a line to scrub along.
                 ScrubLine(
-                    onUnfold = { compact = false },
+                    onUnfold = { if (!fullscreen) compact = false },
                     totalMs = clipStarts.last(),
                     playheadMs = { scrubT.value ?: timelineOf(playhead.longValue) },
                     onScrub = { t ->
