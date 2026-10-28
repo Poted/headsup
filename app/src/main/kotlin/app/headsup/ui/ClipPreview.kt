@@ -539,6 +539,8 @@ fun ClipPreview(
     val sample by rememberUpdatedState(onSample)
     val maskMover by rememberUpdatedState(onMoveMask)
     val maskTransformer by rememberUpdatedState(onTransformMask)
+    // Where a finger measuring colour is now (fractions of the view), shown before it lifts.
+    var liveMarker by remember { mutableStateOf<Offset?>(null) }
     val brushPainter by rememberUpdatedState(onBrush)
     val reframer by rememberUpdatedState(onReframe)
     val currentReframe by rememberUpdatedState(reframe)
@@ -573,6 +575,11 @@ fun ClipPreview(
     var playing by remember { mutableStateOf(false) }
     // Playing or about to (a player still loading counts): what the play button shows and toggles.
     var wantsPlay by remember { mutableStateOf(false) }
+    // A colour marker no longer points at what was measured once the picture played on: hidden
+    // from then until the next measurement.
+    var markerStale by remember { mutableStateOf(false) }
+    LaunchedEffect(wantsPlay) { if (wantsPlay) markerStale = true }
+    LaunchedEffect(marker) { markerStale = false }
     val photoNow by rememberUpdatedState(photo)
     val clipLength by rememberUpdatedState(clip.durationMs)
     val speedNow by rememberUpdatedState(clip.speed)
@@ -989,10 +996,26 @@ fun ClipPreview(
                                 val widget = renderer.hitTest(down.position.x, down.position.y, slop = 12.dp.toPx())
                                 if (widget == null) {
                                     // A tap elsewhere measures colour when the skin tool is open.
+                                    // The marker follows the finger; the colour is measured where it lifts.
                                     val onTap = sample ?: return@awaitEachGesture
-                                    val up = waitForUpOrCancellation() ?: return@awaitEachGesture
-                                    up.consume()
-                                    grab(SAMPLE_WIDTH)?.let { onTap(it, up.position.x / size.width, up.position.y / size.height) }
+                                    fun at(p: Offset) = Offset(p.x / size.width, p.y / size.height)
+                                    liveMarker = at(down.position)
+                                    var last = down.position
+                                    while (true) {
+                                        val event = awaitPointerEvent()
+                                        val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                                        if (!change.pressed) {
+                                            change.consume()
+                                            last = change.position
+                                            break
+                                        }
+                                        change.consume()
+                                        last = change.position
+                                        liveMarker = at(last)
+                                    }
+                                    val m = at(last)
+                                    grab(SAMPLE_WIDTH)?.let { onTap(it, m.x, m.y) }
+                                    liveMarker = null
                                     return@awaitEachGesture
                                 }
                                 val start = renderer.boxOf(widget) ?: return@awaitEachGesture
@@ -1060,7 +1083,8 @@ fun ClipPreview(
                             }
                         }
                     }
-                    marker?.let { m ->
+                    // Not while playing or after: the picture has moved on from what was measured.
+                    (liveMarker ?: marker?.takeIf { !wantsPlay && !markerStale })?.let { m ->
                         val c = Offset(m.x * size.width, m.y * size.height)
                         drawCircle(Color.Black.copy(alpha = 0.5f), radius = 14.dp.toPx(), center = c, style = Stroke(3.dp.toPx()))
                         drawCircle(HeadsupColors.Accent, radius = 14.dp.toPx(), center = c, style = Stroke(1.5.dp.toPx()))

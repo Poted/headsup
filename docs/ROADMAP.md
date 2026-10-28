@@ -81,7 +81,8 @@ project's files), the preview resized left/right when held sideways, Edit called
 - [ ] Skin tones struggle in odd light.
 - [ ] Intro slides: thanks for choosing Sweet Spot, what the app can do, how to make cinematic
       films and professional photos, so a newcomer feels welcome and wants to go further.
-- [ ] Speed curves: editable and presets.
+- [ ] Speed curves: an editable curve per clip and a few presets (ramp in, ramp out, speed up then
+      slow at the peak, …); the presets are also among the moves the auto edit may use.
 - [ ] Mixer: RGB channel mixer (each output channel from R, G, B; film looks like Aerochrome,
       casts), B&W mixer (how bright each colour becomes in black and white), point colour (pick a
       hue from the picture, widen or narrow its range, change its hue/saturation/luminance),
@@ -109,7 +110,8 @@ project's files), the preview resized left/right when held sideways, Edit called
   (fast or slow), and the model is asked for an edit. It answers only with calls to functions the
   app defines and runs itself (a plan, not pixels): cut a clip to a span, order the pieces (e.g.
   one-second cuts on a fast pace), add a transition (cut, cross-fade, fade through black, slow
-  fade out), set speed (slow motion over a jump found in these frames for Sport), apply a look or
+  fade out), set speed (slow motion over a jump found in these frames for Sport, or one of the speed-curve
+  presets), apply a look or
   a vignette (Cinematic), place titles, pick music and cut to its beats. Styles are presets: a
   prompt plus the functions and rules they allow, so results stay in the app's own vocabulary and
   every step can be undone or changed by hand. The proxy keeps the API key off the phone; clips
