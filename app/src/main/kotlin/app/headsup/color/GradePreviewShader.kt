@@ -73,7 +73,8 @@ class GradePreviewShader {
         fromWeight: Float,
         detail: RawDevelop? = null,
         presence: Presence = Presence.NONE,
-    ): androidx.compose.ui.graphics.RenderEffect = nativeEffect(effects, zebra, frame, width, height, masks, fromWeight, detail, presence).asComposeRenderEffect()
+        warp: DoubleArray? = null,
+    ): androidx.compose.ui.graphics.RenderEffect = nativeEffect(effects, zebra, frame, width, height, masks, fromWeight, detail, presence, warp).asComposeRenderEffect()
 
     /** The same, for drawing outside Compose (a photo export). */
     fun nativeEffect(
@@ -86,8 +87,9 @@ class GradePreviewShader {
         fromWeight: Float,
         detail: RawDevelop? = null,
         presence: Presence = Presence.NONE,
+        warp: DoubleArray? = null,
     ): RenderEffect {
-        setUniforms(effects, zebra, frame, width, height, masks, fromWeight, detail, presence)
+        setUniforms(effects, zebra, frame, width, height, masks, fromWeight, detail, presence, warp)
         return RenderEffect.createRuntimeShaderEffect(shader, "image")
     }
 
@@ -103,8 +105,9 @@ class GradePreviewShader {
         image: Shader,
         detail: RawDevelop? = null,
         presence: Presence = Presence.NONE,
+        warp: DoubleArray? = null,
     ): Shader {
-        setUniforms(effects, false, 0f, width, height, masks, 0f, detail, presence)
+        setUniforms(effects, false, 0f, width, height, masks, 0f, detail, presence, warp)
         shader.setInputShader("image", image)
         return shader
     }
@@ -119,7 +122,12 @@ class GradePreviewShader {
         fromWeight: Float,
         detail: RawDevelop?,
         presence: Presence,
+        warp: DoubleArray?,
     ) {
+        // Perspective correction: the 3×3 (row by row) given to the shader column by column.
+        shader.setFloatUniform("hasWarp", if (warp != null) 1f else 0f)
+        val m = warp ?: doubleArrayOf(1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0)
+        shader.setFloatUniform("warp", floatArrayOf(m[0].toFloat(), m[3].toFloat(), m[6].toFloat(), m[1].toFloat(), m[4].toFloat(), m[7].toFloat(), m[2].toFloat(), m[5].toFloat(), m[8].toFloat()))
         // A raw's sharpening and colour noise removal, on the picture before its colours.
         shader.setFloatUniform("sharpen", detail?.sharpen ?: 0f)
         shader.setFloatUniform("chromaNR", detail?.colourNoise ?: 0f)
@@ -199,6 +207,16 @@ class GradePreviewShader {
             uniform float lcDehaze;
             ${List(ColourMask.MAX_PER_CLIP) { "uniform float3 mp$it;" }.joinToString("\n")}
 
+            uniform float hasWarp;
+            uniform float3x3 warp;
+
+            // The picture, through the perspective correction (Perspective.sourceOf) when there is one.
+            half4 img(float2 p) {
+                if (hasWarp < 0.5) return image.eval(p);
+                float3 q = warp * float3(p / size, 1.0);
+                return image.eval(clamp(q.xy / q.z, float2(0.0), float2(1.0)) * size);
+            }
+
             ${TABLES.joinToString("\n") { lookup(it) }}
 
             float smooth01(float e0, float e1, float x) {
@@ -249,7 +267,7 @@ class GradePreviewShader {
             float luma(float3 c) { return dot(c, float3(0.2126, 0.7152, 0.0722)); }
 
             float3 bright(float2 p) {
-                float3 c = float3(gradeNearest(image.eval(p).rgb));
+                float3 c = float3(gradeNearest(img(p).rgb));
                 float k = max(luma(c) - threshold, 0.0) / max(1.0 - threshold, 0.01);
                 return c * k;
             }
@@ -262,14 +280,14 @@ class GradePreviewShader {
                     float3 acc = c;
                     for (int i = 0; i < 8; i++) {
                         float a = float(i) * 0.7854;
-                        acc += float3(image.eval(p + float2(cos(a), sin(a)) * r).rgb);
+                        acc += float3(img(p + float2(cos(a), sin(a)) * r).rgb);
                     }
                     float3 avg = acc / 9.0;
                     c = mix(c, avg + (luma(c) - luma(avg)), min(1.0, chromaNR * 1.5));
                 }
                 if (sharpen > 0.0) {
-                    float3 n = (float3(image.eval(p + float2(1.0, 0.0)).rgb) + float3(image.eval(p - float2(1.0, 0.0)).rgb) +
-                        float3(image.eval(p + float2(0.0, 1.0)).rgb) + float3(image.eval(p - float2(0.0, 1.0)).rgb)) * 0.25;
+                    float3 n = (float3(img(p + float2(1.0, 0.0)).rgb) + float3(img(p - float2(1.0, 0.0)).rgb) +
+                        float3(img(p + float2(0.0, 1.0)).rgb) + float3(img(p - float2(0.0, 1.0)).rgb)) * 0.25;
                     float d = luma(c) - luma(n);
                     d = sign(d) * max(abs(d) - 0.004, 0.0);
                     c += d * sharpen * 2.0;
@@ -282,7 +300,7 @@ class GradePreviewShader {
                 float acc = 0.0;
                 for (int i = 0; i < 8; i++) {
                     float a = float(i) * 0.7854 + 0.3927;
-                    acc += luma(float3(image.eval(p + float2(cos(a), sin(a)) * r).rgb));
+                    acc += luma(float3(img(p + float2(cos(a), sin(a)) * r).rgb));
                 }
                 return acc / 8.0;
             }
@@ -306,7 +324,7 @@ class GradePreviewShader {
                     float dark = min(c.r, min(c.g, c.b));
                     for (int i = 0; i < 8; i++) {
                         float a = float(i) * 0.7854;
-                        float3 s = float3(image.eval(p + float2(cos(a), sin(a)) * r).rgb);
+                        float3 s = float3(img(p + float2(cos(a), sin(a)) * r).rgb);
                         dark += min(s.r, min(s.g, s.b));
                     }
                     float h = clamp(dark / 9.0 * pr.z * 0.95, 0.0, 0.9);
@@ -318,7 +336,7 @@ class GradePreviewShader {
             }
 
             half4 main(float2 coord) {
-                half4 src = image.eval(coord);
+                half4 src = img(coord);
                 if (sharpen > 0.0 || chromaNR > 0.0) src = half4(half3(detailed(coord, float3(src.rgb))), src.a);
                 // Masks first: inside one, its texture, clarity and dehaze add to the clip's.
                 float3 pr = float3(lcTexture, lcClarity, lcDehaze);

@@ -32,9 +32,11 @@ class GradeSetup(
     val transitionMs: Long = 0L,
     /** Texture, clarity and dehaze, which look at each pixel's surroundings. */
     val presence: Presence = Presence.NONE,
+    /** Perspective correction, before the colours. */
+    val warp: DoubleArray? = null,
 ) {
     /** True when a single colour table is not enough. */
-    val needsGradeEffect: Boolean get() = masks.isNotEmpty() || (fromCube != null && transitionMs > 0) || !presence.isNeutral
+    val needsGradeEffect: Boolean get() = masks.isNotEmpty() || (fromCube != null && transitionMs > 0) || !presence.isNeutral || warp != null
 }
 
 data class ExportRequest(

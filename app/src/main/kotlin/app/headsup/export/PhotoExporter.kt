@@ -114,7 +114,7 @@ object PhotoExporter {
             setTables(GradeTables(request.cube, request.maskCubes))
             setBrush(brush)
         }
-        val graded = android.graphics.Paint().apply { this.shader = shader.paintShader(request.effects, picW, picH, request.masks, image, request.rawDevelop.takeIf { request.raw }, request.presence) }
+        val graded = android.graphics.Paint().apply { this.shader = shader.paintShader(request.effects, picW, picH, request.masks, image, request.rawDevelop.takeIf { request.raw }, request.presence, request.reframe.warp) }
         val renderer = DashboardRenderer(context.assets)
         val root = RenderNode("frame").apply {
             setPosition(0, 0, fw, fh)

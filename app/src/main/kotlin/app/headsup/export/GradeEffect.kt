@@ -37,6 +37,8 @@ class GradeEffect(
     private val fileStartMs: Long = 0L,
     /** Texture, clarity and dehaze, drawn on the frame before its colour tables. */
     private val presence: Presence = Presence.NONE,
+    /** Perspective correction ([app.headsup.core.frame.Perspective.sourceOf]), row by row; null for none. */
+    private val warp: DoubleArray? = null,
 ) : GlEffect {
     override fun toGlShaderProgram(context: Context, useHdr: Boolean): GlShaderProgram = Program(context.applicationContext, useHdr)
 
@@ -122,6 +124,10 @@ class GradeEffect(
                 program.setFloatsUniform("uHlgFix", if (hdrInput == HdrInput.RELABELLED_BT709) HdrRoute.HLG_FIX else HdrRoute.IDENTITY)
                 program.setFloatUniform("uSdrWhite", HdrRoute.SDR_WHITE)
                 program.setFloatsUniform("uPresence", floatArrayOf(presence.texture, presence.clarity, presence.dehaze))
+                program.setFloatUniform("uHasWarp", if (warp != null) 1f else 0f)
+                val m = warp ?: doubleArrayOf(1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0)
+                // Given column by column, as GLSL reads a mat3.
+                program.setFloatsUniform("uWarp", floatArrayOf(m[0].toFloat(), m[3].toFloat(), m[6].toFloat(), m[1].toFloat(), m[4].toFloat(), m[7].toFloat(), m[2].toFloat(), m[5].toFloat(), m[8].toFloat()))
                 program.bindAttributesAndUniforms()
                 GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4)
             } catch (e: GlUtil.GlException) {
@@ -170,6 +176,8 @@ class GradeEffect(
             uniform mat3 uHlgFix;
             uniform float uSdrWhite;
             uniform vec3 uPresence;
+            uniform float uHasWarp;
+            uniform mat3 uWarp;
             ${List(ColourMask.MAX_PER_CLIP) { "uniform vec3 uMp$it;" }.joinToString("\n")}
             const mat3 BT2020_TO_BT709 = mat3(
                 1.6605, -0.1246, -0.0182,
@@ -239,6 +247,12 @@ class GradeEffect(
 
             // The file's values as the colour tables expect them.
             vec3 source(vec2 uv) {
+                // Perspective correction, on fractions measured from the top (as the preview's).
+                if (uHasWarp > 0.5) {
+                    vec3 q = uWarp * vec3(uv.x, 1.0 - uv.y, 1.0);
+                    vec2 s = clamp(q.xy / q.z, 0.0, 1.0);
+                    uv = vec2(s.x, 1.0 - s.y);
+                }
                 vec4 src = texture2D(uTexSampler, uv);
                 if (uHdrIn == 1) {
                     // Relabelled SDR/log: back to the file's own code values.

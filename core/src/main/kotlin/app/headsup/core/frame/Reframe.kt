@@ -28,8 +28,14 @@ data class Reframe(
     val aspect: Float? = null,
     /** The whole picture inside the frame, with bars where the shapes differ (instead of cropping). */
     val fit: Boolean = false,
+    /** Perspective correction, −1..1 ([Perspective]): lines leaning together up/down, and sideways. */
+    val vertical: Float = 0f,
+    val horizontal: Float = 0f,
 ) {
-    val isIdentity: Boolean get() = zoom == 1f && centerX == 0.5f && centerY == 0.5f && angleDegrees == 0f && aspect == null
+    val isIdentity: Boolean get() = zoom == 1f && centerX == 0.5f && centerY == 0.5f && angleDegrees == 0f && aspect == null && vertical == 0f && horizontal == 0f
+
+    /** Where each point of the corrected picture comes from ([Perspective.sourceOf]); null without correction. */
+    val warp: DoubleArray? get() = Perspective.sourceOf(vertical, horizontal)
 
     /** Output frame size for a [srcW]×[srcH] clip, in its pixels: inside the picture (fill) or around it (fit). */
     fun outputSize(srcW: Float, srcH: Float): Pair<Float, Float> {

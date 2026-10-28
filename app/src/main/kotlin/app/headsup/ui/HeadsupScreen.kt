@@ -467,7 +467,6 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
             } else if (state.clips.isNotEmpty() && (folded || fullscreenFilm)) {
                 // Folded: the timeline is a line to scrub along.
                 ScrubLine(
-                    onUnfold = { if (!fullscreen) compact = false },
                     totalMs = clipStarts.last(),
                     playheadMs = { scrubT.value ?: timelineOf(playhead.longValue) },
                     onScrub = { t ->
@@ -649,10 +648,13 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
                             .fillMaxHeight()
                             .clipToBounds()
                             .graphicsLayer { scaleX = settle.value; scaleY = settle.value }
-                            .freeSwipe(pictureFree && !state.photoProject) {
-                                when (it) {
-                                    Swipe.DOWN -> compact = true
-                                    Swipe.UP -> compact = false
+                            .freeSwipe(pictureFree) {
+                                // Down folds the transport and timeline; up unfolds them, or when
+                                // unfolded goes full screen.
+                                when {
+                                    it == Swipe.DOWN && !state.photoProject -> compact = true
+                                    it == Swipe.UP && folded -> compact = false
+                                    it == Swipe.UP -> fullscreen = true
                                     else -> Unit
                                 }
                             },
@@ -798,7 +800,8 @@ private fun Modifier.freeSwipe(enabled: Boolean, onSwipe: (Swipe) -> Unit): Modi
     val distance = 56.dp.toPx()
     awaitEachGesture {
         val down = awaitFirstDown(requireUnconsumed = false, pass = androidx.compose.ui.input.pointer.PointerEventPass.Final)
-        var spoilt = down.isConsumed
+        // A button takes the touch but not the moves: only moves used inside spoil the swipe.
+        var spoilt = false
         while (true) {
             val event = awaitPointerEvent(androidx.compose.ui.input.pointer.PointerEventPass.Final)
             if (event.changes.count { it.pressed } > 1) spoilt = true
@@ -824,7 +827,7 @@ private val MIN_TOOLS_WIDTH = 248.dp
 
 /** The timeline folded to a line: the playhead's place in it, dragged or tapped to move it. */
 @Composable
-private fun ScrubLine(totalMs: Long, playheadMs: () -> Long, onScrub: (Long?) -> Unit, onUnfold: () -> Unit) {
+private fun ScrubLine(totalMs: Long, playheadMs: () -> Long, onScrub: (Long?) -> Unit) {
     val accent = HeadsupColors.Accent
     Box(
         Modifier
@@ -833,26 +836,29 @@ private fun ScrubLine(totalMs: Long, playheadMs: () -> Long, onScrub: (Long?) ->
             .padding(horizontal = 24.dp)
             .pointerInput(totalMs) {
                 fun at(x: Float) = (x / size.width.coerceAtLeast(1) * totalMs).toLong().coerceIn(0L, totalMs)
-                val swipe = 28.dp.toPx()
+                val slop = viewConfiguration.touchSlop
                 awaitEachGesture {
                     val down = awaitFirstDown()
-                    down.consume()
-                    onScrub(at(down.position.x))
+                    // A tap moves the playhead there; a drag sideways scrubs; up or down is left to the
+                    // screen's swipes (fold, full screen), so it never scrubs on the way.
+                    var scrubbing = false
                     while (true) {
                         val event = awaitPointerEvent()
                         val change = event.changes.firstOrNull { it.id == down.id } ?: break
-                        if (!change.pressed) break
-                        change.consume()
-                        val d = change.position - down.position
-                        // A finger going up (more than sideways) unfolds the timeline.
-                        if (-d.y > swipe && -d.y > abs(d.x)) {
-                            onScrub(null)
-                            onUnfold()
-                            return@awaitEachGesture
+                        if (!change.pressed) {
+                            if (!scrubbing) { onScrub(at(down.position.x)); onScrub(null) }
+                            break
                         }
+                        val d = change.position - down.position
+                        if (!scrubbing) {
+                            if (d.getDistance() < slop) continue
+                            if (abs(d.y) > abs(d.x)) return@awaitEachGesture
+                            scrubbing = true
+                        }
+                        change.consume()
                         onScrub(at(change.position.x))
                     }
-                    onScrub(null)
+                    if (scrubbing) onScrub(null)
                 }
             }
             .drawBehind {
@@ -2781,6 +2787,7 @@ private fun FramePanel(state: UiState, vm: HeadsupViewModel) {
         r.angleDegrees, -15f..15f, 0.1f, { v -> vm.updateReframe { it.copy(angleDegrees = v) } },
         onReset = { vm.updateReframe { it.copy(angleDegrees = 0f) } },
     )
+    PerspectiveRulers(r, vm)
     if (state.clips.size > 1) {
         Row {
             Spacer(Modifier.weight(1f))
@@ -3512,6 +3519,17 @@ private fun PhotoCrop(state: UiState, clip: ClipState, vm: HeadsupViewModel) {
     RulerSlider(r.zoom, 1f..4f, 0.02f, { v -> vm.updateReframe { it.copy(zoom = v) } }, onReset = { vm.updateReframe { it.copy(zoom = 1f) } })
     ValueHeader("Straighten", String.format(Locale.US, "%+.1f°", r.angleDegrees))
     RulerSlider(r.angleDegrees, -15f..15f, 0.1f, { v -> vm.updateReframe { it.copy(angleDegrees = v) } }, onReset = { vm.updateReframe { it.copy(angleDegrees = 0f) } })
+    PerspectiveRulers(r, vm)
+}
+
+/** Perspective correction: lines leaning together (a building shot from below) set straight. */
+@Composable
+private fun PerspectiveRulers(r: Reframe, vm: HeadsupViewModel) {
+    ValueHeader("Vertical", String.format(Locale.US, "%+.0f", r.vertical * 100))
+    RulerSlider(r.vertical, -1f..1f, 0.01f, { v -> vm.updateReframe { it.copy(vertical = v) } }, onReset = { vm.updateReframe { it.copy(vertical = 0f) } })
+    ValueHeader("Horizontal", String.format(Locale.US, "%+.0f", r.horizontal * 100))
+    RulerSlider(r.horizontal, -1f..1f, 0.01f, { v -> vm.updateReframe { it.copy(horizontal = v) } }, onReset = { vm.updateReframe { it.copy(horizontal = 0f) } })
+    Hint("Vertical straightens a building's sides when the camera looked up or down; Horizontal the same sideways. The picture zooms in just enough to hide the empty corners.")
 }
 
 /** The activity's route over the picture: on or off, size, colour, background and the "you are here" dot. */

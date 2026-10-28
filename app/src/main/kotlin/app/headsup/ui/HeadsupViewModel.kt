@@ -2217,8 +2217,10 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                     telemetry = telemetry,
                     style = s.style,
                     effects = clip.effects,
-                    grade = if (graded) GradeSetup(cube, applied.vignette, masks, maskCubes, fromCube, clip.transitionMs, applied.presence)
-                        else cube?.let { GradeSetup(it, 0f) },
+                    grade = s.framing(clip).warp.let { warp ->
+                        if (graded) GradeSetup(cube, applied.vignette, masks, maskCubes, fromCube, clip.transitionMs, applied.presence, warp)
+                        else if (cube != null || warp != null) GradeSetup(cube, 0f, warp = warp) else null
+                    },
                     reframe = s.framing(clip),
                     speed = clip.speed,
                     isPhoto = clip.meta.isPhoto,

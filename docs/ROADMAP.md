@@ -95,7 +95,8 @@ project's files), the preview resized left/right when held sideways, Edit called
    texture / clarity / dehaze (Adjust → Presence; also inside masks).
 2. **Masks:** done: brush, two-finger resize/turn, presence (texture, clarity, dehaze) per mask.
    Later: subject/sky selection.
-3. **Geometry:** perspective correction.
+3. **Geometry:** done: perspective correction (Vertical, Horizontal, with a zoom that hides empty
+   corners). Later: guided upright (draw the lines that should be straight).
 4. **Export:** 16-bit TIFF, Ultra HDR (JPEG with a gain map).
 5. **Formats (last):** camera raws that are not DNG (CR3, NEF, ARW, RAF, …) through LibRaw,
    GoPro GPR (VC-5), lossy DNG.

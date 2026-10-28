@@ -254,6 +254,9 @@ fun Timeline(
                                 return@awaitEachGesture
                             }
                             val first = start ?: return@awaitEachGesture
+                            // Up or down over the timeline is not scrolling it: left to the screen's swipes.
+                            val lead = first.position - down.position
+                            val upright = abs(lead.y) > 1.5f * abs(lead.x)
                             val mode = when (hit) {
                                 is Hit.ClipStart -> Mode.TRIM_CLIP_START
                                 is Hit.ClipEnd -> Mode.TRIM_CLIP_END
@@ -265,6 +268,7 @@ fun Timeline(
                                 is Hit.Text -> if (hit.id == selectedTextNow || held) Mode.MOVE_TEXT else Mode.SCROLL
                                 else -> if (held) Mode.NONE else Mode.SCROLL
                             }
+                            if (mode == Mode.SCROLL && upright) return@awaitEachGesture
                             val zoomPx = g.zoom
                             val t = g.t
                             val tracker = VelocityTracker()

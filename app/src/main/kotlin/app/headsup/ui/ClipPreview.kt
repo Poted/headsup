@@ -817,7 +817,7 @@ fun ClipPreview(
                         tableVersion
                         val frame = if (effects.grain > 0f) (positionMs / 33).toFloat() else 0f
                         val fromWeight = if (fromCube != null) ColourTransition.fromWeight(positionMs, transitionMs) else 0f
-                        renderEffect = previewShader?.effect(effects, zebra, frame, size.width, size.height, masks.map { it.at(fileMs) }, fromWeight, if (raw) clip.rawDevelop else null, presence)
+                        renderEffect = previewShader?.effect(effects, zebra, frame, size.width, size.height, masks.map { it.at(fileMs) }, fromWeight, if (raw) clip.rawDevelop else null, presence, reframe.warp)
                         // Reframing moves the graded picture, as in the export (colour first, then framing).
                         val t = reframeTransform(reframe, geometry)
                         scaleX = t.zoom
@@ -874,9 +874,9 @@ fun ClipPreview(
                                     val frame = if (effects.grain > 0f) (positionMs / 33).toFloat() else 0f
                                     val fromWeight = if (fromCube != null) ColourTransition.fromWeight(positionMs, transitionMs) else 0f
                                     renderEffect = if (pictureClip[i] == null || pictureClip[i] == clip.id) {
-                                        playerShaders?.get(i)?.effect(effects, zebra, frame, this.size.width, this.size.height, masks.map { it.at(fileMs) }, fromWeight, presence = presence)
+                                        playerShaders?.get(i)?.effect(effects, zebra, frame, this.size.width, this.size.height, masks.map { it.at(fileMs) }, fromWeight, presence = presence, warp = r.warp)
                                     } else {
-                                        playerShaders?.get(i)?.effect(effects, zebra, frame, this.size.width, this.size.height, emptyList(), 0f)
+                                        playerShaders?.get(i)?.effect(effects, zebra, frame, this.size.width, this.size.height, emptyList(), 0f, warp = r.warp)
                                     }
                                     val t = reframeTransform(r, g)
                                     scaleX = t.zoom
