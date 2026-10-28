@@ -543,7 +543,20 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
             LaunchedEffect(state.photoProject) { if (tool !in tools) tool = Tool.COLOUR }
             // In an album the Edit page only crops: it is named so.
             if (tool == Tool.COLOUR || tool == Tool.EFFECTS) ScopeMenu(state, vm, adjust = tool == Tool.COLOUR, open = scopeOpen) { scopeOpen = !scopeOpen }
-            BottomToolbar(tool, tools, labelOf = { t -> if (state.photoProject && t == Tool.EDIT) "Crop" else t.label }) {
+            // Adjust and Effects say what they work on unless it is this clip, and that they open a menu.
+            BottomToolbar(tool, tools, labelOf = { t ->
+                when {
+                    state.photoProject && t == Tool.EDIT -> "Crop"
+                    t == Tool.COLOUR && t == tool -> t.label + when (state.target) {
+                        GradeTarget.CLIP -> " ▴"
+                        GradeTarget.GROUP -> " · group"
+                        GradeTarget.MASK -> " · mask"
+                        GradeTarget.GLOBAL -> " · all"
+                    }
+                    t == Tool.EFFECTS && t == tool -> t.label + if (state.effectsOnAll) " · all" else " ▴"
+                    else -> t.label
+                }
+            }) {
                 // Tapping Adjust or Effects again opens its menu.
                 if (it == tool && (it == Tool.COLOUR || it == Tool.EFFECTS)) scopeOpen = !scopeOpen else { tool = it; scopeOpen = false }
             }
@@ -1593,7 +1606,7 @@ private fun LookActions(state: UiState, vm: HeadsupViewModel) {
 
 /**
  * The menu over the Adjust (and Effects) button: what the page works on, copying, resetting.
- * Folded to a small pill showing the current choice; the button tapped again opens it too.
+ * Opened by tapping the button again (its label shows the current choice and the ▴).
  */
 @Composable
 private fun ScopeMenu(state: UiState, vm: HeadsupViewModel, adjust: Boolean, open: Boolean, onToggle: () -> Unit) {
@@ -1617,7 +1630,16 @@ private fun ScopeMenu(state: UiState, vm: HeadsupViewModel, adjust: Boolean, ope
                             FilterChip(selected = state.target.ordinal == i, onClick = { vm.setTarget(GradeTarget.entries[i]); onToggle() }, label = { Text(label) })
                         }
                     }
-                    if (state.target == GradeTarget.GLOBAL) {
+                } else {
+                    // Effects: this clip, or set on all clips (only what is changed, as a sync).
+                    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        FilterChip(selected = !state.effectsOnAll, onClick = { vm.setEffectsOnAll(false); onToggle() }, label = { Text(labels[0]) })
+                        FilterChip(selected = state.effectsOnAll, onClick = { vm.setEffectsOnAll(true); onToggle() }, label = { Text(labels[3]) })
+                    }
+                    if (state.effectsOnAll) Hint(if (album) "A change is set on every photo." else "A change is set on every clip.")
+                }
+                run {
+                    if (adjust && state.target == GradeTarget.GLOBAL) {
                         Hint(if (album) "A change is set on every photo: each shows it under This photo." else "A change is set on every clip: each shows it under This clip.")
                     }
                 }
@@ -1631,15 +1653,6 @@ private fun ScopeMenu(state: UiState, vm: HeadsupViewModel, adjust: Boolean, ope
                     }
                 }
             }
-        }
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-            Text(
-                (if (adjust) labels[state.target.ordinal] else if (album) "This photo" else "This clip") + if (open) "  ▾" else "  ▴",
-                Modifier.clip(RoundedCornerShape(50)).background(HeadsupColors.Surface).border(1.dp, HeadsupColors.Outline, RoundedCornerShape(50))
-                    .clickable(onClick = onToggle).padding(horizontal = 14.dp, vertical = 6.dp),
-                style = MaterialTheme.typography.labelLarge,
-                color = HeadsupColors.Highlight,
-            )
         }
     }
 }

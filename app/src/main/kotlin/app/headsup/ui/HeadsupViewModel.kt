@@ -257,6 +257,8 @@ data class UiState(
     val globalGrade: ColorGrade = ColorGrade(),
     /** Which corrections the colour page edits. */
     val target: GradeTarget = GradeTarget.CLIP,
+    /** Effects change this clip only, or are set on every clip (as a sync). */
+    val effectsOnAll: Boolean = false,
     val groups: List<ClipGroup> = emptyList(),
     val luts: List<String> = emptyList(),
     /** Grade shown in the preview instead of [grade] while comparing (one correction held off). */
@@ -1183,8 +1185,19 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
     /** Changes the selected clip's effects; they also become the default for clips added later. */
     fun updateEffects(transform: (EffectSettings) -> EffectSettings) {
         _state.update { s ->
-            val effects = transform(s.effects)
-            s.copy(defaultEffects = effects, clips = s.clips.mapIndexed { i, c -> if (i == s.selectedClip) c.copy(effects = effects) else c })
+            val before = s.effects
+            val effects = transform(before)
+            s.copy(
+                defaultEffects = if (s.effectsOnAll) s.defaultEffects.synced(before, effects) else effects,
+                clips = s.clips.mapIndexed { i, c ->
+                    when {
+                        i == s.selectedClip -> c.copy(effects = effects)
+                        // On all clips: the changed values are set on each, the others kept.
+                        s.effectsOnAll -> c.copy(effects = c.effects.synced(before, effects))
+                        else -> c
+                    }
+                },
+            )
         }
         effectPrefs.save(_state.value.defaultEffects)
     }
@@ -1285,6 +1298,8 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun setClipGrade(index: Int, enabled: Boolean) = updateClip(index) { it.copy(colorGrade = enabled) }
+
+    fun setEffectsOnAll(all: Boolean) = _state.update { it.copy(effectsOnAll = all) }
 
     fun setTarget(target: GradeTarget) {
         _state.update { it.copy(target = target, compareGrade = null) }

@@ -32,6 +32,18 @@ data class EffectSettings(
     val dashboard: Boolean = true,
 ) {
     val changesPixels: Boolean get() = grain > 0f || glow > 0f || halation > 0f
+
+    /** These effects with the ones changed from [before] to [after] set as in [after] (a sync to other clips). */
+    fun synced(before: EffectSettings, after: EffectSettings) = EffectSettings(
+        grain = if (after.grain != before.grain) after.grain else grain,
+        grainSize = if (after.grainSize != before.grainSize) after.grainSize else grainSize,
+        glow = if (after.glow != before.glow) after.glow else glow,
+        glowThreshold = if (after.glowThreshold != before.glowThreshold) after.glowThreshold else glowThreshold,
+        halation = if (after.halation != before.halation) after.halation else halation,
+        barsRatio = if (after.barsRatio != before.barsRatio) after.barsRatio else barsRatio,
+        graph = if (after.graph != before.graph) after.graph else graph,
+        dashboard = if (after.dashboard != before.dashboard) after.dashboard else dashboard,
+    )
 }
 
 class EffectPrefs(context: Context) {
