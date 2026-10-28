@@ -12,10 +12,13 @@ class GrayFrame(val width: Int, val height: Int, val pixels: FloatArray) {
 }
 
 /**
- * Makes a mask follow the picture through a clip, like a tracker in DaVinci: two patches of the
- * picture along the mask (either side of its centre) are found again in each next frame by
- * normalised cross-correlation. Their midpoint moves the mask, the line between them turns and
- * scales it. Tracking stops where a patch can no longer be found with confidence.
+ * Makes a mask follow the picture through a clip, like a planar tracker in DaVinci: patches of the
+ * picture spread over the mask's area (along it, for a line) are found again in each next frame by
+ * normalised cross-correlation, and one move, turn and scale is fitted to them all, leaving out the
+ * ones that disagree (lost on a reflection, covered by something). Patches slowly take on the
+ * picture's new look, so an object seen ever closer is still found. Patches that leave the frame
+ * stop counting; when the whole area leaves it, the mask carries on at its last speed until it is
+ * out of the picture ([leftFrame]). Tracking stops where too few patches can be found.
  */
 class MaskTracker(
     start: ColourMask,
@@ -26,60 +29,155 @@ class MaskTracker(
      * mask is followed where it is painted, and its centre moves, turns and scales with that place.
      */
     anchor: Pair<Float, Float>? = null,
+    /** Half the width and height of the area to follow (fractions of the frame), when known (a painted mask's). */
+    spread: Pair<Float, Float>? = null,
 ) {
     private val radius = (first.height / 20).coerceAtLeast(6)
     private val search = radius * 2
     private val base = start
-    private val p1: Point
-    private val p2: Point
-    private val startAngle: Double
-    private val startLength: Double
+    private val width = first.width
+    private val height = first.height
+    private val points: List<Point>
 
-    /** The mask's centre from the followed place, in pixels, at the start. */
-    private val offsetX: Double
-    private val offsetY: Double
+    /** The mask's centre at the start, in pixels. */
+    private val c0x = start.centerX * first.width.toDouble()
+    private val c0y = start.centerY * first.height.toDouble()
 
-    /** Set once a patch was lost; later frames are ignored. */
+    /** How far the followed area reaches from its middle, in pixels (for when it leaves the frame). */
+    private val reach: Double
+
+    /** The last fit: scale, turn, the mask's centre and how it moved since the frame before. */
+    private var scale = 1.0
+    private var turn = 0.0
+    private var cx = c0x
+    private var cy = c0y
+    private var vx = 0.0
+    private var vy = 0.0
+
+    /** Set once tracking stopped; later frames are ignored. */
     var lost: Boolean = false
         private set
 
+    /** Set when tracking stopped because the area went out of the picture (the mask was carried out with it). */
+    var leftFrame: Boolean = false
+        private set
+
     init {
-        val cx = (anchor?.first ?: start.centerX) * first.width
-        val cy = (anchor?.second ?: start.centerY) * first.height
-        offsetX = (start.centerX * first.width - cx).toDouble()
-        offsetY = (start.centerY * first.height - cy).toDouble()
+        val ax = (anchor?.first ?: start.centerX) * first.width.toDouble()
+        val ay = (anchor?.second ?: start.centerY) * first.height.toDouble()
         val a = Math.toRadians(start.angleDegrees.toDouble())
-        // Points along the mask, kept inside the frame with room for their patch.
-        var d = first.height * 0.15
-        fun inside(x: Double, y: Double) = x > radius + 1 && x < first.width - radius - 2 && y > radius + 1 && y < first.height - radius - 2
-        while (d > radius && !(inside(cx - d * cos(a), cy - d * sin(a)) && inside(cx + d * cos(a), cy + d * sin(a)))) d *= 0.8
-        p1 = Point(first, cx - d * cos(a), cy - d * sin(a), radius)
-        p2 = Point(first, cx + d * cos(a), cy + d * sin(a), radius)
-        startAngle = atan2(p2.y - p1.y, p2.x - p1.x)
-        startLength = hypot(p2.x - p1.x, p2.y - p1.y).coerceAtLeast(1.0)
+        val candidates = if (start.kind == MaskKind.LINEAR && anchor == null) {
+            // Along the line.
+            val d = first.height * 0.15
+            listOf(-1.0, -0.5, 0.0, 0.5, 1.0).map { t -> ax + t * d * cos(a) to ay + t * d * sin(a) }
+        } else {
+            // A 3×3 grid over the middle of the area, turned with the mask.
+            val hx = spread?.first?.times(first.width)?.toDouble() ?: (start.sizeX / 2.0 * first.height * 0.6)
+            val hy = spread?.second?.times(first.height)?.toDouble() ?: (start.sizeY / 2.0 * first.height * 0.6)
+            val ux = hx.coerceAtLeast(radius * 1.5)
+            val uy = hy.coerceAtLeast(radius * 1.5)
+            (-1..1).flatMap { j -> (-1..1).map { i -> i * ux * 0.7 to j * uy * 0.7 } }
+                .map { (dx, dy) -> ax + dx * cos(a) - dy * sin(a) to ay + dx * sin(a) + dy * cos(a) }
+        }
+        reach = (spread?.let { hypot(it.first * first.width.toDouble(), it.second * first.height.toDouble()) } ?: (start.sizeX / 2.0 * first.height))
+            .coerceAtLeast(radius * 2.0)
+        val inFrame = candidates.filter { (x, y) -> inside(x, y) }
+        // Patches with some texture to find again; flat ones (a white wall) only if nothing else.
+        val textured = inFrame.filter { (x, y) -> Point.contrast(first, x.toInt(), y.toInt(), radius) > 0.0004 }
+        points = (if (textured.size >= 2) textured else inFrame).map { (x, y) -> Point(first, x, y, radius) }
     }
 
-    /** The mask's key for [frame] at [timeMs], or null once tracking is lost. */
+    private fun inside(x: Double, y: Double) = x > radius + 1 && x < width - radius - 2 && y > radius + 1 && y < height - radius - 2
+
+    /** The mask's key for [frame] at [timeMs], or null once tracking stopped. */
     fun next(frame: GrayFrame, timeMs: Long): MaskKey? {
         if (lost) return null
-        if (!p1.follow(frame, search) || !p2.follow(frame, search)) {
-            lost = true
-            return null
+        for (p in points) {
+            if (!p.alive || p.out) continue
+            // Leaving the frame: no longer measured, not lost.
+            if (!inside(p.x + p.vx, p.y + p.vy)) { p.out = true; continue }
+            if (!p.follow(frame, search)) p.alive = false
         }
-        val angle = atan2(p2.y - p1.y, p2.x - p1.x)
-        val scale = (hypot(p2.x - p1.x, p2.y - p1.y) / startLength).toFloat()
-        // The centre keeps its place from the followed point, turned and scaled with it.
-        val turn = angle - startAngle
-        val cx = (p1.x + p2.x) / 2 + (offsetX * cos(turn) - offsetY * sin(turn)) * scale
-        val cy = (p1.y + p2.y) / 2 + (offsetX * sin(turn) + offsetY * cos(turn)) * scale
-        return MaskKey(
-            timeMs,
-            (cx / frame.width).toFloat(),
-            (cy / frame.height).toFloat(),
-            base.angleDegrees + Math.toDegrees(angle - startAngle).toFloat(),
-            base.sizeX * scale,
-            base.sizeY * scale,
-        )
+        var measured = points.filter { it.alive && !it.out }
+        var fit = if (measured.size >= 2) fit(measured) else null
+        if (fit != null) {
+            // Patches far from what the others agree on are lost (a reflection, something in front).
+            val residuals = measured.map { p -> fit!!.residual(p) }
+            val typical = residuals.sorted()[residuals.size / 2]
+            val limit = maxOf(2.0, typical * 3.0)
+            measured.forEachIndexed { i, p -> if (residuals[i] > limit) p.alive = false }
+            measured = measured.filter { it.alive }
+            fit = if (measured.size >= 2) fit(measured) else null
+        }
+        if (fit == null) {
+            val goingOut = points.any { it.out } && hypot(vx, vy) > 0.5
+            if (!goingOut) {
+                lost = true
+                return null
+            }
+            // The area is leaving the picture: carry the mask on until it is out.
+            cx += vx
+            cy += vy
+            val gone = cx < -reach || cx > width + reach || cy < -reach || cy > height + reach
+            if (gone) {
+                lost = true
+                leftFrame = true
+            }
+            return key(timeMs)
+        }
+        val nx = fit.mx + fit.scale * ((c0x - fit.m0x) * cos(fit.turn) - (c0y - fit.m0y) * sin(fit.turn))
+        val ny = fit.my + fit.scale * ((c0x - fit.m0x) * sin(fit.turn) + (c0y - fit.m0y) * cos(fit.turn))
+        vx = nx - cx
+        vy = ny - cy
+        cx = nx
+        cy = ny
+        scale = fit.scale
+        turn = fit.turn
+        return key(timeMs)
+    }
+
+    private fun key(timeMs: Long) = MaskKey(
+        timeMs,
+        (cx / width).toFloat(),
+        (cy / height).toFloat(),
+        base.angleDegrees + Math.toDegrees(turn).toFloat(),
+        (base.sizeX * scale).toFloat(),
+        (base.sizeY * scale).toFloat(),
+    )
+
+    /** One move, turn and scale taking the patches' starting places to where they are now (least squares). */
+    private class Fit(val m0x: Double, val m0y: Double, val mx: Double, val my: Double, val scale: Double, val turn: Double) {
+        fun residual(p: Point): Double {
+            val dx = p.x0 - m0x
+            val dy = p.y0 - m0y
+            val ex = mx + scale * (dx * cos(turn) - dy * sin(turn))
+            val ey = my + scale * (dx * sin(turn) + dy * cos(turn))
+            return hypot(p.x - ex, p.y - ey)
+        }
+    }
+
+    private fun fit(ps: List<Point>): Fit? {
+        val m0x = ps.sumOf { it.x0 } / ps.size
+        val m0y = ps.sumOf { it.y0 } / ps.size
+        val mx = ps.sumOf { it.x } / ps.size
+        val my = ps.sumOf { it.y } / ps.size
+        var a = 0.0
+        var b = 0.0
+        var s0 = 0.0
+        for (p in ps) {
+            val dx0 = p.x0 - m0x
+            val dy0 = p.y0 - m0y
+            val dx = p.x - mx
+            val dy = p.y - my
+            a += dx0 * dx + dy0 * dy
+            b += dx0 * dy - dy0 * dx
+            s0 += dx0 * dx0 + dy0 * dy0
+        }
+        if (s0 < 1e-6) return null
+        val s = hypot(a, b) / s0
+        // A sudden jump in size is a bad match, not the camera.
+        if (s !in 0.2..5.0) return null
+        return Fit(m0x, m0y, mx, my, s, atan2(b, a))
     }
 
     /** The key at the starting frame, so the track begins where the mask was placed. */
@@ -87,13 +185,26 @@ class MaskTracker(
 
     /** One followed patch. */
     private class Point(frame: GrayFrame, var x: Double, var y: Double, private val r: Int) {
-        private var vx = 0.0
-        private var vy = 0.0
-        private var template = patch(frame, x.toInt(), y.toInt())
+        val x0 = x
+        val y0 = y
+        var alive = true
+        var out = false
+        var vx = 0.0
+        var vy = 0.0
+        private var template = patch(frame, x.toInt(), y.toInt(), r)
 
-        private fun patch(f: GrayFrame, px: Int, py: Int): FloatArray {
-            val n = 2 * r + 1
-            return FloatArray(n * n) { i -> f[px - r + i % n, py - r + i / n] }
+        companion object {
+            fun patch(f: GrayFrame, px: Int, py: Int, r: Int): FloatArray {
+                val n = 2 * r + 1
+                return FloatArray(n * n) { i -> f[px - r + i % n, py - r + i / n] }
+            }
+
+            /** The patch's variance: how much there is to find again. */
+            fun contrast(f: GrayFrame, px: Int, py: Int, r: Int): Double {
+                val p = patch(f, px, py, r)
+                val mean = p.average()
+                return p.sumOf { (it - mean) * (it - mean) } / p.size
+            }
         }
 
         /** Normalised cross-correlation of the template with the patch centred at ([px], [py]), -1..1. */
@@ -128,7 +239,7 @@ class MaskTracker(
                 val s = score(f, cx + dx, cy + dy)
                 if (s > best) { best = s; bx = cx + dx; by = cy + dy }
             }
-            if (best < 0.6) return false
+            if (best < 0.55) return false
             // Sub-pixel position from a parabola through the neighbouring scores.
             fun offset(a: Double, b: Double, c: Double): Double {
                 val d = a - 2 * b + c
@@ -140,10 +251,12 @@ class MaskTracker(
             vy = ny - y
             x = nx
             y = ny
-            // Follow slow changes of appearance without drifting off the original.
-            if (best > 0.85) {
-                val fresh = patch(f, bx, by)
-                for (i in template.indices) template[i] = template[i] * 0.8f + fresh[i] * 0.2f
+            // Take on the picture's new look (an object seen closer, from another side), more
+            // when the match is sure; the fit over all patches keeps one patch's drift in check.
+            if (best > 0.75) {
+                val fresh = patch(f, bx, by, r)
+                val k = if (best > 0.9) 0.35f else 0.2f
+                for (i in template.indices) template[i] = template[i] * (1f - k) + fresh[i] * k
             }
             return true
         }

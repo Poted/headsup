@@ -1873,11 +1873,13 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                         // A painted mask is followed where it is painted.
                         val aspect = if (clip.meta.width > 0 && clip.meta.height > 0) clip.meta.width.toFloat() / clip.meta.height else 16f / 9f
                         val anchor = if (start.kind == MaskKind.BRUSH) app.headsup.core.color.BrushMask.centreOf(start.strokes, MaskKey.of(start, 0L), aspect) else null
-                        val tracker = MaskTracker(start, frames[first].second, frames[first].first, anchor)
+                        val spread = if (start.kind == MaskKind.BRUSH) app.headsup.core.color.BrushMask.extentOf(start.strokes, MaskKey.of(start, 0L), aspect) else null
+                        val tracker = MaskTracker(start, frames[first].second, frames[first].first, anchor, spread)
                         val keys = mutableListOf<MaskKey>()
                         for (i in range) {
                             val (ms, frame) = frames[i]
-                            val key = tracker.next(frame, ms) ?: return keys to ms
+                            // Carried out of the picture with what it follows: not lost, just gone.
+                            val key = tracker.next(frame, ms) ?: return keys to ms.takeIf { !tracker.leftFrame }
                             keys += key
                         }
                         return keys to null

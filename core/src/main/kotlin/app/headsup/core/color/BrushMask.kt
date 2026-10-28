@@ -450,6 +450,18 @@ object BrushMask {
         return place(pts.sumOf { it[0].toDouble() }.toFloat() / pts.size, pts.sumOf { it[1].toDouble() }.toFloat() / pts.size, now, aspect)
     }
 
+    /**
+     * Half the width and height (fractions of the frame) of what is painted, with the mask at [now]:
+     * the area tracking follows. Null with nothing painted.
+     */
+    fun extentOf(strokes: List<BrushStroke>, now: MaskKey, aspect: Float): Pair<Float, Float>? {
+        val painted = strokes.filter { !it.erase }
+        val pts = painted.flatMap { it.points.chunked(2).filter { p -> p.size == 2 } }.map { place(it[0], it[1], now, aspect) }
+        if (pts.isEmpty()) return null
+        val r = painted.filter { !it.lasso }.maxOfOrNull { it.radius * now.sizeX } ?: 0f
+        return ((pts.maxOf { it.first } - pts.minOf { it.first }) / 2f + r / aspect) to ((pts.maxOf { it.second } - pts.minOf { it.second }) / 2f + r)
+    }
+
     private fun smoothstep(e0: Float, e1: Float, x: Float): Float {
         val t = ((x - e0) / (e1 - e0).coerceAtLeast(0.0001f)).coerceIn(0f, 1f)
         return t * t * (3f - 2f * t)
