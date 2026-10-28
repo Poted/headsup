@@ -109,6 +109,11 @@ project's files), the preview resized left/right when held sideways, Edit called
 
 ## Ideas
 
+- **A guide agent** – ask it "how do I make this clip cinematic?" and it shows the way step by
+  step in the app itself: it highlights what to tap next (the tool, the section, the ruler) and
+  says what to set and why, waiting for each step, so the user learns the app while editing. Built
+  on the same AI proxy and app-defined functions as the auto edit (it may also apply a step on
+  request).
 - **Auto edit (as GoPro's), through an AI model behind our own proxy** – the app analyses the
   clips (motion, faces, sharpness, the watch data: speed, jumps, heart rate, existing Moments),
   the user picks a style (serious/cinematic, energetic/sport, trekking, wedding, …) and a pace
