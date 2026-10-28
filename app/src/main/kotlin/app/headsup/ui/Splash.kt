@@ -35,31 +35,42 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 private val LOGO_SIZE = 52.sp
+
+/** Animations at their written length, whatever the system's animation scale. */
+private object RealTime : androidx.compose.ui.MotionDurationScale {
+    override val scaleFactor: Float = 1f
+}
 private val RECORD_RED = Color(0xFFFF3B30)
 
 /**
- * Start-up animation, about three seconds: "Sweet Spot" unrolls from the left, the "o" being a
- * record button that is pressed once the word is complete; then the overlay fades out.
+ * Start-up animation, about three and a half seconds: "Sweet Spot" unrolls from the left, the "o"
+ * being a record button that is pressed once the word is complete; then the overlay fades out.
+ * [onRevealed] comes once the word is complete, so heavier work can start without stealing its
+ * frames. It plays at its own pace even when the phone's animations are shortened or off.
  */
 @Composable
-fun SplashOverlay(onFinished: () -> Unit) {
+fun SplashOverlay(onRevealed: () -> Unit = {}, onFinished: () -> Unit) {
     val reveal = remember { Animatable(0f) }
     val press = remember { Animatable(1f) }
     val glow = remember { Animatable(0f) }
     val fade = remember { Animatable(1f) }
     LaunchedEffect(Unit) {
-        delay(150)
-        reveal.animateTo(1f, tween(1100, easing = FastOutSlowInEasing))
-        delay(150)
+      withContext(RealTime) {
+        delay(250)
+        reveal.animateTo(1f, tween(1400, easing = FastOutSlowInEasing))
+        onRevealed()
+        delay(250)
         // Press: the dot sinks, then springs back with a red glow, like starting a recording.
         launch { glow.animateTo(1f, tween(250)); glow.animateTo(0.35f, tween(400)) }
         press.animateTo(0.72f, tween(110, easing = LinearEasing))
         press.animateTo(1f, spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessMedium))
-        delay(900)
-        fade.animateTo(0f, tween(450))
+        delay(1000)
+        fade.animateTo(0f, tween(500))
         onFinished()
+      }
     }
     Box(
         Modifier

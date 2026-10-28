@@ -21,9 +21,11 @@ class MainActivity : ComponentActivity() {
             HeadsupTheme {
                 // The logo animation plays once per launch, not on rotation.
                 var splash by rememberSaveable { mutableStateOf(savedInstanceState == null) }
+                // The editor is built once the logo is complete, so building it does not eat the animation's frames.
+                var editor by rememberSaveable { mutableStateOf(savedInstanceState != null) }
                 Box {
-                    HeadsupScreen()
-                    if (splash) SplashOverlay { splash = false }
+                    if (editor) HeadsupScreen()
+                    if (splash) SplashOverlay(onRevealed = { editor = true }) { splash = false; editor = true }
                 }
             }
         }
