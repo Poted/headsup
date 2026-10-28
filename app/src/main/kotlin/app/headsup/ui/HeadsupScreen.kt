@@ -166,6 +166,7 @@ import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.runtime.rememberUpdatedState
 import app.headsup.core.track.ActivityTrack
@@ -295,12 +296,25 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
     val folded = compact && wide && !fullscreen && !state.photoProject
     // Full screen keeps a line to scrub along under a film's picture, and play on it.
     val fullscreenFilm = fullscreen && !state.photoProject && state.clips.isNotEmpty()
-    val previewMaxHeight = when {
-        fullscreenFilm -> configuration.screenHeightDp.dp - 40.dp
-        fullscreen -> configuration.screenHeightDp.dp
-        folded -> (configuration.screenHeightDp * 0.84f).dp
-        else -> (configuration.screenHeightDp * share).dp
+    // The picture grows and shrinks smoothly when the transport folds or full screen changes.
+    val previewMaxHeight by androidx.compose.animation.core.animateDpAsState(
+        when {
+            fullscreenFilm -> configuration.screenHeightDp.dp - 40.dp
+            fullscreen -> configuration.screenHeightDp.dp
+            folded -> (configuration.screenHeightDp * 0.84f).dp
+            else -> (configuration.screenHeightDp * share).dp
+        },
+        androidx.compose.animation.core.tween(220),
+        label = "preview height",
+    )
+    // A small settle of the whole screen when full screen comes or goes.
+    val settle = remember { androidx.compose.animation.core.Animatable(1f) }
+    LaunchedEffect(fullscreen) {
+        settle.snapTo(0.96f)
+        settle.animateTo(1f, androidx.compose.animation.core.tween(220))
     }
+    // Swipes on what the picture's tools leave alone: they never fight a mask, framing or a text being moved.
+    val pictureFree = !(tool == Tool.COLOUR && state.target == GradeTarget.MASK) && !framing && !editingTexts && !measuring
     // Full screen hides the status and navigation bars too (a swipe from the edge shows them for a moment).
     val activityWindow = (LocalContext.current as? android.app.Activity)?.window
     val rootView = androidx.compose.ui.platform.LocalView.current
@@ -609,8 +623,16 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
     Box(Modifier.fillMaxSize().background(HeadsupColors.BackgroundGradient)) {
         // No title bar: the picture starts at the top, adding files lives in the Project tool.
         if (fullscreen) {
-            // The picture alone on black, centred, whichever way the phone is held.
-            Column(Modifier.fillMaxSize().background(Color.Black), verticalArrangement = Arrangement.Center, content = pictureAndTimeline)
+            // The picture alone on black, centred, whichever way the phone is held; a swipe down leaves.
+            Column(
+                Modifier
+                    .fillMaxSize()
+                    .background(Color.Black)
+                    .graphicsLayer { scaleX = settle.value; scaleY = settle.value; alpha = 0.4f + 0.6f * ((settle.value - 0.96f) / 0.04f) }
+                    .freeSwipe(pictureFree) { if (it == Swipe.DOWN) fullscreen = false },
+                verticalArrangement = Arrangement.Center,
+                content = pictureAndTimeline,
+            )
         } else if (wide) {
             androidx.compose.foundation.layout.BoxWithConstraints(Modifier.fillMaxSize().systemBarsPadding().padding(top = 8.dp)) {
                 val total = constraints.maxWidth.toFloat().coerceAtLeast(1f)
@@ -620,10 +642,32 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
                 val pictureShare = wideShare.coerceIn(0.35f, maxShare)
                 Row(Modifier.fillMaxSize()) {
                     // Clipped: the timeline scrolls inside its column, never under the tools.
-                    Column(Modifier.weight(pictureShare).fillMaxHeight().clipToBounds(), content = pictureAndTimeline)
+                    // A swipe down anywhere here folds the transport and timeline, up unfolds them.
+                    Column(
+                        Modifier
+                            .weight(pictureShare)
+                            .fillMaxHeight()
+                            .clipToBounds()
+                            .graphicsLayer { scaleX = settle.value; scaleY = settle.value }
+                            .freeSwipe(pictureFree && !state.photoProject) {
+                                when (it) {
+                                    Swipe.DOWN -> compact = true
+                                    Swipe.UP -> compact = false
+                                    else -> Unit
+                                }
+                            },
+                        content = pictureAndTimeline,
+                    )
                     // Dragging this moves the line between the picture and the tools, left and right.
                     SideHandle { dx -> wideShare = (pictureShare + dx / total).coerceIn(0.35f, maxShare) }
-                    Column(Modifier.weight(1f - pictureShare).fillMaxHeight(), content = tools)
+                    // A swipe to the right over the tools (where nothing scrolls or slides) goes full screen.
+                    Column(
+                        Modifier
+                            .weight(1f - pictureShare)
+                            .fillMaxHeight()
+                            .freeSwipe(true) { if (it == Swipe.RIGHT) fullscreen = true },
+                        content = tools,
+                    )
                 }
             }
         } else {
@@ -742,6 +786,37 @@ private fun UndoRedo(canUndo: Boolean, canRedo: Boolean, onUndo: () -> Unit, onR
 private data class Quad<A, B, C, D>(val a: A, val b: B, val c: C, val d: D)
 
 private const val UNDO_ALL_HOLD_MS = 3_000L
+
+private enum class Swipe { LEFT, RIGHT, UP, DOWN }
+
+/**
+ * A clear swipe (one finger, mostly one way, at least 56 dp) that nothing inside used: sliders,
+ * scrolling, the timeline and the picture's own tools consume their moves, and then this stays out.
+ */
+private fun Modifier.freeSwipe(enabled: Boolean, onSwipe: (Swipe) -> Unit): Modifier = if (!enabled) this else pointerInput(Unit) {
+    val distance = 56.dp.toPx()
+    awaitEachGesture {
+        val down = awaitFirstDown(requireUnconsumed = false, pass = androidx.compose.ui.input.pointer.PointerEventPass.Final)
+        var spoilt = down.isConsumed
+        while (true) {
+            val event = awaitPointerEvent(androidx.compose.ui.input.pointer.PointerEventPass.Final)
+            if (event.changes.count { it.pressed } > 1) spoilt = true
+            val change = event.changes.firstOrNull { it.id == down.id } ?: break
+            if (!change.pressed) break
+            if (change.isConsumed) spoilt = true
+            if (spoilt) continue
+            val d = change.position - down.position
+            if (d.getDistance() < distance) continue
+            val swipe = when {
+                abs(d.x) > 2 * abs(d.y) -> if (d.x > 0) Swipe.RIGHT else Swipe.LEFT
+                abs(d.y) > 2 * abs(d.x) -> if (d.y > 0) Swipe.DOWN else Swipe.UP
+                else -> null
+            }
+            if (swipe != null) onSwipe(swipe)
+            break
+        }
+    }
+}
 
 /** The tools' narrowest, held sideways: three circles of a tool row, with the panel's margins. */
 private val MIN_TOOLS_WIDTH = 248.dp
