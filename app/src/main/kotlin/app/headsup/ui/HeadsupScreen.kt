@@ -434,7 +434,7 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
                         },
                     )
                     // Undo/redo tucked into the picture's corner, only when there is something to undo.
-                    if (!fullscreen) UndoRedo(state.canUndo, state.canRedo, vm::undo, vm::redo, vm::undoAll, Modifier.align(Alignment.TopEnd).padding(top = 8.dp, end = 24.dp))
+                    if (!fullscreen) UndoRedo(state.canUndo, state.canRedo, vm::undo, vm::redo, vm::undoAll, vm::resetAllEdits, Modifier.align(Alignment.TopEnd).padding(top = 8.dp, end = 24.dp), canResetAll = state.clips.isNotEmpty())
                     // Full screen: the picture alone, to see it as it will look.
                     Box(
                         Modifier
@@ -735,8 +735,9 @@ private fun EmptyState(photoProject: Boolean) {
  * undo for [UNDO_ALL_HOLD_MS] (a ring fills meanwhile) asks whether to undo every change.
  */
 @Composable
-private fun UndoRedo(canUndo: Boolean, canRedo: Boolean, onUndo: () -> Unit, onRedo: () -> Unit, onUndoAll: () -> Unit, modifier: Modifier) {
-    if (!canUndo && !canRedo) return
+private fun UndoRedo(canUndo: Boolean, canRedo: Boolean, onUndo: () -> Unit, onRedo: () -> Unit, onUndoAll: () -> Unit, onResetAll: () -> Unit, modifier: Modifier, canResetAll: Boolean = false) {
+    // Shown while there is something to undo, or edits to remove (holding undo works even when a tap would not).
+    if (!canUndo && !canRedo && !canResetAll) return
     var askAll by remember { mutableStateOf(false) }
     val hold = remember { androidx.compose.animation.core.Animatable(0f) }
     val scope = rememberCoroutineScope()
@@ -744,8 +745,19 @@ private fun UndoRedo(canUndo: Boolean, canRedo: Boolean, onUndo: () -> Unit, onR
         AlertDialog(
             onDismissRequest = { askAll = false },
             title = { Text("Undo all changes?") },
-            text = { Text("The project goes back to how it was when you opened it. Undo brings the changes back.") },
-            confirmButton = { TextButton(onClick = { askAll = false; onUndoAll() }) { Text("Undo all") } },
+            text = {
+                Text(
+                    "Since opened: back to how the project was when you opened it.\n\nEvery edit: colour, masks, " +
+                        "framing, effects, speed and cuts removed from every clip, however long ago they were made; " +
+                        "the files, sound and texts stay.\n\nEither way, undo brings the changes back.",
+                )
+            },
+            confirmButton = {
+                Row {
+                    TextButton(onClick = { askAll = false; onResetAll() }) { Text("Every edit") }
+                    TextButton(onClick = { askAll = false; onUndoAll() }) { Text("Since opened") }
+                }
+            },
             dismissButton = { TextButton(onClick = { askAll = false }) { Text("Cancel") } },
         )
     }
@@ -765,7 +777,6 @@ private fun UndoRedo(canUndo: Boolean, canRedo: Boolean, onUndo: () -> Unit, onR
                             Modifier.clickable(enabled = enabled, onClick = action)
                         } else {
                             Modifier.pointerInput(enabled) {
-                                if (!enabled) return@pointerInput
                                 awaitEachGesture {
                                     awaitFirstDown().consume()
                                     // The ring fills in the hold's real time, whatever the system's animation scale.
@@ -773,7 +784,7 @@ private fun UndoRedo(canUndo: Boolean, canRedo: Boolean, onUndo: () -> Unit, onR
                                     val up = withTimeoutOrNull(UNDO_ALL_HOLD_MS) { waitForUpOrCancellation() }
                                     filling.cancel()
                                     scope.launch { hold.snapTo(0f) }
-                                    if (up != null) action() else askAll = true
+                                    if (up != null) { if (enabled) action() } else askAll = true
                                 }
                             }
                         },

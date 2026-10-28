@@ -666,6 +666,40 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
         record(base)
     }
 
+    /**
+     * Every picture edit gone, however long ago it was made (also in earlier sessions): colour,
+     * masks, LUTs, framing and perspective, effects, speed, cuts, fades, blends, raw development and
+     * the groups' and all clips' corrections. The files, their order, sound and texts stay; pieces
+     * of one file cut apart become one clip again. A step of its own, so undo brings it all back.
+     */
+    fun resetAllEdits() {
+        record(_state.value.snapshot())
+        _state.update { s ->
+            val fresh = mutableListOf<ClipState>()
+            for (c in s.clips) {
+                // The pieces of a cut-up file, side by side, are one clip again.
+                if (fresh.lastOrNull()?.meta?.uri == c.meta.uri) continue
+                fresh += ClipState(
+                    meta = c.meta, sync = c.sync, id = c.id, manualOffsetMs = c.manualOffsetMs,
+                    manualStart = c.manualStart, picked = c.picked, soundLevel = c.soundLevel,
+                )
+            }
+            s.copy(
+                clips = fresh,
+                groups = s.groups.map { it.copy(grade = ColorGrade(), lutName = null) },
+                globalGrade = ColorGrade(),
+                selectedClip = s.selectedClip?.coerceAtMost(fresh.lastIndex)?.takeIf { it >= 0 },
+                selectedMask = 0,
+                compareGrade = null,
+                cine = null,
+                matchSession = null,
+                scope = null,
+            )
+        }
+        record(_state.value.snapshot())
+        refreshPreview()
+    }
+
     fun redo() {
         if (historyIndex >= history.lastIndex) return
         historyIndex++
