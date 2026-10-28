@@ -137,6 +137,8 @@ class GradePreviewShader {
             val (a, b) = masks.getOrNull(i)?.shaderParams() ?: (FloatArray(4) to FloatArray(4))
             shader.setFloatUniform("m${i}a", a)
             shader.setFloatUniform("m${i}b", b)
+            val p = masks.getOrNull(i)?.grade?.presence ?: Presence.NONE
+            shader.setFloatUniform("mp$i", p.texture, p.clarity, p.dehaze)
         }
         shader.setFloatUniform("fromWeight", fromWeight)
         shader.setFloatUniform("grain", effects.grain)
@@ -195,6 +197,7 @@ class GradePreviewShader {
             uniform float lcTexture;
             uniform float lcClarity;
             uniform float lcDehaze;
+            ${List(ColourMask.MAX_PER_CLIP) { "uniform float3 mp$it;" }.joinToString("\n")}
 
             ${TABLES.joinToString("\n") { lookup(it) }}
 
@@ -287,18 +290,18 @@ class GradePreviewShader {
             // Presence: texture and clarity add the difference from the surroundings' brightness
             // (small and wider), clarity mostly in the midtones; dehaze takes out the haze, i.e. how
             // far the darkest channel is lifted over a wide area (negative adds haze).
-            float3 presence(float2 p, float3 c) {
+            float3 presence(float2 p, float3 c, float3 pr) {
                 float l = luma(c);
-                if (lcTexture != 0.0) {
+                if (pr.x != 0.0) {
                     float m = ringLuma(p, max(1.5, shortSide * 0.003));
-                    c += (l - m) * lcTexture * 1.5;
+                    c += (l - m) * pr.x * 1.5;
                 }
-                if (lcClarity != 0.0) {
+                if (pr.y != 0.0) {
                     float r = shortSide * 0.025;
                     float m = (ringLuma(p, r) * 2.0 + ringLuma(p, r * 0.5)) / 3.0;
-                    c += (l - m) * lcClarity * 6.0 * l * (1.0 - l);
+                    c += (l - m) * pr.y * 6.0 * l * (1.0 - l);
                 }
-                if (lcDehaze > 0.0) {
+                if (pr.z > 0.0) {
                     float r = shortSide * 0.05;
                     float dark = min(c.r, min(c.g, c.b));
                     for (int i = 0; i < 8; i++) {
@@ -306,10 +309,10 @@ class GradePreviewShader {
                         float3 s = float3(image.eval(p + float2(cos(a), sin(a)) * r).rgb);
                         dark += min(s.r, min(s.g, s.b));
                     }
-                    float h = clamp(dark / 9.0 * lcDehaze * 0.95, 0.0, 0.9);
+                    float h = clamp(dark / 9.0 * pr.z * 0.95, 0.0, 0.9);
                     c = (c - h) / (1.0 - h);
-                } else if (lcDehaze < 0.0) {
-                    c = mix(c, float3(0.82), -lcDehaze * 0.45);
+                } else if (pr.z < 0.0) {
+                    c = mix(c, float3(0.82), -pr.z * 0.45);
                 }
                 return clamp(c, 0.0, 1.0);
             }
@@ -317,13 +320,18 @@ class GradePreviewShader {
             half4 main(float2 coord) {
                 half4 src = image.eval(coord);
                 if (sharpen > 0.0 || chromaNR > 0.0) src = half4(half3(detailed(coord, float3(src.rgb))), src.a);
-                if (lcTexture != 0.0 || lcClarity != 0.0 || lcDehaze != 0.0) src = half4(half3(presence(coord, float3(src.rgb))), src.a);
+                // Masks first: inside one, its texture, clarity and dehaze add to the clip's.
+                float3 pr = float3(lcTexture, lcClarity, lcDehaze);
+                ${List(ColourMask.MAX_PER_CLIP) { i -> """
+                float w$i = 0.0;
+                if (maskCount > ${i}.5) {
+                    w$i = m${i}a.x > 1.5 ? brushWeight(m${i}a, m${i}b, coord, $i.0) : maskWeight(m${i}a, m${i}b, coord);
+                    pr += mp$i * w$i;
+                }""" }.joinToString("")}
+                if (pr != float3(0.0)) src = half4(half3(presence(coord, float3(src.rgb), pr)), src.a);
                 float3 c = float3(grade_lut(src.rgb));
                 ${List(ColourMask.MAX_PER_CLIP) { i -> """
-                if (maskCount > ${i}.5) {
-                    float w$i = m${i}a.x > 1.5 ? brushWeight(m${i}a, m${i}b, coord, $i.0) : maskWeight(m${i}a, m${i}b, coord);
-                    if (w$i > 0.0) c = mix(c, float3(grade_lutM$i(src.rgb)), w$i);
-                }""" }.joinToString("")}
+                if (w$i > 0.0) c = mix(c, float3(grade_lutM$i(src.rgb)), w$i);""" }.joinToString("")}
                 if (fromWeight > 0.0) c = mix(c, float3(grade_lutFrom(src.rgb)), fromWeight);
                 if (glow > 0.0 || halation > 0.0) {
                     float r = shortSide * 0.012;

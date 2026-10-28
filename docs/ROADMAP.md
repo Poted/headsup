@@ -83,9 +83,9 @@ project's files), the preview resized left/right when held sideways, Edit called
 ## Next (in this order)
 
 1. **Photo tools:** done: colour mixer, looks, point tone curves, colour grading wheels,
-   texture / clarity / dehaze (Adjust → Presence; on the whole picture, not per mask yet).
-2. **Masks:** done: brush, two-finger resize/turn. Next: presence (texture, clarity, dehaze) per
-   mask; later subject/sky selection.
+   texture / clarity / dehaze (Adjust → Presence; also inside masks).
+2. **Masks:** done: brush, two-finger resize/turn, presence (texture, clarity, dehaze) per mask.
+   Later: subject/sky selection.
 3. **Geometry:** perspective correction.
 4. **Export:** 16-bit TIFF, Ultra HDR (JPEG with a gain map).
 5. **Formats (last):** camera raws that are not DNG (CR3, NEF, ARW, RAF, …) through LibRaw,

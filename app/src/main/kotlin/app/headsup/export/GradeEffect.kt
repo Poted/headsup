@@ -113,6 +113,8 @@ class GradeEffect(
                     val (a, b) = masks.getOrNull(i)?.at(fileStartMs + positionMs)?.shaderParams() ?: (FloatArray(4) to FloatArray(4))
                     program.setFloatsUniform("uM${i}a", a)
                     program.setFloatsUniform("uM${i}b", b)
+                    val p = masks.getOrNull(i)?.grade?.presence ?: Presence.NONE
+                    program.setFloatsUniform("uMp$i", floatArrayOf(p.texture, p.clarity, p.dehaze))
                 }
                 val fromWeight = if (from != null) ColourTransition.fromWeight(positionMs, transitionMs) else 0f
                 program.setFloatUniform("uFromWeight", fromWeight)
@@ -168,6 +170,7 @@ class GradeEffect(
             uniform mat3 uHlgFix;
             uniform float uSdrWhite;
             uniform vec3 uPresence;
+            ${List(ColourMask.MAX_PER_CLIP) { "uniform vec3 uMp$it;" }.joinToString("\n")}
             const mat3 BT2020_TO_BT709 = mat3(
                 1.6605, -0.1246, -0.0182,
                 -0.5876, 1.1329, -0.1006,
@@ -264,19 +267,19 @@ class GradeEffect(
             }
 
             // As the preview shader's presence(): texture, clarity, dehaze.
-            vec3 presence(vec2 uv, vec3 c) {
+            vec3 presence(vec2 uv, vec3 c, vec3 pr) {
                 float shortSide = min(uSize.x, uSize.y);
                 float l = luma(c);
-                if (uPresence.x != 0.0) {
+                if (pr.x != 0.0) {
                     float m = ringLuma(uv, max(1.5, shortSide * 0.003));
-                    c += (l - m) * uPresence.x * 1.5;
+                    c += (l - m) * pr.x * 1.5;
                 }
-                if (uPresence.y != 0.0) {
+                if (pr.y != 0.0) {
                     float r = shortSide * 0.025;
                     float m = (ringLuma(uv, r) * 2.0 + ringLuma(uv, r * 0.5)) / 3.0;
-                    c += (l - m) * uPresence.y * 6.0 * l * (1.0 - l);
+                    c += (l - m) * pr.y * 6.0 * l * (1.0 - l);
                 }
-                if (uPresence.z > 0.0) {
+                if (pr.z > 0.0) {
                     float r = shortSide * 0.05;
                     float dark = min(c.r, min(c.g, c.b));
                     for (int i = 0; i < 8; i++) {
@@ -284,10 +287,10 @@ class GradeEffect(
                         vec3 s = source(uv + vec2(cos(a), sin(a)) * r / uSize);
                         dark += min(s.r, min(s.g, s.b));
                     }
-                    float h = clamp(dark / 9.0 * uPresence.z * 0.95, 0.0, 0.9);
+                    float h = clamp(dark / 9.0 * pr.z * 0.95, 0.0, 0.9);
                     c = (c - h) / (1.0 - h);
-                } else if (uPresence.z < 0.0) {
-                    c = mix(c, vec3(0.82), -uPresence.z * 0.45);
+                } else if (pr.z < 0.0) {
+                    c = mix(c, vec3(0.82), -pr.z * 0.45);
                 }
                 return clamp(c, 0.0, 1.0);
             }
@@ -295,14 +298,19 @@ class GradeEffect(
             void main() {
                 vec4 src = texture2D(uTexSampler, vTexSamplingCoord);
                 vec3 srcRgb = source(vTexSamplingCoord);
-                if (uPresence != vec3(0.0)) srcRgb = presence(vTexSamplingCoord, srcRgb);
                 vec2 px = vec2(vTexSamplingCoord.x, 1.0 - vTexSamplingCoord.y) * uSize;
+                // Masks first: inside one, its texture, clarity and dehaze add to the clip's.
+                vec3 pr = uPresence;
+                ${List(ColourMask.MAX_PER_CLIP) { i -> """
+                float w$i = 0.0;
+                if (uMaskCount > $i.5) {
+                    w$i = uM${i}a.x > 1.5 ? brushWeight(uM${i}a, uM${i}b, px, $i.0) : maskWeight(uM${i}a, uM${i}b, px);
+                    pr += uMp$i * w$i;
+                }""" }.joinToString("")}
+                if (pr != vec3(0.0)) srcRgb = presence(vTexSamplingCoord, srcRgb, pr);
                 vec3 c = grade(uLut, srcRgb);
                 ${List(ColourMask.MAX_PER_CLIP) { i -> """
-                if (uMaskCount > $i.5) {
-                    float w$i = uM${i}a.x > 1.5 ? brushWeight(uM${i}a, uM${i}b, px, $i.0) : maskWeight(uM${i}a, uM${i}b, px);
-                    if (w$i > 0.0) c = mix(c, grade(uLutM$i, srcRgb), w$i);
-                }""" }.joinToString("")}
+                if (w$i > 0.0) c = mix(c, grade(uLutM$i, srcRgb), w$i);""" }.joinToString("")}
                 if (uFromWeight > 0.0) c = mix(c, grade(uLutFrom, srcRgb), uFromWeight);
                 gl_FragColor = vec4(c, src.a);
             }

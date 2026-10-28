@@ -1796,9 +1796,7 @@ private fun ColourPage(
         GradeTarget.GROUP -> Adjustment.entries - Adjustment.BLEND - Adjustment.CINE - Adjustment.MATCH
         GradeTarget.GLOBAL -> Adjustment.entries - Adjustment.LUT - Adjustment.BLEND - Adjustment.CINE - Adjustment.MATCH
         GradeTarget.MASK -> Adjustment.entries - Adjustment.LUT - Adjustment.SKIN - Adjustment.VIGNETTE - Adjustment.BLEND -
-            Adjustment.CINE - Adjustment.MATCH - Adjustment.LOOK -
-            // Drawn on the whole picture before its colours, not per mask (yet).
-            Adjustment.TEXTURE - Adjustment.CLARITY - Adjustment.DEHAZE
+            Adjustment.CINE - Adjustment.MATCH - Adjustment.LOOK
     }
     val adjustment = if (adjustment in options) adjustment else Adjustment.EXPOSURE
     // On the Masks tab the ruler edits either a shape control or a correction.
