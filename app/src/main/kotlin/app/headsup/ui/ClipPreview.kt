@@ -231,6 +231,12 @@ fun ClipPreview(
     routeOverlay: ((android.graphics.Canvas, Float, Float, Long) -> Unit)? = null,
     /** The bar under the picture (play, time or size, histogram, zebra). */
     showTransport: Boolean = true,
+    /**
+     * Held sideways, the transport can fold away for a bigger picture: when [compactTransport], play
+     * and the time sit on the picture; [onCompact] (null: not offered) folds or unfolds it.
+     */
+    compactTransport: Boolean = false,
+    onCompact: ((Boolean) -> Unit)? = null,
 ) {
     val context = LocalContext.current
     // Two players: one shows the clip, the other holds the next one ready (a different shape or
@@ -631,6 +637,16 @@ fun ClipPreview(
         }
         players[active].play()
         playingChanged(true)
+    }
+    fun togglePlay() {
+        when {
+            photo -> {
+                if (!photoPlaying && playerMs >= clip.durationMs) playerMs = 0L
+                photoPlaying = !photoPlaying
+            }
+            wantsPlay -> pause()
+            else -> play()
+        }
     }
     // The timeline being dragged: declared after the media item is set (above), so a newly reached clip is ready.
     val timelineScrub = scrubTo.value
@@ -1095,12 +1111,44 @@ fun ClipPreview(
                     )
                 }
                 histogram?.takeIf { histogramOn }?.let { bins ->
-                    Histogram(bins, Modifier.align(Alignment.BottomStart).padding(10.dp).size(width = 128.dp, height = 56.dp))
+                    Histogram(bins, Modifier.align(Alignment.BottomStart).padding(start = 10.dp, end = 10.dp, top = 10.dp, bottom = if (compactTransport) 56.dp else 10.dp).size(width = 128.dp, height = 56.dp))
+                }
+                if (showTransport && compactTransport && !photoMode) {
+                    // Folded transport: play, the time and unfolding, on the picture.
+                    Row(
+                        Modifier.align(Alignment.BottomStart).fillMaxWidth().padding(10.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Box(
+                            Modifier
+                                .size(40.dp)
+                                .clip(CircleShape)
+                                .background(Color.Black.copy(alpha = 0.5f))
+                                .clickable { togglePlay() },
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Icon(if (wantsPlay) HeadsupIcons.Pause else HeadsupIcons.Play, contentDescription = if (wantsPlay) "Pause" else "Play", tint = Color.White)
+                        }
+                        Text(
+                            "  " + timecode(timelineOffsetMs + clipTimelineMs, clip.meta.frameRate) + "  /  " + Formats.duration(timelineTotalMs),
+                            Modifier.clip(RoundedCornerShape(8.dp)).background(Color.Black.copy(alpha = 0.4f)).padding(horizontal = 6.dp, vertical = 2.dp),
+                            style = MaterialTheme.typography.labelMedium.copy(fontFamily = FontFamily.Monospace),
+                            color = Color.White,
+                            maxLines = 1,
+                        )
+                        Spacer(Modifier.weight(1f))
+                        onCompact?.let { unfold ->
+                            Box(
+                                Modifier.size(36.dp).clip(CircleShape).background(Color.Black.copy(alpha = 0.5f)).clickable { unfold(false) },
+                                contentAlignment = Alignment.Center,
+                            ) { Text("⌃", color = Color.White, style = MaterialTheme.typography.titleMedium) }
+                        }
+                    }
                 }
             }
         }
 
-        if (showTransport) Row(
+        if (showTransport && !compactTransport) Row(
             Modifier.fillMaxWidth().clip(RoundedCornerShape(50)).background(HeadsupColors.CardGradient).border(1.dp, HeadsupColors.Outline, RoundedCornerShape(50)).padding(horizontal = 6.dp, vertical = 5.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
@@ -1109,16 +1157,7 @@ fun ClipPreview(
                     .size(36.dp)
                     .clip(CircleShape)
                     .background(HeadsupColors.Accent)
-                    .clickable {
-                        when {
-                            photo -> {
-                                if (!photoPlaying && playerMs >= clip.durationMs) playerMs = 0L
-                                photoPlaying = !photoPlaying
-                            }
-                            wantsPlay -> pause()
-                            else -> play()
-                        }
-                    },
+                    .clickable { togglePlay() },
                 contentAlignment = Alignment.Center,
             ) {
                 Icon(if (wantsPlay) HeadsupIcons.Pause else HeadsupIcons.Play, contentDescription = if (wantsPlay) "Pause" else "Play", tint = HeadsupColors.OnAccent)
@@ -1156,6 +1195,11 @@ fun ClipPreview(
             ToggleDot("H", histogramOn) { histogramOn = !histogramOn }
             Spacer(Modifier.width(4.dp))
             if (Build.VERSION.SDK_INT >= 33) ToggleDot("Z", zebra) { zebra = !zebra }
+            // Sideways: fold the transport and the timeline away for a bigger picture.
+            onCompact?.let { fold ->
+                Spacer(Modifier.width(4.dp))
+                ToggleDot("⌄", false) { fold(true) }
+            }
         }
     }
 }

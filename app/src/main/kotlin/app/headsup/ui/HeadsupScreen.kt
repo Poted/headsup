@@ -164,6 +164,7 @@ import kotlinx.coroutines.launch
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.runtime.rememberUpdatedState
 import app.headsup.core.track.ActivityTrack
@@ -288,7 +289,14 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
     // Sideways the screen is low: the picture leaves room under it for the transport and timeline.
     val share = if (wide) 0.48f else if (state.photoProject) albumShare else filmShare
     var wideShare by rememberSaveable { mutableStateOf(0.56f) }
-    val previewMaxHeight = if (fullscreen) configuration.screenHeightDp.dp else (configuration.screenHeightDp * share).dp
+    // Sideways the transport and timeline can fold away (play on the picture, the timeline a line).
+    var compact by rememberSaveable { mutableStateOf(false) }
+    val folded = compact && wide && !fullscreen && !state.photoProject
+    val previewMaxHeight = when {
+        fullscreen -> configuration.screenHeightDp.dp
+        folded -> (configuration.screenHeightDp * 0.84f).dp
+        else -> (configuration.screenHeightDp * share).dp
+    }
     // Full screen hides the status and navigation bars too (a swipe from the edge shows them for a moment).
     val activityWindow = (LocalContext.current as? android.app.Activity)?.window
     val rootView = androidx.compose.ui.platform.LocalView.current
@@ -371,6 +379,8 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
                         texts = if (state.photoProject) state.texts.filter { it.showsOn(selected.id, selected.groupId) } else state.texts,
                         photoMode = state.photoProject,
                         showTransport = !fullscreen && (!state.photoProject || tool == Tool.EDIT || tool == Tool.COLOUR),
+                        compactTransport = folded,
+                        onCompact = if (wide && !fullscreen && !state.photoProject) { c -> compact = c } else null,
                         // Read here so arriving place names redraw the texts.
                         textValues = state.placesVersion.let { _ -> { pos -> vm.textValues(state, selected, pos) } },
                         routeOverlay = if (state.routeMap.enabled) routeOverlayFor(vm, state, selected) else null,
@@ -436,6 +446,25 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
                         AlbumBar(state, vm) { albumOpen = true }
                     }
                 }
+            } else if (state.clips.isNotEmpty() && folded) {
+                // Folded: the timeline is a line to scrub along.
+                ScrubLine(
+                    totalMs = clipStarts.last(),
+                    playheadMs = { scrubT.value ?: timelineOf(playhead.longValue) },
+                    onScrub = { t ->
+                        if (t == null) {
+                            scrubTo.value = null
+                        } else {
+                            scrubT.value = t
+                            val (i, pos) = locate(t)
+                            if (i != state.selectedClip) {
+                                videoSelected = false
+                                vm.selectClip(i)
+                            }
+                            scrubTo.value = pos
+                        }
+                    },
+                )
             } else if (state.clips.isNotEmpty()) {
                 Timeline(
                     state = state,
@@ -580,11 +609,15 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
         } else if (wide) {
             androidx.compose.foundation.layout.BoxWithConstraints(Modifier.fillMaxSize().systemBarsPadding().padding(top = 8.dp)) {
                 val total = constraints.maxWidth.toFloat().coerceAtLeast(1f)
+                // The picture takes at most three quarters, and leaves the tools room for three of their circles.
+                val minTools = with(density) { MIN_TOOLS_WIDTH.toPx() }
+                val maxShare = minOf(0.75f, 1f - minTools / total).coerceAtLeast(0.36f)
+                val pictureShare = wideShare.coerceIn(0.35f, maxShare)
                 Row(Modifier.fillMaxSize()) {
-                    Column(Modifier.weight(wideShare).fillMaxHeight(), content = pictureAndTimeline)
+                    Column(Modifier.weight(pictureShare).fillMaxHeight(), content = pictureAndTimeline)
                     // Dragging this moves the line between the picture and the tools, left and right.
-                    SideHandle { dx -> wideShare = (wideShare + dx / total).coerceIn(0.35f, 0.75f) }
-                    Column(Modifier.weight(1f - wideShare).fillMaxHeight(), content = tools)
+                    SideHandle { dx -> wideShare = (pictureShare + dx / total).coerceIn(0.35f, maxShare) }
+                    Column(Modifier.weight(1f - pictureShare).fillMaxHeight(), content = tools)
                 }
             }
         } else {
@@ -703,6 +736,44 @@ private fun UndoRedo(canUndo: Boolean, canRedo: Boolean, onUndo: () -> Unit, onR
 private data class Quad<A, B, C, D>(val a: A, val b: B, val c: C, val d: D)
 
 private const val UNDO_ALL_HOLD_MS = 3_000L
+
+/** The tools' narrowest, held sideways: three circles of a tool row, with the panel's margins. */
+private val MIN_TOOLS_WIDTH = 248.dp
+
+/** The timeline folded to a line: the playhead's place in it, dragged or tapped to move it. */
+@Composable
+private fun ScrubLine(totalMs: Long, playheadMs: () -> Long, onScrub: (Long?) -> Unit) {
+    val accent = HeadsupColors.Accent
+    Box(
+        Modifier
+            .fillMaxWidth()
+            .height(32.dp)
+            .padding(horizontal = 24.dp)
+            .pointerInput(totalMs) {
+                fun at(x: Float) = (x / size.width.coerceAtLeast(1) * totalMs).toLong().coerceIn(0L, totalMs)
+                awaitEachGesture {
+                    val down = awaitFirstDown()
+                    down.consume()
+                    onScrub(at(down.position.x))
+                    while (true) {
+                        val event = awaitPointerEvent()
+                        val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                        if (!change.pressed) break
+                        change.consume()
+                        onScrub(at(change.position.x))
+                    }
+                    onScrub(null)
+                }
+            }
+            .drawBehind {
+                val y = size.height / 2
+                val f = if (totalMs > 0) (playheadMs().toFloat() / totalMs).coerceIn(0f, 1f) else 0f
+                drawLine(Color.White.copy(alpha = 0.25f), Offset(0f, y), Offset(size.width, y), strokeWidth = 3.dp.toPx(), cap = androidx.compose.ui.graphics.StrokeCap.Round)
+                drawLine(accent, Offset(0f, y), Offset(size.width * f, y), strokeWidth = 3.dp.toPx(), cap = androidx.compose.ui.graphics.StrokeCap.Round)
+                drawCircle(Color.White, radius = 7.dp.toPx(), center = Offset(size.width * f, y))
+            },
+    )
+}
 
 /** Rounded block used to group related controls inside a panel. */
 @Composable

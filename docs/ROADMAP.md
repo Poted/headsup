@@ -59,6 +59,10 @@ project's files), the preview resized left/right when held sideways, Edit called
       for none). Without a FIT file: say a file is needed, and no dashboard options on by default.
 - [x] The playhead jumps to the clip's start (e.g. after a cut) instead of staying at the join.
 
+- [x] Held sideways: the picture takes at most 3/4 of the width, the tools keep room for three
+      circles; the transport and timeline fold away (play and time on the picture, the timeline a
+      line to scrub) for a bigger picture.
+
 ### Later
 - [ ] Shrinking the preview is not obvious: a short tutorial for users.
 - [x] Holding undo for 3 s asks to undo all changes (back to the project as opened; redo brings
