@@ -1,5 +1,6 @@
 package app.headsup.core.color
 
+import kotlin.math.abs
 import kotlin.math.cos
 import kotlin.math.sin
 import kotlin.test.Test
@@ -100,5 +101,25 @@ class MaskTrackerTest {
         assertNotNull(last)
         // The painting (0.3 right of the mask's centre) ended beyond the right edge.
         assertTrue(last.centerX + 0.3f > 1f)
+    }
+
+    /** The textured scene squashed vertically by [squash] around the centre (a table seen ever more from the side). */
+    private fun squashed(squash: Double) = GrayFrame(w, h, FloatArray(w * h) { i ->
+        val x = i % w - w / 2.0
+        val y = (i / w - h / 2.0) / squash
+        (0.5 + 0.2 * sin(x * 0.21) * cos(y * 0.17) + 0.15 * sin((x + 2 * y) * 0.09) + 0.1 * cos(x * 0.05 - y * 0.31)).toFloat()
+    })
+
+    @Test
+    fun `an oval on a surface turning away becomes flatter`() {
+        val mask = ColourMask(MaskKind.ELLIPSE, centerX = 0.5f, centerY = 0.5f, sizeX = 0.5f, sizeY = 0.5f)
+        val tracker = MaskTracker(mask, squashed(1.0), 0)
+        var key: MaskKey? = null
+        for (step in 1..20) key = tracker.next(squashed(1.0 - step * 0.02), step * 100L)
+        assertNotNull(key)
+        // Flattened to 0.6 of its height, its width kept, still upright.
+        val (wide, tall) = if (abs(key.angleDegrees) < 45f) key.sizeX to key.sizeY else key.sizeY to key.sizeX
+        assertEquals(0.5f, wide, 0.04f)
+        assertEquals(0.3f, tall, 0.04f)
     }
 }

@@ -1,5 +1,6 @@
 package app.headsup.core.color
 
+import kotlin.math.abs
 import kotlin.math.atan2
 import kotlin.math.cos
 import kotlin.math.hypot
@@ -14,8 +15,9 @@ class GrayFrame(val width: Int, val height: Int, val pixels: FloatArray) {
 /**
  * Makes a mask follow the picture through a clip, like a planar tracker in DaVinci: patches of the
  * picture spread over the mask's area (along it, for a line) are found again in each next frame by
- * normalised cross-correlation, and one move, turn and scale is fitted to them all, leaving out the
- * ones that disagree (lost on a reflection, covered by something). Patches slowly take on the
+ * normalised cross-correlation, and one affine change (move, turn, scale, and the squash and slant
+ * of a surface seen from a new angle, e.g. a round table becoming an ellipse) is fitted to them
+ * all, leaving out the ones that disagree (lost on a reflection, covered by something). Patches slowly take on the
  * picture's new look, so an object seen ever closer is still found. Patches that leave the frame
  * stop counting; when the whole area leaves it, the mask carries on at its last speed until it is
  * out of the picture ([leftFrame]). Tracking stops where too few patches can be found.
@@ -46,9 +48,10 @@ class MaskTracker(
     /** How far the followed area reaches from its middle, in pixels (for when it leaves the frame). */
     private val reach: Double
 
-    /** The last fit: scale, turn, the mask's centre and how it moved since the frame before. */
-    private var scale = 1.0
-    private var turn = 0.0
+    /** The mask as last fitted: angle (degrees), sizes, its centre and how it moved since the frame before. */
+    private var angle = start.angleDegrees.toDouble()
+    private var sizeX = start.sizeX.toDouble()
+    private var sizeY = start.sizeY.toDouble()
     private var cx = c0x
     private var cy = c0y
     private var vx = 0.0
@@ -125,14 +128,12 @@ class MaskTracker(
             }
             return key(timeMs)
         }
-        val nx = fit.mx + fit.scale * ((c0x - fit.m0x) * cos(fit.turn) - (c0y - fit.m0y) * sin(fit.turn))
-        val ny = fit.my + fit.scale * ((c0x - fit.m0x) * sin(fit.turn) + (c0y - fit.m0y) * cos(fit.turn))
+        val (nx, ny) = fit.apply(c0x, c0y)
         vx = nx - cx
         vy = ny - cy
         cx = nx
         cy = ny
-        scale = fit.scale
-        turn = fit.turn
+        shape(fit)
         return key(timeMs)
     }
 
@@ -140,18 +141,73 @@ class MaskTracker(
         timeMs,
         (cx / width).toFloat(),
         (cy / height).toFloat(),
-        base.angleDegrees + Math.toDegrees(turn).toFloat(),
-        (base.sizeX * scale).toFloat(),
-        (base.sizeY * scale).toFloat(),
+        angle.toFloat(),
+        sizeX.toFloat(),
+        sizeY.toFloat(),
     )
 
-    /** One move, turn and scale taking the patches' starting places to where they are now (least squares). */
-    private class Fit(val m0x: Double, val m0y: Double, val mx: Double, val my: Double, val scale: Double, val turn: Double) {
+    /**
+     * The mask's angle and sizes after [fit]'s change. An oval stays an exact oval (its axes from the
+     * changed ellipse); a painted mask takes the nearest turn with a stretch along its own axes; a
+     * line takes the turn of its direction.
+     */
+    private fun shape(fit: Fit) {
+        val a0 = Math.toRadians(base.angleDegrees.toDouble())
+        val c = cos(a0)
+        val s = sin(a0)
+        // The mask's axes (in pixels, isotropic) after the change: M = A · R(a0) · diag(sx, sy).
+        val m11 = (fit.a11 * c + fit.a12 * s) * base.sizeX
+        val m21 = (fit.a21 * c + fit.a22 * s) * base.sizeX
+        val m12 = (-fit.a11 * s + fit.a12 * c) * base.sizeY
+        val m22 = (-fit.a21 * s + fit.a22 * c) * base.sizeY
+        when (base.kind) {
+            MaskKind.LINEAR -> angle = Math.toDegrees(atan2(fit.a21 * c + fit.a22 * s, fit.a11 * c + fit.a12 * s))
+            MaskKind.ELLIPSE -> {
+                // Singular values of M: the new axes; the left rotation: their angle.
+                val e = (m11 + m22) / 2
+                val f = (m11 - m22) / 2
+                val g = (m21 + m12) / 2
+                val h = (m21 - m12) / 2
+                val q = hypot(e, h)
+                val r = hypot(f, g)
+                val theta = Math.toDegrees((atan2(h, e) + atan2(g, f)) / 2)
+                // The same oval can be named by a turn of half a revolution, or a quarter with the
+                // sizes swapped: take the one nearest the last, so keys glide.
+                val options = listOf(Triple(theta, q + r, abs(q - r)), Triple(theta + 90, abs(q - r), q + r))
+                    .flatMap { (t, x, y) -> listOf(-360.0, -180.0, 0.0, 180.0, 360.0).map { Triple(t + it, x, y) } }
+                val best = options.minBy { abs(it.first - angle) }
+                angle = best.first
+                sizeX = best.second
+                sizeY = best.third
+            }
+            MaskKind.BRUSH -> {
+                // Nearest turn (polar decomposition), then the stretch along the mask's own axes.
+                val t = atan2(m21 - m12, m11 + m22)
+                val ct = cos(t)
+                val st = sin(t)
+                angle = Math.toDegrees(t)
+                sizeX = abs(ct * m11 + st * m21)
+                sizeY = abs(-st * m12 + ct * m22)
+            }
+        }
+    }
+
+    /**
+     * The change taking the patches' starting places to where they are now (least squares):
+     * p = m + A · (p0 − m0). Affine with enough patches spread out, else a move, turn and scale.
+     */
+    private class Fit(
+        val m0x: Double, val m0y: Double, val mx: Double, val my: Double,
+        val a11: Double, val a12: Double, val a21: Double, val a22: Double,
+    ) {
+        fun apply(x: Double, y: Double): Pair<Double, Double> {
+            val dx = x - m0x
+            val dy = y - m0y
+            return mx + a11 * dx + a12 * dy to my + a21 * dx + a22 * dy
+        }
+
         fun residual(p: Point): Double {
-            val dx = p.x0 - m0x
-            val dy = p.y0 - m0y
-            val ex = mx + scale * (dx * cos(turn) - dy * sin(turn))
-            val ey = my + scale * (dx * sin(turn) + dy * cos(turn))
+            val (ex, ey) = apply(p.x0, p.y0)
             return hypot(p.x - ex, p.y - ey)
         }
     }
@@ -161,23 +217,41 @@ class MaskTracker(
         val m0y = ps.sumOf { it.y0 } / ps.size
         val mx = ps.sumOf { it.x } / ps.size
         val my = ps.sumOf { it.y } / ps.size
-        var a = 0.0
-        var b = 0.0
-        var s0 = 0.0
+        var sxx = 0.0; var sxy = 0.0; var syy = 0.0
+        var bxx = 0.0; var bxy = 0.0; var byx = 0.0; var byy = 0.0
+        var a = 0.0; var b = 0.0
         for (p in ps) {
             val dx0 = p.x0 - m0x
             val dy0 = p.y0 - m0y
             val dx = p.x - mx
             val dy = p.y - my
+            sxx += dx0 * dx0; sxy += dx0 * dy0; syy += dy0 * dy0
+            bxx += dx * dx0; bxy += dx * dy0; byx += dy * dx0; byy += dy * dy0
             a += dx0 * dx + dy0 * dy
             b += dx0 * dy - dy0 * dx
-            s0 += dx0 * dx0 + dy0 * dy0
         }
+        val s0 = sxx + syy
         if (s0 < 1e-6) return null
+        val det = sxx * syy - sxy * sxy
+        // Spread in both directions (not all on a line) and enough of them: the full change.
+        val spread = det / (s0 * s0 / 4)
+        if (ps.size >= 4 && spread > 0.05) {
+            val a11 = (bxx * syy - bxy * sxy) / det
+            val a12 = (bxy * sxx - bxx * sxy) / det
+            val a21 = (byx * syy - byy * sxy) / det
+            val a22 = (byy * sxx - byx * sxy) / det
+            val area = a11 * a22 - a12 * a21
+            // Mirrored, collapsed or blown up: a bad match, not the camera.
+            if (area < 0.04 || area > 25.0) return null
+            val s1 = hypot(a11, a21)
+            val s2 = hypot(a12, a22)
+            if (s1 / s2 !in 0.2..5.0) return null
+            return Fit(m0x, m0y, mx, my, a11, a12, a21, a22)
+        }
         val s = hypot(a, b) / s0
-        // A sudden jump in size is a bad match, not the camera.
         if (s !in 0.2..5.0) return null
-        return Fit(m0x, m0y, mx, my, s, atan2(b, a))
+        val t = atan2(b, a)
+        return Fit(m0x, m0y, mx, my, s * cos(t), -s * sin(t), s * sin(t), s * cos(t))
     }
 
     /** The key at the starting frame, so the track begins where the mask was placed. */

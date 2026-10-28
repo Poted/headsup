@@ -158,6 +158,9 @@ import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.waitForUpOrCancellation
+import androidx.compose.ui.draw.drawWithContent
+import kotlinx.coroutines.launch
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.input.pointer.pointerInput
@@ -398,7 +401,7 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
                         },
                     )
                     // Undo/redo tucked into the picture's corner, only when there is something to undo.
-                    if (!fullscreen) UndoRedo(state.canUndo, state.canRedo, vm::undo, vm::redo, Modifier.align(Alignment.TopEnd).padding(top = 8.dp, end = 24.dp))
+                    if (!fullscreen) UndoRedo(state.canUndo, state.canRedo, vm::undo, vm::redo, vm::undoAll, Modifier.align(Alignment.TopEnd).padding(top = 8.dp, end = 24.dp))
                     // Full screen: the picture alone, to see it as it will look.
                     Box(
                         Modifier
@@ -636,21 +639,59 @@ private fun EmptyState(photoProject: Boolean) {
     }
 }
 
-/** Two small, quiet arrows over the picture; hidden until there is something to undo. */
+/**
+ * Two small, quiet arrows over the picture; hidden until there is something to undo. Holding
+ * undo for [UNDO_ALL_HOLD_MS] (a ring fills meanwhile) asks whether to undo every change.
+ */
 @Composable
-private fun UndoRedo(canUndo: Boolean, canRedo: Boolean, onUndo: () -> Unit, onRedo: () -> Unit, modifier: Modifier) {
+private fun UndoRedo(canUndo: Boolean, canRedo: Boolean, onUndo: () -> Unit, onRedo: () -> Unit, onUndoAll: () -> Unit, modifier: Modifier) {
     if (!canUndo && !canRedo) return
+    var askAll by remember { mutableStateOf(false) }
+    val hold = remember { androidx.compose.animation.core.Animatable(0f) }
+    val scope = rememberCoroutineScope()
+    if (askAll) {
+        AlertDialog(
+            onDismissRequest = { askAll = false },
+            title = { Text("Undo all changes?") },
+            text = { Text("The project goes back to how it was when you opened it. Redo can still bring the changes back.") },
+            confirmButton = { TextButton(onClick = { askAll = false; onUndoAll() }) { Text("Undo all") } },
+            dismissButton = { TextButton(onClick = { askAll = false }) { Text("Cancel") } },
+        )
+    }
     Row(modifier, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
         for ((icon, enabled, action, label) in listOf(
             Quad(HeadsupIcons.Undo, canUndo, onUndo, "Undo"),
             Quad(HeadsupIcons.Redo, canRedo, onRedo, "Redo"),
         )) {
+            val undo = label == "Undo"
             Box(
                 Modifier
                     .size(30.dp)
                     .clip(CircleShape)
                     .background(Color.Black.copy(alpha = 0.35f))
-                    .clickable(enabled = enabled, onClick = action),
+                    .then(
+                        if (!undo) {
+                            Modifier.clickable(enabled = enabled, onClick = action)
+                        } else {
+                            Modifier.pointerInput(enabled) {
+                                if (!enabled) return@pointerInput
+                                awaitEachGesture {
+                                    awaitFirstDown().consume()
+                                    val filling = scope.launch { hold.animateTo(1f, androidx.compose.animation.core.tween(UNDO_ALL_HOLD_MS.toInt(), easing = androidx.compose.animation.core.LinearEasing)) }
+                                    val up = withTimeoutOrNull(UNDO_ALL_HOLD_MS) { waitForUpOrCancellation() }
+                                    filling.cancel()
+                                    scope.launch { hold.snapTo(0f) }
+                                    if (up != null) action() else askAll = true
+                                }
+                            }
+                        },
+                    )
+                    .drawWithContent {
+                        drawContent()
+                        if (undo && hold.value > 0f) {
+                            drawArc(HeadsupColors.Accent, -90f, 360f * hold.value, false, style = Stroke(2.dp.toPx()))
+                        }
+                    },
                 contentAlignment = Alignment.Center,
             ) {
                 Icon(icon, contentDescription = label, Modifier.size(16.dp), tint = Color.White.copy(alpha = if (enabled) 0.85f else 0.3f))
@@ -660,6 +701,8 @@ private fun UndoRedo(canUndo: Boolean, canRedo: Boolean, onUndo: () -> Unit, onR
 }
 
 private data class Quad<A, B, C, D>(val a: A, val b: B, val c: C, val d: D)
+
+private const val UNDO_ALL_HOLD_MS = 3_000L
 
 /** Rounded block used to group related controls inside a panel. */
 @Composable

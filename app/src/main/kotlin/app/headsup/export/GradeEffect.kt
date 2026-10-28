@@ -220,7 +220,7 @@ class GradeEffect(
                 vec2 d = vec2((px.x / uSize.x - a.y) * aspect, px.y / uSize.y - a.z);
                 float c = cos(a.w);
                 float s = sin(a.w);
-                vec2 u = vec2(d.x * c + d.y * s, -d.x * s + d.y * c) / max(b.x, 0.001);
+                vec2 u = vec2(d.x * c + d.y * s, -d.x * s + d.y * c) / max(b.xy, vec2(0.001));
                 vec2 q = vec2(0.5 + u.x / aspect, 0.5 + u.y);
                 float w = 0.0;
                 if (q.x >= 0.0 && q.x <= 1.0 && q.y >= 0.0 && q.y <= 1.0) {

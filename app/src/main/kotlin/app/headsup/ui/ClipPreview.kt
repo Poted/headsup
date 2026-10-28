@@ -1277,7 +1277,7 @@ private fun drawBrushOverlay(canvas: android.graphics.Canvas, atlas: Bitmap, slo
     canvas.save()
     canvas.translate(mask.centerX * width, mask.centerY * height)
     canvas.rotate(mask.angleDegrees)
-    canvas.scale(mask.sizeX, mask.sizeX)
+    canvas.scale(mask.sizeX, mask.sizeY)
     canvas.translate(-width / 2f, -height / 2f)
     canvas.drawBitmap(atlas, android.graphics.Rect(slot * slotW, 0, (slot + 1) * slotW, atlas.height), android.graphics.RectF(0f, 0f, width, height), brushOverlayPaint)
     canvas.restore()

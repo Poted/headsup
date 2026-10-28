@@ -229,7 +229,7 @@ class GradePreviewShader {
                 float2 d = float2((coord.x / size.x - a.y) * aspect, coord.y / size.y - a.z);
                 float c = cos(a.w);
                 float s = sin(a.w);
-                float2 u = float2(d.x * c + d.y * s, -d.x * s + d.y * c) / max(b.x, 0.001);
+                float2 u = float2(d.x * c + d.y * s, -d.x * s + d.y * c) / max(b.xy, float2(0.001));
                 float2 q = float2(0.5 + u.x / aspect, 0.5 + u.y);
                 float w = 0.0;
                 if (q.x >= 0.0 && q.x <= 1.0 && q.y >= 0.0 && q.y <= 1.0) {

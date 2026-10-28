@@ -423,9 +423,9 @@ object BrushMask {
         val s = sin(delta).toFloat()
         val dx = (x - now.centerX) * aspect
         val dy = y - now.centerY
-        val k = BASE.sizeX / now.sizeX.coerceAtLeast(0.001f)
-        val ux = (dx * c + dy * s) * k
-        val uy = (-dx * s + dy * c) * k
+        // Stretched along the mask's own axes (a surface seen from a new angle).
+        val ux = (dx * c + dy * s) * BASE.sizeX / now.sizeX.coerceAtLeast(0.001f)
+        val uy = (-dx * s + dy * c) * BASE.sizeY / now.sizeY.coerceAtLeast(0.001f)
         return BASE.centerX + ux / aspect to BASE.centerY + uy
     }
 
@@ -434,9 +434,8 @@ object BrushMask {
         val delta = Math.toRadians((now.angleDegrees - BASE.angleDegrees).toDouble())
         val c = cos(delta).toFloat()
         val s = sin(delta).toFloat()
-        val k = now.sizeX / BASE.sizeX
-        val ux = (x - BASE.centerX) * aspect * k
-        val uy = (y - BASE.centerY) * k
+        val ux = (x - BASE.centerX) * aspect * now.sizeX / BASE.sizeX
+        val uy = (y - BASE.centerY) * now.sizeY / BASE.sizeY
         return now.centerX + (ux * c - uy * s) / aspect to now.centerY + (ux * s + uy * c)
     }
 

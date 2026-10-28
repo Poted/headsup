@@ -61,6 +61,8 @@ project's files), the preview resized left/right when held sideways, Edit called
 
 ### Later
 - [ ] Shrinking the preview is not obvious: a short tutorial for users.
+- [x] Holding undo for 3 s asks to undo all changes (back to the project as opened; redo brings
+      them back).
 - [ ] Safe point: a moment in the edit history to come back to easily.
 - [ ] A scrollbar at the side wherever a page scrolls, so users know.
 - [ ] Show how far each control is set without opening it (like a guitar amp's knob): the dot on
