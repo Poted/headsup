@@ -366,6 +366,7 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
                         paintRadius = state.brush.radius,
                         paintStrength = state.brush.flow,
                         paintErase = state.brush.mode == BrushMode.ERASE,
+                        brushCursor = state.brush.radius.takeIf { state.brushSizeShown && editingBrush && editingMasks },
                         vignette = if (selected.colorGrade && !showOriginal) state.appliedGrade(selected).vignette else 0f,
                         presence = if (selected.colorGrade && !showOriginal) state.appliedGrade(selected).presence else app.headsup.core.color.Presence.NONE,
                         effects = if (showOriginal) app.headsup.render.EffectSettings(dashboard = false) else state.compareEffects ?: state.effects,
@@ -2158,10 +2159,17 @@ private fun WheelControls(state: UiState, vm: HeadsupViewModel) {
     val sat = W.saturation(wheels, range)
     fun set(index: Int, v: Float) = vm.updateGrade { it.copy(wheels = W.with(it.wheels, index, v)) }
     val hueIndex = range.ordinal * 3
+    // The range's values above, the wheel under them, not wider than the panel allows.
     Row(verticalAlignment = Alignment.CenterVertically) {
+        Hint(String.format(Locale.US, "%s: %.0f°, %.0f %%", range.label, hue, sat * 100), Modifier.weight(1f))
+        if (sat != 0f || W.luminance(wheels, range) != 0f) {
+            SmallAction("Reset", { vm.updateGrade { g -> g.copy(wheels = W.with(W.with(W.with(g.wheels, hueIndex, 0f), hueIndex + 1, 0f), hueIndex + 2, 0f)) } })
+        }
+    }
+    androidx.compose.foundation.layout.BoxWithConstraints(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
         androidx.compose.foundation.Canvas(
             Modifier
-                .size(170.dp)
+                .size(minOf(150.dp, maxWidth * 0.75f))
                 .pointerInput(range) {
                     fun pick(pos: Offset) {
                         val cx = size.width / 2f
@@ -2183,13 +2191,6 @@ private fun WheelControls(state: UiState, vm: HeadsupViewModel) {
             val a = Math.toRadians(hue.toDouble())
             val dot = Offset(center.x + (kotlin.math.cos(a) * sat * radius).toFloat(), center.y - (kotlin.math.sin(a) * sat * radius).toFloat())
             drawCircle(Color.White, 7.dp.toPx(), dot, style = androidx.compose.ui.graphics.drawscope.Stroke(2.dp.toPx()))
-        }
-        Spacer(Modifier.width(12.dp))
-        Column(Modifier.weight(1f)) {
-            Hint(String.format(Locale.US, "%s: %.0f°, %.0f %%", range.label, hue, sat * 100))
-            if (sat != 0f || W.luminance(wheels, range) != 0f) {
-                SmallAction("Reset ${range.label.lowercase()}", { vm.updateGrade { g -> g.copy(wheels = W.with(W.with(W.with(g.wheels, hueIndex, 0f), hueIndex + 1, 0f), hueIndex + 2, 0f)) } })
-            }
         }
     }
     ValueHeader("${range.label} brightness", String.format(Locale.US, "%+.0f", W.luminance(wheels, range) * 100))
@@ -2525,6 +2526,9 @@ private fun BrushControls(state: UiState, vm: HeadsupViewModel) {
             CircleOption(b.symbol, b.label, selected = b == setting, modified = false) { chosen = b }
         }
     }
+    // Choosing Size shows the brush on the picture, as big as it paints.
+    LaunchedEffect(setting) { vm.showBrushSize(setting == BrushSetting.SIZE) }
+    DisposableEffect(Unit) { onDispose { vm.showBrushSize(false) } }
     val value = when (setting) {
         BrushSetting.SIZE -> brush.radius
         BrushSetting.SOFTNESS -> mask.softness

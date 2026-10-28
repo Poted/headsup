@@ -161,6 +161,8 @@ fun ClipPreview(
     paintRadius: Float = 0f,
     paintStrength: Float = 1f,
     paintErase: Boolean = false,
+    /** The brush's radius (of the picture's height) to show in the picture's middle while its size is set, or null. */
+    brushCursor: Float? = null,
     vignette: Float,
     /** Texture, clarity and dehaze of the selected clip. */
     presence: app.headsup.core.color.Presence = app.headsup.core.color.Presence.NONE,
@@ -1026,6 +1028,12 @@ fun ClipPreview(
                         }) {
                             if (m.kind == MaskKind.BRUSH) {
                                 brushAtlas?.let { atlas -> drawIntoCanvas { drawBrushOverlay(it.nativeCanvas, atlas, guideIndex, m, geometry.pictureW, geometry.pictureH) } }
+                                brushCursor?.let { radius ->
+                                    val c = Offset(geometry.pictureW / 2f, geometry.pictureH / 2f)
+                                    val px = radius * geometry.pictureH
+                                    drawCircle(Color.Black.copy(alpha = 0.5f), px, c, style = Stroke(3.dp.toPx()))
+                                    drawCircle(Color.White, px, c, style = Stroke(1.5.dp.toPx()))
+                                }
                                 if (paintPath.size >= 2) {
                                     // The stroke as it is painted, the brush's width, before the mask is drawn again.
                                     val path = androidx.compose.ui.graphics.Path()
