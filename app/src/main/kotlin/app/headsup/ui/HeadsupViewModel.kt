@@ -595,6 +595,9 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
     // Undo and redo
 
     private val history = ArrayList<EditSnapshot>()
+
+    /** The project as it was when opened: kept apart, as the history drops its oldest steps. */
+    private var historyBase: EditSnapshot? = null
     private var historyStartsAgain = true
     private var historyIndex = -1
 
@@ -625,6 +628,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
             historyStartsAgain = false
             history.clear()
             history += snapshot
+            historyBase = snapshot
             historyIndex = 0
         } else {
             while (history.size > historyIndex + 1) history.removeAt(history.lastIndex)
@@ -650,12 +654,16 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
         restore(history[historyIndex])
     }
 
-    /** Back to the start of the history (the project as opened); redo can bring the changes back. */
+    /**
+     * Back to the project as it was when opened, however many steps ago. It is a step of its own,
+     * so undo brings the changes back.
+     */
     fun undoAll() {
+        val base = historyBase ?: return
         record(_state.value.snapshot())
-        if (historyIndex <= 0) return
-        historyIndex = 0
-        restore(history[0])
+        if (history.getOrNull(historyIndex) == base) return
+        restore(base)
+        record(base)
     }
 
     fun redo() {

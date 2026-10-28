@@ -744,7 +744,7 @@ private fun UndoRedo(canUndo: Boolean, canRedo: Boolean, onUndo: () -> Unit, onR
         AlertDialog(
             onDismissRequest = { askAll = false },
             title = { Text("Undo all changes?") },
-            text = { Text("The project goes back to how it was when you opened it. Redo can still bring the changes back.") },
+            text = { Text("The project goes back to how it was when you opened it. Undo brings the changes back.") },
             confirmButton = { TextButton(onClick = { askAll = false; onUndoAll() }) { Text("Undo all") } },
             dismissButton = { TextButton(onClick = { askAll = false }) { Text("Cancel") } },
         )
