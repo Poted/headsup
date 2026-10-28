@@ -156,6 +156,8 @@ import java.util.Locale
 import kotlin.math.roundToLong
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.input.pointer.pointerInput
@@ -2001,52 +2003,58 @@ private fun CurveControls(state: UiState, vm: HeadsupViewModel) {
         }
         if (flat.isNotEmpty()) SmallAction("Reset", { store(listOf(0f to 0f, 1f to 1f)) })
     }
-    // The points while a finger moves one, so the drag follows it between updates.
     val points = app.headsup.core.color.ToneCurve.points(flat)
     val current by rememberUpdatedState(points)
-    var dragged by remember { mutableStateOf(-1) }
     androidx.compose.foundation.Canvas(
         Modifier
             .fillMaxWidth()
             .aspectRatio(1.4f)
             .clip(RoundedCornerShape(12.dp))
             .background(Color.Black.copy(alpha = 0.35f))
+            // One handler for touching, dragging and double-tapping, working on its own copy of the
+            // points (the stored ones arrive a frame later) and taking every move, so the page
+            // does not scroll instead.
             .pointerInput(channel) {
-                detectTapGestures(onDoubleTap = { pos ->
-                    val p = current
-                    val i = p.indices.minByOrNull { k -> (Offset(p[k].first * size.width, (1 - p[k].second) * size.height) - pos).getDistance() } ?: return@detectTapGestures
-                    val near = (Offset(p[i].first * size.width, (1 - p[i].second) * size.height) - pos).getDistance() < 28.dp.toPx()
-                    if (near && i != 0 && i != p.lastIndex) store(p.filterIndexed { k, _ -> k != i })
-                })
-            }
-            .pointerInput(channel) {
-                detectDragGestures(
-                    onDragStart = { pos ->
-                        val p = current
-                        val i = p.indices.minByOrNull { k -> (Offset(p[k].first * size.width, (1 - p[k].second) * size.height) - pos).getDistance() }
-                        dragged = if (i != null && (Offset(p[i].first * size.width, (1 - p[i].second) * size.height) - pos).getDistance() < 28.dp.toPx()) {
-                            i
-                        } else {
-                            // A new point on the curve where the finger is.
-                            val x = (pos.x / size.width).coerceIn(0.01f, 0.99f)
-                            val added = (p + (x to app.headsup.core.color.ToneCurve.through(p, x))).sortedBy { it.first }
-                            store(added)
-                            added.indexOfFirst { it.first == x }
-                        }
-                    },
-                    onDragEnd = { dragged = -1 },
-                    onDragCancel = { dragged = -1 },
-                ) { change, _ ->
-                    val p = current
-                    val i = dragged
-                    if (i !in p.indices) return@detectDragGestures
-                    change.consume()
-                    // A point stays between its neighbours; the ends keep their x.
-                    val lo = if (i == 0) 0f else p[i - 1].first + 0.01f
-                    val hi = if (i == p.lastIndex) 1f else p[i + 1].first - 0.01f
-                    val x = if (i == 0 || i == p.lastIndex) p[i].first else (change.position.x / size.width).coerceIn(lo, hi)
-                    val y = (1f - change.position.y / size.height).coerceIn(0f, 1f)
-                    store(p.mapIndexed { k, v -> if (k == i) x to y else v })
+                var lastTap = 0L
+                awaitEachGesture {
+                    val down = awaitFirstDown()
+                    down.consume()
+                    val w = size.width.toFloat()
+                    val h = size.height.toFloat()
+                    fun at(p: Pair<Float, Float>) = Offset(p.first * w, (1f - p.second) * h)
+                    val work = current.toMutableList()
+                    var i = work.indices.minByOrNull { (at(work[it]) - down.position).getDistance() } ?: return@awaitEachGesture
+                    val near = (at(work[i]) - down.position).getDistance() < 28.dp.toPx()
+                    if (near && down.uptimeMillis - lastTap < 300 && i != 0 && i != work.lastIndex) {
+                        // A double tap on a point removes it.
+                        work.removeAt(i)
+                        store(work.toList())
+                        lastTap = 0L
+                        return@awaitEachGesture
+                    }
+                    lastTap = down.uptimeMillis
+                    if (!near) {
+                        // A new point on the curve where the finger is.
+                        val x = (down.position.x / w).coerceIn(0.01f, 0.99f)
+                        work += x to app.headsup.core.color.ToneCurve.through(work, x)
+                        work.sortBy { it.first }
+                        i = work.indexOfFirst { it.first == x }
+                        store(work.toList())
+                    }
+                    while (true) {
+                        val event = awaitPointerEvent()
+                        val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                        if (!change.pressed) break
+                        change.consume()
+                        // A point stays between its neighbours; the ends keep their x.
+                        val end = i == 0 || i == work.lastIndex
+                        val lo = if (i == 0) 0f else work[i - 1].first + 0.01f
+                        val hi = if (i == work.lastIndex) 1f else work[i + 1].first - 0.01f
+                        val x = if (end) work[i].first else (change.position.x / w).coerceIn(lo, hi)
+                        val y = (1f - change.position.y / h).coerceIn(0f, 1f)
+                        work[i] = x to y
+                        store(work.toList())
+                    }
                 }
             },
     ) {
@@ -2067,7 +2075,7 @@ private fun CurveControls(state: UiState, vm: HeadsupViewModel) {
         drawPath(path, colour, style = androidx.compose.ui.graphics.drawscope.Stroke(2.dp.toPx()))
         for ((x, y) in points) drawCircle(colour, 6.dp.toPx(), Offset(x * w, (1 - y) * h))
     }
-    Hint("Drag the curve to bend it; double-tap a point to remove it.")
+    Hint("Touch the curve to add a point and drag it; double-tap a point to remove it.")
 }
 
 /** Colour mixer: a hue band, which of its hue, saturation and luminance, and a ruler for it. */
