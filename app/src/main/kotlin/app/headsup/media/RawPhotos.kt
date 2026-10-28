@@ -98,7 +98,19 @@ object RawPhotos {
     }
 
     /** A raw developed at full size for export, in half floats; [degrees] turns it upright. */
-    class FullPicture(val bitmap: Bitmap, val degrees: Int, val warp: app.headsup.core.raw.Opcode.WarpRectilinear?)
+    class FullPicture(
+        val bitmap: Bitmap,
+        val degrees: Int,
+        val warp: app.headsup.core.raw.Opcode.WarpRectilinear?,
+        /**
+         * Where the scene is brighter than white, at a quarter of the size (the brightest of each
+         * 4×4): log2 of the brightness over [HEADROOM_STOPS] stops, in grey; null when nothing is.
+         */
+        val headroom: Bitmap? = null,
+    )
+
+    /** Stops above white a raw's headroom map holds (Ultra HDR export). */
+    const val HEADROOM_STOPS = 3f
 
     /**
      * [uri] developed at its full size (a mosaic demosaiced, not averaged) into a half-float
@@ -121,6 +133,11 @@ object RawPhotos {
             val bytes = ByteBuffer.allocate(w * STRIP_ROWS * 8).order(ByteOrder.nativeOrder())
             val halves = bytes.asShortBuffer()
             val row = FloatArray(w * 3)
+            val scene = FloatArray(w)
+            val hw = (w + 3) / 4
+            val hh = (dev.height + 3) / 4
+            val headroom = IntArray(hw * hh)
+            var bright = false
             val canvas = Canvas(picture)
             val one = Half.toHalf(1f)
             var y0 = 0
@@ -128,7 +145,16 @@ object RawPhotos {
                 val n = minOf(STRIP_ROWS, dev.height - y0)
                 halves.clear()
                 for (i in 0 until n) {
-                    dev.row(y0 + i, row)
+                    dev.row(y0 + i, row, scene)
+                    // The scene above white, for an Ultra HDR export's gain map.
+                    val hy = (y0 + i) / 4
+                    for (x in 0 until w) {
+                        val l = scene[x]
+                        if (l <= 1f) continue
+                        val e = (kotlin.math.ln(minOf(l, 8f)) / kotlin.math.ln(2f) / HEADROOM_STOPS * 255f + 0.5f).toInt().coerceIn(0, 255)
+                        val k = hy * hw + x / 4
+                        if (e > headroom[k]) { headroom[k] = e; bright = true }
+                    }
                     for (x in 0 until w) {
                         halves.put(Half.toHalf(row[x * 3]))
                         halves.put(Half.toHalf(row[x * 3 + 1]))
@@ -150,7 +176,10 @@ object RawPhotos {
                 8 -> 270
                 else -> 0
             }
-            FullPicture(picture, degrees, raw.warp)
+            val map = if (bright) {
+                Bitmap.createBitmap(IntArray(hw * hh) { i -> val v = headroom[i]; (0xFF shl 24) or (v shl 16) or (v shl 8) or v }, hw, hh, Bitmap.Config.ARGB_8888)
+            } else null
+            FullPicture(picture, degrees, raw.warp, map)
         } catch (e: Throwable) {
             lastError = if (e is OutOfMemoryError) "Not enough memory to develop this file at full size" else e.message
             null

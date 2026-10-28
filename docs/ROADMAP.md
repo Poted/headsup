@@ -101,8 +101,9 @@ project's files), the preview resized left/right when held sideways, Edit called
    Later: subject/sky selection.
 3. **Geometry:** done: perspective correction (Vertical, Horizontal, with a zoom that hides empty
    corners). Later: guided upright (draw the lines that should be straight).
-4. **Export:** done: 16-bit TIFF and Ultra HDR photos (gain map lifting highlights near white by
-   up to 2 stops). Next: the gain map from a raw's real highlights above white.
+4. **Export:** done: 16-bit TIFF and Ultra HDR photos: a raw's gain map from the scene's real light
+   above white (up to 3 stops, framed as the photo); other photos lift their highlights near white
+   (up to 2 stops).
 5. **Formats (last):** camera raws that are not DNG (CR3, NEF, ARW, RAF, …) through LibRaw,
    GoPro GPR (VC-5), lossy DNG.
 

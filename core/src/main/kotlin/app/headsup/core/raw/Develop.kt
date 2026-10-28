@@ -88,8 +88,12 @@ class Developer(raw: RawImage, private val settings: RawDevelop = RawDevelop(), 
         const val DEFAULT_LIFT = 1f
     }
 
-    /** Row [y]: display values (sRGB with the curve), 0..1, three per pixel, into [out]. */
-    fun row(y: Int, out: FloatArray) {
+    /**
+     * Row [y]: display values (sRGB with the curve), 0..1, three per pixel, into [out]; with
+     * [scene], also each pixel's brightness in the scene (linear, 1 = white, above it for lights
+     * the display values clip), e.g. for an HDR gain map.
+     */
+    fun row(y: Int, out: FloatArray, scene: FloatArray? = null) {
         camera.row(y, cam)
         if (vignette != null && vignetteRow != null) {
             for (x in 0 until width) vignetteRow[x] = vignette.gain(x.toDouble(), y.toDouble(), width, height)
@@ -136,6 +140,7 @@ class Developer(raw: RawImage, private val settings: RawDevelop = RawDevelop(), 
             }
             // Highlights and shadows by the pixel's brightness, keeping its colour.
             val lum = max(0.0001f, 0.2126f * r + 0.7152f * g + 0.0722f * b)
+            if (scene != null) scene[x] = lum
             val k = Dng.tone(lum, settings) / lum
             r *= k; g *= k; b *= k
             run {

@@ -153,6 +153,10 @@ object PhotoExporter {
             return MediaStoreOutput.savePhoto(context, name, "image/tiff") { out -> writeTiff(sized, out.buffered(1 shl 20)) }.also { sized.recycle() }
         }
         val rendered = render(root, fw, fh)
+        // A raw's real lights above white, framed as the photo, for an Ultra HDR gain map.
+        val headroom = if (request.format == PhotoFormat.ULTRA_HDR) full?.headroom?.let { map ->
+            runCatching { renderHeadroom(map, degrees, picW, picH, fw, fh, t, request.reframe) }.getOrNull().also { map.recycle() }
+        } else null
         photo.recycle()
         onProgress(0.92f)
         // Smaller on request (never larger than the photo).
@@ -162,7 +166,7 @@ object PhotoExporter {
             Bitmap.createScaledBitmap(rendered, (fw * k).toInt().coerceAtLeast(2), (fh * k).toInt().coerceAtLeast(2), true).also { rendered.recycle() }
         }
         val name = request.name.substringBeforeLast('.') + "_edit.jpg"
-        val saved = if (request.format == PhotoFormat.ULTRA_HDR && android.os.Build.VERSION.SDK_INT >= 34) withGainmap(bitmap) else bitmap
+        val saved = if (request.format == PhotoFormat.ULTRA_HDR && android.os.Build.VERSION.SDK_INT >= 34) withGainmap(bitmap, headroom) else bitmap
         return MediaStoreOutput.savePhoto(context, name) { out -> saved.compress(Bitmap.CompressFormat.JPEG, request.quality.coerceIn(1, 100), out) }
             .also { saved.recycle(); if (saved !== bitmap) bitmap.recycle() }
     }
@@ -301,8 +305,22 @@ object PhotoExporter {
      * screens show the JPEG as it is. The map is a quarter of the size, grey, log-encoded.
      */
     @androidx.annotation.RequiresApi(34)
-    private fun withGainmap(sdr: Bitmap): Bitmap {
+    private fun withGainmap(sdr: Bitmap, headroom: Bitmap? = null): Bitmap {
         val out = if (sdr.isMutable) sdr else sdr.copy(Bitmap.Config.ARGB_8888, true)
+        if (headroom != null) {
+            // A raw: the scene's own light above white, up to RawPhotos.HEADROOM_STOPS.
+            val maxGain = Math.pow(2.0, app.headsup.media.RawPhotos.HEADROOM_STOPS.toDouble()).toFloat()
+            out.gainmap = android.graphics.Gainmap(headroom).apply {
+                setRatioMin(1f, 1f, 1f)
+                setRatioMax(maxGain, maxGain, maxGain)
+                setGamma(1f, 1f, 1f)
+                setEpsilonSdr(0f, 0f, 0f)
+                setEpsilonHdr(0f, 0f, 0f)
+                setMinDisplayRatioForHdrTransition(1f)
+                setDisplayRatioForFullHdr(maxGain)
+            }
+            return out
+        }
         val gw = (out.width / 4).coerceAtLeast(1)
         val gh = (out.height / 4).coerceAtLeast(1)
         val small = Bitmap.createScaledBitmap(out, gw, gh, true)
@@ -331,6 +349,62 @@ object PhotoExporter {
         }
         return out
     }
+
+    /**
+     * A raw's headroom map drawn as the photo is (upright, framed, straightened, perspective
+     * corrected), at a quarter of the frame's size: the Ultra HDR gain map's contents.
+     */
+    private fun renderHeadroom(map: Bitmap, degrees: Int, picW: Float, picH: Float, fw: Int, fh: Int, t: app.headsup.ui.ReframeTransform, reframe: app.headsup.core.frame.Reframe): Bitmap? {
+        val turned = degrees == 90 || degrees == 270
+        val mw = (if (turned) map.height else map.width).toFloat()
+        val mh = (if (turned) map.width else map.height).toFloat()
+        val mapShader = BitmapShader(map, Shader.TileMode.CLAMP, Shader.TileMode.CLAMP).apply {
+            filterMode = BitmapShader.FILTER_MODE_LINEAR
+            setLocalMatrix(Matrix().apply {
+                postRotate(degrees.toFloat())
+                when (degrees) {
+                    90 -> postTranslate(map.height.toFloat(), 0f)
+                    180 -> postTranslate(map.width.toFloat(), map.height.toFloat())
+                    270 -> postTranslate(0f, map.width.toFloat())
+                }
+                postScale(picW / mw, picH / mh)
+            })
+        }
+        val shader: Shader = reframe.warp?.let { m ->
+            android.graphics.RuntimeShader(HEADROOM_WARP).apply {
+                setInputShader("map", mapShader)
+                setFloatUniform("warp", floatArrayOf(m[0].toFloat(), m[3].toFloat(), m[6].toFloat(), m[1].toFloat(), m[4].toFloat(), m[7].toFloat(), m[2].toFloat(), m[5].toFloat(), m[8].toFloat()))
+                setFloatUniform("size", picW, picH)
+            }
+        } ?: mapShader
+        val gw = (fw / 4).coerceAtLeast(1)
+        val gh = (fh / 4).coerceAtLeast(1)
+        val paint = android.graphics.Paint().apply { this.shader = shader }
+        val root = RenderNode("headroom").apply {
+            setPosition(0, 0, gw, gh)
+            val c = beginRecording()
+            c.drawColor(android.graphics.Color.BLACK)
+            c.scale(gw.toFloat() / fw, gh.toFloat() / fh)
+            c.translate(fw / 2f + t.translation.x, fh / 2f + t.translation.y)
+            c.rotate(reframe.angleDegrees)
+            c.scale(t.zoom, t.zoom)
+            c.translate(-picW / 2f, -picH / 2f)
+            c.drawRect(0f, 0f, picW, picH, paint)
+            endRecording()
+        }
+        return draw(root, gw, gh, PixelFormat.RGBA_8888)
+    }
+
+    // The perspective correction (as the grading shader's img()), for the headroom map.
+    private val HEADROOM_WARP = """
+        uniform shader map;
+        uniform float3x3 warp;
+        uniform float2 size;
+        half4 main(float2 p) {
+            float3 q = warp * float3(p / size, 1.0);
+            return map.eval(clamp(q.xy / q.z, float2(0.0), float2(1.0)) * size);
+        }
+    """
 
     /**
      * [src] as a 16-bit TIFF: a half-float picture's values as they are (sRGB-encoded first if
