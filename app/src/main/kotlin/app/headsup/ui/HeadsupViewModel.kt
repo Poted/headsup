@@ -212,7 +212,6 @@ data class FoundHighlight(val highlight: Highlight, val clipId: Long, val clipNa
 data class SoundAnalysis(val envelope: AudioEnvelope, val rhythm: AudioEnvelope.Rhythm)
 
 private data class EditSnapshot(
-    val project: String,
     val activities: List<LoadedActivity>,
     val clips: List<ClipState>,
     val groups: List<ClipGroup>,
@@ -586,9 +585,10 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
     // Undo and redo
 
     private val history = ArrayList<EditSnapshot>()
+    private var historyStartsAgain = true
     private var historyIndex = -1
 
-    private fun UiState.snapshot() = EditSnapshot(projectName, activities, clips, groups, globalGrade, style, timelineFps, frameAspect, exportSettings, audioFiles, audioClips, clipSound, texts, routeMap)
+    private fun UiState.snapshot() = EditSnapshot(activities, clips, groups, globalGrade, style, timelineFps, frameAspect, exportSettings, audioFiles, audioClips, clipSound, texts, routeMap)
 
     /**
      * Records a step a moment after the edit settles, so a slider drag or a widget move is one
@@ -608,9 +608,11 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
     private fun record(snapshot: EditSnapshot) {
         val current = history.getOrNull(historyIndex)
         if (snapshot == current) return
-        if (current == null || current.project != snapshot.project || current.media().containsAll(snapshot.media()).not()) {
-            // Another project opened, or files added: history starts here (undo never takes
-            // files out of the project; removing one is done on purpose).
+        if (current == null || historyStartsAgain || current.media().containsAll(snapshot.media()).not()) {
+            // A project opened or created, or files added: history starts here (undo never takes
+            // files out of the project; removing one is done on purpose). A rename or a highlight
+            // reel stays in it, so they can be undone.
+            historyStartsAgain = false
             history.clear()
             history += snapshot
             historyIndex = 0
@@ -730,6 +732,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
     /** Opens a saved project; its files are read again, missing ones are reported. */
     fun openProject(name: String) {
         val project = projectStore.load(name) ?: return
+        historyStartsAgain = true
         _state.update { it.copy(busy = true, loadingMessage = "Opening ${project.name}…") }
         viewModelScope.launch {
             val context = getApplication<Application>()
@@ -822,6 +825,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
 
     /** Starts an empty project; the current one stays saved. */
     fun newProject(kind: ProjectKind = ProjectKind.VIDEO) {
+        historyStartsAgain = true
         scopeFrame = null
         _state.update {
             it.copy(
@@ -1108,7 +1112,8 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
             if (cut - clip.trimStartMs < MIN_CLIP_MS || clip.trimEndMs - cut < MIN_CLIP_MS) return@update s
             val first = clip.copy(trimEndMs = cut)
             val second = clip.copy(id = nextClipId(), trimStartMs = cut)
-            s.copy(clips = s.clips.toMutableList().apply { set(index, first); add(index + 1, second) })
+            // The second part is shown from its start: the playhead stays at the cut.
+            s.copy(clips = s.clips.toMutableList().apply { set(index, first); add(index + 1, second) }, selectedClip = index + 1)
         }
     }
 

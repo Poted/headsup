@@ -40,22 +40,24 @@ Already done in the build of 2026-10-25: Project page in two levels (projects �
 project's files), the preview resized left/right when held sideways, Edit called Crop in albums.
 
 ### Now
-- [ ] Landscape: the timeline falls below the screen; the Adjust section tabs (Light, Colour…)
+- [x] Landscape: the timeline falls below the screen; the Adjust section tabs (Light, Colour…)
       squeeze off screen when the tools column is narrowed: make them scroll left/right.
-- [ ] The handle that resizes the preview is hard to catch (bigger touch area); held sideways
+- [x] The handle that resizes the preview is hard to catch (bigger touch area); held sideways
       only the left/right one.
-- [ ] Film: changing the crop breaks undo (the crop disappears, undoing resets it).
-- [ ] Undo can go back past adding a file (to its removal).
-- [ ] Highlights cannot be undone after applying.
-- [ ] Adjust: move the colour on/off switch and Copy / Copy to all out of the top (too much room).
-- [ ] Adjust: the scope tabs (This clip / Group / Masks / All clips) and Copy move to a small
+- [ ] Film: changing the crop breaks undo (the crop disappears, undoing resets it) — check again
+      after the undo fix.
+- [x] Undo can go back past adding a file (to its removal).
+- [x] Undo vanished in films (history was cleared whenever the project's name changed, e.g. by a
+      highlight reel): it now starts again only when a project is opened or created.
+- [x] Adjust: move the colour on/off switch and Copy / Copy to all out of the top (too much room).
+- [x] Adjust: the scope tabs (This clip / Group / Masks / All clips) and Copy move to a small
       menu that pops up with a light animation above the Adjust button; the page starts with
       Light, Colour, Mixer… as Edit does. The same for Effects and for albums.
-- [ ] Remove "Colour off" and the Reset buttons from Adjust; holding a finger on the picture
+- [x] Remove "Colour off" and the Reset buttons from Adjust; holding a finger on the picture
       shows the original (as in Lightroom).
-- [ ] Dashboard on/off per clip (now it is on for all clips whose time the activity covers, or
+- [x] Dashboard on/off per clip (now it is on for all clips whose time the activity covers, or
       for none). Without a FIT file: say a file is needed, and no dashboard options on by default.
-- [ ] The playhead jumps to the clip's start (e.g. after a cut) instead of staying at the join.
+- [x] The playhead jumps to the clip's start (e.g. after a cut) instead of staying at the join.
 
 ### Later
 - [ ] Shrinking the preview is not obvious: a short tutorial for users.
