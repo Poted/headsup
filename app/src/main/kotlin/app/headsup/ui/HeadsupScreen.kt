@@ -2193,7 +2193,7 @@ private fun WheelControls(state: UiState, vm: HeadsupViewModel) {
     androidx.compose.foundation.layout.BoxWithConstraints(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
         androidx.compose.foundation.Canvas(
             Modifier
-                .size(minOf(150.dp, maxWidth * 0.75f))
+                .size(minOf(120.dp, maxWidth * 0.6f))
                 .pointerInput(range) {
                     fun pick(pos: Offset) {
                         val cx = size.width / 2f
