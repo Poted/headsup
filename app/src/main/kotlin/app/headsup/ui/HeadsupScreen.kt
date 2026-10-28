@@ -229,6 +229,7 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
     var seekRequest by remember { mutableStateOf<Long?>(null) }
     val measuring = tool == Tool.COLOUR && adjustment == Adjustment.SKIN && state.target != GradeTarget.MASK
     val editingMasks = tool == Tool.COLOUR && state.target == GradeTarget.MASK && state.selected?.colorGrade == true
+    val editingBrush = state.selected?.masks?.getOrNull(state.selectedMask)?.kind == MaskKind.BRUSH
     // Read only where needed (cut controls), so playback does not recompose the whole screen.
     val playhead = remember { mutableLongStateOf(0L) }
     // File position of a cut handle being dragged; read only by the preview.
@@ -327,8 +328,10 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
                         fromCube = if (showOriginal) null else state.previewFromCube,
                         transitionMs = selected.transitionMs,
                         guideMask = selected.masks.getOrNull(state.selectedMask).takeIf { editingMasks && !fullscreen },
-                        onMoveMask = if (editingMasks && !fullscreen) { x, y -> vm.updateMask { it.copy(centerX = x, centerY = y) } } else null,
+                        onMoveMask = if (editingMasks && !fullscreen && !editingBrush) { x, y -> vm.updateMask { it.copy(centerX = x, centerY = y) } } else null,
                         onTransformMask = if (editingMasks && !fullscreen) vm::transformMask else null,
+                        onBrush = if (editingMasks && !fullscreen && editingBrush && state.brush.mode != BrushMode.MOVE) vm::brushStroke else null,
+                        guideIndex = state.selectedMask,
                         vignette = if (selected.colorGrade && !showOriginal) state.appliedGrade(selected).vignette else 0f,
                         presence = if (selected.colorGrade && !showOriginal) state.appliedGrade(selected).presence else app.headsup.core.color.Presence.NONE,
                         effects = if (showOriginal) app.headsup.render.EffectSettings(dashboard = false) else state.compareEffects ?: state.effects,
@@ -1827,7 +1830,8 @@ private fun ColourPage(
     }
     LazyRow(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
         if (editingShape != null) {
-            items(shapes) { m ->
+            // A painted mask has its brush controls instead.
+            items(if (mask?.kind == MaskKind.BRUSH) emptyList() else shapes) { m ->
                 CircleOption(m.symbol, m.label, selected = m == editingShape, modified = false) { shape = m; onShapes = true }
             }
         }
@@ -1849,6 +1853,10 @@ private fun ColourPage(
                 onAdjustment(a)
             }
         }
+    }
+    if (editingShape != null && mask?.kind == MaskKind.BRUSH) {
+        BrushControls(state, vm)
+        return
     }
     if (editingShape != null && mask != null) {
         // A moving mask is shown and edited as it is at the playhead.
@@ -2272,6 +2280,45 @@ private fun ShotMatchPanel(state: UiState, clip: ClipState, vm: HeadsupViewModel
     }
 }
 
+/** The brush's settings, picked like the corrections and set with the same ruler. */
+private enum class BrushSetting(val symbol: String, val label: String, val get: (BrushSettings) -> Float, val set: (BrushSettings, Float) -> BrushSettings, val range: ClosedFloatingPointRange<Float>) {
+    SIZE("●", "Size", { it.radius }, { b, v -> b.copy(radius = v) }, 0.005f..0.3f),
+    EDGE("◐", "Softness", { it.softness }, { b, v -> b.copy(softness = v) }, 0f..1f),
+    FLOW("≋", "Flow", { it.flow }, { b, v -> b.copy(flow = v) }, 0.05f..1f),
+}
+
+/**
+ * A painted mask: paint or erase with a finger, or move it (one finger drags, two also turn and
+ * scale it); the brush's size, softness and flow.
+ */
+@Composable
+private fun BrushControls(state: UiState, vm: HeadsupViewModel) {
+    var setting by rememberSaveable { mutableStateOf(BrushSetting.SIZE) }
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        FlowRow(Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            for (mode in BrushMode.entries) {
+                FilterChip(selected = state.brush.mode == mode, onClick = { vm.updateBrush { it.copy(mode = mode) } }, label = { Text(mode.label) })
+            }
+        }
+        SmallAction("Clear", { vm.clearBrush() })
+    }
+    LazyRow(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+        items(BrushSetting.entries) { b ->
+            CircleOption(b.symbol, b.label, selected = b == setting, modified = false) { setting = b }
+        }
+    }
+    val value = setting.get(state.brush)
+    ValueHeader(setting.label, String.format(Locale.US, "%.0f %%", value * 100f))
+    RulerSlider(
+        value = value,
+        range = setting.range,
+        step = 0.005f,
+        onChange = { v -> vm.updateBrush { setting.set(it, v) } },
+        onReset = { vm.updateBrush { setting.set(it, setting.get(BrushSettings())) } },
+    )
+    Hint("Paint where the mask's corrections go; Erase takes them away. Two fingers move, turn and scale the painting.")
+}
+
 /** Shape controls of a mask, edited with the same ruler as the corrections. */
 private enum class MaskShape(
     val symbol: String,
@@ -2286,7 +2333,7 @@ private enum class MaskShape(
     POSITION("↕", "Position", setOf(MaskKind.LINEAR), 0f..1f, 0.01f, "%.0f %%", { it.centerY }, { m, v -> m.copy(centerY = v) }),
     WIDTH("↔", "Width", setOf(MaskKind.ELLIPSE), 0.05f..2f, 0.01f, "%.0f %%", { it.sizeX }, { m, v -> m.copy(sizeX = v) }),
     HEIGHT("↕", "Height", setOf(MaskKind.ELLIPSE), 0.05f..2f, 0.01f, "%.0f %%", { it.sizeY }, { m, v -> m.copy(sizeY = v) }),
-    SOFTNESS("◐", "Softness", MaskKind.entries.toSet(), 0.02f..1f, 0.02f, "%.0f %%", { it.softness }, { m, v -> m.copy(softness = v) }),
+    SOFTNESS("◐", "Softness", setOf(MaskKind.LINEAR, MaskKind.ELLIPSE), 0.02f..1f, 0.02f, "%.0f %%", { it.softness }, { m, v -> m.copy(softness = v) }),
     ANGLE("∠", "Angle", MaskKind.entries.toSet(), -90f..90f, 0.5f, "%+.1f°", { it.angleDegrees }, { m, v -> m.copy(angleDegrees = v) }),
     ;
 
@@ -2297,18 +2344,21 @@ private enum class MaskShape(
 /** The selected clip's masks: pick one to edit, add a line or an oval, invert or remove. */
 @Composable
 private fun MaskList(state: UiState, clip: ClipState, vm: HeadsupViewModel, playhead: LongState, onSeek: (Long) -> Unit) {
-    if (clip.masks.isEmpty()) Hint("Windows with their own corrections: a line for the sky, an oval for a face. Drag on the picture to move one; two fingers resize and turn it.")
+    if (clip.masks.isEmpty()) Hint("Windows with their own corrections: a line for the sky, an oval for a face, or paint where they go. Drag on the picture to move one; two fingers resize and turn it.")
     FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         clip.masks.forEachIndexed { i, m ->
             FilterChip(
                 selected = i == state.selectedMask,
                 onClick = { vm.selectMask(i) },
-                label = { Text("${i + 1} · " + if (m.kind == MaskKind.LINEAR) "Line" else "Oval") },
+                label = {
+                    Text("${i + 1} · " + when (m.kind) { MaskKind.LINEAR -> "Line"; MaskKind.ELLIPSE -> "Oval"; MaskKind.BRUSH -> "Brush" })
+                },
             )
         }
         if (clip.masks.size < ColourMask.MAX_PER_CLIP) {
             FilterChip(selected = false, onClick = { vm.addMask(MaskKind.LINEAR) }, label = { Text("+ Line") })
             FilterChip(selected = false, onClick = { vm.addMask(MaskKind.ELLIPSE) }, label = { Text("+ Oval") })
+            FilterChip(selected = false, onClick = { vm.addMask(MaskKind.BRUSH) }, label = { Text("+ Brush") })
         }
     }
     val mask = clip.masks.getOrNull(state.selectedMask) ?: return

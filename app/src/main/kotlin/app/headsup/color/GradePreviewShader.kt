@@ -1,5 +1,6 @@
 package app.headsup.color
 
+import android.graphics.Bitmap
 import android.graphics.BitmapShader
 import android.graphics.RenderEffect
 import android.graphics.RuntimeShader
@@ -33,6 +34,17 @@ class GradePreviewShader {
 
     init {
         setTables(GradeTables(null))
+        setBrush(null)
+    }
+
+    /** The clip's painted masks ([BrushAtlas]); null when it has none. */
+    fun setBrush(atlas: Bitmap?) {
+        val bitmap = atlas ?: BrushAtlas.EMPTY
+        shader.setInputShader("brush", BitmapShader(bitmap, Shader.TileMode.CLAMP, Shader.TileMode.CLAMP).apply {
+            filterMode = BitmapShader.FILTER_MODE_LINEAR
+        })
+        val slots = if (atlas == null) 1 else ColourMask.MAX_PER_CLIP
+        shader.setFloatUniform("brushSlot", bitmap.width.toFloat() / slots, bitmap.height.toFloat())
     }
 
     fun setTables(tables: GradeTables) {
@@ -162,6 +174,8 @@ class GradePreviewShader {
         // nearest entry of the base table, which is plenty for a blurred highlight.
         val SOURCE = """
             uniform shader image;
+            uniform shader brush;
+            uniform float2 brushSlot;
             ${TABLES.joinToString("\n") { "uniform shader $it;" }}
             uniform float n;
             uniform float2 size;
@@ -201,6 +215,25 @@ class GradePreviewShader {
                     float u = (d.x * c + d.y * s) / max(b.x * 0.5, 0.001);
                     float v = (-d.x * s + d.y * c) / max(b.y * 0.5, 0.001);
                     w = 1.0 - smooth01(1.0 - b.z * 0.5, 1.0 + b.z * 0.5, sqrt(u * u + v * v));
+                }
+                return b.w > 0.5 ? 1.0 - w : w;
+            }
+
+            // A brush mask (BrushMask): the pixel taken back to where its strokes were painted
+            // (the mask at BrushMask.BASE: centred, upright, scale 1), then read from its atlas slot.
+            float brushWeight(float4 a, float4 b, float2 coord, float slot) {
+                float aspect = size.x / size.y;
+                float2 d = float2((coord.x / size.x - a.y) * aspect, coord.y / size.y - a.z);
+                float c = cos(a.w);
+                float s = sin(a.w);
+                float2 u = float2(d.x * c + d.y * s, -d.x * s + d.y * c) / max(b.x, 0.001);
+                float2 q = float2(0.5 + u.x / aspect, 0.5 + u.y);
+                float w = 0.0;
+                if (q.x >= 0.0 && q.x <= 1.0 && q.y >= 0.0 && q.y <= 1.0) {
+                    float2 p = float2(
+                        slot * brushSlot.x + clamp(q.x * brushSlot.x, 0.5, brushSlot.x - 0.5),
+                        clamp(q.y * brushSlot.y, 0.5, brushSlot.y - 0.5));
+                    w = float(brush.eval(p).r);
                 }
                 return b.w > 0.5 ? 1.0 - w : w;
             }
@@ -288,7 +321,7 @@ class GradePreviewShader {
                 float3 c = float3(grade_lut(src.rgb));
                 ${List(ColourMask.MAX_PER_CLIP) { i -> """
                 if (maskCount > ${i}.5) {
-                    float w$i = maskWeight(m${i}a, m${i}b, coord);
+                    float w$i = m${i}a.x > 1.5 ? brushWeight(m${i}a, m${i}b, coord, $i.0) : maskWeight(m${i}a, m${i}b, coord);
                     if (w$i > 0.0) c = mix(c, float3(grade_lutM$i(src.rgb)), w$i);
                 }""" }.joinToString("")}
                 if (fromWeight > 0.0) c = mix(c, float3(grade_lutFrom(src.rgb)), fromWeight);

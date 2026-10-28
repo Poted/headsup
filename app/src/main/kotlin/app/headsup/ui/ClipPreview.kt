@@ -74,6 +74,7 @@ import androidx.compose.ui.geometry.isSpecified
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.graphics.graphicsLayer
+import app.headsup.color.BrushAtlas
 import app.headsup.color.GradePreviewShader
 import app.headsup.core.track.TelemetrySampler
 import app.headsup.render.DashboardData
@@ -142,6 +143,10 @@ fun ClipPreview(
     onMoveMask: ((Float, Float) -> Unit)? = null,
     /** Two fingers on the picture while a mask is edited: move (fractions of the picture), scale, turn (degrees). */
     onTransformMask: ((dx: Float, dy: Float, zoom: Float, degrees: Float) -> Unit)? = null,
+    /** Painting a brush mask: a stroke starts (0), goes on (1) and ends (2) at a point of the picture (fractions). */
+    onBrush: ((phase: Int, x: Float, y: Float) -> Unit)? = null,
+    /** Which of [masks] [guideMask] is (its slot of the brush atlas). */
+    guideIndex: Int = 0,
     vignette: Float,
     /** Texture, clarity and dehaze of the selected clip. */
     presence: app.headsup.core.color.Presence = app.headsup.core.color.Presence.NONE,
@@ -512,6 +517,7 @@ fun ClipPreview(
     val sample by rememberUpdatedState(onSample)
     val maskMover by rememberUpdatedState(onMoveMask)
     val maskTransformer by rememberUpdatedState(onTransformMask)
+    val brushPainter by rememberUpdatedState(onBrush)
     val reframer by rememberUpdatedState(onReframe)
     val currentReframe by rememberUpdatedState(reframe)
     // Sizes of the frame and the picture under it, for gestures (read when they happen).
@@ -683,9 +689,19 @@ fun ClipPreview(
     }
     // The frame takes the reframe's shape; the picture is laid out under it, just covering it.
     val frameAspect = reframe.aspect ?: sourceAspect
+    // Painted masks as one picture for the shaders, drawn again when a stroke changes.
+    val brushStrokes = masks.map { it.strokes }
+    val brushAtlas by produceState<Bitmap?>(null, brushStrokes, (sourceAspect * 1000).toInt()) {
+        value = withContext(Dispatchers.Default) { BrushAtlas.build(masks, sourceAspect) }
+    }
+    LaunchedEffect(brushAtlas) {
+        previewShader?.setBrush(brushAtlas)
+        playerShaders?.forEach { it.setBrush(brushAtlas) }
+        tableVersion++
+    }
 
     // Looking closely at a photo: the view's zoom and pan (not the photo's framing).
-    val inspect = photoMode && onReframe == null && onMoveMask == null && onMoveText == null && onSample == null
+    val inspect = photoMode && onReframe == null && onMoveMask == null && onTransformMask == null && onBrush == null && onMoveText == null && onSample == null
     var viewZoom by remember(clip.id) { mutableStateOf(1f) }
     var viewPan by remember(clip.id) { mutableStateOf(Offset.Zero) }
     Column(Modifier.padding(horizontal = if (edgeToEdge) 0.dp else 16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -873,15 +889,23 @@ fun ClipPreview(
                                 // While a mask is edited, a finger on the picture moves it (widgets stay put).
                                 if (reframer != null) return@awaitEachGesture
                                 val moveMask = maskMover
-                                if (moveMask != null) {
+                                val paint = brushPainter
+                                if (moveMask != null || paint != null || maskTransformer != null) {
                                     // Masks live in the picture, so map the finger back through the framing.
                                     fun move(p: Offset) {
                                         val g = geometryRef.value
                                         val (sx, sy) = currentReframe.sourceOf(p.x, p.y, g.boxW, g.boxH, g.pictureW, g.pictureH)
-                                        moveMask(sx / g.pictureW, sy / g.pictureH)
+                                        moveMask?.invoke(sx / g.pictureW, sy / g.pictureH)
+                                    }
+                                    fun pictureOf(p: Offset): Pair<Float, Float> {
+                                        val g = geometryRef.value
+                                        val (sx, sy) = currentReframe.sourceOf(p.x, p.y, g.boxW, g.boxH, g.pictureW, g.pictureH)
+                                        return sx / g.pictureW to sy / g.pictureH
                                     }
                                     down.consume()
-                                    move(down.position)
+                                    var painting = paint != null
+                                    var last = down.position
+                                    if (paint != null) pictureOf(down.position).let { (x, y) -> paint(0, x, y) } else move(down.position)
                                     // One finger places the mask; two move, scale and turn it. After two,
                                     // the finger left on the picture no longer jumps it to itself.
                                     var pinched = false
@@ -892,6 +916,11 @@ fun ClipPreview(
                                         val transform = maskTransformer
                                         if (pressed.size >= 2 && transform != null) {
                                             pinched = true
+                                            if (painting) {
+                                                // A second finger ends the stroke and moves the mask instead.
+                                                painting = false
+                                                pictureOf(last).let { (x, y) -> paint?.invoke(2, x, y) }
+                                            }
                                             val g = geometryRef.value
                                             val before = event.calculateCentroid(useCurrent = false)
                                             val after = event.calculateCentroid(useCurrent = true)
@@ -901,10 +930,22 @@ fun ClipPreview(
                                                 transform((bx - ax) / g.pictureW, (by - ay) / g.pictureH, event.calculateZoom(), event.calculateRotation())
                                             }
                                         } else if (!pinched) {
-                                            move(pressed.first().position)
+                                            val p = pressed.first().position
+                                            when {
+                                                painting -> pictureOf(p).let { (x, y) -> paint?.invoke(1, x, y) }
+                                                moveMask != null -> move(p)
+                                                transform != null -> {
+                                                    // A painted mask moves by the finger's travel, not to the finger.
+                                                    val (ax, ay) = pictureOf(last)
+                                                    val (bx, by) = pictureOf(p)
+                                                    transform(bx - ax, by - ay, 1f, 0f)
+                                                }
+                                            }
+                                            last = p
                                         }
                                         event.changes.forEach { it.consume() }
                                     }
+                                    if (painting) pictureOf(last).let { (x, y) -> paint?.invoke(2, x, y) }
                                     return@awaitEachGesture
                                 }
                                 val widget = renderer.hitTest(down.position.x, down.position.y, slop = 12.dp.toPx())
@@ -946,7 +987,13 @@ fun ClipPreview(
                             translate((geometry.boxW - geometry.pictureW) / 2f + t.translation.x, (geometry.boxH - geometry.pictureH) / 2f + t.translation.y)
                             rotate(reframe.angleDegrees, o)
                             scale(t.zoom, t.zoom, o)
-                        }) { drawMaskGuide(m, geometry.pictureW, geometry.pictureH) }
+                        }) {
+                            if (m.kind == MaskKind.BRUSH) {
+                                brushAtlas?.let { atlas -> drawIntoCanvas { drawBrushOverlay(it.nativeCanvas, atlas, guideIndex, m, geometry.pictureW, geometry.pictureH) } }
+                            } else {
+                                drawMaskGuide(m, geometry.pictureW, geometry.pictureH)
+                            }
+                        }
                     }
                     marker?.let { m ->
                         val c = Offset(m.x * size.width, m.y * size.height)
@@ -1174,6 +1221,7 @@ private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawMaskGuide(mask:
                     )
                 }
             }
+            MaskKind.BRUSH -> Unit
             MaskKind.ELLIPSE -> {
                 for ((scale, dashed) in listOf(1f to false, 1f - mask.softness / 2f to true, 1f + mask.softness / 2f to true)) {
                     if (scale <= 0f) continue
@@ -1188,6 +1236,29 @@ private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawMaskGuide(mask:
         }
     }
     drawCircle(solid, radius = 4f * density, center = centre)
+}
+
+/** Where a brush mask paints, in red over the picture (as Lightroom shows it), moved with the mask. */
+private val brushOverlayPaint = android.graphics.Paint(android.graphics.Paint.FILTER_BITMAP_FLAG).apply {
+    colorFilter = android.graphics.ColorMatrixColorFilter(
+        floatArrayOf(
+            0f, 0f, 0f, 0f, 255f,
+            0f, 0f, 0f, 0f, 40f,
+            0f, 0f, 0f, 0f, 40f,
+            0.45f, 0f, 0f, 0f, 0f,
+        ),
+    )
+}
+
+private fun drawBrushOverlay(canvas: android.graphics.Canvas, atlas: Bitmap, slot: Int, mask: ColourMask, width: Float, height: Float) {
+    val slotW = atlas.width / ColourMask.MAX_PER_CLIP
+    canvas.save()
+    canvas.translate(mask.centerX * width, mask.centerY * height)
+    canvas.rotate(mask.angleDegrees)
+    canvas.scale(mask.sizeX, mask.sizeX)
+    canvas.translate(-width / 2f, -height / 2f)
+    canvas.drawBitmap(atlas, android.graphics.Rect(slot * slotW, 0, (slot + 1) * slotW, atlas.height), android.graphics.RectF(0f, 0f, width, height), brushOverlayPaint)
+    canvas.restore()
 }
 
 private val NO_SCRUB: State<Long?> = mutableStateOf(null)

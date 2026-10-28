@@ -12,6 +12,7 @@ import androidx.media3.common.util.UnstableApi
 import androidx.media3.effect.BaseGlShaderProgram
 import androidx.media3.effect.GlEffect
 import androidx.media3.effect.GlShaderProgram
+import app.headsup.color.BrushAtlas
 import app.headsup.color.LiveColorLut
 import app.headsup.core.color.ColourMask
 import app.headsup.core.color.ColourTransition
@@ -47,6 +48,10 @@ class GradeEffect(
         }
         // Base, one per mask slot, previous clip; unused slots repeat the base table.
         private val textures = IntArray(2 + ColourMask.MAX_PER_CLIP)
+        // The painted masks ([BrushAtlas]), drawn when the frame size is known.
+        private val brushTexture = IntArray(1)
+        private var brushSlot = floatArrayOf(1f, 1f)
+        private var brushSlots = 1f
         private var width = 1
         private var height = 1
         private var firstUs = -1L
@@ -57,6 +62,7 @@ class GradeEffect(
             upload(textures[0], base)
             for (i in 0 until ColourMask.MAX_PER_CLIP) upload(textures[1 + i], maskTables.getOrNull(i) ?: base)
             upload(textures.last(), from ?: base)
+            GLES20.glGenTextures(1, brushTexture, 0)
         }
 
         private fun upload(texture: Int, table: Array<Array<IntArray>>) {
@@ -73,6 +79,17 @@ class GradeEffect(
         override fun configure(inputWidth: Int, inputHeight: Int): Size {
             width = inputWidth
             height = inputHeight
+            val atlas = BrushAtlas.build(masks, inputWidth.toFloat() / inputHeight.coerceAtLeast(1))
+            val bitmap = atlas ?: BrushAtlas.EMPTY
+            brushSlots = if (atlas == null) 1f else ColourMask.MAX_PER_CLIP.toFloat()
+            brushSlot = floatArrayOf(bitmap.width / brushSlots, bitmap.height.toFloat())
+            GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, brushTexture[0])
+            GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MIN_FILTER, GLES20.GL_LINEAR)
+            GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MAG_FILTER, GLES20.GL_LINEAR)
+            GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_S, GLES20.GL_CLAMP_TO_EDGE)
+            GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_T, GLES20.GL_CLAMP_TO_EDGE)
+            GLUtils.texImage2D(GLES20.GL_TEXTURE_2D, 0, bitmap, 0)
+            atlas?.recycle()
             return Size(inputWidth, inputHeight)
         }
 
@@ -86,6 +103,9 @@ class GradeEffect(
                 program.setSamplerTexIdUniform("uLut", textures[0], 1)
                 for (i in 0 until ColourMask.MAX_PER_CLIP) program.setSamplerTexIdUniform("uLutM$i", textures[1 + i], 2 + i)
                 program.setSamplerTexIdUniform("uLutFrom", textures.last(), 2 + ColourMask.MAX_PER_CLIP)
+                program.setSamplerTexIdUniform("uBrush", brushTexture[0], 3 + ColourMask.MAX_PER_CLIP)
+                program.setFloatsUniform("uBrushSlot", brushSlot)
+                program.setFloatUniform("uBrushSlots", brushSlots)
                 program.setFloatUniform("uN", base.size.toFloat())
                 program.setFloatsUniform("uSize", floatArrayOf(width.toFloat(), height.toFloat()))
                 program.setFloatUniform("uMaskCount", masks.size.coerceAtMost(ColourMask.MAX_PER_CLIP).toFloat())
@@ -112,6 +132,7 @@ class GradeEffect(
             try {
                 program.delete()
                 GLES20.glDeleteTextures(textures.size, textures, 0)
+                GLES20.glDeleteTextures(1, brushTexture, 0)
             } catch (e: GlUtil.GlException) {
                 throw VideoFrameProcessingException(e)
             }
@@ -136,6 +157,9 @@ class GradeEffect(
             uniform sampler2D uLut;
             ${List(ColourMask.MAX_PER_CLIP) { "uniform sampler2D uLutM$it;\nuniform vec4 uM${it}a;\nuniform vec4 uM${it}b;" }.joinToString("\n")}
             uniform sampler2D uLutFrom;
+            uniform sampler2D uBrush;
+            uniform vec2 uBrushSlot;
+            uniform float uBrushSlots;
             uniform float uN;
             uniform vec2 uSize;
             uniform float uMaskCount;
@@ -183,6 +207,24 @@ class GradeEffect(
                     float u = (d.x * c + d.y * s) / max(b.x * 0.5, 0.001);
                     float v = (-d.x * s + d.y * c) / max(b.y * 0.5, 0.001);
                     w = 1.0 - smooth01(1.0 - b.z * 0.5, 1.0 + b.z * 0.5, sqrt(u * u + v * v));
+                }
+                return b.w > 0.5 ? 1.0 - w : w;
+            }
+
+            // As the preview shader's brushWeight(): back to where the strokes were painted, then the atlas slot.
+            float brushWeight(vec4 a, vec4 b, vec2 px, float slot) {
+                float aspect = uSize.x / uSize.y;
+                vec2 d = vec2((px.x / uSize.x - a.y) * aspect, px.y / uSize.y - a.z);
+                float c = cos(a.w);
+                float s = sin(a.w);
+                vec2 u = vec2(d.x * c + d.y * s, -d.x * s + d.y * c) / max(b.x, 0.001);
+                vec2 q = vec2(0.5 + u.x / aspect, 0.5 + u.y);
+                float w = 0.0;
+                if (q.x >= 0.0 && q.x <= 1.0 && q.y >= 0.0 && q.y <= 1.0) {
+                    vec2 t = vec2(
+                        (slot * uBrushSlot.x + clamp(q.x * uBrushSlot.x, 0.5, uBrushSlot.x - 0.5)) / (uBrushSlot.x * uBrushSlots),
+                        clamp(q.y * uBrushSlot.y, 0.5, uBrushSlot.y - 0.5) / uBrushSlot.y);
+                    w = texture2D(uBrush, t).r;
                 }
                 return b.w > 0.5 ? 1.0 - w : w;
             }
@@ -258,7 +300,7 @@ class GradeEffect(
                 vec3 c = grade(uLut, srcRgb);
                 ${List(ColourMask.MAX_PER_CLIP) { i -> """
                 if (uMaskCount > $i.5) {
-                    float w$i = maskWeight(uM${i}a, uM${i}b, px);
+                    float w$i = uM${i}a.x > 1.5 ? brushWeight(uM${i}a, uM${i}b, px, $i.0) : maskWeight(uM${i}a, uM${i}b, px);
                     if (w$i > 0.0) c = mix(c, grade(uLutM$i, srcRgb), w$i);
                 }""" }.joinToString("")}
                 if (uFromWeight > 0.0) c = mix(c, grade(uLutFrom, srcRgb), uFromWeight);

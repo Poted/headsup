@@ -10,6 +10,12 @@ enum class MaskKind {
 
     /** Oval window, e.g. around a face or the subject. */
     ELLIPSE,
+
+    /**
+     * Painted with a brush ([BrushMask]). Its strokes are where they were painted with the mask at
+     * [BrushMask.BASE]; moving, turning or scaling the mask (by hand or by keys) carries them along.
+     */
+    BRUSH,
 }
 
 /**
@@ -22,9 +28,9 @@ data class ColourMask(
     val centerX: Float = 0.5f,
     /** Height of the line (linear) or the centre (oval), 0 = top. */
     val centerY: Float = if (kind == MaskKind.LINEAR) 0.45f else 0.5f,
-    /** Oval width and height; unused for a line. */
-    val sizeX: Float = 0.5f,
-    val sizeY: Float = 0.6f,
+    /** Oval width and height; unused for a line; a brush mask's scale (1 = as painted). */
+    val sizeX: Float = if (kind == MaskKind.BRUSH) 1f else 0.5f,
+    val sizeY: Float = if (kind == MaskKind.BRUSH) 1f else 0.6f,
     /** Tilt in degrees, positive clockwise. */
     val angleDegrees: Float = 0f,
     /** Width of the soft edge: of the frame height for a line, of the radius for an oval. */
@@ -37,6 +43,8 @@ data class ColourMask(
      * empty = it stays put. With keys, the centre, angle and size above are only defaults.
      */
     val keys: List<MaskKey> = emptyList(),
+    /** A brush mask's strokes, in the order painted. */
+    val strokes: List<BrushStroke> = emptyList(),
 ) {
     /** The mask at [fileMs] into the clip's file: between keys it moves smoothly, outside them it holds. */
     fun at(fileMs: Long): ColourMask {
@@ -55,9 +63,10 @@ data class ColourMask(
 
     /**
      * How much of the mask applies at pixel ([x], [y]) of a [width]×[height] frame, 0..1.
-     * The shaders use the same formula.
+     * The shaders use the same formula. A brush mask is drawn from its strokes ([BrushMask]), so 0 here.
      */
     fun weight(x: Float, y: Float, width: Float, height: Float): Float {
+        if (kind == MaskKind.BRUSH) return 0f
         val a = Math.toRadians(angleDegrees.toDouble())
         val dx = (x - centerX * width) / height
         val dy = (y - centerY * height) / height
@@ -73,11 +82,16 @@ data class ColourMask(
                 val r = sqrt(u * u + v * v)
                 1f - smoothstep(1f - softness / 2f, 1f + softness / 2f, r)
             }
+            MaskKind.BRUSH -> 0f
         }
         return if (inverted) 1f - w else w
     }
 
-    /** Packed for shaders: (kind, centerX, centerY, angle in radians) and (sizeX, sizeY, softness, inverted). */
+    /**
+     * Packed for shaders: (kind, centerX, centerY, angle in radians) and (sizeX, sizeY, softness,
+     * inverted). A brush mask is drawn from its slot of the brush atlas, moved from [BrushMask.BASE]
+     * to here.
+     */
     fun shaderParams(): Pair<FloatArray, FloatArray> = floatArrayOf(
         kind.ordinal.toFloat(), centerX, centerY, Math.toRadians(angleDegrees.toDouble()).toFloat(),
     ) to floatArrayOf(sizeX, sizeY, softness, if (inverted) 1f else 0f)

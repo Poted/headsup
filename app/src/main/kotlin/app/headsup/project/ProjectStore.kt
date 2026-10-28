@@ -419,6 +419,15 @@ internal object Json {
                 },
             ),
         )
+        .put(
+            "strokes",
+            JSONArray(
+                m.strokes.map {
+                    JSONObject().put("p", JSONArray(it.points.map { v -> v.toDouble() })).put("r", it.radius).put("s", it.softness)
+                        .put("f", it.flow).put("e", it.erase)
+                },
+            ),
+        )
 
     private fun mask(o: JSONObject): ColourMask {
         val kind = MaskKind.entries.firstOrNull { it.name == o.optString("kind") } ?: MaskKind.LINEAR
@@ -439,6 +448,16 @@ internal object Json {
                 MaskKey(
                     it.optLong("t"), it.optDouble("x").toFloat(), it.optDouble("y").toFloat(), it.optDouble("a").toFloat(),
                     it.optDouble("w").toFloat(), it.optDouble("h").toFloat(),
+                )
+            },
+            strokes = o.optJSONArray("strokes").objects().map {
+                val p = it.optJSONArray("p")
+                app.headsup.core.color.BrushStroke(
+                    points = if (p == null) emptyList() else List(p.length()) { i -> p.optDouble(i, 0.0).toFloat() },
+                    radius = it.optDouble("r", 0.06).toFloat(),
+                    softness = it.optDouble("s", 0.5).toFloat(),
+                    flow = it.optDouble("f", 1.0).toFloat(),
+                    erase = it.optBoolean("e", false),
                 )
             },
         )

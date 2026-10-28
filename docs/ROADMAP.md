@@ -67,7 +67,8 @@ project's files), the preview resized left/right when held sideways, Edit called
       each circle placed by the value; to think through (some controls are 0..1, some have
       sub-options).
 - [x] Masks: resize and rotate with two fingers (pinch).
-- [ ] Mask brush; maybe drawing a line or a circle switches to a line/oval mask.
+- [x] Mask brush (paint, erase, move; size, softness, flow). Still open: drawing a line or a circle
+      could offer a line/oval mask instead.
 - [ ] Skin tones struggle in odd light.
 - [ ] Intro slides: thanks for choosing Sweet Spot, what the app can do, how to make cinematic
       films and professional photos, so a newcomer feels welcome and wants to go further.
@@ -83,7 +84,8 @@ project's files), the preview resized left/right when held sideways, Edit called
 
 1. **Photo tools:** done: colour mixer, looks, point tone curves, colour grading wheels,
    texture / clarity / dehaze (Adjust → Presence; on the whole picture, not per mask yet).
-2. **Masks:** a brush to paint where corrections apply; later subject/sky selection.
+2. **Masks:** done: brush, two-finger resize/turn. Next: presence (texture, clarity, dehaze) per
+   mask; later subject/sky selection.
 3. **Geometry:** perspective correction.
 4. **Export:** 16-bit TIFF, Ultra HDR (JPEG with a gain map).
 5. **Formats (last):** camera raws that are not DNG (CR3, NEF, ARW, RAF, …) through LibRaw,

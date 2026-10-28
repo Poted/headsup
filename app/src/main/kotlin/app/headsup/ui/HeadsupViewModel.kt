@@ -272,6 +272,8 @@ data class UiState(
     val previewNeighbourCubes: Map<Long, Array<Array<IntArray>>?> = emptyMap(),
     /** Mask of the selected clip that the Masks tab edits. */
     val selectedMask: Int = 0,
+    /** The brush for painted masks. */
+    val brush: BrushSettings = BrushSettings(),
     /** Cine assistant for the selected clip, while it is open. */
     val cine: CineSession? = null,
     /** Result of the last highlight search; null until searched. */
@@ -1709,6 +1711,43 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
         )
     }
 
+    fun updateBrush(transform: (BrushSettings) -> BrushSettings) = _state.update { it.copy(brush = transform(it.brush)) }
+
+    /**
+     * Paints the selected (brush) mask at a point of the picture (fractions): [phase] 0 starts a
+     * stroke, 1 continues it, 2 ends it. Points land where the mask shows now (it may have moved).
+     * Only the strokes change, so no colour table is computed again.
+     */
+    fun brushStroke(phase: Int, x: Float, y: Float) {
+        val s = _state.value
+        val index = s.selectedClip ?: return
+        val clip = s.selected ?: return
+        val mask = clip.masks.getOrNull(s.selectedMask)?.takeIf { it.kind == MaskKind.BRUSH } ?: return
+        if (phase == 2) return
+        val aspect = if (clip.meta.width > 0 && clip.meta.height > 0) clip.meta.width.toFloat() / clip.meta.height else 16f / 9f
+        val (px, py) = app.headsup.core.color.BrushMask.unmove(x, y, mask.at(playheadFileMs), aspect)
+        val b = s.brush
+        // Radius in the strokes' own frame: as big as it looks on the mask now.
+        val radius = b.radius / mask.at(playheadFileMs).sizeX.coerceAtLeast(0.05f)
+        val strokes = if (phase == 0 || mask.strokes.isEmpty()) {
+            mask.strokes + app.headsup.core.color.BrushStroke(listOf(px, py), radius, b.softness, b.flow, b.mode == BrushMode.ERASE)
+        } else {
+            val last = mask.strokes.last()
+            val lx = last.points[last.points.size - 2]
+            val ly = last.points.last()
+            // Points closer than a fraction of the brush add nothing but work.
+            if (kotlin.math.hypot((px - lx) * aspect, py - ly) < last.radius * 0.15f) return
+            mask.strokes.dropLast(1) + last.copy(points = last.points + px + py)
+        }
+        val m = s.selectedMask
+        _state.update { st ->
+            st.copy(clips = st.clips.mapIndexed { i, c -> if (i == index) c.copy(masks = c.masks.mapIndexed { j, mm -> if (j == m) mm.copy(strokes = strokes) else mm }) else c })
+        }
+    }
+
+    /** Wipes the selected brush mask's strokes. */
+    fun clearBrush() = editSelectedMask { it.copy(strokes = emptyList()) }
+
     private fun editSelectedMask(transform: (ColourMask) -> ColourMask) {
         val s = _state.value
         val index = s.selectedClip ?: return
@@ -2238,3 +2277,14 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
         private const val GLOBAL = "global_"
     }
 }
+
+/** What a finger does on a painted mask. */
+enum class BrushMode(val label: String) { PAINT("Paint"), ERASE("Erase"), MOVE("Move") }
+
+/** The brush: its radius (of the picture's height), edge softness and flow, 0..1. */
+data class BrushSettings(
+    val mode: BrushMode = BrushMode.PAINT,
+    val radius: Float = 0.06f,
+    val softness: Float = 0.5f,
+    val flow: Float = 1f,
+)
