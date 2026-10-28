@@ -296,6 +296,8 @@ data class UiState(
     val lassoPath: List<Float> = emptyList(),
     /** A brush stroke being painted (x, y pairs, fractions of the picture), until the finger lifts. */
     val paintPath: List<Float> = emptyList(),
+    /** The picture's height on screen in pixels, as the preview shows it (for the brush's real size). */
+    val pictureHeightPx: Float = 0f,
     /** Cine assistant for the selected clip, while it is open. */
     val cine: CineSession? = null,
     /** Result of the last highlight search; null until searched. */
@@ -1785,6 +1787,8 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun updateBrush(transform: (BrushSettings) -> BrushSettings) = _state.update { it.copy(brush = transform(it.brush)) }
+
+    fun notePictureHeight(px: Float) = _state.update { if (it.pictureHeightPx == px) it else it.copy(pictureHeightPx = px) }
 
     /**
      * Paints the selected (brush) mask at a point of the picture (fractions): [phase] 0 starts a

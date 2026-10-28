@@ -64,14 +64,12 @@ project's files), the preview resized left/right when held sideways, Edit called
       line to scrub) for a bigger picture.
 
 ### Later
-- [ ] Shrinking the preview is not obvious: a short tutorial for users.
+- [ ] To do, not now: shrinking the preview is not obvious: a short tutorial for users.
 - [x] Holding undo for 3 s asks to undo all changes (back to the project as opened; redo brings
       them back).
 - [ ] Safe point: a moment in the edit history to come back to easily.
 - [ ] A scrollbar at the side wherever a page scrolls, so users know.
-- [ ] Show how far each control is set without opening it (like a guitar amp's knob): the dot on
-      each circle placed by the value; to think through (some controls are 0..1, some have
-      sub-options).
+- [-] Not doing: show how far each control is set on its circle (like a guitar amp's knob).
 - [x] Masks: resize and rotate with two fingers (pinch).
 - [x] Mask brush (paint, erase, move; size, softness, flow), tracking that follows the painted
       area, keys as in other masks. Select: draw round an object (it is found by colour, like an
@@ -83,7 +81,7 @@ project's files), the preview resized left/right when held sideways, Edit called
       subjects but struggles on harder ones (thin branches, low contrast), and tracking follows
       only position, turn and scale. To do: a stronger segmentation model (subject/sky, refined
       edges), the selection run again on each frame so the mask changes shape with the object.
-- [ ] Intro slides: thanks for choosing Sweet Spot, what the app can do, how to make cinematic
+- [ ] To do, not now: intro slides: thanks for choosing Sweet Spot, what the app can do, how to make cinematic
       films and professional photos, so a newcomer feels welcome and wants to go further.
 - [x] Speed curves: an editable ramp per clip (Edit > Speed) and presets (Slow in/out, Hero,
       Bullet, Flash in/out, Montage); the presets are also among the moves the auto edit may use.

@@ -167,6 +167,8 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.nativeCanvas
+import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.runtime.rememberUpdatedState
 import app.headsup.core.track.ActivityTrack
@@ -362,6 +364,7 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
                         onBrush = if (editingMasks && !fullscreen && editingBrush && state.brush.mode != BrushMode.MOVE) vm::brushStroke else null,
                         guideIndex = state.selectedMask,
                         lassoPath = state.lassoPath,
+                        onPictureHeight = vm::notePictureHeight,
                         paintPath = state.paintPath,
                         paintRadius = state.brush.radius,
                         paintStrength = state.brush.flow,
@@ -1561,11 +1564,8 @@ private fun SpeedControls(clip: ClipState, timelineFps: Float, onSpeed: (Float) 
 @Composable
 private fun SpeedRamp(clip: ClipState, onCurve: (List<Float>) -> Unit) {
     val SC = app.headsup.core.edit.SpeedCurve
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        Text("Speed ramp", Modifier.weight(1f), style = MaterialTheme.typography.labelLarge)
-        if (clip.speedCurve.isNotEmpty()) SmallAction("Steady", { onCurve(emptyList()) })
-    }
     Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        FilterChip(selected = clip.speedCurve.isEmpty(), onClick = { onCurve(emptyList()) }, label = { Text("Steady") })
         for (p in app.headsup.core.edit.SpeedCurve.Preset.entries) {
             FilterChip(selected = clip.speedCurve == p.points, onClick = { onCurve(p.points) }, label = { Text(p.label) })
         }
@@ -1629,9 +1629,17 @@ private fun SpeedRamp(clip: ClipState, onCurve: (List<Float>) -> Unit) {
     ) {
         val w = size.width
         val h = size.height
-        // 1× and the doubling lines for reference.
+        // Axes from the bottom left (time across, speed up), the doubling lines and 1×.
+        val axis = Color.White.copy(alpha = 0.45f)
+        drawLine(axis, Offset(1.dp.toPx(), 0f), Offset(1.dp.toPx(), h), strokeWidth = 1.5.dp.toPx())
+        drawLine(axis, Offset(0f, h - 1.dp.toPx()), Offset(w, h - 1.dp.toPx()), strokeWidth = 1.5.dp.toPx())
         for (f in listOf(0.25f, 0.5f, 2f, 4f)) drawLine(Color.White.copy(alpha = 0.1f), Offset(0f, yOf(f) * h), Offset(w, yOf(f) * h))
         drawLine(Color.White.copy(alpha = 0.3f), Offset(0f, yOf(1f) * h), Offset(w, yOf(1f) * h))
+        drawIntoCanvas { c ->
+            val paint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply { color = android.graphics.Color.argb(150, 255, 255, 255); textSize = 11.dp.toPx() }
+            c.nativeCanvas.drawText("speed", 6.dp.toPx(), 13.dp.toPx(), paint)
+            c.nativeCanvas.drawText("1×", w - 18.dp.toPx(), yOf(1f) * h - 3.dp.toPx(), paint)
+        }
         val flat = points.flatMap { listOf(it.first, it.second) }
         val path = androidx.compose.ui.graphics.Path()
         for (k in 0..100) {
@@ -1642,7 +1650,34 @@ private fun SpeedRamp(clip: ClipState, onCurve: (List<Float>) -> Unit) {
         drawPath(path, HeadsupColors.Accent, style = androidx.compose.ui.graphics.drawscope.Stroke(2.dp.toPx()))
         for ((u, f) in points) drawCircle(Color.White, 5.dp.toPx(), Offset(u * w, yOf(f) * h))
     }
-    Hint("Across: the clip; up: faster, down: slower (the line is 1×, on top of the speed above). Touch to add a point and drag it; double-tap one to remove it.")
+}
+
+/** A ramped clip's mark: a little graph (axes from the bottom left) with a wave, "speed" over it. */
+@Composable
+fun SpeedRampIcon(modifier: Modifier = Modifier, tint: Color = Color.White) {
+    androidx.compose.foundation.Canvas(modifier.size(width = 30.dp, height = 22.dp)) {
+        val w = size.width
+        val h = size.height
+        val top = 8.dp.toPx()
+        val sw = 1.2.dp.toPx()
+        drawLine(tint.copy(alpha = 0.7f), Offset(sw, top), Offset(sw, h - sw), strokeWidth = sw)
+        drawLine(tint.copy(alpha = 0.7f), Offset(sw, h - sw), Offset(w, h - sw), strokeWidth = sw)
+        val wave = androidx.compose.ui.graphics.Path()
+        for (k in 0..24) {
+            val x = 3.dp.toPx() + (w - 4.dp.toPx()) * k / 24f
+            val y = top + (h - top - 3.dp.toPx()) * (0.5f - 0.4f * kotlin.math.cos(k / 24f * 2f * Math.PI.toFloat()))
+            if (k == 0) wave.moveTo(x, y) else wave.lineTo(x, y)
+        }
+        drawPath(wave, tint, style = androidx.compose.ui.graphics.drawscope.Stroke(1.5.dp.toPx()))
+        drawIntoCanvas { c ->
+            val paint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+                color = android.graphics.Color.argb(200, 255, 255, 255)
+                textSize = 7.dp.toPx()
+                textAlign = android.graphics.Paint.Align.CENTER
+            }
+            c.nativeCanvas.drawText("speed", w / 2f, 6.5.dp.toPx(), paint)
+        }
+    }
 }
 
 /** Trimming and splitting; the watch data follows every cut because the app knows where it was made. */
@@ -2763,7 +2798,7 @@ private fun BrushControls(state: UiState, vm: HeadsupViewModel) {
     }
     Row(verticalAlignment = Alignment.CenterVertically) {
         Box(Modifier.weight(1f)) { ValueHeader(setting.label, String.format(Locale.US, "%.0f %%", value * 100f)) }
-        BrushPreview(brush.radius, mask.softness)
+        BrushPreview(brush.radius, mask.softness, state.pictureHeightPx)
     }
     RulerSlider(value = value, range = setting.range, step = 0.005f, onChange = { set(it) }, onReset = { set(setting.default) })
     Hint(
@@ -2773,19 +2808,22 @@ private fun BrushControls(state: UiState, vm: HeadsupViewModel) {
 }
 
 /**
- * The brush as it paints, on a small frame of the picture's shape: its size against the picture's
- * height, and its soft edge.
+ * The brush as big as it paints on the picture on screen ([pictureHeightPx]), with its soft edge;
+ * one larger than the box shows its middle part.
  */
 @Composable
-private fun BrushPreview(radius: Float, softness: Float) {
+private fun BrushPreview(radius: Float, softness: Float, pictureHeightPx: Float) {
+    val density = LocalDensity.current
+    val rPx = (radius * pictureHeightPx).coerceAtLeast(1.5f)
+    val box = with(density) { (rPx * 2f).toDp() + 10.dp }.coerceIn(28.dp, 120.dp)
     androidx.compose.foundation.Canvas(
         Modifier
-            .size(width = 96.dp, height = 54.dp)
+            .size(box)
             .clip(RoundedCornerShape(6.dp))
             .background(Color.Black.copy(alpha = 0.45f))
             .border(1.dp, HeadsupColors.Outline, RoundedCornerShape(6.dp)),
     ) {
-        val r = (radius * size.height).coerceAtLeast(1.5f)
+        val r = rPx
         val hard = (1f - softness).coerceIn(0f, 0.99f)
         val red = Color(0xFFFF4A3D)
         drawCircle(

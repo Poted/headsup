@@ -156,6 +156,8 @@ fun ClipPreview(
     guideIndex: Int = 0,
     /** An outline being drawn around an object (x, y pairs, fractions of the picture). */
     lassoPath: List<Float> = emptyList(),
+    /** Told the picture's height on screen in pixels (as framed), e.g. to show a brush at its real size. */
+    onPictureHeight: ((Float) -> Unit)? = null,
     /** A brush stroke being painted (fractions of the picture), its radius (of the picture's height), strength, and whether it erases. */
     paintPath: List<Float> = emptyList(),
     paintRadius: Float = 0f,
@@ -582,8 +584,10 @@ fun ClipPreview(
     val photoNow by rememberUpdatedState(photo)
     val clipLength by rememberUpdatedState(clip.durationMs)
     val clipNow by rememberUpdatedState(clip)
+    val playlistNow by rememberUpdatedState(playlist)
     LaunchedEffect(exoPlayer) {
         var lastFrame = 0L
+        var lastSpeedChange = 0L
         while (true) withFrameMillis { t ->
             val dt = if (lastFrame > 0) t - lastFrame else 0L
             lastFrame = t
@@ -607,10 +611,17 @@ fun ClipPreview(
                 playerMs = exoPlayer.currentPosition
                 if (!fileTime) reportPosition(playerMs)
             }
-            // A speed ramp: the player's speed follows the curve (in small steps, which it plays smoothly).
-            if (clipNow.speedCurve.isNotEmpty() && exoPlayer.isPlaying) {
-                val s = clipNow.speedAt(playerMs)
-                if (kotlin.math.abs(s - exoPlayer.playbackParameters.speed) > 0.02f) exoPlayer.setPlaybackSpeed(s)
+            // The speed of the clip actually on this player (just after a cut the selection may not
+            // have followed yet): its ramp, or its steady speed, so no clip keeps another's speed.
+            // Changed at most every 120 ms and by 3 % or more: each change costs the player a jolt.
+            if (exoPlayer.isPlaying && t - lastSpeedChange >= 120) {
+                val onPlayer = pictureClip[active]?.let { id -> if (id == clipNow.id) clipNow else playlistNow.firstOrNull { it.id == id } } ?: clipNow
+                val s = onPlayer.speedAt(exoPlayer.currentPosition)
+                val now = exoPlayer.playbackParameters.speed
+                if (kotlin.math.abs(s - now) > 0.03f * now) {
+                    exoPlayer.setPlaybackSpeed(s)
+                    lastSpeedChange = t
+                }
             }
             playing = exoPlayer.isPlaying
             wantsPlay = exoPlayer.playWhenReady && exoPlayer.playbackState.let { it == Player.STATE_READY || it == Player.STATE_BUFFERING }
@@ -819,6 +830,8 @@ fun ClipPreview(
                 // A paused player keeps its last frame laid out for the old size (a corner of the
                 // picture after changing the frame) until it draws again: make both draw. A seek to
                 // the current position is ignored, so step 1 ms away and back.
+                val shownHeight = pictureH * reframeTransform(reframe, geometry).zoom
+                LaunchedEffect(shownHeight.toInt()) { onPictureHeight?.invoke(shownHeight) }
                 LaunchedEffect(boxW.toInt(), boxH.toInt(), pictureW.toInt(), pictureH.toInt()) {
                     for (p in players) if (!p.isPlaying && p.playbackState == Player.STATE_READY) {
                         val at = p.currentPosition
@@ -1257,14 +1270,15 @@ fun ClipPreview(
             // The shown clip's own frame rate (the export's is chosen on the Export page).
             clip.meta.frameRate?.takeIf { !photo && !photoMode }?.let { fps ->
                 Text(
-                    String.format(java.util.Locale.US, "%.4g fps", fps) + (if (clip.speed != 1f) " · ${String.format(java.util.Locale.US, "%.3g", clip.speed)}×" else "") +
-                        (if (clip.speedCurve.isNotEmpty()) " · ramp" else ""),
+                    String.format(java.util.Locale.US, "%.4g fps", fps) + (if (clip.speed != 1f) " · ${String.format(java.util.Locale.US, "%.3g", clip.speed)}×" else ""),
                     Modifier.padding(end = 8.dp),
                     style = MaterialTheme.typography.labelSmall,
                     color = HeadsupColors.TextMuted,
                     maxLines = 1,
                 )
             }
+            // A ramped clip: a little speed graph.
+            if (clip.speedCurve.isNotEmpty() && !photoMode) SpeedRampIcon(Modifier.padding(end = 8.dp), tint = HeadsupColors.TextMuted)
             ToggleDot("H", histogramOn) { histogramOn = !histogramOn }
             Spacer(Modifier.width(4.dp))
             if (Build.VERSION.SDK_INT >= 33) ToggleDot("Z", zebra) { zebra = !zebra }

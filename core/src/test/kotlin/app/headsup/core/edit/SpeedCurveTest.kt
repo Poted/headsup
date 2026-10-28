@@ -16,12 +16,12 @@ class SpeedCurveTest {
     fun `a slow middle makes the clip longer, and times map both ways`() {
         val hero = SpeedCurve.Preset.HERO.points
         val length = SpeedCurve.timelineOf(10_000, 10_000, 1f, hero)
-        assertTrue(length > 13_000, "$length")
+        assertTrue(length > 12_000, "$length")
         for (src in listOf(0L, 2_500L, 5_000L, 7_777L, 10_000L)) {
             val tl = SpeedCurve.timelineOf(src, 10_000, 1f, hero)
             assertTrue(abs(SpeedCurve.sourceOf(tl, 10_000, 1f, hero) - src) < 30, "$src")
         }
-        assertEquals(0.25f, SpeedCurve.factor(hero, 0.52f), 1e-4f)
+        assertEquals(0.4f, SpeedCurve.factor(hero, 0.52f), 1e-4f)
         assertEquals(1f, SpeedCurve.factor(hero, 0.1f), 1e-4f)
     }
 

@@ -646,7 +646,7 @@ private fun DrawScope.drawVideo(
             }
             // Duration and speed, the group, how well it matches the watch data.
             val label = Formats.duration(c.timelineDurationMs) + (if (c.speed != 1f) " · ${if (c.speed % 1f == 0f) c.speed.toInt() else c.speed}×" else "") +
-                (if (c.speedCurve.isNotEmpty()) " · ramp" else "")
+                (if (c.speedCurve.isNotEmpty()) " · ∿" else "")
             drawLabel(text, label, Offset(l + 5.dp.toPx(), top + h - 15.dp.toPx()), TextStyle(color = Color.White, fontSize = 10.sp, background = Color.Black.copy(alpha = 0.5f)))
             state.groups.firstOrNull { it.id == c.groupId }?.let {
                 drawLabel(text, it.name, Offset(l + 5.dp.toPx(), top + 3.dp.toPx()), TextStyle(color = HeadsupColors.OnHighlight, fontSize = 10.sp, background = HeadsupColors.Highlight.copy(alpha = 0.9f)))

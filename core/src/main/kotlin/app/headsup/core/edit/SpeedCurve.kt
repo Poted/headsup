@@ -16,13 +16,15 @@ object SpeedCurve {
 
     /** Ready-made ramps. */
     enum class Preset(val label: String, val points: List<Float>) {
-        SLOW_IN("Slow in", listOf(0f, 0.3f, 0.35f, 1f, 1f, 1f)),
-        SLOW_OUT("Slow out", listOf(0f, 1f, 0.65f, 1f, 1f, 0.3f)),
-        HERO("Hero", listOf(0f, 1f, 0.35f, 1f, 0.45f, 0.25f, 0.6f, 0.25f, 0.7f, 1f, 1f, 1f)),
-        BULLET("Bullet", listOf(0f, 2f, 0.38f, 2f, 0.48f, 0.2f, 0.58f, 0.2f, 0.68f, 2f, 1f, 2f)),
-        FLASH_IN("Flash in", listOf(0f, 3f, 0.3f, 1f, 1f, 1f)),
-        FLASH_OUT("Flash out", listOf(0f, 1f, 0.7f, 1f, 1f, 3f)),
-        MONTAGE("Montage", listOf(0f, 2f, 0.25f, 2f, 0.35f, 0.5f, 0.6f, 0.5f, 0.7f, 2f, 1f, 2f)),
+        // Gentle on purpose: slow motion that looks filmed, not a trick (deep slow-downs need
+        // footage shot at a high frame rate to stay smooth).
+        SLOW_IN("Slow in", listOf(0f, 0.4f, 0.4f, 1f, 1f, 1f)),
+        SLOW_OUT("Slow out", listOf(0f, 1f, 0.6f, 1f, 1f, 0.4f)),
+        HERO("Hero", listOf(0f, 1f, 0.3f, 1f, 0.45f, 0.4f, 0.6f, 0.4f, 0.75f, 1f, 1f, 1f)),
+        BULLET("Bullet", listOf(0f, 1.6f, 0.35f, 1.6f, 0.47f, 0.35f, 0.58f, 0.35f, 0.7f, 1.6f, 1f, 1.6f)),
+        FLASH_IN("Flash in", listOf(0f, 2.5f, 0.3f, 1f, 1f, 1f)),
+        FLASH_OUT("Flash out", listOf(0f, 1f, 0.7f, 1f, 1f, 2.5f)),
+        MONTAGE("Montage", listOf(0f, 1.6f, 0.25f, 1.6f, 0.38f, 0.6f, 0.6f, 0.6f, 0.72f, 1.6f, 1f, 1.6f)),
     }
 
     /** The points as (where, factor), sorted. */
