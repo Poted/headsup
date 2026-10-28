@@ -109,7 +109,7 @@ object PhotoExporter {
                 postScale(picW / pw, picH / ph)
             })
         }
-        val brush = app.headsup.color.BrushAtlas.build(request.masks, picW / picH)
+        val brush = app.headsup.color.BrushAtlas.build(context, request.masks, picW / picH)
         val shader = GradePreviewShader().apply {
             setTables(GradeTables(request.cube, request.maskCubes))
             setBrush(brush)

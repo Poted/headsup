@@ -17,7 +17,16 @@ class GrayFrame(val width: Int, val height: Int, val pixels: FloatArray) {
  * normalised cross-correlation. Their midpoint moves the mask, the line between them turns and
  * scales it. Tracking stops where a patch can no longer be found with confidence.
  */
-class MaskTracker(start: ColourMask, first: GrayFrame, private val startMs: Long) {
+class MaskTracker(
+    start: ColourMask,
+    first: GrayFrame,
+    private val startMs: Long,
+    /**
+     * Where in the frame to follow the picture (fractions), when not the mask's centre: a painted
+     * mask is followed where it is painted, and its centre moves, turns and scales with that place.
+     */
+    anchor: Pair<Float, Float>? = null,
+) {
     private val radius = (first.height / 20).coerceAtLeast(6)
     private val search = radius * 2
     private val base = start
@@ -26,13 +35,19 @@ class MaskTracker(start: ColourMask, first: GrayFrame, private val startMs: Long
     private val startAngle: Double
     private val startLength: Double
 
+    /** The mask's centre from the followed place, in pixels, at the start. */
+    private val offsetX: Double
+    private val offsetY: Double
+
     /** Set once a patch was lost; later frames are ignored. */
     var lost: Boolean = false
         private set
 
     init {
-        val cx = start.centerX * first.width
-        val cy = start.centerY * first.height
+        val cx = (anchor?.first ?: start.centerX) * first.width
+        val cy = (anchor?.second ?: start.centerY) * first.height
+        offsetX = (start.centerX * first.width - cx).toDouble()
+        offsetY = (start.centerY * first.height - cy).toDouble()
         val a = Math.toRadians(start.angleDegrees.toDouble())
         // Points along the mask, kept inside the frame with room for their patch.
         var d = first.height * 0.15
@@ -51,10 +66,12 @@ class MaskTracker(start: ColourMask, first: GrayFrame, private val startMs: Long
             lost = true
             return null
         }
-        val cx = (p1.x + p2.x) / 2
-        val cy = (p1.y + p2.y) / 2
         val angle = atan2(p2.y - p1.y, p2.x - p1.x)
         val scale = (hypot(p2.x - p1.x, p2.y - p1.y) / startLength).toFloat()
+        // The centre keeps its place from the followed point, turned and scaled with it.
+        val turn = angle - startAngle
+        val cx = (p1.x + p2.x) / 2 + (offsetX * cos(turn) - offsetY * sin(turn)) * scale
+        val cy = (p1.y + p2.y) / 2 + (offsetX * sin(turn) + offsetY * cos(turn)) * scale
         return MaskKey(
             timeMs,
             (cx / frame.width).toFloat(),

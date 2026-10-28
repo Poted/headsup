@@ -38,9 +38,9 @@ class GradeEffect(
     /** Texture, clarity and dehaze, drawn on the frame before its colour tables. */
     private val presence: Presence = Presence.NONE,
 ) : GlEffect {
-    override fun toGlShaderProgram(context: Context, useHdr: Boolean): GlShaderProgram = Program(useHdr)
+    override fun toGlShaderProgram(context: Context, useHdr: Boolean): GlShaderProgram = Program(context.applicationContext, useHdr)
 
-    private inner class Program(useHdr: Boolean) : BaseGlShaderProgram(useHdr, 1) {
+    private inner class Program(private val context: Context, useHdr: Boolean) : BaseGlShaderProgram(useHdr, 1) {
         private val program: GlProgram = try {
             GlProgram(VERTEX, FRAGMENT)
         } catch (e: GlUtil.GlException) {
@@ -79,7 +79,7 @@ class GradeEffect(
         override fun configure(inputWidth: Int, inputHeight: Int): Size {
             width = inputWidth
             height = inputHeight
-            val atlas = BrushAtlas.build(masks, inputWidth.toFloat() / inputHeight.coerceAtLeast(1))
+            val atlas = BrushAtlas.build(context, masks, inputWidth.toFloat() / inputHeight.coerceAtLeast(1))
             val bitmap = atlas ?: BrushAtlas.EMPTY
             brushSlots = if (atlas == null) 1f else ColourMask.MAX_PER_CLIP.toFloat()
             brushSlot = floatArrayOf(bitmap.width / brushSlots, bitmap.height.toFloat())

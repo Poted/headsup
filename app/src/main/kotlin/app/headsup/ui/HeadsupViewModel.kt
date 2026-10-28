@@ -1718,19 +1718,21 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
      * stroke, 1 continues it, 2 ends it. Points land where the mask shows now (it may have moved).
      * Only the strokes change, so no colour table is computed again.
      */
-    fun brushStroke(phase: Int, x: Float, y: Float) {
+    fun brushStroke(phase: Int, x: Float, y: Float, grab: (Int) -> android.graphics.Bitmap?) {
         val s = _state.value
         val index = s.selectedClip ?: return
         val clip = s.selected ?: return
         val mask = clip.masks.getOrNull(s.selectedMask)?.takeIf { it.kind == MaskKind.BRUSH } ?: return
         if (phase == 2) return
         val aspect = if (clip.meta.width > 0 && clip.meta.height > 0) clip.meta.width.toFloat() / clip.meta.height else 16f / 9f
-        val (px, py) = app.headsup.core.color.BrushMask.unmove(x, y, mask.at(playheadFileMs), aspect)
+        val placed = mask.at(playheadFileMs)
+        val (px, py) = app.headsup.core.color.BrushMask.unmove(x, y, placed, aspect)
         val b = s.brush
         // Radius in the strokes' own frame: as big as it looks on the mask now.
-        val radius = b.radius / mask.at(playheadFileMs).sizeX.coerceAtLeast(0.05f)
+        val radius = b.radius / placed.sizeX.coerceAtLeast(0.05f)
         val strokes = if (phase == 0 || mask.strokes.isEmpty()) {
-            mask.strokes + app.headsup.core.color.BrushStroke(listOf(px, py), radius, b.softness, b.flow, b.mode == BrushMode.ERASE)
+            val reference = if (b.autoEdge) brushReference(clip, placed, grab) else null
+            mask.strokes + app.headsup.core.color.BrushStroke(listOf(px, py), radius, b.flow, b.mode == BrushMode.ERASE, reference, b.range)
         } else {
             val last = mask.strokes.last()
             val lx = last.points[last.points.size - 2]
@@ -1743,6 +1745,23 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
         _state.update { st ->
             st.copy(clips = st.clips.mapIndexed { i, c -> if (i == index) c.copy(masks = c.masks.mapIndexed { j, mm -> if (j == m) mm.copy(strokes = strokes) else mm }) else c })
         }
+    }
+
+    /** The picture edge-finding strokes are painted on: the last one while the frame and mask stay, else a new one. */
+    private var lastReference: Triple<Long, Long, app.headsup.core.color.MaskKey>? = null
+    private var lastReferenceId: String? = null
+
+    private fun brushReference(clip: ClipState, placed: ColourMask, grab: (Int) -> android.graphics.Bitmap?): String? {
+        val placement = MaskKey.of(placed, 0L)
+        val key = Triple(clip.id, if (clip.meta.isPhoto) 0L else playheadFileMs, placement)
+        if (key == lastReference) lastReferenceId?.let { return it }
+        val aspect = if (clip.meta.width > 0 && clip.meta.height > 0) clip.meta.width.toFloat() / clip.meta.height else 16f / 9f
+        val bitmap = grab(app.headsup.color.BrushAtlas.slotSize(aspect).first) ?: return null
+        // Not recycled: for a photo it can be the preview's own picture.
+        val id = app.headsup.color.BrushReferences.create(getApplication(), bitmap, placement)
+        lastReference = key
+        lastReferenceId = id
+        return id
     }
 
     /** Wipes the selected brush mask's strokes. */
@@ -1811,7 +1830,10 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                 val result = withContext(Dispatchers.Default) {
                     val first = frames.indices.minByOrNull { kotlin.math.abs(frames[it].first - t0) } ?: return@withContext null
                     fun follow(range: IntProgression): Pair<List<MaskKey>, Long?> {
-                        val tracker = MaskTracker(start, frames[first].second, frames[first].first)
+                        // A painted mask is followed where it is painted.
+                        val aspect = if (clip.meta.width > 0 && clip.meta.height > 0) clip.meta.width.toFloat() / clip.meta.height else 16f / 9f
+                        val anchor = if (start.kind == MaskKind.BRUSH) app.headsup.core.color.BrushMask.centreOf(start.strokes, MaskKey.of(start, 0L), aspect) else null
+                        val tracker = MaskTracker(start, frames[first].second, frames[first].first, anchor)
                         val keys = mutableListOf<MaskKey>()
                         for (i in range) {
                             val (ms, frame) = frames[i]
@@ -2281,10 +2303,14 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
 /** What a finger does on a painted mask. */
 enum class BrushMode(val label: String) { PAINT("Paint"), ERASE("Erase"), MOVE("Move") }
 
-/** The brush: its radius (of the picture's height), edge softness and flow, 0..1. */
+/**
+ * The brush: its radius (of the picture's height) and flow, 0..1; with [autoEdge] it stops at
+ * edges, reaching colours within [range] of the one under its centre.
+ */
 data class BrushSettings(
     val mode: BrushMode = BrushMode.PAINT,
     val radius: Float = 0.06f,
-    val softness: Float = 0.5f,
     val flow: Float = 1f,
+    val autoEdge: Boolean = false,
+    val range: Float = 0.15f,
 )

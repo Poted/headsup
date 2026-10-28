@@ -2278,11 +2278,12 @@ private fun ShotMatchPanel(state: UiState, clip: ClipState, vm: HeadsupViewModel
     }
 }
 
-/** The brush's settings, picked like the corrections and set with the same ruler. */
-private enum class BrushSetting(val symbol: String, val label: String, val get: (BrushSettings) -> Float, val set: (BrushSettings, Float) -> BrushSettings, val range: ClosedFloatingPointRange<Float>) {
-    SIZE("●", "Size", { it.radius }, { b, v -> b.copy(radius = v) }, 0.005f..0.3f),
-    EDGE("◐", "Softness", { it.softness }, { b, v -> b.copy(softness = v) }, 0f..1f),
-    FLOW("≋", "Flow", { it.flow }, { b, v -> b.copy(flow = v) }, 0.05f..1f),
+/** The brush's settings (and the painted mask's softness), picked like the corrections and set with the same ruler. */
+private enum class BrushSetting(val symbol: String, val label: String, val range: ClosedFloatingPointRange<Float>, val default: Float) {
+    SIZE("●", "Size", 0.005f..0.3f, BrushSettings().radius),
+    SOFTNESS("◐", "Softness", 0f..1f, ColourMask(MaskKind.BRUSH).softness),
+    FLOW("≋", "Flow", 0.05f..1f, BrushSettings().flow),
+    RANGE("≈", "Range", 0.02f..0.6f, BrushSettings().range),
 }
 
 /**
@@ -2291,30 +2292,44 @@ private enum class BrushSetting(val symbol: String, val label: String, val get: 
  */
 @Composable
 private fun BrushControls(state: UiState, vm: HeadsupViewModel) {
-    var setting by rememberSaveable { mutableStateOf(BrushSetting.SIZE) }
+    val mask = state.selected?.masks?.getOrNull(state.selectedMask) ?: return
+    val brush = state.brush
+    val settings = BrushSetting.entries.filter { it != BrushSetting.RANGE || brush.autoEdge }
+    var chosen by rememberSaveable { mutableStateOf(BrushSetting.SIZE) }
+    val setting = chosen.takeIf { it in settings } ?: BrushSetting.SIZE
     Row(verticalAlignment = Alignment.CenterVertically) {
         FlowRow(Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             for (mode in BrushMode.entries) {
-                FilterChip(selected = state.brush.mode == mode, onClick = { vm.updateBrush { it.copy(mode = mode) } }, label = { Text(mode.label) })
+                FilterChip(selected = brush.mode == mode, onClick = { vm.updateBrush { it.copy(mode = mode) } }, label = { Text(mode.label) })
             }
+            FilterChip(selected = brush.autoEdge, onClick = { vm.updateBrush { it.copy(autoEdge = !it.autoEdge) } }, label = { Text("Auto edge") })
         }
         SmallAction("Clear", { vm.clearBrush() })
     }
     LazyRow(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
-        items(BrushSetting.entries) { b ->
-            CircleOption(b.symbol, b.label, selected = b == setting, modified = false) { setting = b }
+        items(settings) { b ->
+            CircleOption(b.symbol, b.label, selected = b == setting, modified = false) { chosen = b }
         }
     }
-    val value = setting.get(state.brush)
+    val value = when (setting) {
+        BrushSetting.SIZE -> brush.radius
+        BrushSetting.SOFTNESS -> mask.softness
+        BrushSetting.FLOW -> brush.flow
+        BrushSetting.RANGE -> brush.range
+    }
+    fun set(v: Float) = when (setting) {
+        BrushSetting.SIZE -> vm.updateBrush { it.copy(radius = v) }
+        // The whole painting's edge, at once.
+        BrushSetting.SOFTNESS -> vm.updateMask { it.copy(softness = v) }
+        BrushSetting.FLOW -> vm.updateBrush { it.copy(flow = v) }
+        BrushSetting.RANGE -> vm.updateBrush { it.copy(range = v) }
+    }
     ValueHeader(setting.label, String.format(Locale.US, "%.0f %%", value * 100f))
-    RulerSlider(
-        value = value,
-        range = setting.range,
-        step = 0.005f,
-        onChange = { v -> vm.updateBrush { setting.set(it, v) } },
-        onReset = { vm.updateBrush { setting.set(it, setting.get(BrushSettings())) } },
+    RulerSlider(value = value, range = setting.range, step = 0.005f, onChange = { set(it) }, onReset = { set(setting.default) })
+    Hint(
+        if (brush.autoEdge) "Auto edge: the brush takes only colours like the one under its centre, so keep the centre on the side you paint (e.g. the sky) and run the edge of the brush along the trees. Range: how alike."
+        else "Paint where the mask's corrections go; Erase takes them away. Two fingers move, turn and scale the painting.",
     )
-    Hint("Paint where the mask's corrections go; Erase takes them away. Two fingers move, turn and scale the painting.")
 }
 
 /** Shape controls of a mask, edited with the same ruler as the corrections. */

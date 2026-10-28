@@ -32,6 +32,9 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.snapshotFlow
+import kotlinx.coroutines.flow.conflate
+import kotlinx.coroutines.flow.distinctUntilChangedBy
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -143,8 +146,11 @@ fun ClipPreview(
     onMoveMask: ((Float, Float) -> Unit)? = null,
     /** Two fingers on the picture while a mask is edited: move (fractions of the picture), scale, turn (degrees). */
     onTransformMask: ((dx: Float, dy: Float, zoom: Float, degrees: Float) -> Unit)? = null,
-    /** Painting a brush mask: a stroke starts (0), goes on (1) and ends (2) at a point of the picture (fractions). */
-    onBrush: ((phase: Int, x: Float, y: Float) -> Unit)? = null,
+    /**
+     * Painting a brush mask: a stroke starts (0), goes on (1) and ends (2) at a point of the picture
+     * (fractions); the last argument grabs the picture (before colour) at a width, for finding edges.
+     */
+    onBrush: ((phase: Int, x: Float, y: Float, grab: (Int) -> Bitmap?) -> Unit)? = null,
     /** Which of [masks] [guideMask] is (its slot of the brush atlas). */
     guideIndex: Int = 0,
     vignette: Float,
@@ -689,10 +695,16 @@ fun ClipPreview(
     }
     // The frame takes the reframe's shape; the picture is laid out under it, just covering it.
     val frameAspect = reframe.aspect ?: sourceAspect
-    // Painted masks as one picture for the shaders, drawn again when a stroke changes.
-    val brushStrokes = masks.map { it.strokes }
-    val brushAtlas by produceState<Bitmap?>(null, brushStrokes, (sourceAspect * 1000).toInt()) {
-        value = withContext(Dispatchers.Default) { BrushAtlas.build(masks, sourceAspect) }
+    // Painted masks as one picture for the shaders, drawn again when a stroke changes. While a
+    // finger paints, each drawing finishes and the next starts from the latest strokes (a new
+    // stroke point must not cancel the drawing, or nothing would show until the finger lifts).
+    val brushInput = rememberUpdatedState(masks to sourceAspect)
+    var brushAtlas by remember { mutableStateOf<Bitmap?>(null) }
+    LaunchedEffect(Unit) {
+        snapshotFlow { brushInput.value }
+            .distinctUntilChangedBy { (m, a) -> Triple(m.map { it.strokes }, m.map { it.softness }, a) }
+            .conflate()
+            .collect { (m, a) -> brushAtlas = withContext(Dispatchers.Default) { BrushAtlas.build(context, m, a) } }
     }
     LaunchedEffect(brushAtlas) {
         previewShader?.setBrush(brushAtlas)
@@ -905,7 +917,7 @@ fun ClipPreview(
                                     down.consume()
                                     var painting = paint != null
                                     var last = down.position
-                                    if (paint != null) pictureOf(down.position).let { (x, y) -> paint(0, x, y) } else move(down.position)
+                                    if (paint != null) pictureOf(down.position).let { (x, y) -> paint(0, x, y, grab) } else move(down.position)
                                     // One finger places the mask; two move, scale and turn it. After two,
                                     // the finger left on the picture no longer jumps it to itself.
                                     var pinched = false
@@ -919,7 +931,7 @@ fun ClipPreview(
                                             if (painting) {
                                                 // A second finger ends the stroke and moves the mask instead.
                                                 painting = false
-                                                pictureOf(last).let { (x, y) -> paint?.invoke(2, x, y) }
+                                                pictureOf(last).let { (x, y) -> paint?.invoke(2, x, y, grab) }
                                             }
                                             val g = geometryRef.value
                                             val before = event.calculateCentroid(useCurrent = false)
@@ -932,7 +944,7 @@ fun ClipPreview(
                                         } else if (!pinched) {
                                             val p = pressed.first().position
                                             when {
-                                                painting -> pictureOf(p).let { (x, y) -> paint?.invoke(1, x, y) }
+                                                painting -> pictureOf(p).let { (x, y) -> paint?.invoke(1, x, y, grab) }
                                                 moveMask != null -> move(p)
                                                 transform != null -> {
                                                     // A painted mask moves by the finger's travel, not to the finger.
@@ -945,7 +957,7 @@ fun ClipPreview(
                                         }
                                         event.changes.forEach { it.consume() }
                                     }
-                                    if (painting) pictureOf(last).let { (x, y) -> paint?.invoke(2, x, y) }
+                                    if (painting) pictureOf(last).let { (x, y) -> paint?.invoke(2, x, y, grab) }
                                     return@awaitEachGesture
                                 }
                                 val widget = renderer.hitTest(down.position.x, down.position.y, slop = 12.dp.toPx())

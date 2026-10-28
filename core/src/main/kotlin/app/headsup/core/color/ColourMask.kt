@@ -33,8 +33,8 @@ data class ColourMask(
     val sizeY: Float = if (kind == MaskKind.BRUSH) 1f else 0.6f,
     /** Tilt in degrees, positive clockwise. */
     val angleDegrees: Float = 0f,
-    /** Width of the soft edge: of the frame height for a line, of the radius for an oval. */
-    val softness: Float = 0.3f,
+    /** Width of the soft edge: of the frame height for a line, of the radius for an oval, of each print for a brush. */
+    val softness: Float = if (kind == MaskKind.BRUSH) 0.5f else 0.3f,
     /** Swaps inside and outside (below the line, outside the oval). */
     val inverted: Boolean = false,
     val grade: ColorGrade = ColorGrade(),
