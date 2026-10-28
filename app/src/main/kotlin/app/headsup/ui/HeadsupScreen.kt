@@ -436,7 +436,9 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
                         },
                     )
                     // Undo/redo tucked into the picture's corner, only when there is something to undo.
-                    if (!fullscreen) UndoRedo(state.canUndo, state.canRedo, vm::undo, vm::redo, vm::undoAll, vm::resetAllEdits, Modifier.align(Alignment.TopEnd).padding(top = 8.dp, end = 24.dp), canResetAll = state.clips.isNotEmpty())
+                    if (!fullscreen) UndoRedo(state.canUndo, state.canRedo, vm::undo, vm::redo, vm::undoAll, vm::resetAllEdits, Modifier.align(Alignment.TopEnd).padding(top = 8.dp, end = 24.dp), canResetAll = state.clips.isNotEmpty(),
+                        hasSafePoint = state.hasSafePoint, onSetSafePoint = vm::setSafePoint, onBackToSafePoint = vm::backToSafePoint,
+                    )
                     // Full screen: the picture alone, to see it as it will look.
                     Box(
                         Modifier
@@ -558,6 +560,7 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
     // The tool's panel and the tools.
     val tools: @Composable ColumnScope.() -> Unit = tools@{
             if (fullscreen) return@tools
+            val panelScroll = rememberScrollState()
             Column(
                 Modifier
                     .weight(1f)
@@ -566,7 +569,8 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
                     .clip(RoundedCornerShape(28.dp))
                     .background(HeadsupColors.CardGradient)
                     .border(1.dp, HeadsupColors.Outline, RoundedCornerShape(28.dp))
-                    .verticalScroll(rememberScrollState())
+                    .scrollBar(panelScroll)
+                    .verticalScroll(panelScroll)
                     .padding(16.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
@@ -737,7 +741,11 @@ private fun EmptyState(photoProject: Boolean) {
  * undo for [UNDO_ALL_HOLD_MS] (a ring fills meanwhile) asks whether to undo every change.
  */
 @Composable
-private fun UndoRedo(canUndo: Boolean, canRedo: Boolean, onUndo: () -> Unit, onRedo: () -> Unit, onUndoAll: () -> Unit, onResetAll: () -> Unit, modifier: Modifier, canResetAll: Boolean = false) {
+private fun UndoRedo(
+    canUndo: Boolean, canRedo: Boolean, onUndo: () -> Unit, onRedo: () -> Unit, onUndoAll: () -> Unit, onResetAll: () -> Unit,
+    modifier: Modifier, canResetAll: Boolean = false,
+    hasSafePoint: Boolean = false, onSetSafePoint: () -> Unit = {}, onBackToSafePoint: () -> Unit = {},
+) {
     // Shown while there is something to undo, or edits to remove (holding undo works even when a tap would not).
     if (!canUndo && !canRedo && !canResetAll) return
     var askAll by remember { mutableStateOf(false) }
@@ -763,7 +771,33 @@ private fun UndoRedo(canUndo: Boolean, canRedo: Boolean, onUndo: () -> Unit, onR
             dismissButton = { TextButton(onClick = { askAll = false }) { Text("Cancel") } },
         )
     }
+    var askSafe by remember { mutableStateOf(false) }
+    if (askSafe) {
+        AlertDialog(
+            onDismissRequest = { askSafe = false },
+            title = { Text("Safe point") },
+            text = { Text("Go back to the safe point, or set it here instead? Going back is a step of its own: undo returns to where you are now.") },
+            confirmButton = {
+                Row {
+                    TextButton(onClick = { askSafe = false; onSetSafePoint() }) { Text("Set here") }
+                    TextButton(onClick = { askSafe = false; onBackToSafePoint() }) { Text("Go back") }
+                }
+            },
+            dismissButton = { TextButton(onClick = { askSafe = false }) { Text("Cancel") } },
+        )
+    }
     Row(modifier, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        // The safe point: a moment of the edit to come back to.
+        Box(
+            Modifier
+                .size(30.dp)
+                .clip(CircleShape)
+                .background(Color.Black.copy(alpha = 0.35f))
+                .clickable { if (hasSafePoint) askSafe = true else onSetSafePoint() },
+            contentAlignment = Alignment.Center,
+        ) {
+            Text("⚑", color = if (hasSafePoint) HeadsupColors.Accent else Color.White.copy(alpha = 0.85f), style = MaterialTheme.typography.labelLarge)
+        }
         for ((icon, enabled, action, label) in listOf(
             Quad(HeadsupIcons.Undo, canUndo, onUndo, "Undo"),
             Quad(HeadsupIcons.Redo, canRedo, onRedo, "Redo"),
@@ -815,6 +849,48 @@ private object RealTimeMotion : androidx.compose.ui.MotionDurationScale {
 }
 
 private enum class Swipe { LEFT, RIGHT, UP, DOWN }
+
+/**
+ * A thin bar at the right edge while there is more to scroll: where the view is and how much of it
+ * shows. Drawn over the content (taking no room); a finger along the edge drags it.
+ */
+private fun Modifier.scrollBar(state: androidx.compose.foundation.ScrollState): Modifier = this
+    .drawWithContent {
+        drawContent()
+        val max = state.maxValue
+        if (max <= 0 || max == Int.MAX_VALUE) return@drawWithContent
+        val h = size.height
+        val inset = 18.dp.toPx()
+        val track = h - 2 * inset
+        val shown = h / (h + max)
+        val barH = (track * shown).coerceAtLeast(24.dp.toPx())
+        val y = inset + (track - barH) * state.value / max
+        val x = size.width - 5.dp.toPx()
+        drawLine(
+            Color.White.copy(alpha = if (state.isScrollInProgress) 0.55f else 0.22f),
+            Offset(x, y), Offset(x, y + barH),
+            strokeWidth = 3.dp.toPx(), cap = androidx.compose.ui.graphics.StrokeCap.Round,
+        )
+    }
+    .pointerInput(state) {
+        // Only a finger that starts on the very edge drags the bar; the rest of the panel scrolls as usual.
+        val edge = 14.dp.toPx()
+        awaitEachGesture {
+            val down = awaitFirstDown(requireUnconsumed = false, pass = androidx.compose.ui.input.pointer.PointerEventPass.Initial)
+            if (down.position.x < size.width - edge || state.maxValue <= 0) return@awaitEachGesture
+            down.consume()
+            val inset = 18.dp.toPx()
+            val track = (size.height - 2 * inset).coerceAtLeast(1f)
+            while (true) {
+                val event = awaitPointerEvent(androidx.compose.ui.input.pointer.PointerEventPass.Initial)
+                val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                if (!change.pressed) break
+                change.consume()
+                val f = ((change.position.y - inset) / track).coerceIn(0f, 1f)
+                state.dispatchRawDelta(f * state.maxValue - state.value)
+            }
+        }
+    }
 
 /**
  * A clear swipe (one finger, mostly one way, at least 56 dp) that nothing inside used: sliders,

@@ -315,6 +315,8 @@ data class UiState(
     /** 0..1 while copying files in, null when the length is unknown or nothing is copied. */
     val loadingProgress: Float? = null,
     val canRedo: Boolean = false,
+    /** A safe point is set (a moment of the edit to come back to). */
+    val hasSafePoint: Boolean = false,
     val exportSettings: ExportSettings = ExportSettings(),
     /** Frame rate of the timeline (exports and slow-motion maths); null = the first clip's. */
     val timelineFps: Float? = null,
@@ -676,6 +678,23 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
      * Back to the project as it was when opened, however many steps ago. It is a step of its own,
      * so undo brings the changes back.
      */
+    /** The edit as it was when the safe point was set (this session). */
+    private var safePoint: EditSnapshot? = null
+
+    /** Keeps the edit as it is now, to come back to with [backToSafePoint]. */
+    fun setSafePoint() {
+        safePoint = _state.value.snapshot()
+        _state.update { it.copy(hasSafePoint = true, messages = it.messages + "Safe point set. Tap the flag again to come back here.") }
+    }
+
+    /** Back to the safe point, as a step of its own (undo returns to where you were). */
+    fun backToSafePoint() {
+        val point = safePoint ?: return
+        record(_state.value.snapshot())
+        restore(point)
+        record(point)
+    }
+
     fun undoAll() {
         val base = historyBase ?: return
         record(_state.value.snapshot())
@@ -811,6 +830,9 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
     fun openProject(name: String) {
         val project = projectStore.load(name) ?: return
         historyStartsAgain = true
+        // A safe point belongs to the project it was set in.
+        safePoint = null
+        _state.update { it.copy(hasSafePoint = false) }
         _state.update { it.copy(busy = true, loadingMessage = "Opening ${project.name}…") }
         viewModelScope.launch {
             val context = getApplication<Application>()
@@ -905,6 +927,9 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
     /** Starts an empty project; the current one stays saved. */
     fun newProject(kind: ProjectKind = ProjectKind.VIDEO) {
         historyStartsAgain = true
+        // A safe point belongs to the project it was set in.
+        safePoint = null
+        _state.update { it.copy(hasSafePoint = false) }
         scopeFrame = null
         _state.update {
             it.copy(

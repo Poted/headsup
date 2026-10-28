@@ -67,8 +67,9 @@ project's files), the preview resized left/right when held sideways, Edit called
 - [ ] To do, not now: shrinking the preview is not obvious: a short tutorial for users.
 - [x] Holding undo for 3 s asks to undo all changes (back to the project as opened; redo brings
       them back).
-- [ ] Safe point: a moment in the edit history to come back to easily.
-- [ ] A scrollbar at the side wherever a page scrolls, so users know.
+- [x] Safe point: the flag by the undo arrows keeps the edit as it is; tapping it again goes back
+      there (a step of its own) or sets it anew. For the session.
+- [x] A thin scroll bar at the panel's edge when it scrolls (takes no room; drag along the edge).
 - [-] Not doing: show how far each control is set on its circle (like a guitar amp's knob).
 - [x] Masks: resize and rotate with two fingers (pinch).
 - [x] Mask brush (paint, erase, move; size, softness, flow), tracking that follows the painted
