@@ -112,6 +112,8 @@ project's files), the preview resized left/right when held sideways, Edit called
   prompt plus the functions and rules they allow, so results stay in the app's own vocabulary and
   every step can be undone or changed by hand. The proxy keeps the API key off the phone; clips
   are sent as small frames and numbers, not whole videos.
+  In a store release: auto edits of films longer than about 30 s need Premium (the model calls
+  cost money per edit); shorter ones are free.
 - **Sharing and platform presets** – share an export straight to Instagram/TikTok/YouTube, with
   presets for each platform's resolution, frame rate and bit rate.
 - Timeline: reordering clips by dragging, clip sound as a waveform, snapping cuts to beats, more
