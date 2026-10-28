@@ -1566,7 +1566,7 @@ private fun SpeedRamp(clip: ClipState, onCurve: (List<Float>) -> Unit) {
         if (clip.speedCurve.isNotEmpty()) SmallAction("Steady", { onCurve(emptyList()) })
     }
     Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        for (p in SC.Preset.entries) {
+        for (p in app.headsup.core.edit.SpeedCurve.Preset.entries) {
             FilterChip(selected = clip.speedCurve == p.points, onClick = { onCurve(p.points) }, label = { Text(p.label) })
         }
     }
