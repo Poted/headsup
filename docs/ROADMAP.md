@@ -101,6 +101,17 @@ project's files), the preview resized left/right when held sideways, Edit called
 
 ## Ideas
 
+- **Auto edit (as GoPro's), through an AI model behind our own proxy** – the app analyses the
+  clips (motion, faces, sharpness, the watch data: speed, jumps, heart rate, existing Moments),
+  the user picks a style (serious/cinematic, energetic/sport, trekking, wedding, …) and a pace
+  (fast or slow), and the model is asked for an edit. It answers only with calls to functions the
+  app defines and runs itself (a plan, not pixels): cut a clip to a span, order the pieces (e.g.
+  one-second cuts on a fast pace), add a transition (cut, cross-fade, fade through black, slow
+  fade out), set speed (slow motion over a jump found in these frames for Sport), apply a look or
+  a vignette (Cinematic), place titles, pick music and cut to its beats. Styles are presets: a
+  prompt plus the functions and rules they allow, so results stay in the app's own vocabulary and
+  every step can be undone or changed by hand. The proxy keeps the API key off the phone; clips
+  are sent as small frames and numbers, not whole videos.
 - **Sharing and platform presets** – share an export straight to Instagram/TikTok/YouTube, with
   presets for each platform's resolution, frame rate and bit rate.
 - Timeline: reordering clips by dragging, clip sound as a waveform, snapping cuts to beats, more
