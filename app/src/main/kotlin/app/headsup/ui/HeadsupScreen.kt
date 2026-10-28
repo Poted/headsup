@@ -1879,7 +1879,7 @@ private val Adjustment.section: ColourSection
         Adjustment.SPLIT, Adjustment.SHADOW_HUE, Adjustment.HIGHLIGHT_HUE, Adjustment.TAME, Adjustment.VIGNETTE, Adjustment.WHEELS -> ColourSection.FILM
         Adjustment.TEXTURE, Adjustment.CLARITY, Adjustment.DEHAZE -> ColourSection.PRESENCE
         Adjustment.CINE, Adjustment.LUT, Adjustment.MATCH, Adjustment.BLEND -> ColourSection.TOOLS
-        Adjustment.MIXER -> ColourSection.MIXER
+        Adjustment.MIXER, Adjustment.CHANNELS, Adjustment.BW, Adjustment.CALIBRATION -> ColourSection.MIXER
         Adjustment.LOOK -> ColourSection.LOOKS
     }
 
@@ -1960,6 +1960,15 @@ internal enum class Adjustment(
 
     /** Not a single ruler: a look (profile) under the corrections, with its amount. */
     LOOK("Look", "Looks", 0f..1f, 1f, "", { 0f }, { g, _ -> g }),
+
+    /** Not a single ruler: each output channel made from red, green and blue. */
+    CHANNELS("RGB", "Channel mixer", 0f..1f, 1f, "", { 0f }, { g, _ -> g }),
+
+    /** Not a single ruler: black and white, with a brightness per hue band. */
+    BW("B&W", "Black & white", 0f..1f, 1f, "", { 0f }, { g, _ -> g }),
+
+    /** Not a single ruler: hue and saturation of the red, green and blue primaries. */
+    CALIBRATION("Cal", "Calibration", 0f..1f, 1f, "", { 0f }, { g, _ -> g }),
 }
 
 private val BLEND_LENGTHS = listOf(0L to "Cut", 500L to "0.5 s", 1000L to "1 s", 2000L to "2 s", 4000L to "4 s", 8000L to "8 s")
@@ -2057,6 +2066,9 @@ private fun ColourPage(
                 Adjustment.CINE -> state.cine != null
                 Adjustment.MATCH -> state.matchReference?.clipId == clip.id
                 Adjustment.MIXER -> state.grade.mixer.any { it != 0f }
+                Adjustment.CHANNELS -> state.grade.channelMix.any { it != 0f }
+                Adjustment.BW -> app.headsup.core.color.BlackAndWhite.on(state.grade.bw)
+                Adjustment.CALIBRATION -> state.grade.calibration.any { it != 0f }
                 Adjustment.CURVE -> state.grade.curves.any { it.isNotEmpty() }
                 Adjustment.WHEELS -> state.grade.wheels.any { it != 0f }
                 Adjustment.LOOK -> state.grade.look != null
@@ -2116,6 +2128,18 @@ private fun ColourPage(
     }
     if (adjustment == Adjustment.MIXER) {
         MixerControls(state, vm)
+        return
+    }
+    if (adjustment == Adjustment.CHANNELS) {
+        ChannelMixerControls(state, vm)
+        return
+    }
+    if (adjustment == Adjustment.BW) {
+        BlackAndWhiteControls(state, vm)
+        return
+    }
+    if (adjustment == Adjustment.CALIBRATION) {
+        CalibrationControls(state, vm)
         return
     }
     if (adjustment == Adjustment.CURVE) {
@@ -2306,6 +2330,98 @@ private fun CurveControls(state: UiState, vm: HeadsupViewModel) {
         for ((x, y) in points) drawCircle(colour, 6.dp.toPx(), Offset(x * w, (1 - y) * h))
     }
     Hint("Touch the curve to add a point and drag it; double-tap a point to remove it.")
+}
+
+private val RGB_NAMES = listOf("Red", "Green", "Blue")
+
+/** Channel mixer: an output channel, and how much of red, green and blue makes it (100 % = itself). */
+@Composable
+private fun ChannelMixerControls(state: UiState, vm: HeadsupViewModel) {
+    var output by rememberSaveable { mutableStateOf(0) }
+    val mix = state.grade.channelMix
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        FlowRow(Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            RGB_NAMES.forEachIndexed { i, name ->
+                val changed = (0..2).any { mix.getOrElse(i * 3 + it) { 0f } != 0f }
+                FilterChip(selected = output == i, onClick = { output = i }, label = { Text(name + " out" + if (changed) " •" else "") })
+            }
+        }
+        if (mix.any { it != 0f }) SmallAction("Reset", { vm.updateGrade { it.copy(channelMix = app.headsup.core.color.ChannelMixer.NEUTRAL) } })
+    }
+    for (input in 0..2) {
+        val index = output * 3 + input
+        val base = if (input == output) 1f else 0f
+        val v = base + mix.getOrElse(index) { 0f }
+        ValueHeader("from ${RGB_NAMES[input]}", String.format(Locale.US, "%+.0f %%", v * 100))
+        RulerSlider(
+            value = v, range = -2f..2f, step = 0.01f,
+            onChange = { x -> vm.updateGrade { g -> g.copy(channelMix = g.channelMix.toMutableList().also { it[index] = x - base }) } },
+            onReset = { vm.updateGrade { g -> g.copy(channelMix = g.channelMix.toMutableList().also { it[index] = 0f }) } },
+        )
+    }
+    Hint("Each output channel made from the three inputs. Swapping red and blue, or red from green (as infrared film), gives strong looks.")
+}
+
+/** Black and white: on or off, and how light each hue band becomes in grey. */
+@Composable
+private fun BlackAndWhiteControls(state: UiState, vm: HeadsupViewModel) {
+    val B = app.headsup.core.color.BlackAndWhite
+    val bw = state.grade.bw
+    var band by rememberSaveable { mutableStateOf(app.headsup.core.color.ColourMixer.Band.BLUE) }
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Text("Black & white", Modifier.weight(1f), style = MaterialTheme.typography.labelLarge)
+        Switch(checked = B.on(bw), onCheckedChange = { on -> vm.updateGrade { g -> g.copy(bw = g.bw.toMutableList().also { it[0] = if (on) 1f else 0f }) } })
+    }
+    if (!B.on(bw)) {
+        Hint("Turns the picture grey; then each colour can be made lighter or darker (a deep sky, bright skin).")
+        return
+    }
+    LazyRow(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+        items(app.headsup.core.color.ColourMixer.Band.entries) { b ->
+            val changed = bw.getOrElse(1 + b.ordinal) { 0f } != 0f
+            Box(
+                Modifier
+                    .size(34.dp)
+                    .clip(CircleShape)
+                    .background(Color(b.swatch))
+                    .border(if (b == band) 3.dp else if (changed) 1.dp else 0.dp, Color.White, CircleShape)
+                    .clickable { band = b },
+            )
+        }
+    }
+    val index = 1 + band.ordinal
+    ValueHeader("${band.label} in grey", String.format(Locale.US, "%+.0f", bw.getOrElse(index) { 0f } * 100))
+    RulerSlider(
+        value = bw.getOrElse(index) { 0f }, range = -1f..1f, step = 0.02f,
+        onChange = { v -> vm.updateGrade { g -> g.copy(bw = g.bw.toMutableList().also { it[index] = v }) } },
+        onReset = { vm.updateGrade { g -> g.copy(bw = g.bw.toMutableList().also { it[index] = 0f }) } },
+    )
+}
+
+/** Calibration: a primary (red, green, blue), and its hue and saturation. */
+@Composable
+private fun CalibrationControls(state: UiState, vm: HeadsupViewModel) {
+    var primary by rememberSaveable { mutableStateOf(0) }
+    val cal = state.grade.calibration
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        FlowRow(Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            RGB_NAMES.forEachIndexed { i, name ->
+                val changed = cal.getOrElse(i * 2) { 0f } != 0f || cal.getOrElse(i * 2 + 1) { 0f } != 0f
+                FilterChip(selected = primary == i, onClick = { primary = i }, label = { Text(name + " primary" + if (changed) " •" else "") })
+            }
+        }
+        if (cal.any { it != 0f }) SmallAction("Reset", { vm.updateGrade { it.copy(calibration = app.headsup.core.color.Calibration.NEUTRAL) } })
+    }
+    for ((offset, label) in listOf(0 to "Hue", 1 to "Saturation")) {
+        val index = primary * 2 + offset
+        ValueHeader(label, String.format(Locale.US, "%+.0f", cal.getOrElse(index) { 0f } * 100))
+        RulerSlider(
+            value = cal.getOrElse(index) { 0f }, range = -1f..1f, step = 0.02f,
+            onChange = { v -> vm.updateGrade { g -> g.copy(calibration = g.calibration.toMutableList().also { it[index] = v }) } },
+            onReset = { vm.updateGrade { g -> g.copy(calibration = g.calibration.toMutableList().also { it[index] = 0f }) } },
+        )
+    }
+    Hint("Shifts every colour made of this primary: e.g. the blue primary's hue towards cyan for teal skies, red's saturation down for calmer skin.")
 }
 
 /** Colour mixer: a hue band, which of its hue, saturation and luminance, and a ruler for it. */

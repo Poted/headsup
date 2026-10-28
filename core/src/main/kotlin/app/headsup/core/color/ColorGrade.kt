@@ -50,6 +50,12 @@ data class ColorGrade(
     val clarity: Float = 0f,
     /** Removes (+) or adds (−) atmospheric haze, −1..1; not a colour operation ([Presence]). */
     val dehaze: Float = 0f,
+    /** RGB channel mixer ([ChannelMixer]): nine offsets from no change. */
+    val channelMix: List<Float> = ChannelMixer.NEUTRAL,
+    /** Black and white ([BlackAndWhite]): on, then a brightness per hue band. */
+    val bw: List<Float> = BlackAndWhite.NEUTRAL,
+    /** Calibration ([Calibration]): hue and saturation of the red, green and blue primaries. */
+    val calibration: List<Float> = Calibration.NEUTRAL,
 ) {
     /** The corrections that look at a pixel's surroundings, drawn by the shader before the colour table. */
     val presence: Presence get() = Presence(texture, clarity, dehaze)
@@ -58,7 +64,8 @@ data class ColorGrade(
         get() = exposure == 0f && brightness == 0f && contrast == 0f && shadows == 0f &&
             highlights == 0f && saturation == 0f && temperature == 0f &&
             blacks == 0f && whites == 0f && vibrance == 0f && tint == 0f && skinHue == 0f &&
-            rolloff == 0f && toneAmount == 0f && tame == 0f && mixer.all { it == 0f } && look == null && curves.all { it.isEmpty() } && wheels.all { it == 0f }
+            rolloff == 0f && toneAmount == 0f && tame == 0f && mixer.all { it == 0f } && look == null && curves.all { it.isEmpty() } && wheels.all { it == 0f } &&
+            channelMix.all { it == 0f } && bw.all { it == 0f } && calibration.all { it == 0f }
 
     /** The corrections scaled by [k] (hues stay), e.g. a suggestion at partial strength. */
     operator fun times(k: Float) = ColorGrade(
@@ -69,6 +76,10 @@ data class ColorGrade(
         // Hues stay; strengths scale.
         wheels.mapIndexed { i, v -> if (i % 3 == 0 && i < 9) v else v * k },
         texture * k, clarity * k, dehaze * k,
+        channelMix.map { it * k },
+        // On stays on; the bands scale.
+        bw.mapIndexed { i, v -> if (i == 0) v else v * k },
+        calibration.map { it * k },
     )
 
     /**
@@ -111,6 +122,12 @@ data class ColorGrade(
         texture = (texture + other.texture).coerceIn(-1f, 1f),
         clarity = (clarity + other.clarity).coerceIn(-1f, 1f),
         dehaze = (dehaze + other.dehaze).coerceIn(-1f, 1f),
+        channelMix = List(ChannelMixer.SIZE) { i -> (channelMix.getOrElse(i) { 0f } + other.channelMix.getOrElse(i) { 0f }).coerceIn(-2f, 2f) },
+        bw = List(BlackAndWhite.SIZE) { i ->
+            if (i == 0) (if (BlackAndWhite.on(bw) || BlackAndWhite.on(other.bw)) 1f else 0f)
+            else (bw.getOrElse(i) { 0f } + other.bw.getOrElse(i) { 0f }).coerceIn(-1f, 1f)
+        },
+        calibration = List(Calibration.SIZE) { i -> (calibration.getOrElse(i) { 0f } + other.calibration.getOrElse(i) { 0f }).coerceIn(-1f, 1f) },
     )
 
     /**
@@ -153,6 +170,18 @@ data class ColorGrade(
         texture = if (after.texture != before.texture) after.texture else texture,
         clarity = if (after.clarity != before.clarity) after.clarity else clarity,
         dehaze = if (after.dehaze != before.dehaze) after.dehaze else dehaze,
+        channelMix = List(ChannelMixer.SIZE) { i ->
+            val a = after.channelMix.getOrElse(i) { 0f }
+            if (a != before.channelMix.getOrElse(i) { 0f }) a else channelMix.getOrElse(i) { 0f }
+        },
+        bw = List(BlackAndWhite.SIZE) { i ->
+            val a = after.bw.getOrElse(i) { 0f }
+            if (a != before.bw.getOrElse(i) { 0f }) a else bw.getOrElse(i) { 0f }
+        },
+        calibration = List(Calibration.SIZE) { i ->
+            val a = after.calibration.getOrElse(i) { 0f }
+            if (a != before.calibration.getOrElse(i) { 0f }) a else calibration.getOrElse(i) { 0f }
+        },
     )
 
     companion object {
@@ -215,9 +244,15 @@ object LutBaker {
             Looks.apply(look, grade.lookAmount, rgb)
         }
         for (i in 0..2) rgb[i] = rgb[i].coerceIn(0f, 1f)
+        // Calibration and the channel mixer first, as the starting colours the rest works on.
+        Calibration.apply(calibrationMatrix(grade.calibration), rgb)
+        ChannelMixer.apply(grade.channelMix, rgb)
+        for (i in 0..2) rgb[i] = rgb[i].coerceIn(0f, 1f)
         // Film look and the skin line work on display-referred (Rec.709) colours, so they run last.
         FilmLook.apply(grade, rgb)
         ColourMixer.apply(grade.mixer, rgb)
+        // Black and white after the colour mixer; curves and grading wheels can still tint it.
+        BlackAndWhite.apply(grade.bw, rgb)
         for (i in 0..2) rgb[i] = rgb[i].coerceIn(0f, 1f)
         ToneCurve.apply(grade.curves, rgb)
         ColourWheels.apply(grade.wheels, rgb)
@@ -225,6 +260,14 @@ object LutBaker {
             SkinTone.rotate(rgb, grade.skinHue)
             for (i in 0..2) rgb[i] = rgb[i].coerceIn(0f, 1f)
         }
+    }
+
+    /** The calibration's matrix, worked out once per table rather than per colour. */
+    @Volatile private var calibrationCache: Pair<List<Float>, FloatArray?>? = null
+
+    private fun calibrationMatrix(cal: List<Float>): FloatArray? {
+        calibrationCache?.let { (key, m) -> if (key == cal) return m }
+        return Calibration.matrix(cal).also { calibrationCache = cal to it }
     }
 
     /** Looks a colour up in a table produced by [bake] (trilinear), e.g. to analyse the graded preview. */

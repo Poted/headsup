@@ -83,7 +83,13 @@ class GradeStore(private val context: Context) {
         texture = prefs.getFloat(prefix + "texture", 0f),
         clarity = prefs.getFloat(prefix + "clarity", 0f),
         dehaze = prefs.getFloat(prefix + "dehaze", 0f),
+        channelMix = floats(prefix + "channel_mix", app.headsup.core.color.ChannelMixer.SIZE) ?: app.headsup.core.color.ChannelMixer.NEUTRAL,
+        bw = floats(prefix + "bw", app.headsup.core.color.BlackAndWhite.SIZE) ?: app.headsup.core.color.BlackAndWhite.NEUTRAL,
+        calibration = floats(prefix + "calibration", app.headsup.core.color.Calibration.SIZE) ?: app.headsup.core.color.Calibration.NEUTRAL,
     )
+
+    private fun floats(key: String, size: Int): List<Float>? =
+        prefs.getString(key, null)?.split(',')?.mapNotNull { it.toFloatOrNull() }?.takeIf { it.size == size }
 
     fun saveGrade(g: ColorGrade, prefix: String = "") {
         prefs.edit()
@@ -113,6 +119,9 @@ class GradeStore(private val context: Context) {
             .putFloat(prefix + "texture", g.texture)
             .putFloat(prefix + "clarity", g.clarity)
             .putFloat(prefix + "dehaze", g.dehaze)
+            .putString(prefix + "channel_mix", g.channelMix.joinToString(","))
+            .putString(prefix + "bw", g.bw.joinToString(","))
+            .putString(prefix + "calibration", g.calibration.joinToString(","))
             .apply()
     }
 

@@ -341,6 +341,9 @@ internal object Json {
         .put("texture", g.texture)
         .put("clarity", g.clarity)
         .put("dehaze", g.dehaze)
+        .put("channelMix", JSONArray(g.channelMix.map { it.toDouble() }))
+        .put("bw", JSONArray(g.bw.map { it.toDouble() }))
+        .put("calibration", JSONArray(g.calibration.map { it.toDouble() }))
 
     fun grade(o: JSONObject?): ColorGrade {
         if (o == null) return ColorGrade()
@@ -376,6 +379,12 @@ internal object Json {
             texture = f("texture"),
             clarity = f("clarity"),
             dehaze = f("dehaze"),
+            channelMix = o.optJSONArray("channelMix")?.let { a -> List(app.headsup.core.color.ChannelMixer.SIZE) { a.optDouble(it, 0.0).toFloat() } }
+                ?: app.headsup.core.color.ChannelMixer.NEUTRAL,
+            bw = o.optJSONArray("bw")?.let { a -> List(app.headsup.core.color.BlackAndWhite.SIZE) { a.optDouble(it, 0.0).toFloat() } }
+                ?: app.headsup.core.color.BlackAndWhite.NEUTRAL,
+            calibration = o.optJSONArray("calibration")?.let { a -> List(app.headsup.core.color.Calibration.SIZE) { a.optDouble(it, 0.0).toFloat() } }
+                ?: app.headsup.core.color.Calibration.NEUTRAL,
         )
     }
 

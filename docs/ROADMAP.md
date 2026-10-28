@@ -83,12 +83,11 @@ project's files), the preview resized left/right when held sideways, Edit called
       films and professional photos, so a newcomer feels welcome and wants to go further.
 - [ ] Speed curves: an editable curve per clip and a few presets (ramp in, ramp out, speed up then
       slow at the peak, …); the presets are also among the moves the auto edit may use.
-- [ ] Mixer: RGB channel mixer (each output channel from R, G, B; film looks like Aerochrome,
-      casts), B&W mixer (how bright each colour becomes in black and white), point colour (pick a
-      hue from the picture, widen or narrow its range, change its hue/saturation/luminance),
-      colour grading wheels (shadows, midtones, highlights), selective colour (CMYK per colour
-      family, whites, neutrals, blacks), calibration (hue and saturation of the red, green and
-      blue primaries).
+- [x] Mixer: RGB channel mixer, B&W mixer (brightness per colour in black and white), calibration
+      (hue and saturation of the red, green and blue primaries).
+- [ ] Mixer, still to do: point colour (pick a hue from the picture, widen or narrow its range,
+      change its hue/saturation/luminance), selective colour (CMYK per colour family, whites,
+      neutrals, blacks).
 
 ## Next (in this order)
 
