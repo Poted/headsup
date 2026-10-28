@@ -37,6 +37,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.systemBarsPadding
@@ -502,7 +503,10 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
                 if (state.messages.isNotEmpty()) Messages(state.messages, vm::dismissMessages)
-                when (tool) {
+                // Adjust's and Effects' menu takes the panel's place while it is open.
+                if (scopeOpen && (tool == Tool.COLOUR || tool == Tool.EFFECTS)) {
+                    ScopeMenu(state, vm, adjust = tool == Tool.COLOUR) { scopeOpen = false }
+                } else when (tool) {
                     Tool.FILES -> FilesPanel(
                         state, vm, onAddVideos = addVideos, onAddFit = addFit, onAddSound = { soundPicker.launch(arrayOf("audio/*")) },
                         onAddPhotos = addPhotos,
@@ -542,21 +546,13 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
             val tools = Tool.entries.filter { !(state.photoProject && it == Tool.AUDIO) }
             LaunchedEffect(state.photoProject) { if (tool !in tools) tool = Tool.COLOUR }
             // In an album the Edit page only crops: it is named so.
-            if (tool == Tool.COLOUR || tool == Tool.EFFECTS) ScopeMenu(state, vm, adjust = tool == Tool.COLOUR, open = scopeOpen) { scopeOpen = !scopeOpen }
             // Adjust and Effects say what they work on unless it is this clip, and that they open a menu.
-            BottomToolbar(tool, tools, labelOf = { t ->
-                when {
-                    state.photoProject && t == Tool.EDIT -> "Crop"
-                    t == Tool.COLOUR && t == tool -> t.label + when (state.target) {
-                        GradeTarget.CLIP -> " ▴"
-                        GradeTarget.GROUP -> " · group"
-                        GradeTarget.MASK -> " · mask"
-                        GradeTarget.GLOBAL -> " · all"
-                    }
-                    t == Tool.EFFECTS && t == tool -> t.label + if (state.effectsOnAll) " · all" else " ▴"
-                    else -> t.label
-                }
-            }) {
+            // A dot on Adjust or Effects when they work on more than this clip (the menu says what).
+            BottomToolbar(
+                tool, tools,
+                labelOf = { t -> if (state.photoProject && t == Tool.EDIT) "Crop" else t.label },
+                badgeOf = { t -> (t == Tool.COLOUR && state.target != GradeTarget.CLIP) || (t == Tool.EFFECTS && state.effectsOnAll) },
+            ) {
                 // Tapping Adjust or Effects again opens its menu.
                 if (it == tool && (it == Tool.COLOUR || it == Tool.EFFECTS)) scopeOpen = !scopeOpen else { tool = it; scopeOpen = false }
             }
@@ -587,7 +583,7 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
 }
 
 @Composable
-private fun BottomToolbar(selected: Tool, tools: List<Tool>, labelOf: (Tool) -> String, onSelect: (Tool) -> Unit) {
+private fun BottomToolbar(selected: Tool, tools: List<Tool>, labelOf: (Tool) -> String, badgeOf: (Tool) -> Boolean, onSelect: (Tool) -> Unit) {
     val shape = RoundedCornerShape(32.dp)
     Row(
         Modifier
@@ -610,7 +606,10 @@ private fun BottomToolbar(selected: Tool, tools: List<Tool>, labelOf: (Tool) -> 
                     .padding(vertical = 8.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {
-                Icon(t.icon, contentDescription = labelOf(t), Modifier.size(22.dp), tint = if (on) HeadsupColors.OnHighlight else HeadsupColors.TextMuted)
+                Box {
+                    Icon(t.icon, contentDescription = labelOf(t), Modifier.size(22.dp), tint = if (on) HeadsupColors.OnHighlight else HeadsupColors.TextMuted)
+                    if (badgeOf(t)) Box(Modifier.align(Alignment.TopEnd).offset(x = 4.dp, y = (-2).dp).size(7.dp).clip(CircleShape).background(HeadsupColors.Accent))
+                }
                 Text(labelOf(t), style = MaterialTheme.typography.labelSmall, color = if (on) HeadsupColors.OnHighlight else HeadsupColors.TextMuted, maxLines = 1, softWrap = false)
             }
         }
@@ -1606,53 +1605,39 @@ private fun LookActions(state: UiState, vm: HeadsupViewModel) {
 
 /**
  * The menu over the Adjust (and Effects) button: what the page works on, copying, resetting.
- * Opened by tapping the button again (its label shows the current choice and the ▴).
+ * Opened by tapping the button again; it takes the panel's place until Done or a choice.
  */
 @Composable
-private fun ScopeMenu(state: UiState, vm: HeadsupViewModel, adjust: Boolean, open: Boolean, onToggle: () -> Unit) {
+private fun ScopeMenu(state: UiState, vm: HeadsupViewModel, adjust: Boolean, onDone: () -> Unit) {
     if (state.selected == null) return
     val album = state.photoProject
     val labels = if (album) listOf("This photo", "Group", "Masks", "All photos") else listOf("This clip", "Group", "Masks", "All clips")
-    Column(Modifier.padding(horizontal = 16.dp)) {
-        androidx.compose.animation.AnimatedVisibility(
-            visible = open,
-            enter = androidx.compose.animation.fadeIn() + androidx.compose.animation.expandVertically(expandFrom = Alignment.Bottom),
-            exit = androidx.compose.animation.fadeOut() + androidx.compose.animation.shrinkVertically(shrinkTowards = Alignment.Bottom),
-        ) {
-            Column(
-                Modifier.fillMaxWidth().padding(bottom = 6.dp).clip(RoundedCornerShape(20.dp)).background(HeadsupColors.Surface)
-                    .border(1.dp, HeadsupColors.Outline, RoundedCornerShape(20.dp)).padding(12.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                if (adjust) {
-                    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        labels.forEachIndexed { i, label ->
-                            FilterChip(selected = state.target.ordinal == i, onClick = { vm.setTarget(GradeTarget.entries[i]); onToggle() }, label = { Text(label) })
-                        }
-                    }
-                } else {
-                    // Effects: this clip, or set on all clips (only what is changed, as a sync).
-                    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        FilterChip(selected = !state.effectsOnAll, onClick = { vm.setEffectsOnAll(false); onToggle() }, label = { Text(labels[0]) })
-                        FilterChip(selected = state.effectsOnAll, onClick = { vm.setEffectsOnAll(true); onToggle() }, label = { Text(labels[3]) })
-                    }
-                    if (state.effectsOnAll) Hint(if (album) "A change is set on every photo." else "A change is set on every clip.")
-                }
-                run {
-                    if (adjust && state.target == GradeTarget.GLOBAL) {
-                        Hint(if (album) "A change is set on every photo: each shows it under This photo." else "A change is set on every clip: each shows it under This clip.")
-                    }
-                }
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    LookActions(state, vm)
-                    Spacer(Modifier.weight(1f))
-                    if (adjust) when (state.target) {
-                        GradeTarget.CLIP -> if (state.grade != ColorGrade()) SmallAction("Reset", { vm.updateGrade { ColorGrade() } })
-                        GradeTarget.GLOBAL, GradeTarget.GROUP -> SmallAction("Reset all", { vm.resetSyncedPhotos() })
-                        GradeTarget.MASK -> Unit
-                    }
-                }
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Text(if (adjust) "Adjust" else "Effects", Modifier.weight(1f), style = MaterialTheme.typography.titleSmall)
+        SmallAction("Done", onDone)
+    }
+    if (adjust) {
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            labels.forEachIndexed { i, label ->
+                FilterChip(selected = state.target.ordinal == i, onClick = { vm.setTarget(GradeTarget.entries[i]); onDone() }, label = { Text(label) })
             }
+        }
+        if (state.target == GradeTarget.GLOBAL) Hint(if (album) "A change is set on every photo: each shows it under This photo." else "A change is set on every clip: each shows it under This clip.")
+    } else {
+        // Effects: this clip, or set on all clips (only what is changed, as a sync).
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            FilterChip(selected = !state.effectsOnAll, onClick = { vm.setEffectsOnAll(false); onDone() }, label = { Text(labels[0]) })
+            FilterChip(selected = state.effectsOnAll, onClick = { vm.setEffectsOnAll(true); onDone() }, label = { Text(labels[3]) })
+        }
+        if (state.effectsOnAll) Hint(if (album) "A change is set on every photo." else "A change is set on every clip.")
+    }
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        LookActions(state, vm)
+        Spacer(Modifier.weight(1f))
+        if (adjust) when (state.target) {
+            GradeTarget.CLIP -> if (state.grade != ColorGrade()) SmallAction("Reset", { vm.updateGrade { ColorGrade() } })
+            GradeTarget.GLOBAL, GradeTarget.GROUP -> SmallAction("Reset all", { vm.resetSyncedPhotos() })
+            GradeTarget.MASK -> Unit
         }
     }
 }
