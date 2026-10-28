@@ -333,6 +333,7 @@ internal object Json {
         .put("mixer", JSONArray(g.mixer.map { it.toDouble() }))
         .putOpt("look", g.look)
         .put("lookAmount", g.lookAmount)
+        .put("curves", JSONArray(g.curves.map { JSONArray(it.map { v -> v.toDouble() }) }))
 
     fun grade(o: JSONObject?): ColorGrade {
         if (o == null) return ColorGrade()
@@ -360,6 +361,9 @@ internal object Json {
                 ?: app.headsup.core.color.ColourMixer.NEUTRAL,
             look = o.optStringOrNull("look"),
             lookAmount = f("lookAmount", 1f),
+            curves = o.optJSONArray("curves")?.let { a ->
+                List(4) { c -> a.optJSONArray(c)?.let { p -> List(p.length()) { p.optDouble(it, 0.0).toFloat() } }.orEmpty() }
+            } ?: app.headsup.core.color.ToneCurve.NEUTRAL,
         )
     }
 

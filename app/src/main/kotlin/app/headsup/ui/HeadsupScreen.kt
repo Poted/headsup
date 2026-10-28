@@ -156,8 +156,11 @@ import java.util.Locale
 import kotlin.math.roundToLong
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.runtime.rememberUpdatedState
 import app.headsup.core.track.ActivityTrack
 
 private val DOWNLOADS_FOLDER: Uri = DocumentsContract.buildDocumentUri("com.android.externalstorage.documents", "primary:Download")
@@ -1648,7 +1651,7 @@ private enum class ColourSection(val label: String) { LIGHT("Light"), COLOUR("Co
 private val Adjustment.section: ColourSection
     get() = when (this) {
         Adjustment.EXPOSURE, Adjustment.BRIGHTNESS, Adjustment.CONTRAST, Adjustment.HIGHLIGHTS, Adjustment.SHADOWS,
-        Adjustment.WHITES, Adjustment.BLACKS, Adjustment.ROLLOFF -> ColourSection.LIGHT
+        Adjustment.WHITES, Adjustment.BLACKS, Adjustment.ROLLOFF, Adjustment.CURVE -> ColourSection.LIGHT
         Adjustment.TEMPERATURE, Adjustment.TINT, Adjustment.SATURATION, Adjustment.VIBRANCE, Adjustment.SKIN -> ColourSection.COLOUR
         Adjustment.SPLIT, Adjustment.SHADOW_HUE, Adjustment.HIGHLIGHT_HUE, Adjustment.TAME, Adjustment.VIGNETTE -> ColourSection.FILM
         Adjustment.CINE, Adjustment.LUT, Adjustment.MATCH, Adjustment.BLEND -> ColourSection.TOOLS
@@ -1718,6 +1721,9 @@ internal enum class Adjustment(
 
     /** Not a ruler value: how the clip blends in from the previous clip's look. */
     BLEND("⇢", "Blend in", 0f..1f, 1f, "", { 0f }, { g, _ -> g }),
+
+    /** Not a single ruler: point tone curves (RGB and per channel). */
+    CURVE("∿", "Curve", 0f..1f, 1f, "", { 0f }, { g, _ -> g }),
 
     /** Not a single ruler: hue, saturation and luminance per hue band. */
     MIXER("HSL", "Colour mixer", 0f..1f, 1f, "", { 0f }, { g, _ -> g }),
@@ -1820,6 +1826,7 @@ private fun ColourPage(
                 Adjustment.CINE -> state.cine != null
                 Adjustment.MATCH -> state.matchReference?.clipId == clip.id
                 Adjustment.MIXER -> state.grade.mixer.any { it != 0f }
+                Adjustment.CURVE -> state.grade.curves.any { it.isNotEmpty() }
                 Adjustment.LOOK -> state.grade.look != null
                 else -> a.get(state.grade) != a.neutral
             }
@@ -1875,6 +1882,10 @@ private fun ColourPage(
         MixerControls(state, vm)
         return
     }
+    if (adjustment == Adjustment.CURVE) {
+        CurveControls(state, vm)
+        return
+    }
     if (adjustment == Adjustment.LOOK) {
         LookControls(state, vm)
         return
@@ -1890,6 +1901,103 @@ private fun ColourPage(
         onReset = { vm.updateGrade { adjustment.set(it, adjustment.neutral) } },
         onHold = { held -> vm.setCompareGrade(if (held) adjustment.set(state.grade, adjustment.neutral) else null) },
     )
+}
+
+/**
+ * Point tone curve: drag a point (or anywhere, which adds one) to bend the curve, double-tap a
+ * point to remove it; RGB or one channel at a time.
+ */
+@Composable
+private fun CurveControls(state: UiState, vm: HeadsupViewModel) {
+    var channel by rememberSaveable { mutableStateOf(app.headsup.core.color.ToneCurve.Channel.RGB) }
+    val c = channel.ordinal
+    val flat = state.grade.curves.getOrNull(c).orEmpty()
+    val colour = when (channel) {
+        app.headsup.core.color.ToneCurve.Channel.RGB -> Color.White
+        app.headsup.core.color.ToneCurve.Channel.RED -> Color(0xFFE0453A)
+        app.headsup.core.color.ToneCurve.Channel.GREEN -> Color(0xFF4CB848)
+        app.headsup.core.color.ToneCurve.Channel.BLUE -> Color(0xFF3A6FE0)
+    }
+    fun store(points: List<Pair<Float, Float>>) = vm.updateGrade { g ->
+        val identity = points.size == 2 && points[0] == (0f to 0f) && points[1] == (1f to 1f)
+        g.copy(curves = List(4) { i -> if (i == c) (if (identity) emptyList() else points.flatMap { listOf(it.first, it.second) }) else g.curves.getOrNull(i).orEmpty() })
+    }
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        FlowRow(Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            for (ch in app.headsup.core.color.ToneCurve.Channel.entries) {
+                val changed = state.grade.curves.getOrNull(ch.ordinal).orEmpty().isNotEmpty()
+                FilterChip(selected = ch == channel, onClick = { channel = ch }, label = { Text(ch.label + if (changed) " •" else "") })
+            }
+        }
+        if (flat.isNotEmpty()) SmallAction("Reset", { store(listOf(0f to 0f, 1f to 1f)) })
+    }
+    // The points while a finger moves one, so the drag follows it between updates.
+    val points = app.headsup.core.color.ToneCurve.points(flat)
+    val current by rememberUpdatedState(points)
+    var dragged by remember { mutableStateOf(-1) }
+    androidx.compose.foundation.Canvas(
+        Modifier
+            .fillMaxWidth()
+            .aspectRatio(1.4f)
+            .clip(RoundedCornerShape(12.dp))
+            .background(Color.Black.copy(alpha = 0.35f))
+            .pointerInput(channel) {
+                detectTapGestures(onDoubleTap = { pos ->
+                    val p = current
+                    val i = p.indices.minByOrNull { k -> (Offset(p[k].first * size.width, (1 - p[k].second) * size.height) - pos).getDistance() } ?: return@detectTapGestures
+                    val near = (Offset(p[i].first * size.width, (1 - p[i].second) * size.height) - pos).getDistance() < 28.dp.toPx()
+                    if (near && i != 0 && i != p.lastIndex) store(p.filterIndexed { k, _ -> k != i })
+                })
+            }
+            .pointerInput(channel) {
+                detectDragGestures(
+                    onDragStart = { pos ->
+                        val p = current
+                        val i = p.indices.minByOrNull { k -> (Offset(p[k].first * size.width, (1 - p[k].second) * size.height) - pos).getDistance() }
+                        dragged = if (i != null && (Offset(p[i].first * size.width, (1 - p[i].second) * size.height) - pos).getDistance() < 28.dp.toPx()) {
+                            i
+                        } else {
+                            // A new point on the curve where the finger is.
+                            val x = (pos.x / size.width).coerceIn(0.01f, 0.99f)
+                            val added = (p + (x to app.headsup.core.color.ToneCurve.through(p, x))).sortedBy { it.first }
+                            store(added)
+                            added.indexOfFirst { it.first == x }
+                        }
+                    },
+                    onDragEnd = { dragged = -1 },
+                    onDragCancel = { dragged = -1 },
+                ) { change, _ ->
+                    val p = current
+                    val i = dragged
+                    if (i !in p.indices) return@detectDragGestures
+                    change.consume()
+                    // A point stays between its neighbours; the ends keep their x.
+                    val lo = if (i == 0) 0f else p[i - 1].first + 0.01f
+                    val hi = if (i == p.lastIndex) 1f else p[i + 1].first - 0.01f
+                    val x = if (i == 0 || i == p.lastIndex) p[i].first else (change.position.x / size.width).coerceIn(lo, hi)
+                    val y = (1f - change.position.y / size.height).coerceIn(0f, 1f)
+                    store(p.mapIndexed { k, v -> if (k == i) x to y else v })
+                }
+            },
+    ) {
+        val w = size.width
+        val h = size.height
+        // Quarters, and the straight line for reference.
+        for (k in 1..3) {
+            drawLine(Color.White.copy(alpha = 0.12f), Offset(w * k / 4, 0f), Offset(w * k / 4, h))
+            drawLine(Color.White.copy(alpha = 0.12f), Offset(0f, h * k / 4), Offset(w, h * k / 4))
+        }
+        drawLine(Color.White.copy(alpha = 0.25f), Offset(0f, h), Offset(w, 0f))
+        val path = androidx.compose.ui.graphics.Path()
+        for (k in 0..100) {
+            val x = k / 100f
+            val y = app.headsup.core.color.ToneCurve.through(points, x)
+            if (k == 0) path.moveTo(0f, (1 - y) * h) else path.lineTo(x * w, (1 - y) * h)
+        }
+        drawPath(path, colour, style = androidx.compose.ui.graphics.drawscope.Stroke(2.dp.toPx()))
+        for ((x, y) in points) drawCircle(colour, 6.dp.toPx(), Offset(x * w, (1 - y) * h))
+    }
+    Hint("Drag the curve to bend it; double-tap a point to remove it.")
 }
 
 /** Colour mixer: a hue band, which of its hue, saturation and luminance, and a ruler for it. */

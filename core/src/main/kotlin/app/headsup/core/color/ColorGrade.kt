@@ -40,19 +40,21 @@ data class ColorGrade(
     /** A look ([Look] name) under the corrections, and how strongly (0..1.5). */
     val look: String? = null,
     val lookAmount: Float = 1f,
+    /** Point tone curves: RGB, red, green, blue, each as x, y pairs ([ToneCurve]); empty is straight. */
+    val curves: List<List<Float>> = ToneCurve.NEUTRAL,
 ) {
     val isNeutralColour: Boolean
         get() = exposure == 0f && brightness == 0f && contrast == 0f && shadows == 0f &&
             highlights == 0f && saturation == 0f && temperature == 0f &&
             blacks == 0f && whites == 0f && vibrance == 0f && tint == 0f && skinHue == 0f &&
-            rolloff == 0f && toneAmount == 0f && tame == 0f && mixer.all { it == 0f } && look == null
+            rolloff == 0f && toneAmount == 0f && tame == 0f && mixer.all { it == 0f } && look == null && curves.all { it.isEmpty() }
 
     /** The corrections scaled by [k] (hues stay), e.g. a suggestion at partial strength. */
     operator fun times(k: Float) = ColorGrade(
         exposure * k, brightness * k, contrast * k, shadows * k, highlights * k, saturation * k, temperature * k,
         vignette * k, blacks * k, whites * k, vibrance * k, tint * k, skinHue * k,
         rolloff * k, toneAmount * k, shadowHue, highlightHue, tame * k,
-        mixer.map { it * k }, look, lookAmount,
+        mixer.map { it * k }, look, lookAmount, curves,
     )
 
     /**
@@ -83,6 +85,8 @@ data class ColorGrade(
         // Looks cannot be added; one set on top wins.
         look = other.look ?: look,
         lookAmount = if (other.look != null) other.lookAmount else lookAmount,
+        // Curves cannot be added either; a curve set on top wins, channel by channel.
+        curves = List(4) { c -> other.curves.getOrNull(c).orEmpty().ifEmpty { curves.getOrNull(c).orEmpty() } },
     )
 
     /**
@@ -114,6 +118,10 @@ data class ColorGrade(
         },
         look = if (after.look != before.look) after.look else look,
         lookAmount = if (after.lookAmount != before.lookAmount) after.lookAmount else lookAmount,
+        curves = List(4) { c ->
+            val a = after.curves.getOrNull(c).orEmpty()
+            if (a != before.curves.getOrNull(c).orEmpty()) a else curves.getOrNull(c).orEmpty()
+        },
     )
 
     companion object {
@@ -180,6 +188,7 @@ object LutBaker {
         FilmLook.apply(grade, rgb)
         ColourMixer.apply(grade.mixer, rgb)
         for (i in 0..2) rgb[i] = rgb[i].coerceIn(0f, 1f)
+        ToneCurve.apply(grade.curves, rgb)
         if (grade.skinHue != 0f) {
             SkinTone.rotate(rgb, grade.skinHue)
             for (i in 0..2) rgb[i] = rgb[i].coerceIn(0f, 1f)
