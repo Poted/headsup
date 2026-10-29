@@ -94,6 +94,11 @@ project's files), the preview resized left/right when held sideways, Edit called
       change its hue/saturation/luminance), selective colour (CMYK per colour family, whites,
       neutrals, blacks).
 
+- [x] Stabilization (Edit > Stabilize): the camera's shake read from the picture (a grid of patches
+      between frames, 20 a second), the path smoothed by a strength, each frame moved, turned and
+      scaled off the shake with a zoom that hides the edges; in the preview and the video export.
+      Later: from the gyro data GoPro and DJI record, rolling-shutter correction.
+
 ## Next (in this order)
 
 1. **Photo tools:** done: colour mixer, looks, point tone curves, colour grading wheels,

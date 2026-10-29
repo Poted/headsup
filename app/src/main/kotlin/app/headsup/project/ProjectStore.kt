@@ -46,6 +46,7 @@ data class SavedClip(
     val rawDevelop: RawDevelop = RawDevelop(),
     val picked: Boolean = false,
     val speedCurve: List<Float> = emptyList(),
+    val stabilization: app.headsup.core.frame.Stabilization? = null,
 )
 
 /** A film made on a timeline, or an album of photos edited one by one. */
@@ -251,6 +252,12 @@ internal object Json {
         .put("transitionMs", c.transitionMs)
         .put("speed", c.speed)
         .put("speedCurve", JSONArray(c.speedCurve.map { it.toDouble() }))
+        .put("stabilization", c.stabilization?.let { st ->
+            JSONObject().put("strength", st.strength).put("aspect", st.aspect)
+                .put("t", JSONArray(st.path.timesMs))
+                .put("x", JSONArray(st.path.x.map { it.toDouble() })).put("y", JSONArray(st.path.y.map { it.toDouble() }))
+                .put("turn", JSONArray(st.path.turn.map { it.toDouble() })).put("scale", JSONArray(st.path.logScale.map { it.toDouble() }))
+        })
         .put("muteChangedSpeed", c.muteChangedSpeed)
         .put("fadeInMs", c.fadeInMs)
         .put("fadeOutMs", c.fadeOutMs)
@@ -278,6 +285,13 @@ internal object Json {
         transitionMs = o.optLong("transitionMs", 0L),
         speed = o.optDouble("speed", 1.0).toFloat(),
         speedCurve = o.optJSONArray("speedCurve")?.let { a -> List(a.length()) { a.optDouble(it, 1.0).toFloat() } } ?: emptyList(),
+        stabilization = o.optJSONObject("stabilization")?.let { st ->
+            fun floats(key: String) = st.optJSONArray(key)?.let { a -> List(a.length()) { a.optDouble(it, 0.0).toFloat() } }.orEmpty()
+            val t = st.optJSONArray("t")?.let { a -> List(a.length()) { a.optLong(it) } }.orEmpty()
+            val path = app.headsup.core.frame.CameraPath(t, floats("x"), floats("y"), floats("turn"), floats("scale"))
+            if (t.isEmpty() || listOf(path.x, path.y, path.turn, path.logScale).any { it.size != t.size }) null
+            else app.headsup.core.frame.Stabilization(path, st.optDouble("strength", 0.6).toFloat(), st.optDouble("aspect", 16.0 / 9).toFloat())
+        },
         muteChangedSpeed = o.optBoolean("muteChangedSpeed", false),
         fadeInMs = o.optLong("fadeInMs", 0L),
         fadeOutMs = o.optLong("fadeOutMs", 0L),

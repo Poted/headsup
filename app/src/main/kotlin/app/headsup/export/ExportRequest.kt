@@ -84,6 +84,8 @@ data class ExportRequest(
     val mapMarker: Pair<Double, Double>? = null,
     /** Set on the steady-speed pieces of one ramped clip ([app.headsup.core.edit.SpeedCurve.pieces]): its id, so they make one file. */
     val pieceOf: Long? = null,
+    /** The camera's shake to take out, by file time. */
+    val stabilization: app.headsup.core.frame.Stabilization? = null,
 ) {
     /** Size of the exported frame: the source's, or the largest frame of the reframe's shape inside it (even numbers for encoders). */
     val frameWidth: Int get() = (reframe.outputSize(width.toFloat(), height.toFloat()).first.toInt() / 2 * 2).coerceAtLeast(2)
