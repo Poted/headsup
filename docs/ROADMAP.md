@@ -84,8 +84,9 @@ project's files), the preview resized left/right when held sideways, Edit called
       edges), the selection run again on each frame so the mask changes shape with the object.
 - [ ] To do, not now: intro slides: thanks for choosing Sweet Spot, what the app can do, how to make cinematic
       films and professional photos, so a newcomer feels welcome and wants to go further.
-- [x] Speed curves: an editable ramp per clip (Edit > Speed) and presets (Slow in/out, Hero,
-      Bullet, Flash in/out, Montage); the presets are also among the moves the auto edit may use.
+- [x] Speed curves: an editable ramp per clip (Edit > Speed) and presets in the reel style (Speed ramp:
+      fast in, slow, fast out; Fast in, Fast out, Double ramp, Slow in/out), slow parts as slow as the
+      footage stays smooth; the presets are also among the moves the auto edit may use.
       Exported as pieces of steady speed (about 0.35 s each).
 - [x] Mixer: RGB channel mixer, B&W mixer (brightness per colour in black and white), calibration
       (hue and saturation of the red, green and blue primaries).

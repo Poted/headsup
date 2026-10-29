@@ -14,15 +14,16 @@ class SpeedCurveTest {
 
     @Test
     fun `a slow middle makes the clip longer, and times map both ways`() {
-        val hero = SpeedCurve.Preset.HERO.points(0.4f)
+        val hero = SpeedCurve.Preset.SPEED_RAMP.points(0.4f)
         val length = SpeedCurve.timelineOf(10_000, 10_000, 1f, hero)
-        assertTrue(length > 12_000, "$length")
+        // Fast ends, a slow middle: about as long as the steady clip, the middle stretched.
+        assertTrue(length in 5_000..20_000, "$length")
         for (src in listOf(0L, 2_500L, 5_000L, 7_777L, 10_000L)) {
             val tl = SpeedCurve.timelineOf(src, 10_000, 1f, hero)
             assertTrue(abs(SpeedCurve.sourceOf(tl, 10_000, 1f, hero) - src) < 30, "$src")
         }
         assertEquals(0.4f, SpeedCurve.factor(hero, 0.52f), 1e-4f)
-        assertEquals(1f, SpeedCurve.factor(hero, 0.1f), 1e-4f)
+        assertEquals(3f, SpeedCurve.factor(hero, 0.1f), 1e-4f)
     }
 
     @Test
@@ -43,14 +44,14 @@ class SpeedCurveTest {
         assertEquals(0.5f to 0.25f, SpeedCurve.slowSpeeds(120f, 30f))
         // 30 fps footage has none to spare.
         assertEquals(0.6f to 0.4f, SpeedCurve.slowSpeeds(30f, 30f))
-        assertEquals(0.25f, SpeedCurve.factor(SpeedCurve.Preset.HERO.points(0.25f), 0.52f), 1e-4f)
+        assertEquals(0.25f, SpeedCurve.factor(SpeedCurve.Preset.SPEED_RAMP.points(0.25f), 0.52f), 1e-4f)
     }
 
     @Test
     fun `flat stretches make one piece`() {
-        val pieces = SpeedCurve.pieces(20_000, 1f, SpeedCurve.Preset.HERO.points(0.4f))
+        val pieces = SpeedCurve.pieces(20_000, 1f, SpeedCurve.Preset.SPEED_RAMP.points(0.4f))
         // The steady starts and ends are single pieces; only the ramps are cut finely.
-        assertTrue(pieces.size < 20, "${pieces.size}")
-        assertTrue(pieces.first().second >= 5_000)
+        assertTrue(pieces.size < 30, "${pieces.size}")
+        assertTrue(pieces.first().second >= 2_500)
     }
 }

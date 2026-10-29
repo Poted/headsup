@@ -19,13 +19,13 @@ object SpeedCurve {
      * ([slowSpeeds]); the rest are factors as they are.
      */
     enum class Preset(val label: String, private val template: List<Float>) {
-        SLOW_IN("Slow in", listOf(0f, 0f, 0.4f, 1f, 1f, 1f)),
-        SLOW_OUT("Slow out", listOf(0f, 1f, 0.6f, 1f, 1f, 0f)),
-        HERO("Hero", listOf(0f, 1f, 0.3f, 1f, 0.45f, 0f, 0.6f, 0f, 0.75f, 1f, 1f, 1f)),
-        BULLET("Bullet", listOf(0f, 1.6f, 0.35f, 1.6f, 0.47f, 0f, 0.58f, 0f, 0.7f, 1.6f, 1f, 1.6f)),
-        FLASH_IN("Flash in", listOf(0f, 2.5f, 0.3f, 1f, 1f, 1f)),
-        FLASH_OUT("Flash out", listOf(0f, 1f, 0.7f, 1f, 1f, 2.5f)),
-        MONTAGE("Montage", listOf(0f, 1.6f, 0.25f, 1.6f, 0.38f, 0f, 0.6f, 0f, 0.72f, 1.6f, 1f, 1.6f)),
+        // As in reels and property films: the camera rushes in, eases into slow motion, rushes on.
+        SPEED_RAMP("Speed ramp", listOf(0f, 3f, 0.15f, 3f, 0.38f, 0f, 0.62f, 0f, 0.85f, 3f, 1f, 3f)),
+        FAST_IN("Fast in", listOf(0f, 3f, 0.2f, 3f, 0.48f, 0f, 1f, 0f)),
+        FAST_OUT("Fast out", listOf(0f, 0f, 0.52f, 0f, 0.8f, 3f, 1f, 3f)),
+        DOUBLE("Double ramp", listOf(0f, 3f, 0.1f, 3f, 0.24f, 0f, 0.38f, 0f, 0.5f, 3f, 0.62f, 0f, 0.76f, 0f, 0.9f, 3f, 1f, 3f)),
+        SLOW_IN("Slow in", listOf(0f, 0f, 0.45f, 1f, 1f, 1f)),
+        SLOW_OUT("Slow out", listOf(0f, 1f, 0.55f, 1f, 1f, 0f)),
         ;
 
         /** The ramp with its slow parts at [slow]. */
