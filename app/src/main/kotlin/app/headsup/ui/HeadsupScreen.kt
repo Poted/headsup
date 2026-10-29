@@ -1648,18 +1648,18 @@ private fun SpeedRamp(clip: ClipState, timelineFps: Float, onCurve: (List<Float>
     var deep by rememberSaveable { mutableStateOf(true) }
     val depth = if (deep) verySlow else slow
     val presets = app.headsup.core.edit.SpeedCurve.Preset.entries
-    val current = presets.firstOrNull { p -> clip.speedCurve == p.points(slow) || clip.speedCurve == p.points(verySlow) }
+    val chosen = presets.firstOrNull { p -> clip.speedCurve == p.points(slow) || clip.speedCurve == p.points(verySlow) }
     Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         FilterChip(selected = clip.speedCurve.isEmpty(), onClick = { onCurve(emptyList()) }, label = { Text("Steady") })
         for (p in presets) {
-            FilterChip(selected = p == current, onClick = { onCurve(p.points(depth)) }, label = { Text(p.label) })
+            FilterChip(selected = p == chosen, onClick = { onCurve(p.points(depth)) }, label = { Text(p.label) })
         }
     }
     Row(verticalAlignment = Alignment.CenterVertically) {
         for ((isDeep, label, speed) in listOf(Triple(false, "Slow", slow), Triple(true, "Very slow", verySlow))) {
             FilterChip(
                 selected = deep == isDeep,
-                onClick = { deep = isDeep; current?.let { onCurve(it.points(if (isDeep) verySlow else slow)) } },
+                onClick = { deep = isDeep; chosen?.let { onCurve(it.points(if (isDeep) verySlow else slow)) } },
                 label = { Text(label + " · " + String.format(Locale.US, "%.2g×", speed)) },
             )
             Spacer(Modifier.width(8.dp))
