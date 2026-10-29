@@ -1827,6 +1827,11 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
         val mask = clip.masks.getOrNull(s.selectedMask)?.takeIf { it.kind == MaskKind.BRUSH } ?: return
         val aspect = if (clip.meta.width > 0 && clip.meta.height > 0) clip.meta.width.toFloat() / clip.meta.height else 16f / 9f
         val placed = mask.at(playheadFileMs)
+        // 3: dropped (a second finger came: the view zooms instead).
+        if (phase == 3) {
+            _state.update { it.copy(paintPath = emptyList(), lassoPath = emptyList()) }
+            return
+        }
         if (s.brush.mode == BrushMode.SELECT) {
             selectStroke(phase, x, y, grab, clip, index, mask, placed, aspect)
             return

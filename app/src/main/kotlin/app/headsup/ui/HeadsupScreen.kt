@@ -360,7 +360,9 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
                         transitionMs = selected.transitionMs,
                         guideMask = selected.masks.getOrNull(state.selectedMask).takeIf { editingMasks && !fullscreen },
                         onMoveMask = if (editingMasks && !fullscreen && !editingBrush) { x, y -> vm.updateMask { it.copy(centerX = x, centerY = y) } } else null,
-                        onTransformMask = if (editingMasks && !fullscreen) vm::transformMask else null,
+                        // A painted mask moves with two fingers only in Move; otherwise they zoom the view.
+                        onTransformMask = if (editingMasks && !fullscreen && (!editingBrush || state.brush.mode == BrushMode.MOVE)) vm::transformMask else null,
+                        zoomForPainting = editingMasks && !fullscreen && editingBrush && state.brush.mode != BrushMode.MOVE,
                         onBrush = if (editingMasks && !fullscreen && editingBrush && state.brush.mode != BrushMode.MOVE) vm::brushStroke else null,
                         guideIndex = state.selectedMask,
                         lassoPath = state.lassoPath,
@@ -2879,7 +2881,7 @@ private fun BrushControls(state: UiState, vm: HeadsupViewModel) {
     RulerSlider(value = value, range = setting.range, step = 0.005f, onChange = { set(it) }, onReset = { set(setting.default) })
     Hint(
         if (brush.mode == BrushMode.SELECT) "Tap an object to select it (found on the phone by a small AI model). Or draw round an object and lift the finger: the object inside is found by its colours (as an oval: Invert for the outside). Or draw a line across (e.g. along the horizon, round a tree): the side above it is selected and the split follows the edges near the line (as a line mask: Invert for the other side). Touch up with Paint and Erase (Size and Strength are theirs; Softness also softens what Select finds)."
-        else "Paint where the mask's corrections go; Erase takes them away. Strength: how much one stroke adds (at 50 % a stroke gives half the effect, going over again adds more). Softness: the painting's edge. Two fingers move, turn and scale the painting.",
+        else "Paint where the mask's corrections go; Erase takes them away. Strength: how much one stroke adds (at 50 % a stroke gives half the effect, going over again adds more). Softness: the painting's edge. Two fingers zoom the picture to reach small things; in Move they move, turn and scale the painting.",
     )
 }
 
@@ -2891,10 +2893,10 @@ private fun BrushControls(state: UiState, vm: HeadsupViewModel) {
 private fun BrushPreview(radius: Float, softness: Float, pictureHeightPx: Float) {
     val density = LocalDensity.current
     val rPx = (radius * pictureHeightPx).coerceAtLeast(1.5f)
-    val box = with(density) { (rPx * 2f).toDp() + 10.dp }.coerceIn(28.dp, 120.dp)
+    // The box stays the same; only the brush in it changes.
     androidx.compose.foundation.Canvas(
         Modifier
-            .size(box)
+            .size(120.dp)
             .clip(RoundedCornerShape(6.dp))
             .background(Color.Black.copy(alpha = 0.45f))
             .border(1.dp, HeadsupColors.Outline, RoundedCornerShape(6.dp)),

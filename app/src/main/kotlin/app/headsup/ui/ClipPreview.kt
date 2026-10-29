@@ -6,6 +6,7 @@ import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.calculateCentroid
 import androidx.compose.foundation.gestures.calculateRotation
 import androidx.compose.foundation.gestures.calculateZoom
+import androidx.compose.foundation.gestures.calculatePan
 import androidx.compose.foundation.gestures.drag
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -158,6 +159,8 @@ fun ClipPreview(
     lassoPath: List<Float> = emptyList(),
     /** Told the picture's height on screen in pixels (as framed), e.g. to show a brush at its real size. */
     onPictureHeight: ((Float) -> Unit)? = null,
+    /** Painting a mask: two fingers zoom and pan the view (one paints), to reach small things. */
+    zoomForPainting: Boolean = false,
     /** A brush stroke being painted (fractions of the picture), its radius (of the picture's height), strength, and whether it erases. */
     paintPath: List<Float> = emptyList(),
     paintRadius: Float = 0f,
@@ -762,6 +765,8 @@ fun ClipPreview(
 
     // Looking closely at a photo: the view's zoom and pan (not the photo's framing).
     val inspect = photoMode && onReframe == null && onMoveMask == null && onTransformMask == null && onBrush == null && onMoveText == null && onSample == null
+    // The view's zoom applies while looking at a photo closely or painting a mask.
+    val viewZoomed = inspect || zoomForPainting
     var viewZoom by remember(clip.id) { mutableStateOf(1f) }
     var viewPan by remember(clip.id) { mutableStateOf(Offset.Zero) }
     Column(Modifier.padding(horizontal = if (edgeToEdge) 0.dp else 16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -806,6 +811,26 @@ fun ClipPreview(
                             }
                         }
                         .pointerInput(Unit) { detectTapGestures(onDoubleTap = { viewZoom = if (viewZoom > 1.01f) 1f else 3f; viewPan = Offset.Zero }) }
+                } else if (zoomForPainting) {
+                    // Painting: two fingers zoom and pan the view, taken before the painting sees
+                    // them (one finger still paints).
+                    Modifier.pointerInput(Unit) {
+                        awaitEachGesture {
+                            awaitFirstDown(requireUnconsumed = false, pass = androidx.compose.ui.input.pointer.PointerEventPass.Initial)
+                            while (true) {
+                                val event = awaitPointerEvent(androidx.compose.ui.input.pointer.PointerEventPass.Initial)
+                                if (event.changes.none { it.pressed }) break
+                                if (event.changes.count { it.pressed } >= 2) {
+                                    viewZoom = (viewZoom * event.calculateZoom()).coerceIn(1f, 8f)
+                                    val maxX = size.width * (viewZoom - 1f) / 2f
+                                    val maxY = size.height * (viewZoom - 1f) / 2f
+                                    viewPan = if (viewZoom <= 1.001f) Offset.Zero
+                                        else (viewPan + event.calculatePan()).let { Offset(it.x.coerceIn(-maxX, maxX), it.y.coerceIn(-maxY, maxY)) }
+                                    event.changes.forEach { it.consume() }
+                                }
+                            }
+                        }
+                    }
                 } else Modifier,
             ),
             contentAlignment = Alignment.Center,
@@ -813,11 +838,11 @@ fun ClipPreview(
             BoxWithConstraints(
                 Modifier.heightIn(max = maxHeight).aspectRatio(frameAspect, matchHeightConstraintsFirst = true)
                     .graphicsLayer {
-                        val z = if (inspect) viewZoom else 1f
+                        val z = if (viewZoomed) viewZoom else 1f
                         scaleX = z
                         scaleY = z
-                        translationX = if (inspect) viewPan.x else 0f
-                        translationY = if (inspect) viewPan.y else 0f
+                        translationX = if (viewZoomed) viewPan.x else 0f
+                        translationY = if (viewZoomed) viewPan.y else 0f
                     }
                     .clipToBounds(),
                 contentAlignment = Alignment.Center,
@@ -976,13 +1001,15 @@ fun ClipPreview(
                                         val pressed = event.changes.filter { it.pressed }
                                         if (pressed.isEmpty()) break
                                         val transform = maskTransformer
-                                        if (pressed.size >= 2 && transform != null) {
+                                        if (pressed.size >= 2) {
                                             pinched = true
                                             if (painting) {
-                                                // A second finger ends the stroke and moves the mask instead.
+                                                // A second finger drops the stroke begun: two fingers zoom the view (or move the mask).
                                                 painting = false
-                                                pictureOf(last).let { (x, y) -> paint?.invoke(2, x, y, grab) }
+                                                pictureOf(last).let { (x, y) -> paint?.invoke(3, x, y, grab) }
                                             }
+                                        }
+                                        if (pressed.size >= 2 && transform != null) {
                                             val g = geometryRef.value
                                             val before = event.calculateCentroid(useCurrent = false)
                                             val after = event.calculateCentroid(useCurrent = true)
