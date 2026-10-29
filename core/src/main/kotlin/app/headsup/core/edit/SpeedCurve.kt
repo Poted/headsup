@@ -14,17 +14,40 @@ object SpeedCurve {
     const val MIN = 0.1f
     const val MAX = 8f
 
-    /** Ready-made ramps. */
-    enum class Preset(val label: String, val points: List<Float>) {
-        // Gentle on purpose: slow motion that looks filmed, not a trick (deep slow-downs need
-        // footage shot at a high frame rate to stay smooth).
-        SLOW_IN("Slow in", listOf(0f, 0.4f, 0.4f, 1f, 1f, 1f)),
-        SLOW_OUT("Slow out", listOf(0f, 1f, 0.6f, 1f, 1f, 0.4f)),
-        HERO("Hero", listOf(0f, 1f, 0.3f, 1f, 0.45f, 0.4f, 0.6f, 0.4f, 0.75f, 1f, 1f, 1f)),
-        BULLET("Bullet", listOf(0f, 1.6f, 0.35f, 1.6f, 0.47f, 0.35f, 0.58f, 0.35f, 0.7f, 1.6f, 1f, 1.6f)),
+    /**
+     * Ready-made ramps. Their slow parts (0 in [template]) take the slow speed the footage allows
+     * ([slowSpeeds]); the rest are factors as they are.
+     */
+    enum class Preset(val label: String, private val template: List<Float>) {
+        SLOW_IN("Slow in", listOf(0f, 0f, 0.4f, 1f, 1f, 1f)),
+        SLOW_OUT("Slow out", listOf(0f, 1f, 0.6f, 1f, 1f, 0f)),
+        HERO("Hero", listOf(0f, 1f, 0.3f, 1f, 0.45f, 0f, 0.6f, 0f, 0.75f, 1f, 1f, 1f)),
+        BULLET("Bullet", listOf(0f, 1.6f, 0.35f, 1.6f, 0.47f, 0f, 0.58f, 0f, 0.7f, 1.6f, 1f, 1.6f)),
         FLASH_IN("Flash in", listOf(0f, 2.5f, 0.3f, 1f, 1f, 1f)),
         FLASH_OUT("Flash out", listOf(0f, 1f, 0.7f, 1f, 1f, 2.5f)),
-        MONTAGE("Montage", listOf(0f, 1.6f, 0.25f, 1.6f, 0.38f, 0.6f, 0.6f, 0.6f, 0.72f, 1.6f, 1f, 1.6f)),
+        MONTAGE("Montage", listOf(0f, 1.6f, 0.25f, 1.6f, 0.38f, 0f, 0.6f, 0f, 0.72f, 1.6f, 1f, 1.6f)),
+        ;
+
+        /** The ramp with its slow parts at [slow]. */
+        fun points(slow: Float): List<Float> = template.mapIndexed { i, v -> if (i % 2 == 1 && v == 0f) slow else v }
+    }
+
+    /**
+     * The slowest speed at which footage shot at [sourceFps] still gives every timeline frame a
+     * frame of its own ([timelineFps]): 120 fps on a 30 fps timeline, 0.25×. Slower, frames repeat
+     * and the picture stutters. Null when the frame rate is unknown.
+     */
+    fun smoothLimit(sourceFps: Float?, timelineFps: Float): Float? =
+        sourceFps?.takeIf { it > 0f }?.let { (timelineFps / it).coerceIn(MIN, MAX) }
+
+    /**
+     * The presets' slow speeds for this footage: "very slow" down to [smoothLimit] (every frame
+     * shown), "slow" twice as fast; footage without frames to spare (30 fps on a 30 fps timeline)
+     * gets 0.6× and 0.4×, which will stutter.
+     */
+    fun slowSpeeds(sourceFps: Float?, timelineFps: Float): Pair<Float, Float> {
+        val limit = smoothLimit(sourceFps, timelineFps) ?: 0.5f
+        return if (limit < 0.9f) minOf(0.75f, limit * 2f) to limit else 0.6f to 0.4f
     }
 
     /** The points as (where, factor), sorted. */
@@ -90,11 +113,25 @@ object SpeedCurve {
     fun pieces(spanMs: Long, base: Float, curve: List<Float>, pieceMs: Long = 350L, maxPieces: Int = 32): List<Triple<Long, Long, Float>> {
         if (curve.isEmpty() || spanMs <= 0L) return listOf(Triple(0L, spanMs, base))
         val n = (spanMs / pieceMs).toInt().coerceIn(1, maxPieces)
-        return (0 until n).map { k ->
+        val fine = (0 until n).map { k ->
             val from = spanMs * k / n
             val to = spanMs * (k + 1) / n
             val length = (timelineOf(to, spanMs, base, curve) - timelineOf(from, spanMs, base, curve)).coerceAtLeast(1L)
             Triple(from, to, ((to - from).toFloat() / length).coerceIn(MIN, MAX))
         }
+        // Neighbours at nearly the same speed become one piece: every join is a seam in the export.
+        val merged = mutableListOf<Triple<Long, Long, Float>>()
+        for (p in fine) {
+            val last = merged.lastOrNull()
+            if (last != null && kotlin.math.abs(p.third - last.third) < 0.03f * last.third) {
+                val from = last.first
+                val to = p.second
+                val length = (timelineOf(to, spanMs, base, curve) - timelineOf(from, spanMs, base, curve)).coerceAtLeast(1L)
+                merged[merged.lastIndex] = Triple(from, to, ((to - from).toFloat() / length).coerceIn(MIN, MAX))
+            } else {
+                merged += p
+            }
+        }
+        return merged
     }
 }
