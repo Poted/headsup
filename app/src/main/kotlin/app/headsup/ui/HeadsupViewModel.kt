@@ -129,6 +129,8 @@ data class ClipState(
     val speed: Float = 1f,
     /** Speed ramp over the cut on top of [speed] ([SpeedCurve]); empty = steady. */
     val speedCurve: List<Float> = emptyList(),
+    /** A photo's Clean up: patches over what was removed, in the order made. */
+    val retouch: List<app.headsup.core.retouch.RetouchPatch> = emptyList(),
     /** Silence the sound while the speed is changed; otherwise it is stretched, keeping its pitch. */
     val muteChangedSpeed: Boolean = false,
     /** Fade from black at the start and to black at the end (picture and sound), timeline time. */
@@ -492,9 +494,11 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
             val after = transform(before)
             _state.update { s -> s.copy(clips = s.clips.map { c -> if (c.meta.isRaw && s.syncsTo(c)) c.copy(rawDevelop = c.rawDevelop.synced(before, after)) else c }) }
             refreshPreview()
+            refreshCleanupLater()
             return
         }
         updateClip(index) { it.copy(rawDevelop = transform(it.rawDevelop)) }
+        refreshCleanupLater()
     }
 
     /** The clips an edit on "all" or a group reaches (those with colour on). */
@@ -805,7 +809,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
             SavedClip(
                 it.meta.uri, it.trimStartMs, it.trimEndMs, it.manualOffsetMs, it.colorGrade, it.lutName,
                 it.manualStart, it.grade, it.effects, it.masks, it.groupId, it.transitionMs, it.reframe, it.speed, it.muteChangedSpeed,
-                it.fadeInMs, it.fadeOutMs, it.soundLevel, it.rawDevelop, it.picked, it.speedCurve,
+                it.fadeInMs, it.fadeOutMs, it.soundLevel, it.rawDevelop, it.picked, it.speedCurve, it.retouch,
             )
         },
         groups = groups.map { SavedGroup(it.id, it.name, it.grade, it.lutName) },
@@ -871,6 +875,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                     reframe = c.reframe,
                     speed = c.speed,
                     speedCurve = c.speedCurve,
+                    retouch = c.retouch,
                     muteChangedSpeed = c.muteChangedSpeed,
                     fadeInMs = c.fadeInMs,
                     fadeOutMs = c.fadeOutMs,
@@ -1939,7 +1944,8 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
 
     /** The picture on screen as MobileSAM reads it; started at once, the same one again while the frame stays. */
     private fun segmentPicture(clip: ClipState, grab: (Int) -> android.graphics.Bitmap?): kotlinx.coroutines.Deferred<SegmentPicture?>? {
-        val key = clip.id to (if (clip.meta.isPhoto) 0L else playheadFileMs)
+        // A photo's picture changes with Clean up (and undoing it); a video's with the frame.
+        val key = clip.id to (if (clip.meta.isPhoto) clip.retouch.hashCode().toLong() else playheadFileMs)
         segmentReading?.let { (k, d) -> if (k == key) return d }
         val aspect = if (clip.meta.width > 0 && clip.meta.height > 0) clip.meta.width.toFloat() / clip.meta.height else 16f / 9f
         val side = app.headsup.color.Segmenter.INPUT
@@ -2060,6 +2066,151 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                 lastPick = null
             } finally {
                 _state.update { it.copy(busy = false, loadingMessage = null) }
+            }
+        }
+    }
+
+    /**
+     * Clean up on a photo: a tap removes the object under it (found by MobileSAM), a stroke the
+     * area painted. Shown as painted while the finger is down.
+     */
+    fun cleanupStroke(phase: Int, x: Float, y: Float, grab: (Int) -> android.graphics.Bitmap?) {
+        val s = _state.value
+        val index = s.selectedClip ?: return
+        val clip = s.selected?.takeIf { it.meta.isPhoto } ?: return
+        when (phase) {
+            0 -> {
+                // Read now, so a tap is answered at once.
+                segmentPicture(clip, grab)
+                _state.update { it.copy(paintPath = listOf(x, y)) }
+            }
+            1 -> _state.update { st ->
+                val p = st.paintPath
+                val aspect = if (clip.meta.width > 0 && clip.meta.height > 0) clip.meta.width.toFloat() / clip.meta.height else 1f
+                if (p.size >= 2 && kotlin.math.hypot((x - p[p.size - 2]) * aspect, y - p.last()) < st.brush.radius * 0.15f) st else st.copy(paintPath = p + x + y)
+            }
+            3 -> _state.update { it.copy(paintPath = emptyList()) }
+            else -> {
+                val path = s.paintPath
+                _state.update { it.copy(paintPath = emptyList()) }
+                if (path.size < 2 || s.busy) return
+                val xs = path.filterIndexed { i, _ -> i % 2 == 0 }
+                val ys = path.filterIndexed { i, _ -> i % 2 == 1 }
+                val tap = path.size < 6 || maxOf(xs.max() - xs.min(), ys.max() - ys.min()) < 0.02f
+                val picture = if (tap) segmentPicture(clip, grab) else null
+                val radius = s.brush.radius
+                cleanup(index, clip) { w, h ->
+                    if (tap) {
+                        val seg = picture?.await() ?: return@cleanup null
+                        val found = app.headsup.color.Segmenter.objects(
+                            getApplication(), seg.reading,
+                            listOf(app.headsup.color.Segmenter.Prompt(path[0], path[1], app.headsup.color.Segmenter.Prompt.Label.IN)), w, h,
+                        )
+                        found.firstOrNull()?.first
+                    } else {
+                        val stroke = app.headsup.core.color.BrushStroke(path, radius, flow = 1f)
+                        app.headsup.core.color.BrushMask.rasterize(listOf(stroke), w, h, softness = 0f)
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * Removes from the photo at [index] what [holeOf] gives (0..1 over the picture, at the size it
+     * is asked for), as new patches over it.
+     */
+    private fun cleanup(index: Int, clip: ClipState, holeOf: suspend (width: Int, height: Int) -> FloatArray?) {
+        val context: Application = getApplication()
+        val clipId = clip.id
+        _state.update { it.copy(busy = true, loadingMessage = "Removing", loadingProgress = null) }
+        loadJob = viewModelScope.launch {
+            try {
+                val made = withContext(Dispatchers.Default) {
+                    val photo = app.headsup.retouch.Cleaner.source(context, clip.meta.uri, clip.meta.isRaw, clip.rawDevelop) ?: return@withContext null
+                    val side = app.headsup.color.Segmenter.INPUT
+                    val hw = if (photo.width >= photo.height) side else (side * photo.width / photo.height).coerceAtLeast(1)
+                    val hh = if (photo.width >= photo.height) (side * photo.height / photo.width).coerceAtLeast(1) else side
+                    val hole = holeOf(hw, hh)?.takeIf { m -> m.any { it > 0.5f } } ?: return@withContext emptyList()
+                    val holeId = app.headsup.color.BrushReferences.create(context, hw, hh, hole, app.headsup.core.color.BrushMask.BASE)
+                    val develop = if (clip.meta.isRaw) app.headsup.retouch.Cleaner.developKey(clip.rawDevelop) else null
+                    val base = app.headsup.retouch.Cleaner.applyTo(context, photo, clip.retouch)
+                    app.headsup.retouch.Cleaner.remove(context, base, hole, hw, hh, holeId, develop) { p ->
+                        _state.update { it.copy(loadingProgress = p) }
+                    }
+                }
+                when {
+                    made == null -> _state.update { it.copy(messages = it.messages + "Could not read the photo to clean it up.") }
+                    made.isEmpty() -> _state.update { it.copy(messages = it.messages + "Nothing found there to remove: tap the object's middle, or paint over it.") }
+                    else -> {
+                        // The picture changed: read again for the next tap.
+                        segmentReading = null
+                        _state.update { st -> st.copy(clips = st.clips.map { c -> if (c.id == clipId) c.copy(retouch = c.retouch + made) else c }) }
+                    }
+                }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Throwable) {
+                e.printStackTrace()
+                _state.update { it.copy(messages = it.messages + "Clean up failed: ${e.message ?: e.javaClass.simpleName}") }
+            } finally {
+                _state.update { it.copy(busy = false, loadingMessage = null, loadingProgress = null) }
+            }
+        }
+    }
+
+    /** Takes away all of the selected photo's Clean up (one step to undo). */
+    fun clearCleanup() {
+        val index = _state.value.selectedClip ?: return
+        updateClip(index) { it.copy(retouch = emptyList()) }
+    }
+
+    /** Takes away the last thing removed from the selected photo. */
+    fun undoLastCleanup() {
+        val index = _state.value.selectedClip ?: return
+        updateClip(index) { c ->
+            val last = c.retouch.lastOrNull()?.hole
+            c.copy(retouch = if (last == null) c.retouch.dropLast(1) else c.retouch.filter { it.hole != last })
+        }
+    }
+
+    private var cleanupRefresh: kotlinx.coroutines.Job? = null
+
+    /**
+     * A raw photo developed differently needs its Clean up made again (the patches were made from
+     * the old development): done in the background, a moment after the last change.
+     */
+    private fun refreshCleanupLater() {
+        cleanupRefresh?.cancel()
+        cleanupRefresh = viewModelScope.launch {
+            kotlinx.coroutines.delay(1200)
+            val context: Application = getApplication()
+            for (clip in _state.value.clips) {
+                if (!clip.meta.isRaw || clip.retouch.isEmpty()) continue
+                val key = app.headsup.retouch.Cleaner.developKey(clip.rawDevelop)
+                if (clip.retouch.all { it.develop == key }) continue
+                val redone = withContext(Dispatchers.Default) {
+                    var photo = app.headsup.retouch.Cleaner.source(context, clip.meta.uri, true, clip.rawDevelop) ?: return@withContext null
+                    val out = ArrayList<app.headsup.core.retouch.RetouchPatch>()
+                    // In the order made: each was made on the photo with the ones before.
+                    for (holeId in clip.retouch.map { it.hole }.distinct()) {
+                        ensureActive()
+                        val ref = holeId?.let { app.headsup.color.BrushReferences.get(context, it) } ?: continue
+                        val hole = FloatArray(ref.width * ref.height) { ref.rgb[it * 3] }
+                        val made = app.headsup.retouch.Cleaner.remove(context, photo, hole, ref.width, ref.height, holeId, key)
+                        photo = app.headsup.retouch.Cleaner.applyTo(context, photo, made)
+                        out += made
+                    }
+                    out
+                } ?: continue
+                _state.update { st ->
+                    st.copy(
+                        clips = st.clips.map { c ->
+                            // Only if nothing changed meanwhile.
+                            if (c.id == clip.id && c.retouch == clip.retouch && app.headsup.retouch.Cleaner.developKey(c.rawDevelop) == key) c.copy(retouch = redone) else c
+                        },
+                    )
+                }
             }
         }
     }
@@ -2535,6 +2686,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                         format = s.exportSettings.photoFormat,
                         raw = clip.meta.isRaw,
                         rawDevelop = clip.rawDevelop,
+                        retouch = clip.retouch,
                     )
                     runCatching {
                         withContext(Dispatchers.Default) {

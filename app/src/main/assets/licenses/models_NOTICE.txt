@@ -10,3 +10,8 @@ sky.onnx
   DeepLab v3 MobileNetV2 trained on ADE20K, from the TensorFlow Models DeepLab model zoo
   (https://github.com/tensorflow/models/tree/master/research/deeplab), Apache License 2.0.
   Converted to ONNX; the output is reduced to the probability of the "sky" class.
+
+lama.onnx (fetched by the build)
+  LaMa: Resolution-robust Large Mask Inpainting with Fourier Convolutions
+  (https://github.com/advimman/lama), Apache License 2.0. ONNX export:
+  https://huggingface.co/Carve/LaMa-ONNX (Apache License 2.0).

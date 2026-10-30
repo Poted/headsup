@@ -33,6 +33,11 @@ jobs:
           distribution: temurin
           java-version: '17'
       - uses: gradle/actions/setup-gradle@v4
+      # The inpainting model (208 MB) the build downloads: kept between runs.
+      - uses: actions/cache@v4
+        with:
+          path: app/build/models
+          key: models-lama-1faef5301d78
       - name: Build debug APK
         run: ./gradlew :app:assembleDebug
       - name: Upload APK

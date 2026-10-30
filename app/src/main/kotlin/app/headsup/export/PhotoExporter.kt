@@ -56,6 +56,8 @@ class PhotoRequest(
     /** A raw (DNG) photo and its development. */
     val raw: Boolean = false,
     val rawDevelop: RawDevelop = RawDevelop(),
+    /** Clean up's patches over the photo. */
+    val retouch: List<app.headsup.core.retouch.RetouchPatch> = emptyList(),
     /** Long side of the file (null = the photo's own), and JPEG quality 0..100. */
     val longSide: Int? = null,
     val quality: Int = 92,
@@ -113,12 +115,14 @@ object PhotoExporter {
                 postScale(picW / pw, picH / ph)
             })
         }
+        // Clean up's patches lie over the photo before anything else (as in the preview).
+        val patched: Shader = retouchShader(context, request.retouch, picW, picH, pw, ph)?.let { android.graphics.ComposeShader(image, it, android.graphics.BlendMode.SRC_OVER) } ?: image
         val brush = app.headsup.color.BrushAtlas.build(context, request.masks, picW / picH)
         val shader = GradePreviewShader().apply {
             setTables(GradeTables(request.cube, request.maskCubes))
             setBrush(brush)
         }
-        val graded = android.graphics.Paint().apply { this.shader = shader.paintShader(request.effects, picW, picH, request.masks, image, request.rawDevelop.takeIf { request.raw }, request.presence, request.reframe.warp) }
+        val graded = android.graphics.Paint().apply { this.shader = shader.paintShader(request.effects, picW, picH, request.masks, patched, request.rawDevelop.takeIf { request.raw }, request.presence, request.reframe.warp) }
         val renderer = DashboardRenderer(context.assets)
         val root = RenderNode("frame").apply {
             setPosition(0, 0, fw, fh)
@@ -155,7 +159,7 @@ object PhotoExporter {
         val rendered = render(root, fw, fh)
         // A raw's real lights above white, framed as the photo, for an Ultra HDR gain map.
         val headroom = if (request.format == PhotoFormat.ULTRA_HDR) full?.headroom?.let { map ->
-            runCatching { renderHeadroom(map, degrees, picW, picH, fw, fh, t, request.reframe) }.getOrNull().also { map.recycle() }
+            runCatching { renderHeadroom(context, map, degrees, picW, picH, fw, fh, t, request.reframe, request.retouch, pw, ph) }.getOrNull().also { map.recycle() }
         } else null
         photo.recycle()
         onProgress(0.92f)
@@ -354,29 +358,39 @@ object PhotoExporter {
      * A raw's headroom map drawn as the photo is (upright, framed, straightened, perspective
      * corrected), at a quarter of the frame's size: the Ultra HDR gain map's contents.
      */
-    private fun renderHeadroom(map: Bitmap, degrees: Int, picW: Float, picH: Float, fw: Int, fh: Int, t: app.headsup.ui.ReframeTransform, reframe: app.headsup.core.frame.Reframe): Bitmap? {
+    private fun renderHeadroom(
+        context: Context, map: Bitmap, degrees: Int, picW: Float, picH: Float, fw: Int, fh: Int,
+        t: app.headsup.ui.ReframeTransform, reframe: app.headsup.core.frame.Reframe,
+        retouch: List<app.headsup.core.retouch.RetouchPatch>, pw: Float, ph: Float,
+    ): Bitmap? {
         val turned = degrees == 90 || degrees == 270
         val mw = (if (turned) map.height else map.width).toFloat()
         val mh = (if (turned) map.width else map.height).toFloat()
+        val toPicture = Matrix().apply {
+            postRotate(degrees.toFloat())
+            when (degrees) {
+                90 -> postTranslate(map.height.toFloat(), 0f)
+                180 -> postTranslate(map.width.toFloat(), map.height.toFloat())
+                270 -> postTranslate(0f, map.width.toFloat())
+            }
+            postScale(picW / mw, picH / mh)
+        }
         val mapShader = BitmapShader(map, Shader.TileMode.CLAMP, Shader.TileMode.CLAMP).apply {
             filterMode = BitmapShader.FILTER_MODE_LINEAR
-            setLocalMatrix(Matrix().apply {
-                postRotate(degrees.toFloat())
-                when (degrees) {
-                    90 -> postTranslate(map.height.toFloat(), 0f)
-                    180 -> postTranslate(map.width.toFloat(), map.height.toFloat())
-                    270 -> postTranslate(0f, map.width.toFloat())
-                }
-                postScale(picW / mw, picH / mh)
-            })
+            setLocalMatrix(toPicture)
         }
+        // Where something was removed, its light above white went with it: the headroom there is
+        // what is around the patch (a removed lamp leaves no glow behind).
+        val toMap = Matrix().also { toPicture.invert(it) }
+        val patchedMap: Shader = retouchShader(context, retouch, picW, picH, pw, ph) { p -> headroomAround(map, toMap, p, picW, picH) }
+            ?.let { android.graphics.ComposeShader(mapShader, it, android.graphics.BlendMode.SRC_OVER) } ?: mapShader
         val shader: Shader = reframe.warp?.let { m ->
             android.graphics.RuntimeShader(HEADROOM_WARP).apply {
-                setInputShader("map", mapShader)
+                setInputShader("map", patchedMap)
                 setFloatUniform("warp", floatArrayOf(m[0].toFloat(), m[3].toFloat(), m[6].toFloat(), m[1].toFloat(), m[4].toFloat(), m[7].toFloat(), m[2].toFloat(), m[5].toFloat(), m[8].toFloat()))
                 setFloatUniform("size", picW, picH)
             }
-        } ?: mapShader
+        } ?: patchedMap
         val gw = (fw / 4).coerceAtLeast(1)
         val gh = (fh / 4).coerceAtLeast(1)
         val paint = android.graphics.Paint().apply { this.shader = shader }
@@ -393,6 +407,54 @@ object PhotoExporter {
             endRecording()
         }
         return draw(root, gw, gh, PixelFormat.RGBA_8888)
+    }
+
+    /**
+     * Clean up's patches as a shader over the picture ([picW]×[picH]; the photo [pw]×[ph] upright),
+     * drawn at up to the detail they were made at; with [colourOf], each in one colour. Null
+     * without patches.
+     */
+    private fun retouchShader(
+        context: Context, retouch: List<app.headsup.core.retouch.RetouchPatch>, picW: Float, picH: Float, pw: Float, ph: Float,
+        colourOf: ((app.headsup.core.retouch.RetouchPatch) -> Int)? = null,
+    ): Shader? {
+        if (retouch.isEmpty()) return null
+        val k = minOf(1f, app.headsup.retouch.Cleaner.WORK_SIDE / maxOf(pw, ph))
+        val lw = (pw * k).toInt().coerceAtLeast(1)
+        val lh = (ph * k).toInt().coerceAtLeast(1)
+        val layer = app.headsup.retouch.Cleaner.layer(context, retouch, lw, lh, colourOf) ?: return null
+        return BitmapShader(layer, Shader.TileMode.CLAMP, Shader.TileMode.CLAMP).apply {
+            filterMode = BitmapShader.FILTER_MODE_LINEAR
+            setLocalMatrix(Matrix().apply { postScale(picW / lw, picH / lh) })
+        }
+    }
+
+    /** The headroom map's mean just around [patch] (picture → map pixels through [toMap]), as a grey. */
+    private fun headroomAround(map: Bitmap, toMap: Matrix, patch: app.headsup.core.retouch.RetouchPatch, picW: Float, picH: Float): Int {
+        if (map.config == Bitmap.Config.HARDWARE) return android.graphics.Color.BLACK
+        val gx = (patch.right - patch.left) * 0.15f
+        val gy = (patch.bottom - patch.top) * 0.15f
+        val l = (patch.left - gx).coerceIn(0f, 1f)
+        val r = (patch.right + gx).coerceIn(0f, 1f)
+        val tp = (patch.top - gy).coerceIn(0f, 1f)
+        val b = (patch.bottom + gy).coerceIn(0f, 1f)
+        var sum = 0f
+        var n = 0
+        val point = FloatArray(2)
+        for (k in 0 until 16) {
+            val f = (k + 0.5f) / 16
+            for ((x, y) in listOf(l + (r - l) * f to tp, l + (r - l) * f to b, l to tp + (b - tp) * f, r to tp + (b - tp) * f)) {
+                point[0] = x * picW; point[1] = y * picH
+                toMap.mapPoints(point)
+                val mx = point[0].toInt().coerceIn(0, map.width - 1)
+                val my = point[1].toInt().coerceIn(0, map.height - 1)
+                val c = map.getPixel(mx, my)
+                sum += (((c shr 16) and 0xFF) + ((c shr 8) and 0xFF) + (c and 0xFF)) / 3f
+                n++
+            }
+        }
+        val v = (sum / n.coerceAtLeast(1)).toInt().coerceIn(0, 255)
+        return android.graphics.Color.rgb(v, v, v)
     }
 
     // The perspective correction (as the grading shader's img()), for the headroom map.

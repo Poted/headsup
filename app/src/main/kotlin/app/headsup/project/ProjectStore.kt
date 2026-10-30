@@ -46,6 +46,7 @@ data class SavedClip(
     val rawDevelop: RawDevelop = RawDevelop(),
     val picked: Boolean = false,
     val speedCurve: List<Float> = emptyList(),
+    val retouch: List<app.headsup.core.retouch.RetouchPatch> = emptyList(),
 )
 
 /** A film made on a timeline, or an album of photos edited one by one. */
@@ -251,6 +252,15 @@ internal object Json {
         .put("transitionMs", c.transitionMs)
         .put("speed", c.speed)
         .put("speedCurve", JSONArray(c.speedCurve.map { it.toDouble() }))
+        .put(
+            "retouch",
+            JSONArray(
+                c.retouch.map {
+                    JSONObject().put("id", it.id).put("l", it.left.toDouble()).put("t", it.top.toDouble()).put("r", it.right.toDouble()).put("b", it.bottom.toDouble())
+                        .put("hole", it.hole).put("develop", it.develop)
+                },
+            ),
+        )
         .put("muteChangedSpeed", c.muteChangedSpeed)
         .put("fadeInMs", c.fadeInMs)
         .put("fadeOutMs", c.fadeOutMs)
@@ -278,6 +288,12 @@ internal object Json {
         transitionMs = o.optLong("transitionMs", 0L),
         speed = o.optDouble("speed", 1.0).toFloat(),
         speedCurve = o.optJSONArray("speedCurve")?.let { a -> List(a.length()) { a.optDouble(it, 1.0).toFloat() } } ?: emptyList(),
+        retouch = o.optJSONArray("retouch").objects().map {
+            app.headsup.core.retouch.RetouchPatch(
+                it.optString("id"), it.optDouble("l").toFloat(), it.optDouble("t").toFloat(), it.optDouble("r").toFloat(), it.optDouble("b").toFloat(),
+                it.optStringOrNull("hole"), it.optStringOrNull("develop"),
+            )
+        },
         muteChangedSpeed = o.optBoolean("muteChangedSpeed", false),
         fadeInMs = o.optLong("fadeInMs", 0L),
         fadeOutMs = o.optLong("fadeOutMs", 0L),

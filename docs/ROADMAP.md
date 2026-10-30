@@ -86,6 +86,13 @@ project's files), the preview resized left/right when held sideways, Edit called
       the sky model. The mask keeps the object's shape and ends when it leaves the picture. Maps
       are kept per clip (files/sequence) and fade from one to the next in preview and export; a fix
       painted on some frame shows on top until tracked again from there.
+- [x] Clean up (albums): tap something to remove it (MobileSAM finds it) or paint over it; filled
+      by LaMa (Apache 2.0, full precision; MI-GAN was tried and left smeared texture) area by area,
+      each seen with as much around it again at 512 px, grown past the object's edge, given back
+      the photo's grain and faded in. Kept as patches over the photo (never changing the file), in
+      preview and export (TIFF, Ultra HDR: the headroom where something was removed is that around
+      it); a raw developed differently is cleaned again by itself. Undo last / Restore all.
+      The model is fetched by the build at a fixed revision and checked by its hash.
 - [ ] Masks, next: (1) edges at full resolution in export (the mask is kept at 640 px: refine it
       against the full picture in the shader); (2) faster tracking (the encoder takes about a
       second per frame on a phone: GPU/NNAPI, or a smaller encoder); (3) more prompts: + / − points
@@ -146,9 +153,6 @@ project's files), the preview resized left/right when held sideways, Edit called
   there: a procedural shader (fire, sparks, glow, smoke) or an animated sprite with alpha, moved,
   turned and scaled with the hand, lighting its surroundings a little; the AI masks put fingers in
   front of it where they should be. Our own pipeline and assets, no generation.
-- **Removing things from photos (on the phone)** – select with the AI masks (tap the object), fill
-  with a small inpainting model (MI-GAN or LaMa class, open licences to check). Good for small and
-  medium objects; big areas need a stronger model (cloud, Premium).
 - **Removing things from videos** – per-frame filling flickers. First: shots where the object
   moves and the background shows on other frames (static or tracked camera): the background
   taken from those frames, aligned (no model needed). The general case (moving camera, nothing

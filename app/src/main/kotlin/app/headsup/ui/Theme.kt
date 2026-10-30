@@ -143,6 +143,16 @@ object HeadsupIcons {
         }
     }
 
+    /** An eraser with a spark: Clean up (removing things). */
+    val Erase = icon("erase") {
+        stroke {
+            moveTo(4f, 15.5f); lineTo(11.5f, 8f); lineTo(16f, 12.5f); lineTo(10.5f, 18f); lineTo(6.5f, 18f); close()
+            moveTo(8f, 11.5f); lineTo(12.5f, 16f)
+            moveTo(10.5f, 18f); lineTo(20f, 18f)
+            moveTo(18f, 3f); lineTo(18f, 7f); moveTo(16f, 5f); lineTo(20f, 5f)
+        }
+    }
+
     /** Arrow curving back: undo. */
     val Undo = icon("undo") {
         stroke {

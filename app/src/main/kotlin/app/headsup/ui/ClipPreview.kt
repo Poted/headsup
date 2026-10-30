@@ -285,14 +285,16 @@ fun ClipPreview(
     var photoFrom by remember { mutableStateOf<android.net.Uri?>(null) }
     // Sharpening and colour noise are applied by the shader: changing them needs no new development.
     val developKey = if (raw) clip.rawDevelop.copy(sharpen = 0f, colourNoise = 0f) else null
-    val photoBitmap by produceState<ImageBitmap?>(null, clip.meta.uri, photo, developKey) {
+    // Clean up's patches lie over the photo as decoded: a change of them decodes it again.
+    val photoBitmap by produceState<ImageBitmap?>(null, clip.meta.uri, photo, developKey, clip.retouch) {
         if (!photo) { value = null; return@produceState }
         // Tried again a few times: while a project opens, other reads of the same files may hold
         // the memory or the file for a moment.
         for (attempt in 0 until 3) {
             val bitmap = withContext(Dispatchers.Default) {
-                (if (raw) RawPhotos.decode(context, clip.meta.uri, clip.rawDevelop, 2048) { isActive }?.asImageBitmap() else null)
+                val decoded = (if (raw) RawPhotos.decode(context, clip.meta.uri, clip.rawDevelop, 2048) { isActive }?.asImageBitmap() else null)
                     ?: if (isActive) decodePhoto(context, clip.meta.uri) else null
+                decoded?.let { app.headsup.retouch.Cleaner.applyTo(context, it.asAndroidBitmap(), clip.retouch).asImageBitmap() }
             }
             if (bitmap != null) {
                 value = bitmap
@@ -1124,6 +1126,27 @@ fun ClipPreview(
                             } else {
                                 drawMaskGuide(m, geometry.pictureW, geometry.pictureH)
                             }
+                        }
+                    }
+                    // Clean up: the stroke over what is to be removed, as it is painted (white, so the photo shows through).
+                    if (guideMask == null && paintPath.size >= 2) {
+                        val t = reframeTransform(reframe, geometry)
+                        val o = Offset(geometry.pictureW / 2f, geometry.pictureH / 2f)
+                        withTransform({
+                            translate((geometry.boxW - geometry.pictureW) / 2f + t.translation.x, (geometry.boxH - geometry.pictureH) / 2f + t.translation.y)
+                            rotate(reframe.angleDegrees, o)
+                            scale(t.zoom, t.zoom, o)
+                        }) {
+                            val path = androidx.compose.ui.graphics.Path()
+                            paintPath.chunked(2).forEachIndexed { k, (x, y) ->
+                                if (k == 0) path.moveTo(x * geometry.pictureW, y * geometry.pictureH) else path.lineTo(x * geometry.pictureW, y * geometry.pictureH)
+                            }
+                            if (paintPath.size == 2) path.lineTo(paintPath[0] * geometry.pictureW + 0.01f, paintPath[1] * geometry.pictureH)
+                            drawPath(
+                                path,
+                                Color.White.copy(alpha = 0.55f),
+                                style = Stroke(2f * paintRadius * geometry.pictureH, cap = androidx.compose.ui.graphics.StrokeCap.Round, join = androidx.compose.ui.graphics.StrokeJoin.Round),
+                            )
                         }
                     }
                     // Not while playing or after: the picture has moved on from what was measured.
