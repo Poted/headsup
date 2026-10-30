@@ -909,7 +909,7 @@ fun ClipPreview(
                 for (i in 0..1) {
                     key(i) {
                         val shown = i == active && !photo
-                        val (onPlayer, r, a) = pictureOf(i)
+                        val (_, r, a) = pictureOf(i)
                         val w = if (a > boxW / boxH) boxH * a else boxW
                         val h = if (a > boxW / boxH) boxH else boxW / a
                         val g = FrameGeometry(boxW, boxH, w, h)
@@ -935,15 +935,11 @@ fun ClipPreview(
                                         playerShaders?.get(i)?.effect(effects, zebra, frame, this.size.width, this.size.height, emptyList(), 0f, warp = r.warp)
                                     }
                                     val t = reframeTransform(r, g)
-                                    // Stabilizing: this frame moved, turned and scaled off the shake, zoomed so no edge shows.
-                                    val stab = onPlayer.stabilization
-                                    val st = stab?.at(if (onPlayer.id == clip.id) fileMs else onPlayer.trimStartMs + players[i].currentPosition)
-                                    val z = if (st != null) stab.zoom * st.scale else 1f
-                                    scaleX = t.zoom * z
-                                    scaleY = t.zoom * z
-                                    rotationZ = r.angleDegrees + (st?.degrees ?: 0f)
-                                    translationX = t.translation.x + (st?.dx ?: 0f) * this.size.width * t.zoom
-                                    translationY = t.translation.y + (st?.dy ?: 0f) * this.size.height * t.zoom
+                                    scaleX = t.zoom
+                                    scaleY = t.zoom
+                                    rotationZ = r.angleDegrees
+                                    translationX = t.translation.x
+                                    translationY = t.translation.y
                                 }
                             },
                         )

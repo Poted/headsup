@@ -25,29 +25,14 @@ object TrackingFrames {
         longSide: Int = 400,
         onProgress: (Float) -> Unit = {},
     ): List<Pair<Long, GrayFrame>> {
-        val frames = ArrayList<Pair<Long, GrayFrame>>()
-        forEach(context, uri, fromMs, toMs, stepMs, longSide, onProgress) { ms, frame -> frames += ms to frame }
-        return frames
-    }
-
-    /** As [read], each frame handed to [onFrame] as it is decoded and then let go (a long clip at a high rate). */
-    suspend fun forEach(
-        context: Context,
-        uri: Uri,
-        fromMs: Long,
-        toMs: Long,
-        stepMs: Long,
-        longSide: Int = 400,
-        onProgress: (Float) -> Unit = {},
-        onFrame: (Long, GrayFrame) -> Unit,
-    ) {
         val extractor = MediaExtractor()
         var codec: MediaCodec? = null
+        val frames = ArrayList<Pair<Long, GrayFrame>>()
         try {
             extractor.setDataSource(context, uri, null)
             val track = (0 until extractor.trackCount).firstOrNull {
                 extractor.getTrackFormat(it).getString(MediaFormat.KEY_MIME)?.startsWith("video/") == true
-            } ?: return
+            } ?: return frames
             extractor.selectTrack(track)
             val format = extractor.getTrackFormat(track)
             val rotation = if (format.containsKey(MediaFormat.KEY_ROTATION)) format.getInteger(MediaFormat.KEY_ROTATION) else 0
@@ -80,7 +65,7 @@ object TrackingFrames {
                 val ms = info.presentationTimeUs / 1000
                 val end = info.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0
                 if (ms >= nextMs && ms <= toMs) {
-                    codec.getOutputImage(outIndex)?.use { image -> onFrame(ms, luma(image, rotation, longSide)) }
+                    codec.getOutputImage(outIndex)?.use { image -> frames += ms to luma(image, rotation, longSide) }
                     nextMs = ms + stepMs
                     onProgress(((ms - fromMs).toFloat() / (toMs - fromMs).coerceAtLeast(1)).coerceIn(0f, 1f))
                 }
@@ -92,6 +77,7 @@ object TrackingFrames {
             runCatching { codec?.release() }
             extractor.release()
         }
+        return frames
     }
 
     /** The Y plane, sampled down and rotated upright (8- or 10-bit). */

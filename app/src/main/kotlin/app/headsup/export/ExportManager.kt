@@ -175,34 +175,6 @@ class ExportManager(private val context: Context) {
         }
     }
 
-    /**
-     * Each frame moved, turned and scaled off the camera's shake ([Stabilization.at] at its file
-     * time) and zoomed so no edge shows, as the preview does.
-     */
-    private fun stabilizeEffect(stab: app.headsup.core.frame.Stabilization, fileStartMs: Long, width: Int, height: Int): MatrixTransformation {
-        val w = width.coerceAtLeast(1).toFloat()
-        val h = height.coerceAtLeast(1).toFloat()
-        return object : MatrixTransformation {
-            // Time counts from the first frame, however Media3 timestamps a clipped item.
-            private var firstUs = -1L
-
-            override fun getMatrix(presentationTimeUs: Long): Matrix {
-                if (firstUs < 0) firstUs = presentationTimeUs
-                val c = stab.at(fileStartMs + (presentationTimeUs - firstUs) / 1000)
-                val z = stab.zoom * c.scale
-                return Matrix().apply {
-                    // NDC to pixels (y up), turned (clockwise on screen is negative here) and scaled
-                    // about the middle, shifted (down on screen is negative), back to NDC.
-                    postScale(w / 2f, h / 2f)
-                    postRotate(-c.degrees)
-                    postScale(z, z)
-                    postTranslate(c.dx * w, -c.dy * h)
-                    postScale(2f / w, 2f / h)
-                }
-            }
-        }
-    }
-
     /** A constant speed for Media3's speed effects. */
     private class ConstantSpeed(private val speed: Float) : SpeedProvider {
         override fun getSpeed(timeUs: Long) = speed
@@ -252,8 +224,6 @@ class ExportManager(private val context: Context) {
         }
         if (request.effects.changesPixels) effects += FinishEffect(request.effects)
         // Reframing comes after colour and texture (as in the preview) and before the dashboard.
-        // The shake taken out first, as in the preview (the frame moved, then framed).
-        request.stabilization?.let { effects += stabilizeEffect(it, request.trimStartMs, request.width, request.height) }
         reframeEffect(request.reframe, request.width, request.height, out.width, out.height)?.let { effects += it }
         // The timeline's frame scaled to the output size (the same shape), so every clip of a joined
         // export has the same frame.

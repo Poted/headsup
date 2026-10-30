@@ -1110,7 +1110,6 @@ private enum class EditTab(val symbol: String, val label: String) {
     SPEED("×", "Speed"),
     FADE("◐", "Fades"),
     FRAME("▭", "Frame"),
-    STABILIZE("✥", "Stabilize"),
     RATE("fps", "Frame rate"),
     MOMENTS("★", "Moments"),
 }
@@ -1133,13 +1132,12 @@ private fun EditPanel(
         return
     }
     LazyRow(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
-        items(EditTab.entries.filter { t -> if (state.photoProject) t == EditTab.FRAME else !((t == EditTab.SPEED || t == EditTab.STABILIZE) && clip?.meta?.isPhoto == true) }) { t ->
+        items(EditTab.entries.filter { t -> if (state.photoProject) t == EditTab.FRAME else !(t == EditTab.SPEED && clip?.meta?.isPhoto == true) }) { t ->
             val modified = when (t) {
                 EditTab.CUT -> clip?.isTrimmed == true
                 EditTab.SPEED -> clip != null && clip.speedChanged
                 EditTab.FADE -> clip != null && (clip.fadeInMs > 0 || clip.fadeOutMs > 0)
                 EditTab.RATE -> state.timelineFps != null
-                EditTab.STABILIZE -> clip?.stabilization != null
                 else -> false
             }
             CircleOption(t.symbol, t.label, selected = t == tab, modified = modified) { onTab(t) }
@@ -1148,7 +1146,7 @@ private fun EditPanel(
     val index = state.selectedClip
     // Photos only: the frame (crop, shape, straightening) is what editing means.
     val tab = if (state.photoProject) EditTab.FRAME else tab
-    val needsClip = tab == EditTab.CUT || tab == EditTab.SPEED || tab == EditTab.FADE || tab == EditTab.STABILIZE
+    val needsClip = tab == EditTab.CUT || tab == EditTab.SPEED || tab == EditTab.FADE
     if (needsClip && (index == null || clip == null)) {
         Hint("Select a clip.")
         return
@@ -1161,7 +1159,6 @@ private fun EditPanel(
         }
         EditTab.FADE -> if (clip != null && index != null) FadeTool(clip, index, vm)
         EditTab.FRAME -> FramePanel(state, vm)
-        EditTab.STABILIZE -> if (clip != null && index != null && !clip.meta.isPhoto) StabilizeControls(state, clip, index, vm)
         EditTab.RATE -> TimelineRate(state, vm)
         EditTab.MOMENTS -> HighlightControls(state, vm, onShowHighlight)
     }
@@ -1818,32 +1815,6 @@ fun SpeedRampIcon(modifier: Modifier = Modifier, tint: Color = Color.White) {
             c.nativeCanvas.drawText("speed", w / 2f, 6.5.dp.toPx(), paint)
         }
     }
-}
-
-/**
- * Stabilizing a clip: the camera's shake read from the picture once, then smoothed by a strength
- * (the more, the steadier, and the more the picture is zoomed in to hide the moved edges).
- */
-@Composable
-private fun StabilizeControls(state: UiState, clip: ClipState, index: Int, vm: HeadsupViewModel) {
-    val stab = clip.stabilization
-    if (stab == null) {
-        Button(onClick = { vm.stabilize(index) }, enabled = !state.busy, modifier = Modifier.fillMaxWidth()) { Text("Stabilize this clip") }
-        Hint("Reads how the camera shook (walking, a drone) from the picture and smooths it out, zooming in a little so no edge shows. Rolling-shutter wobble and motion blur stay.")
-        return
-    }
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        Text("Stabilized", Modifier.weight(1f), style = MaterialTheme.typography.labelLarge)
-        SmallAction("Read again", { vm.stabilize(index, stab.strength) }, enabled = !state.busy)
-        SmallAction("Remove", { vm.removeStabilization(index) })
-    }
-    ValueHeader("Strength", String.format(Locale.US, "%.0f %%", stab.strength * 100))
-    RulerSlider(
-        stab.strength, 0f..1f, 0.02f,
-        { v -> vm.setStabilizationStrength(index, v) },
-        onReset = { vm.setStabilizationStrength(index, 0.6f) },
-    )
-    Hint(String.format(Locale.US, "Zoomed in %.0f %% to hide the edges. More strength: steadier, a slower glide, more zoom.", (stab.zoom - 1f) * 100))
 }
 
 /** Trimming and splitting; the watch data follows every cut because the app knows where it was made. */

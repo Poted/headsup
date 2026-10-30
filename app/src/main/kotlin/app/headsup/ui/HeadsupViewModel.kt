@@ -126,8 +126,6 @@ data class ClipState(
     val speed: Float = 1f,
     /** Speed ramp over the cut on top of [speed] ([SpeedCurve]); empty = steady. */
     val speedCurve: List<Float> = emptyList(),
-    /** The camera's shake taken out ([app.headsup.core.frame.Stabilization]), or null. */
-    val stabilization: app.headsup.core.frame.Stabilization? = null,
     /** Silence the sound while the speed is changed; otherwise it is stretched, keeping its pitch. */
     val muteChangedSpeed: Boolean = false,
     /** Fade from black at the start and to black at the end (picture and sound), timeline time. */
@@ -804,7 +802,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
             SavedClip(
                 it.meta.uri, it.trimStartMs, it.trimEndMs, it.manualOffsetMs, it.colorGrade, it.lutName,
                 it.manualStart, it.grade, it.effects, it.masks, it.groupId, it.transitionMs, it.reframe, it.speed, it.muteChangedSpeed,
-                it.fadeInMs, it.fadeOutMs, it.soundLevel, it.rawDevelop, it.picked, it.speedCurve, it.stabilization,
+                it.fadeInMs, it.fadeOutMs, it.soundLevel, it.rawDevelop, it.picked, it.speedCurve,
             )
         },
         groups = groups.map { SavedGroup(it.id, it.name, it.grade, it.lutName) },
@@ -870,7 +868,6 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                     reframe = c.reframe,
                     speed = c.speed,
                     speedCurve = c.speedCurve,
-                    stabilization = c.stabilization,
                     muteChangedSpeed = c.muteChangedSpeed,
                     fadeInMs = c.fadeInMs,
                     fadeOutMs = c.fadeOutMs,
@@ -2185,53 +2182,6 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
 
     fun setMuteChangedSpeed(index: Int, mute: Boolean) = updateClip(index) { it.copy(muteChangedSpeed = mute) }
 
-    /**
-     * Takes the camera's shake out of the selected clip: its frames are read small (20 a second),
-     * the picture's motion between them found ([app.headsup.core.frame.CameraMotion]) and the path
-     * kept, to be smoothed by [strength] when shown and exported.
-     */
-    fun stabilize(index: Int, strength: Float = 0.6f) {
-        val s = _state.value
-        if (s.busy) return
-        val clip = s.clips.getOrNull(index)?.takeIf { !it.meta.isPhoto } ?: return
-        val clipId = clip.id
-        _state.update { it.copy(busy = true, loadingMessage = "Reading the camera's shake", loadingProgress = 0f) }
-        loadJob = viewModelScope.launch {
-            try {
-                val path = withContext(Dispatchers.Default) {
-                    val times = ArrayList<Long>()
-                    val motions = ArrayList<app.headsup.core.frame.FrameMotion?>()
-                    var last: app.headsup.core.color.GrayFrame? = null
-                    TrackingFrames.forEach(getApplication(), _state.value.previewSource(clip), clip.trimStartMs, clip.trimEndMs, 50L, 192, { p ->
-                        _state.update { it.copy(loadingProgress = p) }
-                    }) { ms, frame ->
-                        last?.let { motions += app.headsup.core.frame.CameraMotion.between(it, frame) }
-                        times += ms
-                        last = frame
-                    }
-                    app.headsup.core.frame.CameraPath.of(times, motions)
-                }
-                if (path.timesMs.size < 3) {
-                    _state.update { it.copy(messages = it.messages + "Could not read the clip's frames to stabilize it.") }
-                    return@launch
-                }
-                val aspect = if (clip.meta.width > 0 && clip.meta.height > 0) clip.meta.width.toFloat() / clip.meta.height else 16f / 9f
-                val stab = app.headsup.core.frame.Stabilization(path, strength, aspect)
-                _state.update { st ->
-                    st.copy(clips = st.clips.map { c -> if (c.id == clipId) c.copy(stabilization = stab) else c })
-                }
-            } finally {
-                _state.update { it.copy(busy = false, loadingMessage = null) }
-            }
-        }
-    }
-
-    fun setStabilizationStrength(index: Int, strength: Float) = updateClip(index) { c ->
-        c.copy(stabilization = c.stabilization?.copy(strength = strength))
-    }
-
-    fun removeStabilization(index: Int) = updateClip(index) { it.copy(stabilization = null) }
-
     /** A speed ramp for the clip (empty: steady); sound is muted by default where it gets very slow. */
     fun setSpeedCurve(index: Int, curve: List<Float>) = updateClip(index) { c ->
         if (c.meta.isPhoto) c else c.copy(
@@ -2424,7 +2374,6 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                         else if (cube != null || warp != null) GradeSetup(cube, 0f, warp = warp) else null
                     },
                     reframe = s.framing(clip),
-                    stabilization = clip.stabilization.takeIf { !clip.meta.isPhoto },
                     speed = clip.speed,
                     isPhoto = clip.meta.isPhoto,
                     muteChangedSpeed = clip.muteChangedSpeed,

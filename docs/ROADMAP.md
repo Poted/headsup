@@ -90,14 +90,12 @@ project's files), the preview resized left/right when held sideways, Edit called
       Exported as pieces of steady speed (about 0.35 s each).
 - [x] Mixer: RGB channel mixer, B&W mixer (brightness per colour in black and white), calibration
       (hue and saturation of the red, green and blue primaries).
+- [ ] Later: stabilization from the camera's gyro (GoPro GPMF, DJI and phone metadata), which also
+      undoes rolling shutter. A picture-only attempt (motion read from frames) was tried and
+      removed: it lost the path on fast walking and FPV footage and could not fix the wobble.
 - [ ] Mixer, still to do: point colour (pick a hue from the picture, widen or narrow its range,
       change its hue/saturation/luminance), selective colour (CMYK per colour family, whites,
       neutrals, blacks).
-
-- [x] Stabilization (Edit > Stabilize): the camera's shake read from the picture (a grid of patches
-      between frames, 20 a second), the path smoothed by a strength, each frame moved, turned and
-      scaled off the shake with a zoom that hides the edges; in the preview and the video export.
-      Later: from the gyro data GoPro and DJI record, rolling-shutter correction.
 
 ## Next (in this order)
 
