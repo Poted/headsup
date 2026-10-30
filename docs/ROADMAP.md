@@ -140,6 +140,23 @@ project's files), the preview resized left/right when held sideways, Edit called
   are sent as small frames and numbers, not whole videos.
   In a store release the whole auto edit is a Premium feature (the model calls cost money per
   edit); no free tier or length limit.
+- **Effects that follow the body (on the phone, no cloud)** – e.g. a flame on an opened hand:
+  hand / face / body landmarks found on each frame (MediaPipe Hand/Face/Pose Landmarker class of
+  models, small and real-time), a gesture read from them (the hand opens), and an effect drawn
+  there: a procedural shader (fire, sparks, glow, smoke) or an animated sprite with alpha, moved,
+  turned and scaled with the hand, lighting its surroundings a little; the AI masks put fingers in
+  front of it where they should be. Our own pipeline and assets, no generation.
+- **Removing things from photos (on the phone)** – select with the AI masks (tap the object), fill
+  with a small inpainting model (MI-GAN or LaMa class, open licences to check). Good for small and
+  medium objects; big areas need a stronger model (cloud, Premium).
+- **Removing things from videos** – per-frame filling flickers. First: shots where the object
+  moves and the background shows on other frames (static or tracked camera): the background
+  taken from those frames, aligned (no model needed). The general case (moving camera, nothing
+  behind): a video inpainting model on a server (open ones are often non-commercial: check) or a
+  cloud model, as Premium.
+- **Generated effects (realistic fire that lights the scene, changing what is in the shot)** –
+  only video generation models can (Veo and the like), in the cloud and paid per use: Premium,
+  later. Claude does not make pictures; Gemini/Veo or other image and video models do.
 - **Sharing and platform presets** – share an export straight to Instagram/TikTok/YouTube, with
   presets for each platform's resolution, frame rate and bit rate.
 - Timeline: reordering clips by dragging, clip sound as a waveform, snapping cuts to beats, more
