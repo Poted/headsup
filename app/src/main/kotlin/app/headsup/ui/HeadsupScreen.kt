@@ -244,6 +244,8 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
     val cutScrub = remember { mutableStateOf<Long?>(null) }
     // Grabs the paused preview frame, for the cine assistant.
     val frameSource = remember { mutableStateOf<(() -> Bitmap?)?>(null) }
+    // Grabs the picture at a chosen width, for finding objects and the sky in masks.
+    val pictureSource = remember { mutableStateOf<((Int) -> Bitmap?)?>(null) }
     val exporting = jobs.any { it.status == JobStatus.QUEUED || it.status == JobStatus.RUNNING }
     // The timeline: a clip selected for trimming, slipping sounds, and where it is being dragged to.
     var videoSelected by remember { mutableStateOf(false) }
@@ -416,6 +418,7 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
                             ?: if (tool == Tool.EFFECTS && effectKind == EffectKind.MAP && state.routeMap.enabled) { x: Float, y: Float -> vm.updateRouteMap { it.copy(x = x, y = y) } } else null,
                         cutScrub = cutScrub,
                         onFrameSource = { frameSource.value = it },
+                        onPictureSource = { pictureSource.value = it },
                         reframe = state.framing(selected),
                         // Full screen is for looking: no framing (pinch zooms the view instead), no grid.
                         onReframe = if (framing && !fullscreen) { r -> vm.updateReframe { r } } else null,
@@ -599,7 +602,7 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
                     )
                     Tool.COLOUR -> ColourPage(
                         state, vm, adjustment, { adjustment = it }, onAddLut = { lutPicker.launch(arrayOf("*/*")) }, frameSource.value,
-                        playhead, onSeek = { seekRequest = it },
+                        playhead, onSeek = { seekRequest = it }, pictureSource = pictureSource.value,
                     )
                     Tool.EFFECTS -> if (effectKind == EffectKind.TEXT) {
                         EffectKinds(state, effectKind) { effectKind = it }
@@ -2263,6 +2266,7 @@ private fun ColourPage(
     frameSource: (() -> Bitmap?)?,
     playhead: LongState,
     onSeek: (clipMs: Long) -> Unit,
+    pictureSource: ((Int) -> Bitmap?)? = null,
 ) {
     val index = state.selectedClip
     val clip = state.selected
@@ -2361,7 +2365,7 @@ private fun ColourPage(
         }
     }
     if (editingShape != null && mask?.kind == MaskKind.BRUSH) {
-        BrushControls(state, vm)
+        BrushControls(state, vm, pictureSource)
         return
     }
     if (editingShape != null && mask != null) {
@@ -2902,7 +2906,7 @@ private enum class BrushSetting(val symbol: String, val label: String, val range
  * scale it); the brush's size, softness and flow.
  */
 @Composable
-private fun BrushControls(state: UiState, vm: HeadsupViewModel) {
+private fun BrushControls(state: UiState, vm: HeadsupViewModel, pictureSource: ((Int) -> Bitmap?)?) {
     val mask = state.selected?.masks?.getOrNull(state.selectedMask) ?: return
     val brush = state.brush
     // Always the same settings (Size and Strength are for painting; Select uses only Softness).
@@ -2916,6 +2920,14 @@ private fun BrushControls(state: UiState, vm: HeadsupViewModel) {
             }
         }
         SmallAction("Clear", { vm.clearBrush() })
+    }
+    if (brush.mode == BrushMode.SELECT) {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            FilterChip(selected = !brush.subtract, onClick = { vm.updateBrush { it.copy(subtract = false) } }, label = { Text("Add") })
+            FilterChip(selected = brush.subtract, onClick = { vm.updateBrush { it.copy(subtract = true) } }, label = { Text("Subtract") })
+            Spacer(Modifier.weight(1f))
+            SmallAction("Sky", { pictureSource?.let(vm::selectSky) }, enabled = pictureSource != null && !state.busy)
+        }
     }
     LazyRow(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
         items(settings) { b ->
@@ -2939,7 +2951,7 @@ private fun BrushControls(state: UiState, vm: HeadsupViewModel) {
     }
     RulerSlider(value = value, range = setting.range, step = 0.005f, onChange = { set(it) }, onReset = { set(setting.default) })
     Hint(
-        if (brush.mode == BrushMode.SELECT) "Tap an object to select it (found on the phone by a small AI model). Or draw round an object and lift the finger: the object inside is found by its colours (as an oval: Invert for the outside). Or draw a line across (e.g. along the horizon, round a tree): the side above it is selected and the split follows the edges near the line (as a line mask: Invert for the other side). Touch up with Paint and Erase (Size and Strength are theirs; Softness also softens what Select finds)."
+        if (brush.mode == BrushMode.SELECT) "Tap an object to select all of it; tap the same place again for a smaller or larger part (a part, the object, more). Or draw round it: the object inside is found. Sky selects the sky. Found on the phone by small AI models (MobileSAM, DeepLab) and laid onto the picture's edges. Subtract takes what is found away. A line drawn across splits the picture along the edges near it (the side above it is selected). Touch up with Paint and Erase; Softness softens what Select finds."
         else "Paint where the mask's corrections go; Erase takes them away. Strength: how much one stroke adds (at 50 % a stroke gives half the effect, going over again adds more). Softness: the painting's edge. Two fingers zoom the picture to reach small things; in Move they move, turn and scale the painting.",
     )
 }

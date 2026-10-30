@@ -192,6 +192,8 @@ fun ClipPreview(
     cutScrub: State<Long?> = NO_SCRUB,
     /** Receives a function that grabs the current frame (before colour), e.g. for analysis. */
     onFrameSource: ((() -> Bitmap?) -> Unit)? = null,
+    /** Receives a function that grabs the current picture (before colour) [width] pixels wide, e.g. for finding objects. */
+    onPictureSource: (((width: Int) -> Bitmap?) -> Unit)? = null,
     /** Zoom, position and straightening; [onReframe] set means a finger on the picture pans and pinches it. */
     reframe: Reframe = Reframe(),
     onReframe: ((Reframe) -> Unit)? = null,
@@ -562,6 +564,7 @@ fun ClipPreview(
     val grab by rememberUpdatedState(grabFrame)
     LaunchedEffect(textureView, photoBitmap) {
         onFrameSource?.invoke { grab(ANALYSIS_WIDTH) }
+        onPictureSource?.invoke { w -> grab(w) }
     }
 
     LaunchedEffect(histogramOn, gradeCube) {

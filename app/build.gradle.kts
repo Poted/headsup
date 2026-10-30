@@ -29,9 +29,9 @@ android {
         }
     }
 
-    // The segmentation model is read straight from the APK, so it is stored uncompressed.
+    // The mask models are read straight from the APK, so they are stored uncompressed.
     androidResources {
-        noCompress += "tflite"
+        noCompress += "onnx"
     }
 
     externalNativeBuild {
@@ -81,6 +81,6 @@ dependencies {
     implementation("androidx.media3:media3-ui:$media3")
     implementation("androidx.media3:media3-effect:$media3")
     implementation("androidx.media3:media3-transformer:$media3")
-    // Selecting an object with a tap (Interactive Segmenter, on the phone).
-    implementation("com.google.mediapipe:tasks-vision:0.10.14")
+    // Mask models on the phone: objects (MobileSAM) and the sky (DeepLab, ADE20K).
+    implementation("com.microsoft.onnxruntime:onnxruntime-android:1.20.0")
 }

@@ -68,6 +68,8 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.async
+import kotlin.math.roundToInt
 import kotlinx.coroutines.withContext
 import app.headsup.core.sync.ClipInfo
 import app.headsup.core.sync.ClockReading
@@ -1862,12 +1864,14 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    /** The picture taken when an outline starts, for finding the object in it. */
+    /** The picture taken when an outline starts, for a line's split by colour. */
     private var lassoReference: String? = null
 
     /**
-     * Drawing an outline around an object: shown as drawn, and when the finger lifts the object
-     * inside is found ([app.headsup.core.color.BrushMask.select]) and added to the mask.
+     * Drawing in Select: shown as drawn, and when the finger lifts, a tap selects the object under
+     * it, a loop the object inside it (MobileSAM, given the loop's box) and a line splits the
+     * picture along it ([app.headsup.core.color.BrushMask.select]). The picture is read as the
+     * finger comes down, so the answer is quick when it lifts.
      */
     private fun selectStroke(
         phase: Int, x: Float, y: Float, grab: (Int) -> android.graphics.Bitmap?,
@@ -1876,6 +1880,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
         when (phase) {
             0 -> {
                 lassoReference = brushReference(clip, placed, grab)
+                segmentPicture(clip, grab)
                 _state.update { it.copy(lassoPath = listOf(x, y)) }
             }
             1 -> _state.update { st ->
@@ -1885,47 +1890,173 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
             else -> {
                 val path = _state.value.lassoPath
                 _state.update { it.copy(lassoPath = emptyList()) }
+                if (path.size < 2) return
                 val xs = path.filterIndexed { i, _ -> i % 2 == 0 }
                 val ys = path.filterIndexed { i, _ -> i % 2 == 1 }
                 val tap = path.size < 6 || maxOf(xs.max() - xs.min(), ys.max() - ys.min()) < 0.02f
-                if (tap && path.size >= 2) {
-                    selectObjectAt(path[0], path[1], grab, clip, index, placed)
+                if (tap) {
+                    selectObject(path[0], path[1], null, grab, clip, index, placed)
                     return
                 }
-                if (path.size < 6) return
-                val points = path.chunked(2).flatMap { (px, py) -> app.headsup.core.color.BrushMask.unmove(px, py, placed, aspect).toList() }
-                val stroke = app.headsup.core.color.BrushStroke(points, radius = 0.01f, flow = 1f, reference = lassoReference, lasso = true)
-                val m = _state.value.selectedMask
-                _state.update { st ->
-                    st.copy(clips = st.clips.mapIndexed { i, c -> if (i == index) c.copy(masks = c.masks.mapIndexed { j, mm -> if (j == m) mm.copy(strokes = mm.strokes + stroke) else mm }) else c })
+                val outline = path.chunked(2).map { (px, py) -> px to py }
+                if (app.headsup.core.color.BrushMask.isLoop(outline)) {
+                    selectObject(
+                        (xs.min() + xs.max()) / 2f, (ys.min() + ys.max()) / 2f,
+                        floatArrayOf(xs.min(), ys.min(), xs.max(), ys.max()), grab, clip, index, placed,
+                    )
+                    return
                 }
+                val points = path.chunked(2).flatMap { (px, py) -> app.headsup.core.color.BrushMask.unmove(px, py, placed, aspect).toList() }
+                val stroke = app.headsup.core.color.BrushStroke(points, radius = 0.01f, flow = 1f, reference = lassoReference, lasso = true, erase = _state.value.brush.subtract)
+                addStroke(index, clip, stroke)
             }
         }
     }
 
-    /**
-     * A tap in Select: the object under the finger is found ([app.headsup.color.ObjectSelector]) in
-     * the picture as it is now and added to the mask.
-     */
-    private fun selectObjectAt(x: Float, y: Float, grab: (Int) -> android.graphics.Bitmap?, clip: ClipState, index: Int, placed: ColourMask) {
-        val picture = grab(512) ?: return
-        val placement = MaskKey.of(placed, 0L)
+    private fun addStroke(index: Int, clip: ClipState, stroke: app.headsup.core.color.BrushStroke, replacing: app.headsup.core.color.BrushStroke? = null) {
         val m = _state.value.selectedMask
+        _state.update { st ->
+            st.copy(
+                clips = st.clips.mapIndexed { i, c ->
+                    if (i != index || c.id != clip.id) c else c.copy(
+                        masks = c.masks.mapIndexed { j, mm ->
+                            if (j != m) mm
+                            else if (replacing != null && mm.strokes.lastOrNull() == replacing) mm.copy(strokes = mm.strokes.dropLast(1) + stroke)
+                            else mm.copy(strokes = mm.strokes + stroke)
+                        },
+                    )
+                },
+            )
+        }
+    }
+
+    /** A picture MobileSAM has read, with the same picture small (as the mask is kept) to lay its answers onto. */
+    private class SegmentPicture(val reading: app.headsup.color.Segmenter.Reading, val guide: FloatArray, val width: Int, val height: Int)
+
+    /** The picture read last: by clip and frame (file time; 0 for a photo). */
+    private var segmentReading: Pair<Pair<Long, Long>, kotlinx.coroutines.Deferred<SegmentPicture?>>? = null
+
+    /** The picture on screen as MobileSAM reads it; started at once, the same one again while the frame stays. */
+    private fun segmentPicture(clip: ClipState, grab: (Int) -> android.graphics.Bitmap?): kotlinx.coroutines.Deferred<SegmentPicture?>? {
+        val key = clip.id to (if (clip.meta.isPhoto) 0L else playheadFileMs)
+        segmentReading?.let { (k, d) -> if (k == key) return d }
+        val aspect = if (clip.meta.width > 0 && clip.meta.height > 0) clip.meta.width.toFloat() / clip.meta.height else 16f / 9f
+        val side = app.headsup.color.Segmenter.INPUT
+        val bitmap = grab(if (aspect >= 1f) side else (side * aspect).roundToInt().coerceAtLeast(1)) ?: return null
+        val d = viewModelScope.async(Dispatchers.Default) {
+            runCatching {
+                val reading = app.headsup.color.Segmenter.read(getApplication(), bitmap)
+                val (w, h) = app.headsup.color.BrushAtlas.slotSize(bitmap.width.toFloat() / bitmap.height.coerceAtLeast(1))
+                val small = Bitmap.createScaledBitmap(bitmap, w, h, true)
+                SegmentPicture(reading, app.headsup.color.Segmenter.rgb(small), w, h)
+            }.onFailure { if (it is kotlinx.coroutines.CancellationException) throw it else it.printStackTrace() }.getOrNull()
+        }
+        segmentReading = key to d
+        return d
+    }
+
+    /**
+     * The last object selected, while it can still be changed: tapping the same place again shows
+     * the next of what MobileSAM offered there (a part, the object, more), smallest to largest.
+     */
+    private class Pick(val clipId: Long, val x: Float, val y: Float, val candidates: List<FloatArray>, val shown: Int, val stroke: app.headsup.core.color.BrushStroke)
+
+    private var lastPick: Pick? = null
+
+    /**
+     * The object at ([x], [y]) (fractions of the picture), or inside [box] (x0, y0, x1, y1) when
+     * one was drawn, found by MobileSAM, laid onto the picture's edges and added to the mask (or
+     * taken from it, with Subtract).
+     */
+    private fun selectObject(
+        x: Float, y: Float, box: FloatArray?, grab: (Int) -> android.graphics.Bitmap?,
+        clip: ClipState, index: Int, placed: ColourMask,
+    ) {
+        val placement = MaskKey.of(placed, 0L)
+        val subtract = _state.value.brush.subtract
+        val previous = lastPick
+        val mask = _state.value.selected?.masks?.getOrNull(_state.value.selectedMask)
+        val again = box == null && previous != null && previous.clipId == clip.id &&
+            mask?.strokes?.lastOrNull() == previous.stroke && kotlin.math.hypot(x - previous.x, y - previous.y) < 0.03f
+        val picture = segmentPicture(clip, grab) ?: return
         viewModelScope.launch {
-            _state.update { it.copy(busy = true, loadingMessage = "Finding the object", loadingProgress = null) }
+            val waiting = !picture.isCompleted
+            if (waiting) _state.update { it.copy(busy = true, loadingMessage = "Reading the picture", loadingProgress = null) }
             try {
-                val found = withContext(Dispatchers.Default) {
-                    runCatching { app.headsup.color.ObjectSelector.select(getApplication(), picture, x, y) }.getOrNull()
-                }
-                if (found == null) {
-                    _state.update { it.copy(messages = it.messages + "No object found there: tap its middle, or draw round it.") }
+                val seg = picture.await()
+                if (seg == null) {
+                    segmentReading = null
+                    _state.update { it.copy(messages = it.messages + "Could not read the picture to find objects.") }
                     return@launch
                 }
-                val id = app.headsup.color.BrushReferences.create(getApplication(), picture.width, picture.height, found, placement)
-                val stroke = app.headsup.core.color.BrushStroke(listOf(x, y), radius = 0.01f, flow = 1f, reference = id, segment = true)
-                _state.update { st ->
-                    st.copy(clips = st.clips.mapIndexed { i, c -> if (i == index && c.id == clip.id) c.copy(masks = c.masks.mapIndexed { j, mm -> if (j == m) mm.copy(strokes = mm.strokes + stroke) else mm }) else c })
+                val pick = withContext(Dispatchers.Default) {
+                    val candidates: List<FloatArray>
+                    val shown: Int
+                    if (again && previous != null) {
+                        candidates = previous.candidates
+                        shown = (previous.shown + 1) % candidates.size
+                    } else {
+                        val prompts = if (box != null) {
+                            listOf(
+                                app.headsup.color.Segmenter.Prompt(box[0], box[1], app.headsup.color.Segmenter.Prompt.Label.BOX_START),
+                                app.headsup.color.Segmenter.Prompt(box[2], box[3], app.headsup.color.Segmenter.Prompt.Label.BOX_END),
+                            )
+                        } else {
+                            listOf(app.headsup.color.Segmenter.Prompt(x, y, app.headsup.color.Segmenter.Prompt.Label.IN))
+                        }
+                        val found = app.headsup.color.Segmenter.objects(getApplication(), seg.reading, prompts, seg.width, seg.height)
+                        if (found.isEmpty()) return@withContext null
+                        // Smallest to largest (what the next taps step through), starting at the one the model likes best.
+                        candidates = found.map { it.first }.sortedBy { m -> m.count { it > 0.5f } }
+                        shown = candidates.indexOf(found.first().first)
+                    }
+                    val refined = app.headsup.color.Segmenter.refine(seg.guide, candidates[shown], seg.width, seg.height)
+                    val id = app.headsup.color.BrushReferences.create(getApplication(), seg.width, seg.height, refined, placement)
+                    val stroke = app.headsup.core.color.BrushStroke(listOf(x, y), radius = 0.01f, flow = 1f, erase = subtract, reference = id, segment = true)
+                    Pick(clip.id, x, y, candidates, shown, stroke)
                 }
+                if (pick == null) {
+                    _state.update { it.copy(messages = it.messages + if (box != null) "Nothing found inside: draw round the whole object." else "No object found there: tap its middle, or draw round it.") }
+                    return@launch
+                }
+                addStroke(index, clip, pick.stroke, replacing = if (again) previous?.stroke else null)
+                lastPick = pick
+            } finally {
+                if (waiting) _state.update { it.copy(busy = false, loadingMessage = null) }
+            }
+        }
+    }
+
+    /** The sky of the picture on screen (the sky model, laid onto the picture's edges) added to the selected brush mask, or taken from it with Subtract. */
+    fun selectSky(grab: (Int) -> android.graphics.Bitmap?) {
+        val s = _state.value
+        val index = s.selectedClip ?: return
+        val clip = s.selected ?: return
+        val mask = clip.masks.getOrNull(s.selectedMask)?.takeIf { it.kind == MaskKind.BRUSH } ?: return
+        val placement = MaskKey.of(mask.at(playheadFileMs), 0L)
+        val aspect = if (clip.meta.width > 0 && clip.meta.height > 0) clip.meta.width.toFloat() / clip.meta.height else 16f / 9f
+        val (w, h) = app.headsup.color.BrushAtlas.slotSize(aspect)
+        val bitmap = grab(w) ?: return
+        val subtract = s.brush.subtract
+        viewModelScope.launch {
+            _state.update { it.copy(busy = true, loadingMessage = "Finding the sky", loadingProgress = null) }
+            try {
+                val stroke = withContext(Dispatchers.Default) {
+                    runCatching {
+                        val small = Bitmap.createScaledBitmap(bitmap, w, h, true)
+                        val sky = app.headsup.color.Segmenter.sky(getApplication(), small, w, h)
+                        if (sky.count { it > 0.5f } < w * h / 500) return@runCatching null
+                        val refined = app.headsup.color.Segmenter.refine(app.headsup.color.Segmenter.rgb(small), sky, w, h)
+                        val id = app.headsup.color.BrushReferences.create(getApplication(), w, h, refined, placement)
+                        app.headsup.core.color.BrushStroke(listOf(0.5f, 0.1f), radius = 0.01f, flow = 1f, erase = subtract, reference = id, segment = true)
+                    }.onFailure { if (it is kotlinx.coroutines.CancellationException) throw it else it.printStackTrace() }.getOrNull()
+                }
+                if (stroke == null) {
+                    _state.update { it.copy(messages = it.messages + "No sky found in this picture.") }
+                    return@launch
+                }
+                addStroke(index, clip, stroke)
+                lastPick = null
             } finally {
                 _state.update { it.copy(busy = false, loadingMessage = null) }
             }
@@ -2548,4 +2679,6 @@ data class BrushSettings(
     val mode: BrushMode = BrushMode.PAINT,
     val radius: Float = 0.06f,
     val flow: Float = 1f,
+    /** Select takes what it finds away from the mask instead of adding it. */
+    val subtract: Boolean = false,
 )

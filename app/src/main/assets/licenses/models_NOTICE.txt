@@ -1,0 +1,12 @@
+On-device models used for masks
+
+sam_encoder.onnx, sam_decoder.onnx
+  MobileSAM (https://github.com/ChaoningZhang/MobileSAM), Apache License 2.0
+  (see mobilesam_Apache-2.0.txt), built on Segment Anything by Meta AI (Apache License 2.0).
+  ONNX export: https://huggingface.co/Acly/MobileSAM (MIT). The decoder is stored with
+  8-bit weights (ONNX Runtime dynamic quantization).
+
+sky.onnx
+  DeepLab v3 MobileNetV2 trained on ADE20K, from the TensorFlow Models DeepLab model zoo
+  (https://github.com/tensorflow/models/tree/master/research/deeplab), Apache License 2.0.
+  Converted to ONNX; the output is reduced to the probability of the "sky" class.

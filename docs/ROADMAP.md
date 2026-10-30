@@ -75,13 +75,17 @@ project's files), the preview resized left/right when held sideways, Edit called
 - [x] Mask brush (paint, erase, move; size, softness, flow), tracking that follows the painted
       area, keys as in other masks. Select: draw round an object (it is found by colour, like an
       oval mask) or a line across (the side above it, split along edges near the line, like a line
-      mask). Tap: the object under the finger, found by MediaPipe's Interactive
-      Segmenter on the phone.
+      mask). Tap: the object under the finger (see AI selection below).
 - [ ] Skin tones struggle in odd light.
-- [ ] Masks selected and tracked by an AI model: the tap selection (MediaPipe) works well on clear
-      subjects but struggles on harder ones (thin branches, low contrast), and tracking follows
-      only position, turn and scale. To do: a stronger segmentation model (subject/sky, refined
-      edges), the selection run again on each frame so the mask changes shape with the object.
+- [x] AI selection in brush masks (Select): a tap selects the whole object (MobileSAM on the phone,
+      ONNX Runtime); tapping the same place again steps through a part / the object / more; a loop
+      drawn round an object is its box. Sky: the sky model (DeepLab v3, ADE20K). Everything found is
+      laid onto the picture's edges (colour guided filter). Add / Subtract.
+- [ ] Masks, next: (1) on video, the sky found again on every frame (no tracking needed) and
+      objects carried frame to frame by MobileSAM (the last frame's mask as the next one's prompt)
+      instead of the shape tracker; (2) edges at full resolution in export (the mask is kept at
+      640 px: refine it against the full picture in the shader); (3) more prompts: + / − points on
+      an object; (4) Select Subject (the main subject without a tap), people (skin, hair, clothes).
 - [ ] To do, not now: intro slides: thanks for choosing Sweet Spot, what the app can do, how to make cinematic
       films and professional photos, so a newcomer feels welcome and wants to go further.
 - [x] Speed curves: an editable ramp per clip (Edit > Speed) and presets in the reel style (Speed ramp:
@@ -101,8 +105,8 @@ project's files), the preview resized left/right when held sideways, Edit called
 
 1. **Photo tools:** done: colour mixer, looks, point tone curves, colour grading wheels,
    texture / clarity / dehaze (Adjust → Presence; also inside masks).
-2. **Masks:** done: brush, two-finger resize/turn, presence (texture, clarity, dehaze) per mask.
-   Later: subject/sky selection.
+2. **Masks:** done: brush, two-finger resize/turn, presence (texture, clarity, dehaze) per mask,
+   AI object and sky selection on photos. Next: AI masks on video (per frame), full-resolution edges.
 3. **Geometry:** done: perspective correction (Vertical, Horizontal, with a zoom that hides empty
    corners). Later: guided upright (draw the lines that should be straight).
 4. **Export:** done: 16-bit TIFF and Ultra HDR photos: a raw's gain map from the scene's real light
