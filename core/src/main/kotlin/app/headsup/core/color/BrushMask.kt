@@ -33,6 +33,8 @@ data class BrushStroke(
      * finder is, per pixel, that it is the object (grey, 0..1).
      */
     val segment: Boolean = false,
+    /** A [segment] that is the sky (found by the sky model): on video it is found again on each frame. */
+    val sky: Boolean = false,
 )
 
 /**

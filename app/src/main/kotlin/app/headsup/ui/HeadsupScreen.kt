@@ -3038,13 +3038,22 @@ private fun MaskList(state: UiState, clip: ClipState, vm: HeadsupViewModel, play
     // Following movement in the shot: keys at moments of the clip, or tracked automatically.
     Row(verticalAlignment = Alignment.CenterVertically) {
         Text(
-            if (mask.keys.isEmpty()) "Stays put" else "Moves with the shot",
+            when {
+                mask.sequence != null -> "Found on each frame"
+                mask.keys.isEmpty() -> "Stays put"
+                else -> "Moves with the shot"
+            },
             Modifier.weight(1f),
             style = MaterialTheme.typography.labelMedium,
             color = HeadsupColors.TextMuted,
         )
         if (!clip.meta.isPhoto) {
-            if (mask.keys.isEmpty()) {
+            if (mask.sequence != null) {
+                // Tracked with AI: continue from a fix made at the playhead, or go back to the strokes.
+                SmallAction("◀ Track", { vm.trackMask(HeadsupViewModel.TrackDirection.BACKWARD) }, enabled = !state.busy)
+                SmallAction("Track ▶", { vm.trackMask(HeadsupViewModel.TrackDirection.FORWARD) }, enabled = !state.busy)
+                SmallAction("Clear", { vm.clearMaskSequence() }, enabled = !state.busy)
+            } else if (mask.keys.isEmpty()) {
                 SmallAction("Track", { vm.trackMask(HeadsupViewModel.TrackDirection.BOTH) }, enabled = !state.busy)
             } else {
                 // Continuing from a key placed by hand keeps what was already tracked.
@@ -3053,7 +3062,13 @@ private fun MaskList(state: UiState, clip: ClipState, vm: HeadsupViewModel, play
             }
         }
     }
-    if (!clip.meta.isPhoto) {
+    if (mask.kind == MaskKind.BRUSH && !clip.meta.isPhoto) {
+        Hint(
+            if (mask.sequence != null) "The mask is found again on each frame by AI (12 a second), so it keeps the object's shape and ends when the object leaves the picture. If it slips somewhere, go there, fix it (Select or Paint) and Track ▶ (or ◀ Track) from that frame."
+            else "Track finds the mask again on each frame with AI (12 a second; about a second per frame on a phone): it keeps the object's shape and ends when the object leaves the picture. The sky is found again on each frame.",
+        )
+    }
+    if (!clip.meta.isPhoto && mask.sequence == null) {
         MaskKeyStrip(
             keys = mask.keys,
             cutStartMs = clip.trimStartMs,

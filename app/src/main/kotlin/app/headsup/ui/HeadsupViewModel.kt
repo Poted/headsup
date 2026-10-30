@@ -69,6 +69,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.async
+import kotlinx.coroutines.ensureActive
 import kotlin.math.roundToInt
 import kotlinx.coroutines.withContext
 import app.headsup.core.sync.ClipInfo
@@ -2048,7 +2049,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                         if (sky.count { it > 0.5f } < w * h / 500) return@runCatching null
                         val refined = app.headsup.color.Segmenter.refine(app.headsup.color.Segmenter.rgb(small), sky, w, h)
                         val id = app.headsup.color.BrushReferences.create(getApplication(), w, h, refined, placement)
-                        app.headsup.core.color.BrushStroke(listOf(0.5f, 0.1f), radius = 0.01f, flow = 1f, erase = subtract, reference = id, segment = true)
+                        app.headsup.core.color.BrushStroke(listOf(0.5f, 0.1f), radius = 0.01f, flow = 1f, erase = subtract, reference = id, segment = true, sky = true)
                     }.onFailure { if (it is kotlinx.coroutines.CancellationException) throw it else it.printStackTrace() }.getOrNull()
                 }
                 if (stroke == null) {
@@ -2081,7 +2082,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /** Wipes the selected brush mask's strokes. */
-    fun clearBrush() = editSelectedMask { it.copy(strokes = emptyList()) }
+    fun clearBrush() = editSelectedMask { it.copy(strokes = emptyList(), sequence = null, sequenceStrokes = 0) }
 
     private fun editSelectedMask(transform: (ColourMask) -> ColourMask) {
         val s = _state.value
@@ -2118,6 +2119,149 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
     enum class TrackDirection { BOTH, FORWARD, BACKWARD }
 
     /**
+     * Tracking a brush mask with AI: the mask is found again on frames of the clip (12 a second),
+     * so it takes the object's shape as it moves, turns and changes ([app.headsup.color.MaskFollower]),
+     * and disappears when the object leaves the picture. From the playhead forward and/or back to
+     * the cut's ends; maps already tracked elsewhere are kept.
+     */
+    private fun trackBrushAI(direction: TrackDirection) {
+        val s = _state.value
+        val clip = s.selected ?: return
+        val maskIndex = s.selectedMask
+        val mask = clip.masks.getOrNull(maskIndex)?.takeIf { it.kind == MaskKind.BRUSH } ?: return
+        val clipId = clip.id
+        val t0 = playheadFileMs.coerceIn(clip.trimStartMs, clip.trimEndMs)
+        val uri = s.previewSource(clip)
+        val adds = mask.strokes.filter { !it.erase }
+        val sky = adds.isNotEmpty() && adds.all { it.sky }
+        val context: Application = getApplication()
+        val step = AI_TRACK_STEP_MS
+        _state.update { it.copy(busy = true, loadingMessage = "Tracking with AI", loadingProgress = 0f) }
+        loadJob = viewModelScope.launch {
+            try {
+                val result = withContext(Dispatchers.Default) {
+                    val aspect = if (clip.meta.width > 0 && clip.meta.height > 0) clip.meta.width.toFloat() / clip.meta.height else 16f / 9f
+                    val (w, h) = app.headsup.color.BrushAtlas.slotSize(aspect)
+                    val old = mask.sequence?.let { app.headsup.color.MaskSequences.get(context, it) }?.takeIf { it.width == w && it.height == h }
+                    // The mask as it shows at the playhead: what was tracked there, with strokes added since on top.
+                    val refs = mask.strokes.mapNotNull { it.reference }.distinct()
+                        .mapNotNull { id -> app.headsup.color.BrushReferences.get(context, id)?.let { id to it } }.toMap()
+                    val start = if (old != null) {
+                        app.headsup.core.color.BrushMask.rasterize(mask.strokes.drop(mask.sequenceStrokes), w, h, mask.softness, refs, start = old.at(t0, w, h))
+                    } else {
+                        app.headsup.core.color.BrushMask.rasterize(mask.strokes, w, h, mask.softness, refs)
+                    }
+                    if (!sky && app.headsup.core.color.MaskFollow.area(start) == 0f) return@withContext null
+                    val forward = direction != TrackDirection.BACKWARD
+                    val backward = direction != TrackDirection.FORWARD
+                    val total = ((if (forward) clip.trimEndMs - t0 else 0L) + (if (backward) t0 - clip.trimStartMs else 0L)).coerceAtLeast(1L)
+                    var done = 0L
+                    fun progress(more: Long) {
+                        done += more
+                        _state.update { it.copy(loadingProgress = (done.toFloat() / total).coerceIn(0f, 1f)) }
+                    }
+                    val times = ArrayList<Long>()
+                    val maps = ArrayList<ByteArray>()
+                    var lostAhead: Long? = null
+                    var lostBehind: Long? = null
+                    var goneAhead: Long? = null
+                    var goneBehind: Long? = null
+                    if (forward) {
+                        val follower = app.headsup.color.MaskFollower(context, w, h, sky, start)
+                        var first = true
+                        var last = t0
+                        TrackingFrames.forEachPicture(context, uri, t0, clip.trimEndMs, step, app.headsup.color.Segmenter.INPUT) { ms, picture ->
+                            progress(ms - last)
+                            last = ms
+                            if (first) {
+                                // The frame the mask was made on: it is the start.
+                                first = false
+                                times += ms; maps += app.headsup.core.color.MaskSequence.bytes(start)
+                                return@forEachPicture true
+                            }
+                            val map = follower.next(picture)
+                            if (map == null) {
+                                // Nothing from here: the mask disappears.
+                                times += ms; maps += ByteArray(w * h)
+                                if (follower.lost) lostAhead = ms else goneAhead = ms
+                                return@forEachPicture false
+                            }
+                            times += ms; maps += app.headsup.core.color.MaskSequence.bytes(map)
+                            true
+                        }
+                    }
+                    if (backward && t0 - clip.trimStartMs > step / 2) {
+                        // Frames come only forward: kept small (as JPEG) and followed from the playhead back.
+                        val kept = ArrayList<Pair<Long, ByteArray>>()
+                        TrackingFrames.forEachPicture(context, uri, clip.trimStartMs, t0 - step / 2, step, app.headsup.color.Segmenter.INPUT) { ms, picture ->
+                            val out = java.io.ByteArrayOutputStream()
+                            picture.compress(Bitmap.CompressFormat.JPEG, 92, out)
+                            picture.recycle()
+                            kept += ms to out.toByteArray()
+                            true
+                        }
+                        val follower = app.headsup.color.MaskFollower(context, w, h, sky, start)
+                        var last = t0
+                        if (times.isEmpty()) {
+                            times += t0; maps += app.headsup.core.color.MaskSequence.bytes(start)
+                        }
+                        for ((ms, jpeg) in kept.asReversed()) {
+                            coroutineContext.ensureActive()
+                            progress(last - ms)
+                            last = ms
+                            val picture = android.graphics.BitmapFactory.decodeByteArray(jpeg, 0, jpeg.size) ?: continue
+                            val map = follower.next(picture)
+                            picture.recycle()
+                            if (map == null) {
+                                times += ms; maps += ByteArray(w * h)
+                                if (follower.lost) lostBehind = ms else goneBehind = ms
+                                break
+                            }
+                            times += ms; maps += app.headsup.core.color.MaskSequence.bytes(map)
+                        }
+                    }
+                    if (times.isEmpty()) return@withContext null
+                    val order = times.indices.sortedBy { times[it] }
+                    val tracked = app.headsup.core.color.MaskSequence(w, h, LongArray(order.size) { times[order[it]] }, order.map { maps[it] })
+                    val merged = old?.merged(tracked) ?: tracked
+                    val id = app.headsup.color.MaskSequences.create(context, merged)
+                    TrackedAi(id, tracked.timesMs.first(), tracked.timesMs.last(), tracked.timesMs.size, lostAhead, lostBehind, goneAhead, goneBehind)
+                }
+                if (result == null) {
+                    _state.update { it.copy(messages = it.messages + "Nothing to track: select something in the mask first (Select, or paint it).") }
+                    return@launch
+                }
+                fun at(ms: Long) = Formats.duration(ms - clip.trimStartMs)
+                _state.update { st ->
+                    st.copy(
+                        clips = st.clips.map { c ->
+                            if (c.id != clipId) c else c.copy(masks = c.masks.mapIndexed { i, m -> if (i != maskIndex) m else m.copy(sequence = result.id, sequenceStrokes = m.strokes.size, keys = emptyList()) })
+                        },
+                        messages = st.messages + listOfNotNull(
+                            "Mask found on ${result.frames} frames, ${at(result.fromMs)}–${at(result.toMs)}.",
+                            result.goneAhead?.let { "Left the picture at ${at(it)}: the mask ends there." },
+                            result.goneBehind?.let { "Going back, it left the picture at ${at(it)}." },
+                            result.lostAhead?.let { "Lost at ${at(it)}: go there, select it again and Track ▶ to continue." },
+                            result.lostBehind?.let { "Lost going back at ${at(it)}: go there, select it again and ◀ Track to continue." },
+                        ),
+                    )
+                }
+                refreshPreview()
+            } finally {
+                _state.update { it.copy(busy = false, loadingMessage = null, loadingProgress = null) }
+            }
+        }
+    }
+
+    private class TrackedAi(
+        val id: String, val fromMs: Long, val toMs: Long, val frames: Int,
+        val lostAhead: Long?, val lostBehind: Long?, val goneAhead: Long?, val goneBehind: Long?,
+    )
+
+    /** Ends the selected mask's tracking with AI: it is drawn from its strokes again, where they were made. */
+    fun clearMaskSequence() = editSelectedMask { it.copy(sequence = null, sequenceStrokes = 0) }
+
+    /**
      * Tracks the selected mask from the playhead towards the end, the start or both ends of the
      * cut: frames of that span are read once (every 66 ms or so), then the mask follows the picture.
      * Keys found replace the old ones only in the tracked span, so a track can be continued from a
@@ -2130,6 +2274,10 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
         if (clip.meta.isPhoto) return
         val maskIndex = s.selectedMask
         val mask = clip.masks.getOrNull(maskIndex) ?: return
+        if (mask.kind == MaskKind.BRUSH) {
+            trackBrushAI(direction)
+            return
+        }
         val clipId = clip.id
         val t0 = playheadFileMs.coerceIn(clip.trimStartMs, clip.trimEndMs)
         val start = mask.at(t0)
@@ -2667,6 +2815,8 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
         const val MAX_OFFSET_MS = 600_000L
         const val PHOTO_DEFAULT_MS = 4_000L
         private const val MAX_HISTORY = 60
+        /** Between the maps of a mask tracked with AI: 12 a second. */
+        private const val AI_TRACK_STEP_MS = 83L
         private const val GLOBAL = "global_"
     }
 }

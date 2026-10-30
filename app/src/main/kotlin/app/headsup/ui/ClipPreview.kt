@@ -752,13 +752,15 @@ fun ClipPreview(
     // Painted masks as one picture for the shaders, drawn again when a stroke changes. While a
     // finger paints, each drawing finishes and the next starts from the latest strokes (a new
     // stroke point must not cancel the drawing, or nothing would show until the finger lifts).
-    val brushInput = rememberUpdatedState(masks to sourceAspect)
+    // A mask tracked with AI changes from frame to frame: then the moment counts too (in 40 ms steps).
+    val brushMs = if (BrushAtlas.changesOverTime(masks)) fileMs / 40 * 40 else 0L
+    val brushInput = rememberUpdatedState(Triple(masks, sourceAspect, brushMs))
     var brushAtlas by remember { mutableStateOf<Bitmap?>(null) }
     LaunchedEffect(Unit) {
         snapshotFlow { brushInput.value }
-            .distinctUntilChangedBy { (m, a) -> Triple(m.map { it.strokes }, m.map { it.softness }, a) }
+            .distinctUntilChangedBy { (m, a, t) -> listOf(m.map { it.strokes }, m.map { it.softness }, m.map { it.sequence to it.sequenceStrokes }, a, t) }
             .conflate()
-            .collect { (m, a) -> brushAtlas = withContext(Dispatchers.Default) { BrushAtlas.build(context, m, a) } }
+            .collect { (m, a, t) -> brushAtlas = withContext(Dispatchers.Default) { BrushAtlas.build(context, m, a, t) } }
     }
     LaunchedEffect(brushAtlas) {
         previewShader?.setBrush(brushAtlas)

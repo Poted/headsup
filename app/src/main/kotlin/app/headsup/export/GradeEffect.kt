@@ -59,6 +59,7 @@ class GradeEffect(
         private var width = 1
         private var height = 1
         private var firstUs = -1L
+        private val changing = BrushAtlas.changesOverTime(masks)
 
         init {
             program.setBufferAttribute("aFramePosition", GlUtil.getNormalizedCoordinateBounds(), GlUtil.HOMOGENEOUS_COORDINATE_VECTOR_SIZE)
@@ -83,7 +84,16 @@ class GradeEffect(
         override fun configure(inputWidth: Int, inputHeight: Int): Size {
             width = inputWidth
             height = inputHeight
-            val atlas = BrushAtlas.build(context, masks, inputWidth.toFloat() / inputHeight.coerceAtLeast(1))
+            uploadBrush(fileStartMs)
+            return Size(inputWidth, inputHeight)
+        }
+
+        /** Masks tracked with AI: the moment the brush atlas was last drawn for (file time), or -1. */
+        private var brushMs = -1L
+
+        private fun uploadBrush(timeMs: Long) {
+            brushMs = timeMs
+            val atlas = BrushAtlas.build(context, masks, width.toFloat() / height.coerceAtLeast(1), timeMs)
             val bitmap = atlas ?: BrushAtlas.EMPTY
             brushSlots = if (atlas == null) 1f else ColourMask.MAX_PER_CLIP.toFloat()
             brushSlot = floatArrayOf(bitmap.width / brushSlots, bitmap.height.toFloat())
@@ -94,7 +104,6 @@ class GradeEffect(
             GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_T, GLES20.GL_CLAMP_TO_EDGE)
             GLUtils.texImage2D(GLES20.GL_TEXTURE_2D, 0, bitmap, 0)
             atlas?.recycle()
-            return Size(inputWidth, inputHeight)
         }
 
         override fun drawFrame(inputTexId: Int, presentationTimeUs: Long) {
@@ -102,6 +111,8 @@ class GradeEffect(
                 // Time counts from the first frame, however Media3 timestamps a clipped item.
                 if (firstUs < 0) firstUs = presentationTimeUs
                 val positionMs = (presentationTimeUs - firstUs) / 1000
+                // A mask tracked with AI has its own map for each moment.
+                if (changing && fileStartMs + positionMs != brushMs) uploadBrush(fileStartMs + positionMs)
                 program.use()
                 program.setSamplerTexIdUniform("uTexSampler", inputTexId, 0)
                 program.setSamplerTexIdUniform("uLut", textures[0], 1)

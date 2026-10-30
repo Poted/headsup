@@ -26,8 +26,17 @@ object BrushAtlas {
 
     private val drawn = HashMap<Int, Drawn>()
 
+    /** All strokes drawn: the same mask again (e.g. on the next frame of a clip with a tracked mask) costs nothing. */
+    private val finished = HashMap<Int, Drawn>()
+
+    private fun references(context: Context, strokes: List<BrushStroke>) =
+        strokes.mapNotNull { it.reference }.distinct().mapNotNull { id -> BrushReferences.get(context, id)?.let { id to it } }.toMap()
+
     private fun coverage(context: Context, slot: Int, mask: ColourMask, w: Int, h: Int): FloatArray {
-        val refs = mask.strokes.mapNotNull { it.reference }.distinct().mapNotNull { id -> BrushReferences.get(context, id)?.let { id to it } }.toMap()
+        synchronized(drawn) { finished[slot] }?.let { f ->
+            if (f.width == w && f.height == h && f.softness == mask.softness && f.strokes == mask.strokes) return f.map
+        }
+        val refs = references(context, mask.strokes)
         val earlier = mask.strokes.dropLast(1)
         val cached = synchronized(drawn) { drawn[slot] }
         val base = if (cached != null && cached.width == w && cached.height == h && cached.softness == mask.softness && cached.strokes == earlier) {
@@ -36,17 +45,32 @@ object BrushAtlas {
             BrushMask.rasterize(earlier, w, h, mask.softness, refs).also { synchronized(drawn) { drawn[slot] = Drawn(earlier, mask.softness, w, h, it) } }
         }
         return BrushMask.rasterize(listOf(mask.strokes.last()), w, h, mask.softness, refs, start = base)
+            .also { synchronized(drawn) { finished[slot] = Drawn(mask.strokes, mask.softness, w, h, it) } }
     }
 
-    /** Null when no mask is painted. */
-    fun build(context: Context, masks: List<ColourMask>, aspect: Float): Bitmap? {
-        if (masks.none { it.kind == MaskKind.BRUSH && it.strokes.isNotEmpty() }) return null
+    /**
+     * A mask tracked with AI at [timeMs]: its map there, with strokes added since it was tracked
+     * drawn on top. Null when it is not tracked (or its maps are gone).
+     */
+    private fun tracked(context: Context, mask: ColourMask, w: Int, h: Int, timeMs: Long): FloatArray? {
+        val seq = mask.sequence?.let { MaskSequences.get(context, it) } ?: return null
+        val base = seq.at(timeMs, w, h)
+        val extra = mask.strokes.drop(mask.sequenceStrokes)
+        return if (extra.isEmpty()) base else BrushMask.rasterize(extra, w, h, mask.softness, references(context, extra), start = base)
+    }
+
+    /** True when a mask changes from frame to frame (tracked with AI): the atlas is drawn again for each. */
+    fun changesOverTime(masks: List<ColourMask>): Boolean = masks.take(ColourMask.MAX_PER_CLIP).any { it.kind == MaskKind.BRUSH && it.sequence != null }
+
+    /** Null when no mask is painted. [timeMs] (file time) is the moment for masks tracked with AI. */
+    fun build(context: Context, masks: List<ColourMask>, aspect: Float, timeMs: Long = 0L): Bitmap? {
+        if (masks.none { it.kind == MaskKind.BRUSH && (it.strokes.isNotEmpty() || it.sequence != null) }) return null
         val (w, h) = slotSize(aspect)
         val pixels = IntArray(w * ColourMask.MAX_PER_CLIP * h) { 0xFF000000.toInt() }
         val stride = w * ColourMask.MAX_PER_CLIP
         masks.take(ColourMask.MAX_PER_CLIP).forEachIndexed { slot, m ->
-            if (m.kind != MaskKind.BRUSH || m.strokes.isEmpty()) return@forEachIndexed
-            val map = coverage(context, slot, m, w, h)
+            if (m.kind != MaskKind.BRUSH || (m.strokes.isEmpty() && m.sequence == null)) return@forEachIndexed
+            val map = tracked(context, m, w, h, timeMs) ?: if (m.strokes.isEmpty()) return@forEachIndexed else coverage(context, slot, m, w, h)
             for (y in 0 until h) {
                 for (x in 0 until w) {
                     val v = (map[y * w + x] * 255f + 0.5f).toInt().coerceIn(0, 255)

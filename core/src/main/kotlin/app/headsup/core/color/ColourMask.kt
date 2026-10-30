@@ -45,9 +45,21 @@ data class ColourMask(
     val keys: List<MaskKey> = emptyList(),
     /** A brush mask's strokes, in the order painted. */
     val strokes: List<BrushStroke> = emptyList(),
+    /**
+     * A brush mask found again on each frame (tracked by an AI model): the id of its maps over
+     * time, kept by the app. While set, the maps are the mask (the strokes are where it started)
+     * and it does not move by keys: each map is already where the object is.
+     */
+    val sequence: String? = null,
+    /**
+     * How many of [strokes] the [sequence] was tracked from; strokes after them (a fix made on
+     * some frame) are drawn on top of each map until the mask is tracked again.
+     */
+    val sequenceStrokes: Int = 0,
 ) {
     /** The mask at [fileMs] into the clip's file: between keys it moves smoothly, outside them it holds. */
     fun at(fileMs: Long): ColourMask {
+        if (sequence != null) return copy(centerX = 0.5f, centerY = 0.5f, angleDegrees = 0f, sizeX = 1f, sizeY = 1f, keys = emptyList())
         if (keys.isEmpty()) return this
         val k = MaskKey.interpolate(keys, fileMs)
         return copy(centerX = k.centerX, centerY = k.centerY, angleDegrees = k.angleDegrees, sizeX = k.sizeX, sizeY = k.sizeY)

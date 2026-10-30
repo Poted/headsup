@@ -104,7 +104,20 @@ object Segmenter {
      * with the picture's shape), each with the model's own score, best first. They differ in how
      * much they take: a part, the object, or the object with what it stands in.
      */
-    fun objects(context: Context, reading: Reading, prompts: List<Prompt>, width: Int, height: Int): List<Pair<FloatArray, Float>> {
+    fun objects(context: Context, reading: Reading, prompts: List<Prompt>, width: Int, height: Int): List<Pair<FloatArray, Float>> =
+        decode(context, reading, prompts, width, height, null).map { it.map to it.score }
+
+    /** A candidate: how sure (0..1), the model's score, and its own rough answer (256 × 256 logits) to give it back on the next frame. */
+    class Found(val map: FloatArray, val score: Float, val rough: FloatArray)
+
+    /**
+     * As [objects], also told what was found on the frame before ([previous]: its rough answer),
+     * which keeps an object followed from frame to frame the same object.
+     */
+    fun follow(context: Context, reading: Reading, prompts: List<Prompt>, width: Int, height: Int, previous: FloatArray?): List<Found> =
+        decode(context, reading, prompts, width, height, previous)
+
+    private fun decode(context: Context, reading: Reading, prompts: List<Prompt>, width: Int, height: Int, previous: FloatArray?): List<Found> {
         if (prompts.isEmpty()) return emptyList()
         val n = prompts.size + 1
         val coords = FloatBuffer.allocate(n * 2)
@@ -120,33 +133,41 @@ object Segmenter {
         // The embedding comes out as 1 × 256 × 64 × 64.
         val embedding = FloatBuffer.wrap(reading.embedding)
         val session = decoder(context)
+        val maskInput = previous?.takeIf { it.size == ROUGH * ROUGH }
         val tensors = listOf(
             "image_embeddings" to OnnxTensor.createTensor(env, embedding, longArrayOf(1, 256, 64, 64)),
             "point_coords" to OnnxTensor.createTensor(env, coords, longArrayOf(1, n.toLong(), 2)),
             "point_labels" to OnnxTensor.createTensor(env, labels, longArrayOf(1, n.toLong())),
-            "mask_input" to OnnxTensor.createTensor(env, FloatBuffer.allocate(256 * 256), longArrayOf(1, 1, 256, 256)),
-            "has_mask_input" to OnnxTensor.createTensor(env, FloatBuffer.wrap(floatArrayOf(0f)), longArrayOf(1)),
+            "mask_input" to OnnxTensor.createTensor(env, if (maskInput != null) FloatBuffer.wrap(maskInput) else FloatBuffer.allocate(ROUGH * ROUGH), longArrayOf(1, 1, ROUGH.toLong(), ROUGH.toLong())),
+            "has_mask_input" to OnnxTensor.createTensor(env, FloatBuffer.wrap(floatArrayOf(if (maskInput != null) 1f else 0f)), longArrayOf(1)),
             "orig_im_size" to OnnxTensor.createTensor(env, FloatBuffer.wrap(floatArrayOf(height.toFloat(), width.toFloat())), longArrayOf(2)),
         )
         try {
             session.run(tensors.toMap()).use { result ->
                 val masks = (result[0] as OnnxTensor).floatBuffer
                 val scores = (result[1] as OnnxTensor).floatBuffer
+                val rough = (result[2] as OnnxTensor).floatBuffer
                 val count = scores.remaining()
                 val size = width * height
                 val found = (0 until count).map { k ->
                     val logits = FloatArray(size)
                     masks.position(k * size)
                     masks.get(logits)
+                    val low = FloatArray(ROUGH * ROUGH)
+                    rough.position(k * ROUGH * ROUGH)
+                    rough.get(low)
                     // The model's logits as how sure it is.
-                    FloatArray(size) { 1f / (1f + exp(-logits[it])) } to scores.get(k)
+                    Found(FloatArray(size) { 1f / (1f + exp(-logits[it])) }, scores.get(k), low)
                 }
-                return found.filter { (m, _) -> m.any { it > 0.5f } }.sortedByDescending { it.second }
+                return found.filter { f -> f.map.any { it > 0.5f } }.sortedByDescending { it.score }
             }
         } finally {
             tensors.forEach { it.second.close() }
         }
     }
+
+    /** Size of the model's own rough answers. */
+    private const val ROUGH = 256
 
     /** How sure the sky model is that each pixel of [picture] is sky (0..1, [width]×[height], row by row). */
     fun sky(context: Context, picture: Bitmap, width: Int, height: Int): FloatArray {

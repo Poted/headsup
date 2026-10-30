@@ -81,11 +81,15 @@ project's files), the preview resized left/right when held sideways, Edit called
       ONNX Runtime); tapping the same place again steps through a part / the object / more; a loop
       drawn round an object is its box. Sky: the sky model (DeepLab v3, ADE20K). Everything found is
       laid onto the picture's edges (colour guided filter). Add / Subtract.
-- [ ] Masks, next: (1) on video, the sky found again on every frame (no tracking needed) and
-      objects carried frame to frame by MobileSAM (the last frame's mask as the next one's prompt)
-      instead of the shape tracker; (2) edges at full resolution in export (the mask is kept at
-      640 px: refine it against the full picture in the shader); (3) more prompts: + / − points on
-      an object; (4) Select Subject (the main subject without a tap), people (skin, hair, clothes).
+- [x] Brush masks on video tracked with AI: Track finds the mask again on each frame (12 a second):
+      objects by MobileSAM told the last frame's box, a point inside and its own answer; the sky by
+      the sky model. The mask keeps the object's shape and ends when it leaves the picture. Maps
+      are kept per clip (files/sequence) and fade from one to the next in preview and export; a fix
+      painted on some frame shows on top until tracked again from there.
+- [ ] Masks, next: (1) edges at full resolution in export (the mask is kept at 640 px: refine it
+      against the full picture in the shader); (2) faster tracking (the encoder takes about a
+      second per frame on a phone: GPU/NNAPI, or a smaller encoder); (3) more prompts: + / − points
+      on an object; (4) Select Subject (the main subject without a tap), people (skin, hair, clothes).
 - [ ] To do, not now: intro slides: thanks for choosing Sweet Spot, what the app can do, how to make cinematic
       films and professional photos, so a newcomer feels welcome and wants to go further.
 - [x] Speed curves: an editable ramp per clip (Edit > Speed) and presets in the reel style (Speed ramp:
@@ -106,7 +110,7 @@ project's files), the preview resized left/right when held sideways, Edit called
 1. **Photo tools:** done: colour mixer, looks, point tone curves, colour grading wheels,
    texture / clarity / dehaze (Adjust → Presence; also inside masks).
 2. **Masks:** done: brush, two-finger resize/turn, presence (texture, clarity, dehaze) per mask,
-   AI object and sky selection on photos. Next: AI masks on video (per frame), full-resolution edges.
+   AI object and sky selection, AI tracking on video (per frame). Next: full-resolution edges, speed.
 3. **Geometry:** done: perspective correction (Vertical, Horizontal, with a zoom that hides empty
    corners). Later: guided upright (draw the lines that should be straight).
 4. **Export:** done: 16-bit TIFF and Ultra HDR photos: a raw's gain map from the scene's real light
