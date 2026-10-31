@@ -1,3 +1,9 @@
+import java.io.File
+import java.io.FileInputStream
+import java.net.URI
+import java.nio.file.Files
+import java.nio.file.StandardCopyOption
+import java.security.MessageDigest
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 
 // Plugin versions live here rather than in a root build file so that :core never has to
@@ -73,25 +79,32 @@ val downloadModels by tasks.registering {
     outputs.file(target)
     doLast {
         val file = target.get().asFile
-        fun hash(f: java.io.File): String {
-            val digest = java.security.MessageDigest.getInstance("SHA-256")
-            f.inputStream().buffered().use { input ->
+        fun hash(f: File): String {
+            val digest = MessageDigest.getInstance("SHA-256")
+            val input = FileInputStream(f)
+            try {
                 val buffer = ByteArray(1 shl 16)
                 while (true) {
                     val n = input.read(buffer)
                     if (n < 0) break
                     digest.update(buffer, 0, n)
                 }
+            } finally {
+                input.close()
             }
-            return digest.digest().joinToString("") { "%02x".format(it) }
+            return digest.digest().joinToString("") { b -> "%02x".format(b) }
         }
         if (file.exists() && hash(file) == sha256) return@doLast
         file.parentFile.mkdirs()
-        val part = java.io.File(file.parentFile, file.name + ".part")
-        java.net.URI(url).toURL().openStream().use { input -> part.outputStream().use { input.copyTo(it, 1 shl 16) } }
+        val part = File(file.parentFile, file.name + ".part")
+        val input = URI(url).toURL().openStream()
+        try {
+            Files.copy(input, part.toPath(), StandardCopyOption.REPLACE_EXISTING)
+        } finally {
+            input.close()
+        }
         check(hash(part) == sha256) { "The downloaded model ${file.name} is not the expected one" }
-        if (file.exists()) file.delete()
-        check(part.renameTo(file)) { "Could not keep ${file.name}" }
+        Files.move(part.toPath(), file.toPath(), StandardCopyOption.REPLACE_EXISTING)
     }
 }
 tasks.named("preBuild") { dependsOn(downloadModels) }

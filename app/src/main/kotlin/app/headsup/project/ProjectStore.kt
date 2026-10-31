@@ -462,6 +462,7 @@ internal object Json {
         )
         .put("sequence", m.sequence)
         .put("sequenceStrokes", m.sequenceStrokes)
+        .put("edge", m.edge.toDouble())
 
     private fun mask(o: JSONObject): ColourMask {
         val kind = MaskKind.entries.firstOrNull { it.name == o.optString("kind") } ?: MaskKind.LINEAR
@@ -500,6 +501,7 @@ internal object Json {
             },
             sequence = o.optStringOrNull("sequence"),
             sequenceStrokes = o.optInt("sequenceStrokes", 0),
+            edge = o.optDouble("edge", 0.0).toFloat(),
         )
     }
 

@@ -93,6 +93,15 @@ project's files), the preview resized left/right when held sideways, Edit called
       preview and export (TIFF, Ultra HDR: the headroom where something was removed is that around
       it); a raw developed differently is cleaned again by itself. Undo last / Restore all.
       The model is fetched by the build at a fixed revision and checked by its hash.
+- [x] Masks UI: the masks as a row of their own with one + (Object, Sky, Brush, Line, Oval); the
+      selected mask's actions in one row (Invert, Overlay, Clear, Reset, Delete); its tabs as the
+      photo's (Mask first: tools, shape, tracking and keys; then Light, Colour, …). Brush tools as
+      a palette (Select, Paint, Erase, Move, View: one finger moves the zoomed picture); Select
+      shows only Add/Subtract, Sky and Edge (tighter … fuller). The mask is drawn as an outline
+      (Overlay fills it in red). A double tap fits the view and paints nothing. Long jobs (AI
+      tracking, Clean up) can be stopped; tracking keeps what it found.
+- [x] Sky model: DeepLab v3+ Xception65 (ADE20K) instead of MobileNetV2 (it took a sunset sea for
+      sky); built by CI from the TensorFlow graph (tools/models/sky_model.py).
 - [ ] Masks, next: (1) edges at full resolution in export (the mask is kept at 640 px: refine it
       against the full picture in the shader); (2) faster tracking (the encoder takes about a
       second per frame on a phone: GPU/NNAPI, or a smaller encoder); (3) more prompts: + / − points

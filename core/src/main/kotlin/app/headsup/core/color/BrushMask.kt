@@ -56,7 +56,7 @@ object BrushMask {
      * brush prints do not build up (each pixel takes the strongest); strokes then add (or erase)
      * by their flow, so going over a place again paints it more. [softness] is the mask's edge:
      * 0 hard, 1 fading from each print's centre. [start] is coverage already drawn (by earlier
-     * strokes) to paint on.
+     * strokes) to paint on. [edge] moves the edge of what was found (Select, Sky) in or out ([MaskEdge]).
      */
     fun rasterize(
         strokes: List<BrushStroke>,
@@ -65,6 +65,7 @@ object BrushMask {
         softness: Float = 0.5f,
         references: Map<String, BrushReference> = emptyMap(),
         start: FloatArray? = null,
+        edge: Float = 0f,
     ): FloatArray {
         val out = start?.takeIf { it.size == width * height }?.copyOf() ?: FloatArray(width * height)
         if (strokes.isEmpty() || width <= 0 || height <= 0) return out
@@ -135,12 +136,12 @@ object BrushMask {
                 }
             }
             if (stroke.segment) {
-                // The finder's certainty, sharpened a little around its middle: a clean edge.
+                // The finder's certainty, cut around its middle (moved by [edge]): a clean edge.
                 if (colours != null) {
-                    for (y in y0..y1) for (x in x0..x1) {
-                        val c = colours[((y - y0) * spanW + (x - x0)) * 3]
-                        layer[y * width + x] = smoothstep(0.3f, 0.7f, c)
-                    }
+                    val spanH = y1 - y0 + 1
+                    val sure = FloatArray(spanW * spanH) { colours[it * 3] }
+                    val shaped = MaskEdge.shape(sure, spanW, spanH, edge)
+                    for (y in y0..y1) for (x in x0..x1) layer[y * width + x] = shaped[(y - y0) * spanW + (x - x0)]
                 }
             } else if (stroke.lasso) {
                 val found = select(pts, colours, x0, x1, y0, y1, softness)

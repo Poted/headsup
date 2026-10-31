@@ -340,7 +340,8 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
                 CineLoader(
                     state.loadingMessage ?: "Working…", Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
                     progress = state.loadingProgress,
-                    onCancel = if (state.loadingMessage?.startsWith("Copying") == true) vm::cancelLoading else null,
+                    // Long jobs can be stopped: copying, AI tracking (keeps what it found), Clean up.
+                    onCancel = if (listOf("Copying", "Tracking with AI", "Removing", "Reading frames").any { state.loadingMessage?.startsWith(it) == true }) vm::stopWork else null,
                 )
             }
 
@@ -368,7 +369,10 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
                         // A painted mask moves with two fingers only in Move; otherwise they zoom the view.
                         onTransformMask = if (editingMasks && !fullscreen && (!editingBrush || state.brush.mode == BrushMode.MOVE)) vm::transformMask else null,
                         zoomForPainting = (editingMasks && editingBrush && state.brush.mode != BrushMode.MOVE || cleaning) && !fullscreen,
-                        onBrush = if (cleaning && !fullscreen) vm::cleanupStroke else if (editingMasks && !fullscreen && editingBrush && state.brush.mode != BrushMode.MOVE) vm::brushStroke else null,
+                        // View: one finger moves the zoomed picture, nothing is painted.
+                        panView = editingMasks && editingBrush && state.brush.mode == BrushMode.VIEW && !fullscreen,
+                        maskOverlay = state.maskOverlay,
+                        onBrush = if (cleaning && !fullscreen) vm::cleanupStroke else if (editingMasks && !fullscreen && editingBrush && state.brush.mode != BrushMode.MOVE && state.brush.mode != BrushMode.VIEW) vm::brushStroke else null,
                         guideIndex = state.selectedMask,
                         lassoPath = state.lassoPath,
                         onPictureHeight = vm::notePictureHeight,
@@ -2285,7 +2289,8 @@ private fun ColourPage(
     val group = state.groupOf(clip)
     when (target) {
         GradeTarget.GROUP -> GroupControls(state, clip, index, group, vm)
-        GradeTarget.MASK -> MaskList(state, clip, vm, playhead, onSeek)
+        // While a new mask is being chosen, only that shows.
+        GradeTarget.MASK -> if (MaskList(state, clip, vm, pictureSource)) return
         else -> Unit
     }
     if (target != GradeTarget.GLOBAL && !clip.colorGrade) {
@@ -2315,6 +2320,12 @@ private fun ColourPage(
     // On the Masks tab the ruler edits either a shape control or a correction.
     var shape by rememberSaveable { mutableStateOf<MaskShape?>(null) }
     var onShapes by rememberSaveable { mutableStateOf(true) }
+    // A new mask opens on its own tools (select, paint, shape).
+    var maskCount by remember { mutableStateOf(clip.masks.size) }
+    LaunchedEffect(clip.id, clip.masks.size) {
+        if (clip.masks.size > maskCount) onShapes = true
+        maskCount = clip.masks.size
+    }
     val shapes = mask?.takeIf { target == GradeTarget.MASK }?.let { m -> MaskShape.entries.filter { m.kind in it.kinds } }.orEmpty()
     val editingShape = if (target == GradeTarget.MASK && onShapes) shape?.takeIf { it in shapes } ?: shapes.firstOrNull() else null
     // Corrections are grouped into short sections (plus the mask's shape), so each row stays short.
@@ -2322,13 +2333,13 @@ private fun ColourPage(
     // The raw development syncs like the rest from "all" and groups.
     val rawPhoto = clip.meta.isRaw && target != GradeTarget.MASK
     var onRaw by rememberSaveable { mutableStateOf(false) }
-    val sections = listOfNotNull("RAW".takeIf { rawPhoto }, "Shape".takeIf { shapes.isNotEmpty() }) +
+    val sections = listOfNotNull("RAW".takeIf { rawPhoto }, "Mask".takeIf { shapes.isNotEmpty() }) +
         ColourSection.entries.filter { s -> options.any { it.section == s } }.map { it.label }
-    val section = if (onRaw && rawPhoto) "RAW" else if (editingShape != null) "Shape" else adjustment.section.label
+    val section = if (onRaw && rawPhoto) "RAW" else if (editingShape != null) "Mask" else adjustment.section.label
     SectionTabs(sections, sections.indexOf(section).coerceAtLeast(0)) { i ->
         onRaw = sections[i] == "RAW"
         if (sections[i] == "RAW") return@SectionTabs
-        if (sections[i] == "Shape") {
+        if (sections[i] == "Mask") {
             onShapes = true
         } else {
             onShapes = false
@@ -2370,6 +2381,7 @@ private fun ColourPage(
     }
     if (editingShape != null && mask?.kind == MaskKind.BRUSH) {
         BrushControls(state, vm, pictureSource)
+        MaskMotion(state, clip, mask, vm, playhead, onSeek)
         return
     }
     if (editingShape != null && mask != null) {
@@ -2383,6 +2395,7 @@ private fun ColourPage(
             onChange = { v -> vm.updateMask { editingShape.set(it, v) } },
             onReset = { vm.updateMask { editingShape.set(it, editingShape.get(ColourMask(it.kind))) } },
         )
+        MaskMotion(state, clip, mask, vm, playhead, onSeek)
         return
     }
     if (adjustment == Adjustment.CINE) {
@@ -2913,51 +2926,71 @@ private enum class BrushSetting(val symbol: String, val label: String, val range
 private fun BrushControls(state: UiState, vm: HeadsupViewModel, pictureSource: ((Int) -> Bitmap?)?) {
     val mask = state.selected?.masks?.getOrNull(state.selectedMask) ?: return
     val brush = state.brush
-    // Always the same settings (Size and Strength are for painting; Select uses only Softness).
-    val settings = BrushSetting.entries
-    var chosen by rememberSaveable { mutableStateOf(BrushSetting.SIZE) }
-    val setting = chosen.takeIf { it in settings } ?: settings.first()
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        FlowRow(Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            for (mode in BrushMode.entries) {
-                FilterChip(selected = brush.mode == mode, onClick = { vm.updateBrush { it.copy(mode = mode) } }, label = { Text(mode.label) })
-            }
-        }
-        SmallAction("Clear", { vm.clearBrush() })
-    }
-    if (brush.mode == BrushMode.SELECT) {
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            FilterChip(selected = !brush.subtract, onClick = { vm.updateBrush { it.copy(subtract = false) } }, label = { Text("Add") })
-            FilterChip(selected = brush.subtract, onClick = { vm.updateBrush { it.copy(subtract = true) } }, label = { Text("Subtract") })
-            Spacer(Modifier.weight(1f))
-            SmallAction("Sky", { pictureSource?.let(vm::selectSky) }, enabled = pictureSource != null && !state.busy)
-        }
-    }
+    // What a finger on the picture does, as a palette.
     LazyRow(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
-        items(settings) { b ->
-            CircleOption(b.symbol, b.label, selected = b == setting, modified = false) { chosen = b }
+        items(BrushMode.entries) { mode ->
+            CircleOption(mode.symbol, mode.label, selected = brush.mode == mode, modified = false) { vm.updateBrush { it.copy(mode = mode) } }
         }
     }
-    val value = when (setting) {
-        BrushSetting.SIZE -> brush.radius
-        BrushSetting.SOFTNESS -> mask.softness
-        BrushSetting.FLOW -> brush.flow
+    when (brush.mode) {
+        BrushMode.SELECT -> {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                FilterChip(selected = !brush.subtract, onClick = { vm.updateBrush { it.copy(subtract = false) } }, label = { Text("Add") })
+                FilterChip(selected = brush.subtract, onClick = { vm.updateBrush { it.copy(subtract = true) } }, label = { Text("Subtract") })
+                Spacer(Modifier.weight(1f))
+                FilterChip(
+                    selected = false,
+                    enabled = pictureSource != null && !state.busy,
+                    onClick = { pictureSource?.let(vm::selectSky) },
+                    label = { Text(if (brush.subtract) "− Sky" else "+ Sky") },
+                )
+            }
+            // Where the edge of what was found lies.
+            val e = mask.edge
+            ValueHeader(
+                "Edge",
+                when {
+                    kotlin.math.abs(e) < 0.005f -> "As found"
+                    e < 0f -> String.format(Locale.US, "Tighter %.0f %%", -e * 100f)
+                    else -> String.format(Locale.US, "Fuller %.0f %%", e * 100f)
+                },
+            )
+            RulerSlider(value = e, range = -1f..1f, step = 0.05f, onChange = { v -> vm.updateMask { it.copy(edge = v) } }, onReset = { vm.updateMask { it.copy(edge = 0f) } })
+            Hint("Tap an object to select all of it (tap again for a smaller or larger part), draw round it, or draw a line across to split the picture. Edge: tighter keeps away from what is around it, fuller takes in its rim. Found on the phone by AI models and laid onto the picture's edges.")
+        }
+        BrushMode.PAINT, BrushMode.ERASE -> {
+            val settings = BrushSetting.entries
+            var chosen by rememberSaveable { mutableStateOf(BrushSetting.SIZE) }
+            val setting = chosen.takeIf { it in settings } ?: settings.first()
+            LazyRow(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+                items(settings) { b ->
+                    CircleOption(b.symbol, b.label, selected = b == setting, modified = false) { chosen = b }
+                }
+            }
+            val value = when (setting) {
+                BrushSetting.SIZE -> brush.radius
+                BrushSetting.SOFTNESS -> mask.softness
+                BrushSetting.FLOW -> brush.flow
+            }
+            fun set(v: Float) = when (setting) {
+                BrushSetting.SIZE -> vm.updateBrush { it.copy(radius = v) }
+                // The whole painting's edge, at once.
+                BrushSetting.SOFTNESS -> vm.updateMask { it.copy(softness = v) }
+                BrushSetting.FLOW -> vm.updateBrush { it.copy(flow = v) }
+            }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Box(Modifier.weight(1f)) { ValueHeader(setting.label, String.format(Locale.US, "%.0f %%", value * 100f)) }
+                BrushPreview(brush.radius, mask.softness, state.pictureHeightPx)
+            }
+            RulerSlider(value = value, range = setting.range, step = 0.005f, onChange = { set(it) }, onReset = { set(setting.default) })
+            Hint(
+                if (brush.mode == BrushMode.ERASE) "Erase takes the mask's corrections away where you paint. Two fingers zoom the picture; View moves around it."
+                else "Paint where the mask's corrections go. Strength: how much one stroke adds; Softness: the painting's edge. Two fingers zoom the picture; View moves around it.",
+            )
+        }
+        BrushMode.MOVE -> Hint("One finger moves the mask; two turn and scale it.")
+        BrushMode.VIEW -> Hint("One finger moves around the zoomed picture, two zoom it, a double tap fits it again. Nothing is painted.")
     }
-    fun set(v: Float) = when (setting) {
-        BrushSetting.SIZE -> vm.updateBrush { it.copy(radius = v) }
-        // The whole painting's edge, at once.
-        BrushSetting.SOFTNESS -> vm.updateMask { it.copy(softness = v) }
-        BrushSetting.FLOW -> vm.updateBrush { it.copy(flow = v) }
-    }
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        Box(Modifier.weight(1f)) { ValueHeader(setting.label, String.format(Locale.US, "%.0f %%", value * 100f)) }
-        BrushPreview(brush.radius, mask.softness, state.pictureHeightPx)
-    }
-    RulerSlider(value = value, range = setting.range, step = 0.005f, onChange = { set(it) }, onReset = { set(setting.default) })
-    Hint(
-        if (brush.mode == BrushMode.SELECT) "Tap an object to select all of it; tap the same place again for a smaller or larger part (a part, the object, more). Or draw round it: the object inside is found. Sky selects the sky. Found on the phone by small AI models (MobileSAM, DeepLab) and laid onto the picture's edges. Subtract takes what is found away. A line drawn across splits the picture along the edges near it (the side above it is selected). Touch up with Paint and Erase; Softness softens what Select finds."
-        else "Paint where the mask's corrections go; Erase takes them away. Strength: how much one stroke adds (at 50 % a stroke gives half the effect, going over again adds more). Softness: the painting's edge. Two fingers zoom the picture to reach small things; in Move they move, turn and scale the painting.",
-    )
 }
 
 /**
@@ -3049,32 +3082,85 @@ private enum class MaskShape(
 
 /** The selected clip's masks: pick one to edit, add a line or an oval, invert or remove. */
 @Composable
-private fun MaskList(state: UiState, clip: ClipState, vm: HeadsupViewModel, playhead: LongState, onSeek: (Long) -> Unit) {
-    if (clip.masks.isEmpty()) Hint("Windows with their own corrections: a line for the sky, an oval for a face, or paint where they go. Drag on the picture to move one; two fingers resize and turn it.")
-    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        clip.masks.forEachIndexed { i, m ->
-            FilterChip(
-                selected = i == state.selectedMask,
-                onClick = { vm.selectMask(i) },
-                label = {
-                    Text("${i + 1} · " + when (m.kind) { MaskKind.LINEAR -> "Line"; MaskKind.ELLIPSE -> "Oval"; MaskKind.BRUSH -> "Brush" })
-                },
-            )
+private fun MaskList(state: UiState, clip: ClipState, vm: HeadsupViewModel, pictureSource: ((Int) -> Bitmap?)?): Boolean {
+    var adding by rememberSaveable { mutableStateOf(false) }
+    val full = clip.masks.size >= ColourMask.MAX_PER_CLIP
+    // The masks, then one button to add another: what is there and what can be made never mix.
+    LazyRow(horizontalArrangement = Arrangement.spacedBy(2.dp), verticalAlignment = Alignment.CenterVertically) {
+        items(clip.masks.size) { i ->
+            val m = clip.masks[i]
+            CircleOption(maskSymbol(m), "${i + 1} · ${maskName(m)}", selected = i == state.selectedMask && !adding, modified = m.grade != ColorGrade()) {
+                adding = false
+                vm.selectMask(i)
+            }
         }
-        if (clip.masks.size < ColourMask.MAX_PER_CLIP) {
-            FilterChip(selected = false, onClick = { vm.addMask(MaskKind.LINEAR) }, label = { Text("+ Line") })
-            FilterChip(selected = false, onClick = { vm.addMask(MaskKind.ELLIPSE) }, label = { Text("+ Oval") })
-            FilterChip(selected = false, onClick = { vm.addMask(MaskKind.BRUSH) }, label = { Text("+ Brush") })
-        }
+        if (!full) item { CircleOption("+", "Add", selected = adding || clip.masks.isEmpty(), modified = false) { adding = !adding } }
     }
-    val mask = clip.masks.getOrNull(state.selectedMask) ?: return
+    if (adding || clip.masks.isEmpty()) {
+        if (full) {
+            Hint("Up to ${ColourMask.MAX_PER_CLIP} masks.")
+            return true
+        }
+        // What a new mask is: found by AI, painted, or a shape.
+        LazyRow(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+            item { CircleOption("◎", "Object", selected = false, modified = false) { adding = false; vm.addBrushMask(BrushMode.SELECT) } }
+            item {
+                CircleOption("☁", "Sky", selected = false, modified = false) {
+                    adding = false
+                    pictureSource?.let(vm::addSkyMask)
+                }
+            }
+            item { CircleOption("✎", "Brush", selected = false, modified = false) { adding = false; vm.addBrushMask(BrushMode.PAINT) } }
+            item { CircleOption("⟋", "Line", selected = false, modified = false) { adding = false; vm.addMask(MaskKind.LINEAR) } }
+            item { CircleOption("◯", "Oval", selected = false, modified = false) { adding = false; vm.addMask(MaskKind.ELLIPSE) } }
+        }
+        Hint("Object: tap what to correct (found by AI). Sky: the sky, found at once. Brush: paint it. Line: a graduated filter (a sky, a foreground). Oval: a face, a vignette of your own.")
+        return true
+    }
+    val mask = clip.masks.getOrNull(state.selectedMask) ?: return false
+    // The selected mask's own actions, always in the same place.
     Row(verticalAlignment = Alignment.CenterVertically) {
-        SmallAction(if (mask.inverted) "Inverted ✓" else "Invert", { vm.updateMask { it.copy(inverted = !it.inverted) } })
+        CircleOption("◑", "Invert", selected = mask.inverted, modified = false) { vm.updateMask { it.copy(inverted = !it.inverted) } }
+        if (mask.kind == MaskKind.BRUSH) {
+            CircleOption("◉", "Overlay", selected = state.maskOverlay, modified = false) { vm.toggleMaskOverlay() }
+            CircleOption("⌀", "Clear", selected = false, modified = false) { vm.clearBrush() }
+        }
         Spacer(Modifier.weight(1f))
-        if (mask.grade != ColorGrade()) SmallAction("Reset", { vm.updateGrade { ColorGrade() } })
-        SmallAction("Remove", { vm.removeMask(state.selectedMask) })
+        if (mask.grade != ColorGrade()) CircleOption("↺", "Reset", selected = false, modified = false) { vm.updateGrade { ColorGrade() } }
+        CircleOption("✕", "Delete", selected = false, modified = false) { vm.removeMask(state.selectedMask) }
     }
-    // Following movement in the shot: keys at moments of the clip, or tracked automatically.
+    return false
+}
+
+/** What a mask is, as its list names it. */
+private fun maskName(m: ColourMask): String = when (m.kind) {
+    MaskKind.LINEAR -> "Line"
+    MaskKind.ELLIPSE -> "Oval"
+    MaskKind.BRUSH -> {
+        val adds = m.strokes.filter { !it.erase }
+        when {
+            adds.isNotEmpty() && adds.all { it.sky } -> "Sky"
+            adds.any { it.segment || it.lasso } -> "Object"
+            else -> "Brush"
+        }
+    }
+}
+
+private fun maskSymbol(m: ColourMask): String = when (maskName(m)) {
+    "Line" -> "⟋"
+    "Oval" -> "◯"
+    "Sky" -> "☁"
+    "Object" -> "◎"
+    else -> "✎"
+}
+
+/**
+ * How the selected mask follows movement in a clip: tracked with AI (a painted mask, found again on
+ * each frame), or tracked by its shape and keys (a line or oval).
+ */
+@Composable
+private fun MaskMotion(state: UiState, clip: ClipState, mask: ColourMask, vm: HeadsupViewModel, playhead: LongState, onSeek: (Long) -> Unit) {
+    if (clip.meta.isPhoto) return
     Row(verticalAlignment = Alignment.CenterVertically) {
         Text(
             when {
@@ -3083,31 +3169,23 @@ private fun MaskList(state: UiState, clip: ClipState, vm: HeadsupViewModel, play
                 else -> "Moves with the shot"
             },
             Modifier.weight(1f),
-            style = MaterialTheme.typography.labelMedium,
+            style = MaterialTheme.typography.labelLarge,
             color = HeadsupColors.TextMuted,
         )
-        if (!clip.meta.isPhoto) {
-            if (mask.sequence != null) {
-                // Tracked with AI: continue from a fix made at the playhead, or go back to the strokes.
-                SmallAction("◀ Track", { vm.trackMask(HeadsupViewModel.TrackDirection.BACKWARD) }, enabled = !state.busy)
-                SmallAction("Track ▶", { vm.trackMask(HeadsupViewModel.TrackDirection.FORWARD) }, enabled = !state.busy)
-                SmallAction("Clear", { vm.clearMaskSequence() }, enabled = !state.busy)
-            } else if (mask.keys.isEmpty()) {
-                SmallAction("Track", { vm.trackMask(HeadsupViewModel.TrackDirection.BOTH) }, enabled = !state.busy)
-            } else {
-                // Continuing from a key placed by hand keeps what was already tracked.
-                SmallAction("◀ Track", { vm.trackMask(HeadsupViewModel.TrackDirection.BACKWARD) }, enabled = !state.busy)
-                SmallAction("Track ▶", { vm.trackMask(HeadsupViewModel.TrackDirection.FORWARD) }, enabled = !state.busy)
-            }
+        if (mask.sequence != null) {
+            // Tracked with AI: continue from a fix made at the playhead, or go back to the strokes.
+            SmallAction("◀ Track", { vm.trackMask(HeadsupViewModel.TrackDirection.BACKWARD) }, enabled = !state.busy)
+            SmallAction("Track ▶", { vm.trackMask(HeadsupViewModel.TrackDirection.FORWARD) }, enabled = !state.busy)
+            SmallAction("Untrack", { vm.clearMaskSequence() }, enabled = !state.busy)
+        } else if (mask.keys.isEmpty()) {
+            SmallAction("Track", { vm.trackMask(HeadsupViewModel.TrackDirection.BOTH) }, enabled = !state.busy)
+        } else {
+            // Continuing from a key placed by hand keeps what was already tracked.
+            SmallAction("◀ Track", { vm.trackMask(HeadsupViewModel.TrackDirection.BACKWARD) }, enabled = !state.busy)
+            SmallAction("Track ▶", { vm.trackMask(HeadsupViewModel.TrackDirection.FORWARD) }, enabled = !state.busy)
         }
     }
-    if (mask.kind == MaskKind.BRUSH && !clip.meta.isPhoto) {
-        Hint(
-            if (mask.sequence != null) "The mask is found again on each frame by AI (12 a second), so it keeps the object's shape and ends when the object leaves the picture. If it slips somewhere, go there, fix it (Select or Paint) and Track ▶ (or ◀ Track) from that frame."
-            else "Track finds the mask again on each frame with AI (12 a second; about a second per frame on a phone): it keeps the object's shape and ends when the object leaves the picture. The sky is found again on each frame.",
-        )
-    }
-    if (!clip.meta.isPhoto && mask.sequence == null) {
+    if (mask.sequence == null) {
         MaskKeyStrip(
             keys = mask.keys,
             cutStartMs = clip.trimStartMs,
@@ -3120,8 +3198,12 @@ private fun MaskList(state: UiState, clip: ClipState, vm: HeadsupViewModel, play
         )
     }
     Hint(
-        if (mask.keys.isEmpty()) "To follow movement: place the mask, then Track (it follows the picture both ways from here), or pause, + Key, and move the mask at a few moments."
-        else "Pause on a key (or tap its diamond) and move the mask to change it; between keys it glides. Where tracking was lost, place the mask by hand there and Track ▶ to continue; only the part after it changes.",
+        when {
+            mask.kind == MaskKind.BRUSH && mask.sequence != null -> "Found again on each frame by AI, so it keeps the object's shape and ends when it leaves the picture. Where it slips, go there, fix it (Select or Paint) and Track from that frame."
+            mask.kind == MaskKind.BRUSH -> "Track finds the mask again on each frame with AI (about a second a frame on a phone; Stop keeps what was found): it keeps the object's shape and ends when the object leaves the picture."
+            mask.keys.isEmpty() -> "Place the mask, then Track (it follows the picture both ways from here), or pause, + Key, and move the mask at a few moments."
+            else -> "Pause on a key (or tap its diamond) and move the mask to change it; between keys it glides."
+        },
     )
 }
 

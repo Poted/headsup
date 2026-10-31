@@ -161,6 +161,10 @@ fun ClipPreview(
     onPictureHeight: ((Float) -> Unit)? = null,
     /** Painting a mask: two fingers zoom and pan the view (one paints), to reach small things. */
     zoomForPainting: Boolean = false,
+    /** With [zoomForPainting]: one finger also moves the zoomed view (nothing is painted). */
+    panView: Boolean = false,
+    /** The selected painted mask shown filled in red; otherwise only its outline. */
+    maskOverlay: Boolean = false,
     /** A brush stroke being painted (fractions of the picture), its radius (of the picture's height), strength, and whether it erases. */
     paintPath: List<Float> = emptyList(),
     paintRadius: Float = 0f,
@@ -760,9 +764,16 @@ fun ClipPreview(
     var brushAtlas by remember { mutableStateOf<Bitmap?>(null) }
     LaunchedEffect(Unit) {
         snapshotFlow { brushInput.value }
-            .distinctUntilChangedBy { (m, a, t) -> listOf(m.map { it.strokes }, m.map { it.softness }, m.map { it.sequence to it.sequenceStrokes }, a, t) }
+            .distinctUntilChangedBy { (m, a, t) -> listOf(m.map { it.strokes }, m.map { it.softness }, m.map { it.edge }, m.map { it.sequence to it.sequenceStrokes }, a, t) }
             .conflate()
             .collect { (m, a, t) -> brushAtlas = withContext(Dispatchers.Default) { BrushAtlas.build(context, m, a, t) } }
+    }
+    // The selected painted mask's outline (drawn over the picture instead of a red fill, so what is
+    // being corrected stays in sight).
+    var brushOutline by remember { mutableStateOf<Bitmap?>(null) }
+    LaunchedEffect(brushAtlas, guideIndex) {
+        val atlas = brushAtlas
+        brushOutline = if (atlas == null) null else withContext(Dispatchers.Default) { outlineOf(atlas, guideIndex) }
     }
     LaunchedEffect(brushAtlas) {
         previewShader?.setBrush(brushAtlas)
@@ -820,14 +831,41 @@ fun ClipPreview(
                         .pointerInput(Unit) { detectTapGestures(onDoubleTap = { viewZoom = if (viewZoom > 1.01f) 1f else 3f; viewPan = Offset.Zero }) }
                 } else if (zoomForPainting) {
                     // Painting: two fingers zoom and pan the view, taken before the painting sees
-                    // them (one finger still paints).
+                    // them (one finger still paints; in View it moves the view). A double tap
+                    // fits the view again and paints nothing: its first tap is taken back.
                     Modifier.pointerInput(Unit) {
+                        var lastTapMs = 0L
+                        var lastTapAt = Offset.Zero
                         awaitEachGesture {
-                            awaitFirstDown(requireUnconsumed = false, pass = androidx.compose.ui.input.pointer.PointerEventPass.Initial)
+                            val first = awaitFirstDown(requireUnconsumed = false, pass = androidx.compose.ui.input.pointer.PointerEventPass.Initial)
+                            val downMs = first.uptimeMillis
+                            if (downMs - lastTapMs < 300L && (first.position - lastTapAt).getDistance() < 48.dp.toPx()) {
+                                first.consume()
+                                lastTapMs = 0L
+                                viewZoom = 1f
+                                viewPan = Offset.Zero
+                                brushPainter?.invoke(4, 0f, 0f, grab)
+                                do {
+                                    val e = awaitPointerEvent(androidx.compose.ui.input.pointer.PointerEventPass.Initial)
+                                    e.changes.forEach { it.consume() }
+                                } while (e.changes.any { it.pressed })
+                                return@awaitEachGesture
+                            }
+                            var moved = false
+                            var multi = false
                             while (true) {
                                 val event = awaitPointerEvent(androidx.compose.ui.input.pointer.PointerEventPass.Initial)
                                 if (event.changes.none { it.pressed }) break
+                                event.changes.firstOrNull()?.let { if ((it.position - first.position).getDistance() > 12.dp.toPx()) moved = true }
+                                if (panView && event.changes.count { it.pressed } == 1) {
+                                    val maxX = size.width * (viewZoom - 1f) / 2f
+                                    val maxY = size.height * (viewZoom - 1f) / 2f
+                                    viewPan = if (viewZoom <= 1.001f) Offset.Zero
+                                        else (viewPan + event.calculatePan()).let { Offset(it.x.coerceIn(-maxX, maxX), it.y.coerceIn(-maxY, maxY)) }
+                                    event.changes.forEach { it.consume() }
+                                }
                                 if (event.changes.count { it.pressed } >= 2) {
+                                    multi = true
                                     viewZoom = (viewZoom * event.calculateZoom()).coerceIn(1f, 8f)
                                     val maxX = size.width * (viewZoom - 1f) / 2f
                                     val maxY = size.height * (viewZoom - 1f) / 2f
@@ -835,6 +873,13 @@ fun ClipPreview(
                                         else (viewPan + event.calculatePan()).let { Offset(it.x.coerceIn(-maxX, maxX), it.y.coerceIn(-maxY, maxY)) }
                                     event.changes.forEach { it.consume() }
                                 }
+                            }
+                            // A short tap in place may be the first of a double tap.
+                            if (!moved && !multi) {
+                                lastTapMs = downMs
+                                lastTapAt = first.position
+                            } else {
+                                lastTapMs = 0L
                             }
                         }
                     }
@@ -1101,7 +1146,11 @@ fun ClipPreview(
                             scale(t.zoom, t.zoom, o)
                         }) {
                             if (m.kind == MaskKind.BRUSH) {
-                                brushAtlas?.let { atlas -> drawIntoCanvas { drawBrushOverlay(it.nativeCanvas, atlas, guideIndex, m, geometry.pictureW, geometry.pictureH) } }
+                                if (maskOverlay) {
+                                    brushAtlas?.let { atlas -> drawIntoCanvas { drawBrushOverlay(it.nativeCanvas, atlas, guideIndex, m, geometry.pictureW, geometry.pictureH) } }
+                                } else {
+                                    brushOutline?.let { outline -> drawIntoCanvas { drawBrushOutline(it.nativeCanvas, outline, m, geometry.pictureW, geometry.pictureH) } }
+                                }
                                 if (paintPath.size >= 2) {
                                     // The stroke as it is painted, the brush's width, before the mask is drawn again.
                                     val path = androidx.compose.ui.graphics.Path()
@@ -1111,7 +1160,7 @@ fun ClipPreview(
                                     if (paintPath.size == 2) path.lineTo(paintPath[0] * geometry.pictureW + 0.01f, paintPath[1] * geometry.pictureH)
                                     drawPath(
                                         path,
-                                        if (paintErase) Color.Black.copy(alpha = 0.45f * paintStrength) else Color(0xFFFF2828).copy(alpha = 0.45f * paintStrength),
+                                        if (paintErase) Color.Black.copy(alpha = 0.45f * paintStrength) else Color.White.copy(alpha = 0.45f * paintStrength),
                                         style = Stroke(2f * paintRadius * geometry.pictureH, cap = androidx.compose.ui.graphics.StrokeCap.Round, join = androidx.compose.ui.graphics.StrokeJoin.Round),
                                     )
                                 }
@@ -1466,6 +1515,45 @@ private fun drawBrushOverlay(canvas: android.graphics.Canvas, atlas: Bitmap, slo
     canvas.scale(mask.sizeX, mask.sizeY)
     canvas.translate(-width / 2f, -height / 2f)
     canvas.drawBitmap(atlas, android.graphics.Rect(slot * slotW, 0, (slot + 1) * slotW, atlas.height), android.graphics.RectF(0f, 0f, width, height), brushOverlayPaint)
+    canvas.restore()
+}
+
+/**
+ * The edge of slot [slot]'s mask in [atlas] (where its coverage crosses one half) as a thin white
+ * line with a dark rim, so it shows on any picture; the frame's own border is no edge.
+ */
+private fun outlineOf(atlas: Bitmap, slot: Int): Bitmap? {
+    val w = atlas.width / ColourMask.MAX_PER_CLIP
+    val h = atlas.height
+    if (w < 3 || h < 3 || slot !in 0 until ColourMask.MAX_PER_CLIP) return null
+    val px = IntArray(w * h)
+    atlas.getPixels(px, 0, w, slot * w, 0, w, h)
+    val inside = BooleanArray(w * h) { ((px[it] shr 16) and 0xFF) >= 128 }
+    val out = IntArray(w * h)
+    val line = android.graphics.Color.WHITE
+    val rim = android.graphics.Color.argb(140, 0, 0, 0)
+    for (y in 1 until h - 1) for (x in 1 until w - 1) {
+        val i = y * w + x
+        if (inside[i] && (!inside[i - 1] || !inside[i + 1] || !inside[i - w] || !inside[i + w])) out[i] = line
+    }
+    // The dark rim around the line.
+    for (y in 1 until h - 1) for (x in 1 until w - 1) {
+        val i = y * w + x
+        if (out[i] == 0 && (out[i - 1] == line || out[i + 1] == line || out[i - w] == line || out[i + w] == line)) out[i] = rim
+    }
+    return Bitmap.createBitmap(out, w, h, Bitmap.Config.ARGB_8888)
+}
+
+private val outlinePaint = android.graphics.Paint(android.graphics.Paint.FILTER_BITMAP_FLAG)
+
+/** [outline] (a mask's edge, from [outlineOf]) placed as the mask is. */
+private fun drawBrushOutline(canvas: android.graphics.Canvas, outline: Bitmap, mask: ColourMask, width: Float, height: Float) {
+    canvas.save()
+    canvas.translate(mask.centerX * width, mask.centerY * height)
+    canvas.rotate(mask.angleDegrees)
+    canvas.scale(mask.sizeX, mask.sizeY)
+    canvas.translate(-width / 2f, -height / 2f)
+    canvas.drawBitmap(outline, null, android.graphics.RectF(0f, 0f, width, height), outlinePaint)
     canvas.restore()
 }
 

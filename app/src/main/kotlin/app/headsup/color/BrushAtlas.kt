@@ -22,7 +22,7 @@ object BrushAtlas {
         if (aspect >= 1f) SLOT to (SLOT / aspect).roundToInt().coerceAtLeast(1) else (SLOT * aspect).roundToInt().coerceAtLeast(1) to SLOT
 
     /** All strokes but the one being painted, already drawn: while a finger paints, only its stroke is drawn again. */
-    private class Drawn(val strokes: List<BrushStroke>, val softness: Float, val width: Int, val height: Int, val map: FloatArray)
+    private class Drawn(val strokes: List<BrushStroke>, val softness: Float, val edge: Float, val width: Int, val height: Int, val map: FloatArray)
 
     private val drawn = HashMap<Int, Drawn>()
 
@@ -34,18 +34,18 @@ object BrushAtlas {
 
     private fun coverage(context: Context, slot: Int, mask: ColourMask, w: Int, h: Int): FloatArray {
         synchronized(drawn) { finished[slot] }?.let { f ->
-            if (f.width == w && f.height == h && f.softness == mask.softness && f.strokes == mask.strokes) return f.map
+            if (f.width == w && f.height == h && f.softness == mask.softness && f.edge == mask.edge && f.strokes == mask.strokes) return f.map
         }
         val refs = references(context, mask.strokes)
         val earlier = mask.strokes.dropLast(1)
         val cached = synchronized(drawn) { drawn[slot] }
-        val base = if (cached != null && cached.width == w && cached.height == h && cached.softness == mask.softness && cached.strokes == earlier) {
+        val base = if (cached != null && cached.width == w && cached.height == h && cached.softness == mask.softness && cached.edge == mask.edge && cached.strokes == earlier) {
             cached.map
         } else {
-            BrushMask.rasterize(earlier, w, h, mask.softness, refs).also { synchronized(drawn) { drawn[slot] = Drawn(earlier, mask.softness, w, h, it) } }
+            BrushMask.rasterize(earlier, w, h, mask.softness, refs, edge = mask.edge).also { synchronized(drawn) { drawn[slot] = Drawn(earlier, mask.softness, mask.edge, w, h, it) } }
         }
-        return BrushMask.rasterize(listOf(mask.strokes.last()), w, h, mask.softness, refs, start = base)
-            .also { synchronized(drawn) { finished[slot] = Drawn(mask.strokes, mask.softness, w, h, it) } }
+        return BrushMask.rasterize(listOf(mask.strokes.last()), w, h, mask.softness, refs, start = base, edge = mask.edge)
+            .also { synchronized(drawn) { finished[slot] = Drawn(mask.strokes, mask.softness, mask.edge, w, h, it) } }
     }
 
     /**
@@ -54,9 +54,10 @@ object BrushAtlas {
      */
     private fun tracked(context: Context, mask: ColourMask, w: Int, h: Int, timeMs: Long): FloatArray? {
         val seq = mask.sequence?.let { MaskSequences.get(context, it) } ?: return null
-        val base = seq.at(timeMs, w, h)
+        val maps = seq.at(timeMs, w, h)
+        val base = if (mask.edge == 0f) maps else app.headsup.core.color.MaskEdge.shape(maps, w, h, mask.edge)
         val extra = mask.strokes.drop(mask.sequenceStrokes)
-        return if (extra.isEmpty()) base else BrushMask.rasterize(extra, w, h, mask.softness, references(context, extra), start = base)
+        return if (extra.isEmpty()) base else BrushMask.rasterize(extra, w, h, mask.softness, references(context, extra), start = base, edge = mask.edge)
     }
 
     /** True when a mask changes from frame to frame (tracked with AI): the atlas is drawn again for each. */

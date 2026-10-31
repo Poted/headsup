@@ -15,7 +15,7 @@ import kotlin.math.roundToInt
 /**
  * Masks found by small models on the phone (ONNX Runtime): objects with MobileSAM (Segment
  * Anything: the picture is read once, then each tap, outline or box is answered in a moment) and
- * the sky with DeepLab (trained on ADE20K). What they find is rough (they see the picture small),
+ * the sky with DeepLab v3+ (Xception65, trained on ADE20K). What they find is rough (they see the picture small),
  * so it is laid onto the picture's own edges ([MaskRefine]).
  */
 object Segmenter {
@@ -27,12 +27,25 @@ object Segmenter {
     private var decoder: OrtSession? = null
     private var skyModel: OrtSession? = null
 
+    /**
+     * A model opened from a file (the large ones are not read into memory first), copied once out
+     * of the app's package (again when the app brings a different one).
+     */
     private fun session(context: Context, asset: String): OrtSession {
-        val bytes = context.applicationContext.assets.open(asset).use { it.readBytes() }
+        val app = context.applicationContext
+        val file = java.io.File(java.io.File(app.filesDir, "models"), asset)
+        val size = app.assets.openFd(asset).use { it.length }
+        if (!file.exists() || file.length() != size) {
+            file.parentFile?.mkdirs()
+            val part = java.io.File(file.parentFile, "$asset.part")
+            app.assets.open(asset).use { input -> part.outputStream().use { input.copyTo(it, 1 shl 16) } }
+            file.delete()
+            check(part.renameTo(file)) { "Could not keep the model $asset" }
+        }
         val options = OrtSession.SessionOptions().apply {
             setIntraOpNumThreads(Runtime.getRuntime().availableProcessors().coerceIn(1, 4))
         }
-        return env.createSession(bytes, options)
+        return env.createSession(file.absolutePath, options)
     }
 
     @Synchronized private fun encoder(context: Context) = encoder ?: session(context, "sam_encoder.onnx").also { encoder = it }

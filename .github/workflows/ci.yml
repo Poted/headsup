@@ -33,11 +33,22 @@ jobs:
           distribution: temurin
           java-version: '17'
       - uses: gradle/actions/setup-gradle@v4
-      # The inpainting model (208 MB) the build downloads: kept between runs.
+      # Models too large for the repository: the inpainting model (downloaded by the build) and the
+      # sky model (built from DeepLab's TensorFlow graph), kept between runs.
       - uses: actions/cache@v4
+        id: models
         with:
           path: app/build/models
-          key: models-lama-1faef5301d78
+          key: models-${{ hashFiles('tools/models/**') }}-lama-1faef5301d78
+      - uses: actions/setup-python@v5
+        if: steps.models.outputs.cache-hit != 'true'
+        with:
+          python-version: '3.13'
+      - name: Sky model
+        if: steps.models.outputs.cache-hit != 'true'
+        run: |
+          pip install tensorflow-cpu==2.21.0 tf2onnx==1.17.0 onnx==1.23.2 onnxruntime numpy
+          python tools/models/sky_model.py app/build/models/assets/sky.onnx
       - name: Build debug APK
         run: ./gradlew :app:assembleDebug
       - name: Upload APK

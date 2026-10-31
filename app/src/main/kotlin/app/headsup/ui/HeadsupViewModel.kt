@@ -297,6 +297,8 @@ data class UiState(
     val selectedMask: Int = 0,
     /** The brush for painted masks. */
     val brush: BrushSettings = BrushSettings(),
+    /** The selected mask shown filled in red (otherwise only its outline). */
+    val maskOverlay: Boolean = false,
     /** An outline being drawn around an object (x, y pairs, fractions of the picture), until the finger lifts. */
     val lassoPath: List<Float> = emptyList(),
     /** A brush stroke being painted (x, y pairs, fractions of the picture), until the finger lifts. */
@@ -1198,6 +1200,22 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    /** Asks AI tracking to stop after the frame it is on (what was tracked is kept). */
+    @Volatile private var stopRequested = false
+
+    /**
+     * The Stop of a long job: AI tracking stops after its frame and keeps what it found; other
+     * jobs (copying, Clean up) are cancelled.
+     */
+    fun stopWork() {
+        if (_state.value.loadingMessage?.startsWith("Tracking with AI") == true) {
+            stopRequested = true
+            _state.update { it.copy(loadingMessage = "Stopping…") }
+        } else {
+            cancelLoading()
+        }
+    }
+
     /** Stops copying files in; what was not finished is removed. */
     fun cancelLoading() {
         loadJob?.cancel()
@@ -1772,6 +1790,20 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
         _state.update { it.copy(selectedMask = count) }
     }
 
+    /** A new painted mask, with the finger set to what it is for: [mode] (Select for an object, Paint to paint). */
+    fun addBrushMask(mode: BrushMode) {
+        addMask(MaskKind.BRUSH)
+        _state.update { it.copy(brush = it.brush.copy(mode = mode, subtract = false)) }
+    }
+
+    /** A new mask that is the sky of the picture on screen. */
+    fun addSkyMask(grab: (Int) -> android.graphics.Bitmap?) {
+        addBrushMask(BrushMode.SELECT)
+        selectSky(grab)
+    }
+
+    fun toggleMaskOverlay() = _state.update { it.copy(maskOverlay = !it.maskOverlay) }
+
     fun removeMask(maskIndex: Int) {
         val index = _state.value.selectedClip ?: return
         updateClip(index) { it.copy(masks = it.masks.filterIndexed { i, _ -> i != maskIndex }) }
@@ -1828,7 +1860,30 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
      * stroke, 1 continues it, 2 ends it. Points land where the mask shows now (it may have moved).
      * Only the strokes change, so no colour table is computed again.
      */
+    /** A tap's action waits a moment ([TAP_WAIT_MS]): a second tap (which fits the view again) takes it back. */
+    private var pendingTap: kotlinx.coroutines.Job? = null
+
+    private fun afterTap(action: () -> Unit) {
+        pendingTap?.cancel()
+        pendingTap = viewModelScope.launch {
+            kotlinx.coroutines.delay(TAP_WAIT_MS)
+            action()
+        }
+    }
+
+    /** A double tap on the picture: it only fits the view again, so the first tap does nothing. */
+    private fun dropTap() {
+        pendingTap?.cancel()
+        _state.update { it.copy(paintPath = emptyList(), lassoPath = emptyList()) }
+    }
+
+    /**
+     * A finger on a painted mask. [phase]: 0 down, 1 moved, 2 lifted, 3 dropped (a second finger
+     * came: the view zooms instead), 4 a double tap (the view fits again; the tap before it is
+     * taken back).
+     */
     fun brushStroke(phase: Int, x: Float, y: Float, grab: (Int) -> android.graphics.Bitmap?) {
+        if (phase == 4) return dropTap()
         val s = _state.value
         val index = s.selectedClip ?: return
         val clip = s.selected ?: return
@@ -1863,9 +1918,13 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                 val radius = b.radius / placed.sizeX.coerceAtLeast(0.05f)
                 val stroke = app.headsup.core.color.BrushStroke(points, radius, b.flow, b.mode == BrushMode.ERASE)
                 val m = s.selectedMask
-                _state.update { st ->
-                    st.copy(clips = st.clips.mapIndexed { i, c -> if (i == index) c.copy(masks = c.masks.mapIndexed { j, mm -> if (j == m) mm.copy(strokes = mm.strokes + stroke) else mm }) else c })
+                val add = {
+                    _state.update { st ->
+                        st.copy(clips = st.clips.mapIndexed { i, c -> if (i == index) c.copy(masks = c.masks.mapIndexed { j, mm -> if (j == m) mm.copy(strokes = mm.strokes + stroke) else mm }) else c })
+                    }
                 }
+                // A dab (a tap) may be the start of a double tap.
+                if (path.size <= 2) afterTap(add) else add()
             }
         }
     }
@@ -1901,7 +1960,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                 val ys = path.filterIndexed { i, _ -> i % 2 == 1 }
                 val tap = path.size < 6 || maxOf(xs.max() - xs.min(), ys.max() - ys.min()) < 0.02f
                 if (tap) {
-                    selectObject(path[0], path[1], null, grab, clip, index, placed)
+                    afterTap { selectObject(path[0], path[1], null, grab, clip, index, placed) }
                     return
                 }
                 val outline = path.chunked(2).map { (px, py) -> px to py }
@@ -2075,6 +2134,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
      * area painted. Shown as painted while the finger is down.
      */
     fun cleanupStroke(phase: Int, x: Float, y: Float, grab: (Int) -> android.graphics.Bitmap?) {
+        if (phase == 4) return dropTap()
         val s = _state.value
         val index = s.selectedClip ?: return
         val clip = s.selected?.takeIf { it.meta.isPhoto } ?: return
@@ -2099,7 +2159,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                 val tap = path.size < 6 || maxOf(xs.max() - xs.min(), ys.max() - ys.min()) < 0.02f
                 val picture = if (tap) segmentPicture(clip, grab) else null
                 val radius = s.brush.radius
-                cleanup(index, clip) { w, h ->
+                val run = { cleanup(index, clip) { w, h ->
                     if (tap) {
                         val seg = picture?.await() ?: return@cleanup null
                         val found = app.headsup.color.Segmenter.objects(
@@ -2111,7 +2171,8 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                         val stroke = app.headsup.core.color.BrushStroke(path, radius, flow = 1f)
                         app.headsup.core.color.BrushMask.rasterize(listOf(stroke), w, h, softness = 0f)
                     }
-                }
+                } }
+                if (tap) afterTap(run) else run()
             }
         }
     }
@@ -2136,6 +2197,8 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                     val develop = if (clip.meta.isRaw) app.headsup.retouch.Cleaner.developKey(clip.rawDevelop) else null
                     val base = app.headsup.retouch.Cleaner.applyTo(context, photo, clip.retouch)
                     app.headsup.retouch.Cleaner.remove(context, base, hole, hw, hh, holeId, develop) { p ->
+                        // Stop takes effect between areas (one fill cannot be interrupted).
+                        ensureActive()
                         _state.update { it.copy(loadingProgress = p) }
                     }
                 }
@@ -2286,7 +2349,9 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
         val adds = mask.strokes.filter { !it.erase }
         val sky = adds.isNotEmpty() && adds.all { it.sky }
         val context: Application = getApplication()
-        val step = AI_TRACK_STEP_MS
+        // The sky model is larger and the sky changes slowly: 4 maps a second, faded between.
+        val step = if (sky) AI_TRACK_SKY_STEP_MS else AI_TRACK_STEP_MS
+        stopRequested = false
         _state.update { it.copy(busy = true, loadingMessage = "Tracking with AI", loadingProgress = 0f) }
         loadJob = viewModelScope.launch {
             try {
@@ -2298,9 +2363,9 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                     val refs = mask.strokes.mapNotNull { it.reference }.distinct()
                         .mapNotNull { id -> app.headsup.color.BrushReferences.get(context, id)?.let { id to it } }.toMap()
                     val start = if (old != null) {
-                        app.headsup.core.color.BrushMask.rasterize(mask.strokes.drop(mask.sequenceStrokes), w, h, mask.softness, refs, start = old.at(t0, w, h))
+                        app.headsup.core.color.BrushMask.rasterize(mask.strokes.drop(mask.sequenceStrokes), w, h, mask.softness, refs, start = old.at(t0, w, h), edge = mask.edge)
                     } else {
-                        app.headsup.core.color.BrushMask.rasterize(mask.strokes, w, h, mask.softness, refs)
+                        app.headsup.core.color.BrushMask.rasterize(mask.strokes, w, h, mask.softness, refs, edge = mask.edge)
                     }
                     if (!sky && app.headsup.core.color.MaskFollow.area(start) == 0f) return@withContext null
                     val forward = direction != TrackDirection.BACKWARD
@@ -2322,6 +2387,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                         var first = true
                         var last = t0
                         TrackingFrames.forEachPicture(context, uri, t0, clip.trimEndMs, step, app.headsup.color.Segmenter.INPUT) { ms, picture ->
+                            if (stopRequested) return@forEachPicture false
                             progress(ms - last)
                             last = ms
                             if (first) {
@@ -2341,10 +2407,11 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                             true
                         }
                     }
-                    if (backward && t0 - clip.trimStartMs > step / 2) {
+                    if (backward && t0 - clip.trimStartMs > step / 2 && !stopRequested) {
                         // Frames come only forward: kept small (as JPEG) and followed from the playhead back.
                         val kept = ArrayList<Pair<Long, ByteArray>>()
                         TrackingFrames.forEachPicture(context, uri, clip.trimStartMs, t0 - step / 2, step, app.headsup.color.Segmenter.INPUT) { ms, picture ->
+                            if (stopRequested) return@forEachPicture false
                             val out = java.io.ByteArrayOutputStream()
                             picture.compress(Bitmap.CompressFormat.JPEG, 92, out)
                             picture.recycle()
@@ -2358,6 +2425,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                         }
                         for ((ms, jpeg) in kept.asReversed()) {
                             coroutineContext.ensureActive()
+                            if (stopRequested) break
                             progress(last - ms)
                             last = ms
                             val picture = android.graphics.BitmapFactory.decodeByteArray(jpeg, 0, jpeg.size) ?: continue
@@ -2376,7 +2444,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                     val tracked = app.headsup.core.color.MaskSequence(w, h, LongArray(order.size) { times[order[it]] }, order.map { maps[it] })
                     val merged = old?.merged(tracked) ?: tracked
                     val id = app.headsup.color.MaskSequences.create(context, merged)
-                    TrackedAi(id, tracked.timesMs.first(), tracked.timesMs.last(), tracked.timesMs.size, lostAhead, lostBehind, goneAhead, goneBehind)
+                    TrackedAi(id, tracked.timesMs.first(), tracked.timesMs.last(), tracked.timesMs.size, lostAhead, lostBehind, goneAhead, goneBehind, stopRequested)
                 }
                 if (result == null) {
                     _state.update { it.copy(messages = it.messages + "Nothing to track: select something in the mask first (Select, or paint it).") }
@@ -2389,7 +2457,8 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                             if (c.id != clipId) c else c.copy(masks = c.masks.mapIndexed { i, m -> if (i != maskIndex) m else m.copy(sequence = result.id, sequenceStrokes = m.strokes.size, keys = emptyList()) })
                         },
                         messages = st.messages + listOfNotNull(
-                            "Mask found on ${result.frames} frames, ${at(result.fromMs)}–${at(result.toMs)}.",
+                            "Mask found on ${result.frames} frames, ${at(result.fromMs)}–${at(result.toMs)}." +
+                                if (result.stopped) " Stopped: what was tracked is kept; Track ▶ / ◀ Track continues from the playhead." else "",
                             result.goneAhead?.let { "Left the picture at ${at(it)}: the mask ends there." },
                             result.goneBehind?.let { "Going back, it left the picture at ${at(it)}." },
                             result.lostAhead?.let { "Lost at ${at(it)}: go there, select it again and Track ▶ to continue." },
@@ -2407,6 +2476,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
     private class TrackedAi(
         val id: String, val fromMs: Long, val toMs: Long, val frames: Int,
         val lostAhead: Long?, val lostBehind: Long?, val goneAhead: Long?, val goneBehind: Long?,
+        val stopped: Boolean,
     )
 
     /** Ends the selected mask's tracking with AI: it is drawn from its strokes again, where they were made. */
@@ -2967,14 +3037,22 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
         const val MAX_OFFSET_MS = 600_000L
         const val PHOTO_DEFAULT_MS = 4_000L
         private const val MAX_HISTORY = 60
+        /** How long a tap waits for a second one (a double tap only fits the view). */
+        private const val TAP_WAIT_MS = 280L
         /** Between the maps of a mask tracked with AI: 12 a second. */
         private const val AI_TRACK_STEP_MS = 83L
+        private const val AI_TRACK_SKY_STEP_MS = 250L
         private const val GLOBAL = "global_"
     }
 }
 
-/** What a finger does on a painted mask: paint, erase, outline an object to select it, or move the mask. */
-enum class BrushMode(val label: String) { PAINT("Paint"), ERASE("Erase"), SELECT("Select"), MOVE("Move") }
+/**
+ * What a finger does on a painted mask: select an object (tap, outline, line), paint, erase, move
+ * the mask, or only look (VIEW: one finger moves the zoomed picture, nothing is painted).
+ */
+enum class BrushMode(val symbol: String, val label: String) {
+    SELECT("◎", "Select"), PAINT("✎", "Paint"), ERASE("⌫", "Erase"), MOVE("✥", "Move"), VIEW("✋", "View"),
+}
 
 /** The brush: its radius (of the picture's height) and flow, 0..1. */
 data class BrushSettings(
