@@ -115,6 +115,10 @@ project's files), the preview resized left/right when held sideways, Edit called
       earlier). Export: a tracked mask's fixes are drawn once (not on every frame), its pictures are
       not read from the disk again on each frame, and the muxer waits up to a minute for a slow
       frame (the export failed with MUXING_TIMEOUT after 10 s).
+- [x] Mask flow: a mask's shape is changed in a mode of its own (Shape: its tools, tracking and
+      keys, Overlay, Clear, Done); its corrections are the default view, where a finger on the
+      picture changes nothing. A new mask opens in Shape; Done goes to its corrections. The
+      transport jumps to a clip's first or last frame (⇤ ⇥). The export progress bar has no end dot.
 - [ ] Masks, next: (1) edges at full resolution in export (the mask is kept at 640 px: refine it
       against the full picture in the shader); (2) faster tracking (the encoder takes about a
       second per frame on a phone: GPU/NNAPI, or a smaller encoder); (3) more prompts: + / − points

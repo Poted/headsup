@@ -590,6 +590,18 @@ fun ClipPreview(
     var playing by remember { mutableStateOf(false) }
     // Playing or about to (a player still loading counts): what the play button shows and toggles.
     var wantsPlay by remember { mutableStateOf(false) }
+    // A jump within the clip (its first or last frame): paused there.
+    var jumpTarget by remember { mutableStateOf<Long?>(null) }
+    LaunchedEffect(jumpTarget) {
+        val target = jumpTarget ?: return@LaunchedEffect
+        photoPlaying = false
+        wantsPlay = false
+        val player = players[active]
+        player.pause()
+        player.seekTo(target.coerceIn(0L, clip.durationMs))
+        jumpTarget = null
+    }
+    fun jumpInClip(ms: Long) { jumpTarget = ms }
     // A colour marker no longer points at what was measured once the picture played on: hidden
     // from then until the next measurement.
     var markerStale by remember { mutableStateOf(false) }
@@ -1352,6 +1364,16 @@ fun ClipPreview(
                 contentAlignment = Alignment.Center,
             ) {
                 Icon(if (wantsPlay) HeadsupIcons.Pause else HeadsupIcons.Play, contentDescription = if (wantsPlay) "Pause" else "Play", tint = HeadsupColors.OnAccent)
+            }
+            // To the clip's first or last frame exactly (where a mask is made or tracked from).
+            if (!photoMode && !photo) {
+                Spacer(Modifier.width(6.dp))
+                ToggleDot("⇤", false) { jumpInClip(0L) }
+                Spacer(Modifier.width(4.dp))
+                ToggleDot("⇥", false) {
+                    val frameMs = (1000f / (clip.meta.frameRate ?: 30f)).toLong().coerceAtLeast(1L)
+                    jumpInClip((clip.durationMs - frameMs).coerceAtLeast(0L))
+                }
             }
             // Timeline time (the timeline below is scrubbed by dragging it); file time while a cut handle moves.
             if (photoMode) {

@@ -240,9 +240,9 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
     val measuring = tool == Tool.COLOUR && adjustment == Adjustment.SKIN && state.target != GradeTarget.MASK
     val editingMasks = tool == Tool.COLOUR && state.target == GradeTarget.MASK && state.selected?.colorGrade == true
     val editingBrush = state.selected?.masks?.getOrNull(state.selectedMask)?.kind == MaskKind.BRUSH
-    // Only on a mask's Mask tab does a finger on the picture shape it; on Light, Colour, … the
-    // picture is left alone (the outline still shows), so a touch never changes the mask by chance.
-    var maskTools by rememberSaveable { mutableStateOf(true) }
+    // Only while a mask's shape is being changed (Shape) does a finger on the picture change it;
+    // with its corrections the picture is left alone (the outline still shows).
+    var maskTools by rememberSaveable { mutableStateOf(false) }
     val shaping = editingMasks && maskTools
     // Read only where needed (cut controls), so playback does not recompose the whole screen.
     val playhead = remember { mutableLongStateOf(0L) }
@@ -2284,7 +2284,7 @@ private fun ColourPage(
     playhead: LongState,
     onSeek: (clipMs: Long) -> Unit,
     pictureSource: ((Int) -> Bitmap?)? = null,
-    /** On a mask's Mask tab (its tools), where a finger on the picture shapes the mask. */
+    /** Changing a mask's shape (its tools), where a finger on the picture shapes the mask; else its corrections. */
     maskTools: Boolean = true,
     onMaskTools: (Boolean) -> Unit = {},
 ) {
@@ -2302,7 +2302,8 @@ private fun ColourPage(
     when (target) {
         GradeTarget.GROUP -> GroupControls(state, clip, index, group, vm)
         // While a new mask is being chosen, only that shows.
-        GradeTarget.MASK -> if (MaskList(state, clip, vm, pictureSource)) return
+        // While a mask's shape is being changed only its tools show; while a new one is chosen, only that.
+        GradeTarget.MASK -> if ((!maskTools || clip.masks.getOrNull(state.selectedMask) == null) && MaskList(state, clip, vm, pictureSource) { onMaskTools(true) }) return
         else -> Unit
     }
     if (target != GradeTarget.GLOBAL && !clip.colorGrade) {
@@ -2346,31 +2347,53 @@ private fun ColourPage(
     // The raw development syncs like the rest from "all" and groups.
     val rawPhoto = clip.meta.isRaw && target != GradeTarget.MASK
     var onRaw by rememberSaveable { mutableStateOf(false) }
-    val sections = listOfNotNull("RAW".takeIf { rawPhoto }, "Mask".takeIf { shapes.isNotEmpty() }) +
+    // Shaping a mask is a mode of its own: only its tools show (and only then does a finger on the
+    // picture change it); Done goes back to its corrections, which stay as they are.
+    if (editingShape != null && mask != null) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("Shape · ${state.selectedMask + 1} · ${maskName(mask)}", Modifier.weight(1f), style = MaterialTheme.typography.titleSmall)
+            if (mask.kind == MaskKind.BRUSH) {
+                SmallAction(if (state.maskOverlay) "Overlay ✓" else "Overlay", { vm.toggleMaskOverlay() })
+                SmallAction("Clear", { vm.clearBrush() })
+            }
+            Spacer(Modifier.width(8.dp))
+            Button(onClick = { onMaskTools(false) }) { Text("Done") }
+        }
+        if (mask.kind == MaskKind.BRUSH) {
+            BrushControls(state, vm, pictureSource)
+        } else {
+            LazyRow(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+                items(shapes) { m -> CircleOption(m.symbol, m.label, selected = m == editingShape, modified = false) { shape = m } }
+            }
+            // A moving mask is shown and edited as it is at the playhead.
+            val here = vm.maskAtPlayhead(mask)
+            ValueHeader(editingShape.label, String.format(Locale.US, editingShape.format, editingShape.shown(here)))
+            RulerSlider(
+                value = editingShape.get(here),
+                range = editingShape.range,
+                step = editingShape.step,
+                onChange = { v -> vm.updateMask { editingShape.set(it, v) } },
+                onReset = { vm.updateMask { editingShape.set(it, editingShape.get(ColourMask(it.kind))) } },
+            )
+            Hint("Drag the mask on the picture to move it; two fingers resize and turn it.")
+        }
+        MaskMotion(state, clip, mask, vm, playhead, onSeek)
+        return
+    }
+    val sections = listOfNotNull("RAW".takeIf { rawPhoto }) +
         ColourSection.entries.filter { s -> options.any { it.section == s } }.map { it.label }
-    val section = if (onRaw && rawPhoto) "RAW" else if (editingShape != null) "Mask" else adjustment.section.label
+    val section = if (onRaw && rawPhoto) "RAW" else adjustment.section.label
     SectionTabs(sections, sections.indexOf(section).coerceAtLeast(0)) { i ->
         onRaw = sections[i] == "RAW"
         if (sections[i] == "RAW") return@SectionTabs
-        if (sections[i] == "Mask") {
-            onMaskTools(true)
-        } else {
-            onMaskTools(false)
-            options.firstOrNull { it.section.label == sections[i] }?.let(onAdjustment)
-        }
+        options.firstOrNull { it.section.label == sections[i] }?.let(onAdjustment)
     }
     if (onRaw && rawPhoto) {
         RawControls(clip, index, vm)
         return
     }
     LazyRow(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
-        if (editingShape != null) {
-            // A painted mask has its brush controls instead.
-            items(if (mask?.kind == MaskKind.BRUSH) emptyList() else shapes) { m ->
-                CircleOption(m.symbol, m.label, selected = m == editingShape, modified = false) { shape = m; onMaskTools(true) }
-            }
-        }
-        items(if (editingShape != null) emptyList() else options.filter { it.section == adjustment.section }) { a ->
+        items(options.filter { it.section == adjustment.section }) { a ->
             val lut = if (target == GradeTarget.GROUP) group?.lutName else clip.lutName
             val modified = when (a) {
                 Adjustment.LUT -> lut != null
@@ -2386,30 +2409,8 @@ private fun ColourPage(
                 Adjustment.LOOK -> state.grade.look != null
                 else -> a.get(state.grade) != a.neutral
             }
-            CircleOption(a.symbol, a.label, selected = editingShape == null && a == adjustment, modified = modified) {
-                onMaskTools(false)
-                onAdjustment(a)
-            }
+            CircleOption(a.symbol, a.label, selected = a == adjustment, modified = modified) { onAdjustment(a) }
         }
-    }
-    if (editingShape != null && mask?.kind == MaskKind.BRUSH) {
-        BrushControls(state, vm, pictureSource)
-        MaskMotion(state, clip, mask, vm, playhead, onSeek)
-        return
-    }
-    if (editingShape != null && mask != null) {
-        // A moving mask is shown and edited as it is at the playhead.
-        val here = vm.maskAtPlayhead(mask)
-        ValueHeader(editingShape.label, String.format(Locale.US, editingShape.format, editingShape.shown(here)))
-        RulerSlider(
-            value = editingShape.get(here),
-            range = editingShape.range,
-            step = editingShape.step,
-            onChange = { v -> vm.updateMask { editingShape.set(it, v) } },
-            onReset = { vm.updateMask { editingShape.set(it, editingShape.get(ColourMask(it.kind))) } },
-        )
-        MaskMotion(state, clip, mask, vm, playhead, onSeek)
-        return
     }
     if (adjustment == Adjustment.CINE) {
         CinePanel(state, vm, frameSource)
@@ -3095,7 +3096,7 @@ private enum class MaskShape(
 
 /** The selected clip's masks: pick one to edit, add a line or an oval, invert or remove. */
 @Composable
-private fun MaskList(state: UiState, clip: ClipState, vm: HeadsupViewModel, pictureSource: ((Int) -> Bitmap?)?): Boolean {
+private fun MaskList(state: UiState, clip: ClipState, vm: HeadsupViewModel, pictureSource: ((Int) -> Bitmap?)?, onShape: () -> Unit): Boolean {
     var adding by rememberSaveable { mutableStateOf(false) }
     val full = clip.masks.size >= ColourMask.MAX_PER_CLIP
     // The masks, then one button to add another: what is there and what can be made never mix.
@@ -3133,11 +3134,9 @@ private fun MaskList(state: UiState, clip: ClipState, vm: HeadsupViewModel, pict
     val mask = clip.masks.getOrNull(state.selectedMask) ?: return false
     // The selected mask's own actions, always in the same place.
     Row(Modifier.horizontalScroll(rememberScrollState()), verticalAlignment = Alignment.CenterVertically) {
+        // Its shape is changed in a mode of its own (Shape), its corrections below.
+        CircleOption("✎", "Shape", selected = false, modified = false) { onShape() }
         CircleOption("◑", "Invert", selected = mask.inverted, modified = false) { vm.updateMask { it.copy(inverted = !it.inverted) } }
-        if (mask.kind == MaskKind.BRUSH) {
-            CircleOption("◉", "Overlay", selected = state.maskOverlay, modified = false) { vm.toggleMaskOverlay() }
-            CircleOption("⌀", "Clear", selected = false, modified = false) { vm.clearBrush() }
-        }
         // A copy, or its opposite (the sky's mask as the land's), with its tracking.
         if (clip.masks.size < ColourMask.MAX_PER_CLIP) {
             CircleOption("⧉", "Copy", selected = false, modified = false) { vm.duplicateMask(inverted = false) }
@@ -3786,7 +3785,13 @@ private fun JobRow(job: ExportJob) {
             when (job.status) {
                 JobStatus.QUEUED -> Hint("Waiting")
                 JobStatus.RUNNING -> {
-                    LinearProgressIndicator(progress = { job.progress / 100f }, modifier = Modifier.fillMaxWidth())
+                    LinearProgressIndicator(
+                        progress = { job.progress / 100f },
+                        modifier = Modifier.fillMaxWidth(),
+                        // A plain bar: no gap and no end dot (it read as part of the progress).
+                        gapSize = 0.dp,
+                        drawStopIndicator = {},
+                    )
                     Hint("${job.progress}%")
                 }
                 JobStatus.DONE -> Text("Done", color = Color(0xFF4CAF50), style = MaterialTheme.typography.bodySmall)
