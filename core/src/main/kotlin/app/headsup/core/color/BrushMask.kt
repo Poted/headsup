@@ -445,6 +445,32 @@ object BrushMask {
         return BASE.centerX + ux / aspect to BASE.centerY + uy
     }
 
+    /**
+     * Coverage drawn in the strokes' own frame ([map], [width]×[height]) as it shows with the mask
+     * at [now] (moved, turned, scaled): what the picture shows of the mask, e.g. where tracking starts.
+     */
+    fun placed(map: FloatArray, width: Int, height: Int, now: MaskKey): FloatArray {
+        if (now.copy(timeMs = 0L) == BASE) return map.copyOf()
+        val aspect = width.toFloat() / height
+        val out = FloatArray(width * height)
+        for (y in 0 until height) for (x in 0 until width) {
+            val (u, v) = unmove((x + 0.5f) / width, (y + 0.5f) / height, now, aspect)
+            val sx = u * width - 0.5f
+            val sy = v * height - 0.5f
+            if (sx < -0.5f || sy < -0.5f || sx > width - 0.5f || sy > height - 0.5f) continue
+            val x0 = floor(sx).toInt().coerceIn(0, width - 1)
+            val y0 = floor(sy).toInt().coerceIn(0, height - 1)
+            val x1 = min(x0 + 1, width - 1)
+            val y1 = min(y0 + 1, height - 1)
+            val fx = (sx - x0).coerceIn(0f, 1f)
+            val fy = (sy - y0).coerceIn(0f, 1f)
+            val top = map[y0 * width + x0] * (1 - fx) + map[y0 * width + x1] * fx
+            val bottom = map[y1 * width + x0] * (1 - fx) + map[y1 * width + x1] * fx
+            out[y * width + x] = top * (1 - fy) + bottom * fy
+        }
+        return out
+    }
+
     /** The reverse of [unmove]: a point of the strokes' own frame where it shows with the mask at [now]. */
     fun place(x: Float, y: Float, now: MaskKey, aspect: Float): Pair<Float, Float> {
         val delta = Math.toRadians((now.angleDegrees - BASE.angleDegrees).toDouble())

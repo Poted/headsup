@@ -144,4 +144,19 @@ class BrushMaskTest {
         assertTrue(at(map, w, 15, 35) > 0.95f)
         assertTrue(at(map, w, 35, 10) < 0.05f)
     }
+
+    @Test
+    fun `coverage is placed where the moved mask shows`() {
+        val w = 40
+        val h = 20
+        // A block at the left of the strokes' frame.
+        val map = FloatArray(w * h) { i -> if (i % w in 4 until 10 && i / w in 6 until 14) 1f else 0f }
+        val moved = BrushMask.placed(map, w, h, MaskKey(0L, 0.75f, 0.5f, 0f, 1f, 1f))
+        // Moved right by a quarter of the width: 10 pixels.
+        kotlin.test.assertEquals(1f, moved[10 * w + 17], 1e-4f)
+        kotlin.test.assertEquals(0f, moved[10 * w + 7], 1e-4f)
+        // Not moved: the same.
+        val same = BrushMask.placed(map, w, h, BrushMask.BASE)
+        kotlin.test.assertEquals(map.toList(), same.toList())
+    }
 }

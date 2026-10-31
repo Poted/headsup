@@ -240,6 +240,10 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
     val measuring = tool == Tool.COLOUR && adjustment == Adjustment.SKIN && state.target != GradeTarget.MASK
     val editingMasks = tool == Tool.COLOUR && state.target == GradeTarget.MASK && state.selected?.colorGrade == true
     val editingBrush = state.selected?.masks?.getOrNull(state.selectedMask)?.kind == MaskKind.BRUSH
+    // Only on a mask's Mask tab does a finger on the picture shape it; on Light, Colour, … the
+    // picture is left alone (the outline still shows), so a touch never changes the mask by chance.
+    var maskTools by rememberSaveable { mutableStateOf(true) }
+    val shaping = editingMasks && maskTools
     // Read only where needed (cut controls), so playback does not recompose the whole screen.
     val playhead = remember { mutableLongStateOf(0L) }
     // File position of a cut handle being dragged; read only by the preview.
@@ -365,14 +369,14 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
                         fromCube = if (showOriginal) null else state.previewFromCube,
                         transitionMs = selected.transitionMs,
                         guideMask = selected.masks.getOrNull(state.selectedMask).takeIf { editingMasks && !fullscreen },
-                        onMoveMask = if (editingMasks && !fullscreen && !editingBrush) { x, y -> vm.updateMask { it.copy(centerX = x, centerY = y) } } else null,
+                        onMoveMask = if (shaping && !fullscreen && !editingBrush) { x, y -> vm.updateMask { it.copy(centerX = x, centerY = y) } } else null,
                         // A painted mask moves with two fingers only in Move; otherwise they zoom the view.
-                        onTransformMask = if (editingMasks && !fullscreen && (!editingBrush || state.brush.mode == BrushMode.MOVE)) vm::transformMask else null,
-                        zoomForPainting = (editingMasks && editingBrush && state.brush.mode != BrushMode.MOVE || cleaning) && !fullscreen,
+                        onTransformMask = if (shaping && !fullscreen && (!editingBrush || state.brush.mode == BrushMode.MOVE)) vm::transformMask else null,
+                        zoomForPainting = (shaping && editingBrush && state.brush.mode != BrushMode.MOVE || cleaning) && !fullscreen,
                         // View: one finger moves the zoomed picture, nothing is painted.
-                        panView = editingMasks && editingBrush && state.brush.mode == BrushMode.VIEW && !fullscreen,
+                        panView = shaping && editingBrush && state.brush.mode == BrushMode.VIEW && !fullscreen,
                         maskOverlay = state.maskOverlay,
-                        onBrush = if (cleaning && !fullscreen) vm::cleanupStroke else if (editingMasks && !fullscreen && editingBrush && state.brush.mode != BrushMode.MOVE && state.brush.mode != BrushMode.VIEW) vm::brushStroke else null,
+                        onBrush = if (cleaning && !fullscreen) vm::cleanupStroke else if (shaping && !fullscreen && editingBrush && state.brush.mode != BrushMode.MOVE && state.brush.mode != BrushMode.VIEW) vm::brushStroke else null,
                         guideIndex = state.selectedMask,
                         lassoPath = state.lassoPath,
                         onPictureHeight = vm::notePictureHeight,
@@ -610,6 +614,7 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
                     Tool.COLOUR -> ColourPage(
                         state, vm, adjustment, { adjustment = it }, onAddLut = { lutPicker.launch(arrayOf("*/*")) }, frameSource.value,
                         playhead, onSeek = { seekRequest = it }, pictureSource = pictureSource.value,
+                        maskTools = maskTools, onMaskTools = { maskTools = it },
                     )
                     Tool.CLEANUP -> CleanupPanel(state, vm)
                     Tool.EFFECTS -> if (effectKind == EffectKind.TEXT) {
@@ -2279,6 +2284,9 @@ private fun ColourPage(
     playhead: LongState,
     onSeek: (clipMs: Long) -> Unit,
     pictureSource: ((Int) -> Bitmap?)? = null,
+    /** On a mask's Mask tab (its tools), where a finger on the picture shapes the mask. */
+    maskTools: Boolean = true,
+    onMaskTools: (Boolean) -> Unit = {},
 ) {
     val index = state.selectedClip
     val clip = state.selected
@@ -2325,15 +2333,14 @@ private fun ColourPage(
     val adjustment = if (adjustment in options) adjustment else Adjustment.EXPOSURE
     // On the Masks tab the ruler edits either a shape control or a correction.
     var shape by rememberSaveable { mutableStateOf<MaskShape?>(null) }
-    var onShapes by rememberSaveable { mutableStateOf(true) }
     // A new mask opens on its own tools (select, paint, shape).
     var maskCount by remember { mutableStateOf(clip.masks.size) }
     LaunchedEffect(clip.id, clip.masks.size) {
-        if (clip.masks.size > maskCount) onShapes = true
+        if (clip.masks.size > maskCount) onMaskTools(true)
         maskCount = clip.masks.size
     }
     val shapes = mask?.takeIf { target == GradeTarget.MASK }?.let { m -> MaskShape.entries.filter { m.kind in it.kinds } }.orEmpty()
-    val editingShape = if (target == GradeTarget.MASK && onShapes) shape?.takeIf { it in shapes } ?: shapes.firstOrNull() else null
+    val editingShape = if (target == GradeTarget.MASK && maskTools) shape?.takeIf { it in shapes } ?: shapes.firstOrNull() else null
     // Corrections are grouped into short sections (plus the mask's shape), so each row stays short.
     // A raw (DNG) photo is developed first (exposure, highlights, shadows, white balance on the raw data).
     // The raw development syncs like the rest from "all" and groups.
@@ -2346,9 +2353,9 @@ private fun ColourPage(
         onRaw = sections[i] == "RAW"
         if (sections[i] == "RAW") return@SectionTabs
         if (sections[i] == "Mask") {
-            onShapes = true
+            onMaskTools(true)
         } else {
-            onShapes = false
+            onMaskTools(false)
             options.firstOrNull { it.section.label == sections[i] }?.let(onAdjustment)
         }
     }
@@ -2360,7 +2367,7 @@ private fun ColourPage(
         if (editingShape != null) {
             // A painted mask has its brush controls instead.
             items(if (mask?.kind == MaskKind.BRUSH) emptyList() else shapes) { m ->
-                CircleOption(m.symbol, m.label, selected = m == editingShape, modified = false) { shape = m; onShapes = true }
+                CircleOption(m.symbol, m.label, selected = m == editingShape, modified = false) { shape = m; onMaskTools(true) }
             }
         }
         items(if (editingShape != null) emptyList() else options.filter { it.section == adjustment.section }) { a ->
@@ -2380,7 +2387,7 @@ private fun ColourPage(
                 else -> a.get(state.grade) != a.neutral
             }
             CircleOption(a.symbol, a.label, selected = editingShape == null && a == adjustment, modified = modified) {
-                onShapes = false
+                onMaskTools(false)
                 onAdjustment(a)
             }
         }

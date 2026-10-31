@@ -2365,7 +2365,9 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                     val start = if (old != null) {
                         app.headsup.core.color.BrushMask.rasterize(mask.strokes.drop(mask.sequenceStrokes), w, h, mask.softness, refs, start = old.at(t0, w, h), edge = mask.edge)
                     } else {
-                        app.headsup.core.color.BrushMask.rasterize(mask.strokes, w, h, mask.softness, refs, edge = mask.edge)
+                        // Where the mask shows now: moved, turned or scaled after it was made, it starts from there.
+                        val drawn = app.headsup.core.color.BrushMask.rasterize(mask.strokes, w, h, mask.softness, refs, edge = mask.edge)
+                        app.headsup.core.color.BrushMask.placed(drawn, w, h, MaskKey.of(mask.at(t0), 0L))
                     }
                     if (!sky && app.headsup.core.color.MaskFollow.area(start) == 0f) return@withContext null
                     val forward = direction != TrackDirection.BACKWARD
