@@ -2357,14 +2357,21 @@ private fun ColourPage(
     if (editingShape != null && mask != null) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text("Shape · ${state.selectedMask + 1} · ${maskName(mask)}", Modifier.weight(1f), style = MaterialTheme.typography.titleSmall)
-            if (mask.kind == MaskKind.BRUSH) {
+            Spacer(Modifier.width(8.dp))
+            // On video, a painted mask not tracked since it changed would stay where it is drawn:
+            // tracking is the main way out of Shape then, so it is not forgotten.
+            if (maskNeedsTracking(clip, mask)) {
+                SmallAction("Done", { onMaskTools(false) }, enabled = !state.busy)
+                Button(onClick = { vm.trackMask(HeadsupViewModel.TrackDirection.BOTH); onMaskTools(false) }, enabled = !state.busy) { Text("Track & done") }
+            } else {
+                Button(onClick = { onMaskTools(false) }) { Text("Done") }
+            }
+        }
+        if (mask.kind == MaskKind.BRUSH) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
                 SmallAction(if (state.maskOverlay) "Overlay ✓" else "Overlay", { vm.toggleMaskOverlay() })
                 SmallAction("Clear", { vm.clearBrush() })
             }
-            Spacer(Modifier.width(8.dp))
-            Button(onClick = { onMaskTools(false) }) { Text("Done") }
-        }
-        if (mask.kind == MaskKind.BRUSH) {
             BrushControls(state, vm, pictureSource)
         } else {
             LazyRow(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
@@ -3154,6 +3161,11 @@ private fun MaskList(state: UiState, clip: ClipState, vm: HeadsupViewModel, pict
     return false
 }
 
+/** A painted mask on video that is not tracked, or changed since it was. */
+private fun maskNeedsTracking(clip: ClipState, mask: ColourMask): Boolean =
+    !clip.meta.isPhoto && mask.kind == MaskKind.BRUSH && mask.strokes.isNotEmpty() &&
+        (mask.sequence == null || mask.strokes.size > mask.sequenceStrokes)
+
 /** What a mask is, as its list names it. */
 private fun maskName(m: ColourMask): String = when (m.kind) {
     MaskKind.LINEAR -> "Line"
@@ -3184,15 +3196,19 @@ private fun maskSymbol(m: ColourMask): String = when (maskName(m)) {
 private fun MaskMotion(state: UiState, clip: ClipState, mask: ColourMask, vm: HeadsupViewModel, playhead: LongState, onSeek: (Long) -> Unit) {
     if (clip.meta.isPhoto) return
     Row(verticalAlignment = Alignment.CenterVertically) {
+        val stale = maskNeedsTracking(clip, mask)
         Text(
             when {
-                mask.sequence != null -> "Found on each frame"
+                stale && mask.sequence != null -> "Changed since tracking"
+                stale -> "Not tracked: stays as drawn"
+                mask.sequence != null -> "Tracked on each frame"
                 mask.keys.isEmpty() -> "Stays put"
                 else -> "Moves with the shot"
             },
             Modifier.weight(1f),
             style = MaterialTheme.typography.labelLarge,
-            color = HeadsupColors.TextMuted,
+            // What still needs doing stands out.
+            color = if (stale) HeadsupColors.Accent else HeadsupColors.TextMuted,
         )
         if (mask.sequence != null) {
             // Tracked with AI: from a fix at the playhead both ways (up to the frames fixed before), or back to the strokes.
