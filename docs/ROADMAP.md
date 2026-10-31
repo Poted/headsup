@@ -144,13 +144,21 @@ project's files), the preview resized left/right when held sideways, Edit called
       (tap, outline, paint, Edge), Remove fills what it covers; "N removed · Undo last · Restore
       all" under the masks. The separate tool is gone.
 - [x] Albums sideways: with the photos folded into their bar the photo takes the screen's height.
-- [ ] Masks as Lightroom's, still missing: Color range (pick a colour), Luminance range (only the
-      lights or shadows), Select Subject / People / Background without a tap, and combining masks
-      (add, subtract, intersect: e.g. only the lights inside an oval).
+- [x] Adjust restructured: the scope (This clip · Group · All) always in view at the top; for this
+      clip its layers (Base, each mask, +) as chips with the selected layer's actions as pills;
+      the same tabs per layer (Light, Presence, Colour, Mixer, Film, Effects; the base also Looks
+      and Tools). Grain, glow, halation and bars are the base's Effects; text, route map,
+      dashboard and graph are a new Overlays tool. Section captions with hairlines order the panel.
+- [x] Masks as Lightroom's: Colour (tap a colour; its range in Oklab) and Light (a range of
+      brightness) masks, and either range narrowing any mask; a mask joined to the one before
+      (add, subtract, intersect), its layer keeping the corrections. Found at once: Subject,
+      People, Background, Sky, Plants, Water, Mountains, Buildings, Ground, Vehicles, Animals
+      (the scene model: DeepLab on ADE20K, tools/models/scene_model.py; things made exact by
+      MobileSAM). Preview, photo and video export.
 - [ ] Masks, next: (1) edges at full resolution in export (the mask is kept at 640 px: refine it
       against the full picture in the shader); (2) faster tracking (the encoder takes about a
       second per frame on a phone: GPU/NNAPI, or a smaller encoder); (3) more prompts: + / − points
-      on an object; (4) Select Subject (the main subject without a tap), people (skin, hair, clothes).
+      on an object; (4) people's parts (skin, hair, clothes); (5) several people on video followed one by one.
 - [ ] To do, not now: intro slides: thanks for choosing Sweet Spot, what the app can do, how to make cinematic
       films and professional photos, so a newcomer feels welcome and wants to go further.
 - [x] Speed curves: an editable ramp per clip (Edit > Speed) and presets in the reel style (Speed ramp:
