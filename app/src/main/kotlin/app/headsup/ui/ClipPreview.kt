@@ -1541,6 +1541,8 @@ private const val ANALYSIS_WIDTH = 256
 
 /** The mask's edge (solid) and the ends of its soft blend (dashed), as in DaVinci's window controls. */
 private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawMaskGuide(mask: ColourMask, width: Float, height: Float) {
+    // A range mask is the whole picture: no window to show.
+    if (mask.kind == MaskKind.RANGE) return
     val centre = Offset(mask.centerX * width, mask.centerY * height)
     val dash = PathEffect.dashPathEffect(floatArrayOf(8f * density, 6f * density))
     val solid = Color.White.copy(alpha = 0.9f)
@@ -1557,7 +1559,7 @@ private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawMaskGuide(mask:
                     )
                 }
             }
-            MaskKind.BRUSH -> Unit
+            MaskKind.BRUSH, MaskKind.RANGE -> Unit
             MaskKind.ELLIPSE -> {
                 for ((scale, dashed) in listOf(1f to false, 1f - mask.softness / 2f to true, 1f + mask.softness / 2f to true)) {
                     if (scale <= 0f) continue

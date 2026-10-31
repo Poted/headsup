@@ -189,6 +189,8 @@ class MaskTracker(
                 sizeX = abs(ct * m11 + st * m21)
                 sizeY = abs(-st * m12 + ct * m22)
             }
+            // The whole picture: nothing to move.
+            MaskKind.RANGE -> Unit
         }
     }
 

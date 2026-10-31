@@ -136,6 +136,9 @@ class GradeEffect(
                     program.setFloatsUniform("uMp$i", floatArrayOf(p.texture, p.clarity, p.dehaze))
                     val g = masks.getOrNull(i)?.grade
                     program.setFloatsUniform("uMg$i", floatArrayOf(g?.glow ?: 0f, g?.halation ?: 0f))
+                    val (q, k) = (masks.getOrNull(i) ?: ColourMask()).rangeParams()
+                    program.setFloatsUniform("uMq$i", q)
+                    program.setFloatsUniform("uMc$i", k)
                 }
                 val fromWeight = if (from != null) ColourTransition.fromWeight(positionMs + timeOffsetMs, transitionMs) else 0f
                 program.setFloatUniform("uFromWeight", fromWeight)
@@ -207,6 +210,7 @@ class GradeEffect(
             ${List(ColourMask.MAX_PER_CLIP) { "uniform vec3 uMp$it;" }.joinToString("\n")}
             ${List(ColourMask.MAX_PER_CLIP) { "uniform vec2 uMg$it;" }.joinToString("\n")}
             uniform float uMaskGlow;
+            ${List(ColourMask.MAX_PER_CLIP) { "uniform vec4 uMq$it;\nuniform vec4 uMc$it;" }.joinToString("\n")}
             const mat3 BT2020_TO_BT709 = mat3(
                 1.6605, -0.1246, -0.0182,
                 -0.5876, 1.1329, -0.1006,
@@ -300,6 +304,64 @@ class GradeEffect(
 
             float luma(vec3 c) { return dot(c, vec3(0.2126, 0.7152, 0.0722)); }
 
+            // As the preview shader's oklab() (MaskRange.oklab).
+            vec3 oklab(vec3 c) {
+                c = clamp(c, 0.0, 1.0);
+                vec3 lin = mix(c / 12.92, pow((c + 0.055) / 1.055, vec3(2.4)), step(vec3(0.04045), c));
+                float l = pow(max(dot(lin, vec3(0.4122214708, 0.5363325363, 0.0514459929)), 0.0), 1.0 / 3.0);
+                float m = pow(max(dot(lin, vec3(0.2119034982, 0.6806995451, 0.1073969566)), 0.0), 1.0 / 3.0);
+                float s = pow(max(dot(lin, vec3(0.0883024619, 0.2817188376, 0.6299787005)), 0.0), 1.0 / 3.0);
+                return vec3(
+                    0.2104542553 * l + 0.7936177850 * m - 0.0040720468 * s,
+                    1.9779984951 * l - 2.4285922050 * m + 0.4505937099 * s,
+                    0.0259040371 * l + 0.7827717662 * m - 0.8086757660 * s);
+            }
+
+            // As the preview shader's cover() (MaskRange.cover).
+            float cover(vec4 a, vec4 b, vec4 q, vec4 k, float shape, vec3 c) {
+                float w = 1.0;
+                if (q.x > -0.5) {
+                    float l = luma(c);
+                    w *= smooth01(q.x - q.z, q.x, l) * (1.0 - smooth01(q.y, q.y + q.z, l));
+                }
+                if (k.w > 0.0) {
+                    vec3 d = (oklab(c) - k.xyz) * vec3(0.35, 1.0, 1.0);
+                    w *= 1.0 - smooth01(k.w, k.w * 2.0, length(d));
+                }
+                if (a.x > 2.5) return b.w > 0.5 ? 1.0 - w : w;
+                return shape * w;
+            }
+
+            float shapeAt(vec4 a, vec4 b, vec2 px, float slot) {
+                if (a.x > 2.5) return 1.0;
+                if (a.x > 1.5) return brushWeight(a, b, px, slot);
+                return maskWeight(a, b, px);
+            }
+
+            float joinOf(float a, float b, float j) {
+                if (j < 1.5) return max(a, b);
+                if (j < 2.5) return a * (1.0 - b);
+                return a * b;
+            }
+
+            vec4 putAt(vec4 f, float h, float v) {
+                if (h < 0.5) f.x = v; else if (h < 1.5) f.y = v; else if (h < 2.5) f.z = v; else f.w = v;
+                return f;
+            }
+
+            // As the preview shader's weightsAt() (MaskRange.joined).
+            vec4 weightsAt(vec2 px, vec3 c) {
+                ${List(ColourMask.MAX_PER_CLIP) { i -> """
+                float w$i = 0.0;
+                if (uMaskCount > $i.5) w$i = cover(uM${i}a, uM${i}b, uMq$i, uMc$i, shapeAt(uM${i}a, uM${i}b, px, $i.0), c);""" }.joinToString("")}
+                float acc = w0;
+                float h = 0.0;
+                vec4 f = vec4(0.0);
+                ${(1 until ColourMask.MAX_PER_CLIP).joinToString("") { i -> """
+                if (uMq$i.w < 0.5) { f = putAt(f, h, acc); acc = w$i; h = $i.0; } else { acc = joinOf(acc, w$i, uMq$i.w); }""" }}
+                return putAt(f, h, acc);
+            }
+
             // As the preview shader's localMean(): an edge-aware mean brightness over a disc of r pixels.
             float localMean(vec2 uv, float r, float l) {
                 float acc = l;
@@ -337,11 +399,10 @@ class GradeEffect(
 
             // As the preview shader's maskGlowAt(): each glowing mask's glow and halation at px, added up.
             vec2 maskGlowAt(vec2 px) {
+                vec4 w = weightsAt(px, source(vec2(px.x / uSize.x, 1.0 - px.y / uSize.y)));
                 vec2 g = vec2(0.0);
                 ${List(ColourMask.MAX_PER_CLIP) { i -> """
-                if (uMaskCount > $i.5 && (uMg$i.x > 0.0 || uMg$i.y > 0.0)) {
-                    g += uMg$i * (uM${i}a.x > 1.5 ? brushWeight(uM${i}a, uM${i}b, px, $i.0) : maskWeight(uM${i}a, uM${i}b, px));
-                }""" }.joinToString("")}
+                if (uMaskCount > $i.5 && (uMg$i.x > 0.0 || uMg$i.y > 0.0)) g += uMg$i * w.${"xyzw"[i]};""" }.joinToString("")}
                 return g;
             }
 
@@ -351,12 +412,10 @@ class GradeEffect(
                 vec2 px = vec2(vTexSamplingCoord.x, 1.0 - vTexSamplingCoord.y) * uSize;
                 // Masks first: inside one, its texture, clarity and dehaze add to the clip's.
                 vec3 pr = uPresence;
+                vec4 mw = uMaskCount > 0.5 ? weightsAt(px, srcRgb) : vec4(0.0);
                 ${List(ColourMask.MAX_PER_CLIP) { i -> """
-                float w$i = 0.0;
-                if (uMaskCount > $i.5) {
-                    w$i = uM${i}a.x > 1.5 ? brushWeight(uM${i}a, uM${i}b, px, $i.0) : maskWeight(uM${i}a, uM${i}b, px);
-                    pr += uMp$i * w$i;
-                }""" }.joinToString("")}
+                float w$i = mw.${"xyzw"[i]};
+                pr += uMp$i * w$i;""" }.joinToString("")}
                 if (pr.x != 0.0 || pr.y != 0.0) srcRgb = presence(vTexSamplingCoord, srcRgb, pr);
                 vec3 c = grade(uLut, srcRgb);
                 ${List(ColourMask.MAX_PER_CLIP) { i -> """

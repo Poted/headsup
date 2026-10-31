@@ -16,7 +16,39 @@ enum class MaskKind {
      * [BrushMask.BASE]; moving, turning or scaling the mask (by hand or by keys) carries them along.
      */
     BRUSH,
+
+    /**
+     * The whole picture, narrowed only by its colour and/or luminance range ([ColourMask.colour],
+     * [ColourMask.luma]): everything of that colour or brightness, wherever it is.
+     */
+    RANGE,
 }
+
+/**
+ * How a mask works with the mask before it in the clip's list: on its own (a layer with its own
+ * corrections), or changing the coverage of the layer above it (added to it, taken from it, or
+ * kept only where both are), as masks are combined in Lightroom. A joined mask has no corrections
+ * of its own: the layer it joins applies its corrections over the combined coverage.
+ */
+enum class MaskJoin(val symbol: String, val label: String) {
+    NEW("", "Own layer"),
+    ADD("+", "Add"),
+    SUBTRACT("−", "Subtract"),
+    INTERSECT("∩", "Intersect"),
+}
+
+/**
+ * Brightness the mask keeps: from [low] to [high] (0..1, of the picture's luma, Rec. 709 weights
+ * of the encoded values), fading over [soft] beyond each end.
+ */
+data class LumaRange(val low: Float = 0.6f, val high: Float = 1f, val soft: Float = 0.15f)
+
+/**
+ * Colour the mask keeps: like the sampled colour ([r], [g], [b], encoded 0..1), within
+ * [tolerance] (0 just that colour … 1 much of its family), measured in Oklab (lightness counts
+ * less than hue and colourfulness, so a colour in shade and in sun is the same colour).
+ */
+data class ColourRange(val r: Float, val g: Float, val b: Float, val tolerance: Float = 0.35f)
 
 /**
  * A window with its own corrections ([grade], added to the clip's), like a power window in
@@ -63,7 +95,16 @@ data class ColourMask(
      * tracking. Tracking again from a frame runs to the next key either way, never over it.
      */
     val anchors: List<Long> = emptyList(),
+    /** Narrows the mask to a range of brightness (null = any). */
+    val luma: LumaRange? = null,
+    /** Narrows the mask to a colour (null = any). */
+    val colour: ColourRange? = null,
+    /** On its own, or joined to the mask before it ([MaskJoin]). */
+    val join: MaskJoin = MaskJoin.NEW,
 ) {
+    /** True when a colour or luminance range narrows the mask. */
+    val ranged: Boolean get() = luma != null || colour != null
+
     /** The mask at [fileMs] into the clip's file: between keys it moves smoothly, outside them it holds. */
     fun at(fileMs: Long): ColourMask {
         if (sequence != null) return copy(centerX = 0.5f, centerY = 0.5f, angleDegrees = 0f, sizeX = 1f, sizeY = 1f, keys = emptyList())
@@ -86,6 +127,8 @@ data class ColourMask(
      */
     fun weight(x: Float, y: Float, width: Float, height: Float): Float {
         if (kind == MaskKind.BRUSH) return 0f
+        // A range mask is the whole picture before its range (inverting it inverts the range: MaskRange).
+        if (kind == MaskKind.RANGE) return 1f
         val a = Math.toRadians(angleDegrees.toDouble())
         val dx = (x - centerX * width) / height
         val dy = (y - centerY * height) / height
@@ -101,7 +144,7 @@ data class ColourMask(
                 val r = sqrt(u * u + v * v)
                 1f - smoothstep(1f - softness / 2f, 1f + softness / 2f, r)
             }
-            MaskKind.BRUSH -> 0f
+            MaskKind.BRUSH, MaskKind.RANGE -> 0f
         }
         return if (inverted) 1f - w else w
     }
@@ -114,6 +157,19 @@ data class ColourMask(
     fun shaderParams(): Pair<FloatArray, FloatArray> = floatArrayOf(
         kind.ordinal.toFloat(), centerX, centerY, Math.toRadians(angleDegrees.toDouble()).toFloat(),
     ) to floatArrayOf(sizeX, sizeY, softness, if (inverted) 1f else 0f)
+
+    /**
+     * The range and join packed for shaders: (luma low, high, soft, join) with low < -0.5 when
+     * there is no luminance range, and (Oklab L, a, b, tolerance) with tolerance 0 when there is
+     * no colour range ([MaskRange]).
+     */
+    fun rangeParams(): Pair<FloatArray, FloatArray> {
+        val l = luma
+        val c = colour
+        val first = if (l == null) floatArrayOf(-1f, 1f, 0f, join.ordinal.toFloat()) else floatArrayOf(l.low, l.high, l.soft, join.ordinal.toFloat())
+        val second = if (c == null) FloatArray(4) else MaskRange.oklab(c.r, c.g, c.b).let { floatArrayOf(it[0], it[1], it[2], MaskRange.reach(c.tolerance)) }
+        return first to second
+    }
 
     companion object {
         const val MAX_PER_CLIP = 4

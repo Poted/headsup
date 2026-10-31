@@ -301,6 +301,8 @@ data class UiState(
     val maskOverlay: Boolean = false,
     /** A mask is being made to remove what it covers from the photo ([HeadsupViewModel.startRemoval]). */
     val removing: Boolean = false,
+    /** The next tap on the picture picks the selected mask's colour ([HeadsupViewModel.pickMaskColour]). */
+    val pickingColour: Boolean = false,
     /** An outline being drawn around an object (x, y pairs, fractions of the picture), until the finger lifts. */
     val lassoPath: List<Float> = emptyList(),
     /** A brush stroke being painted (x, y pairs, fractions of the picture), until the finger lifts. */
@@ -1809,6 +1811,52 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
         selectSky(grab)
     }
 
+    /**
+     * A new mask of everything of a colour (the next tap on the picture picks it) or of a range of
+     * brightness (the highlights to start with).
+     */
+    fun addRangeMask(colour: Boolean) {
+        addMask(MaskKind.RANGE)
+        if (colour) {
+            _state.update { it.copy(pickingColour = true) }
+        } else {
+            updateMask { it.copy(luma = app.headsup.core.color.LumaRange()) }
+        }
+    }
+
+    /** The next tap on the picture picks the selected mask's colour (or stops waiting for it). */
+    fun setPickingColour(on: Boolean) = _state.update { it.copy(pickingColour = on) }
+
+    /** The selected mask keeps the colour around ([x], [y]) (fractions) of [frame], the picture as it is. */
+    fun pickMaskColour(frame: Bitmap, x: Float, y: Float) {
+        val cx = (x * frame.width).toInt().coerceIn(0, frame.width - 1)
+        val cy = (y * frame.height).toInt().coerceIn(0, frame.height - 1)
+        // A small patch, so one noisy pixel does not decide.
+        val r = maxOf(1, frame.width / 200)
+        var sr = 0f
+        var sg = 0f
+        var sb = 0f
+        var n = 0
+        for (yy in (cy - r)..(cy + r)) for (xx in (cx - r)..(cx + r)) {
+            if (xx !in 0 until frame.width || yy !in 0 until frame.height) continue
+            val c = frame.getPixel(xx, yy)
+            sr += (c shr 16 and 0xFF) / 255f
+            sg += (c shr 8 and 0xFF) / 255f
+            sb += (c and 0xFF) / 255f
+            n++
+        }
+        frame.recycle()
+        if (n == 0) return
+        updateMask { it.copy(colour = app.headsup.core.color.ColourRange(sr / n, sg / n, sb / n, it.colour?.tolerance ?: 0.35f)) }
+        _state.update { it.copy(pickingColour = false) }
+    }
+
+    /** How the selected mask works with the one before it: its own layer, or added, subtracted, intersected. */
+    fun setMaskJoin(join: app.headsup.core.color.MaskJoin) {
+        if (_state.value.selectedMask == 0) return
+        updateMask { it.copy(join = join) }
+    }
+
     fun toggleMaskOverlay() = _state.update { it.copy(maskOverlay = !it.maskOverlay) }
 
     /**
@@ -1826,12 +1874,17 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
 
     fun removeMask(maskIndex: Int) {
         val index = _state.value.selectedClip ?: return
-        updateClip(index) { it.copy(masks = it.masks.filterIndexed { i, _ -> i != maskIndex }) }
+        updateClip(index) { c ->
+            val rest = c.masks.filterIndexed { i, _ -> i != maskIndex }
+            // The first mask is always a layer of its own.
+            c.copy(masks = rest.mapIndexed { i, m -> if (i == 0 && m.join != app.headsup.core.color.MaskJoin.NEW) m.copy(join = app.headsup.core.color.MaskJoin.NEW) else m })
+        }
+        _state.update { it.copy(pickingColour = false) }
         _state.update { it.copy(selectedMask = (it.selectedMask - if (it.selectedMask >= maskIndex) 1 else 0).coerceAtLeast(0)) }
     }
 
     fun selectMask(maskIndex: Int) {
-        _state.update { it.copy(selectedMask = maskIndex, compareGrade = null, removing = false) }
+        _state.update { it.copy(selectedMask = maskIndex, compareGrade = null, removing = false, pickingColour = false) }
         refreshPreview()
     }
 

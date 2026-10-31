@@ -107,6 +107,9 @@ import app.headsup.core.edit.TextField
 import app.headsup.core.edit.FieldSource
 import app.headsup.core.color.ColourMask
 import app.headsup.core.color.MaskKind
+import app.headsup.core.color.MaskJoin
+import app.headsup.core.color.MaskRange
+import app.headsup.core.color.LumaRange
 import app.headsup.core.frame.Reframe
 import app.headsup.media.ClipMetadataReader
 import app.headsup.core.highlight.HighlightFinder
@@ -239,6 +242,9 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
     val measuring = tool == Tool.COLOUR && adjustment == Adjustment.SKIN && state.target != GradeTarget.MASK
     val editingMasks = tool == Tool.COLOUR && state.target == GradeTarget.MASK && state.selected?.colorGrade == true
     val editingBrush = state.selected?.masks?.getOrNull(state.selectedMask)?.kind == MaskKind.BRUSH
+    // A range mask has no window to move; while a colour is being picked a tap picks it.
+    val editingRange = state.selected?.masks?.getOrNull(state.selectedMask)?.kind == MaskKind.RANGE
+    val pickingColour = editingMasks && state.pickingColour
     // Only while a mask's shape is being changed (Shape) does a finger on the picture change it;
     // with its corrections the picture is left alone (the outline still shows).
     var maskTools by rememberSaveable { mutableStateOf(false) }
@@ -372,14 +378,14 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
                         fromCube = if (showOriginal) null else state.previewFromCube,
                         transitionMs = selected.transitionMs,
                         guideMask = selected.masks.getOrNull(state.selectedMask).takeIf { editingMasks && !fullscreen },
-                        onMoveMask = if (shaping && !fullscreen && !editingBrush) { x, y -> vm.updateMask { it.copy(centerX = x, centerY = y) } } else null,
+                        onMoveMask = if (shaping && !fullscreen && !editingBrush && !editingRange && !pickingColour) { x, y -> vm.updateMask { it.copy(centerX = x, centerY = y) } } else null,
                         // A painted mask moves with two fingers only in Move; otherwise they zoom the view.
-                        onTransformMask = if (shaping && !fullscreen && (!editingBrush || state.brush.mode == BrushMode.MOVE)) vm::transformMask else null,
+                        onTransformMask = if (shaping && !fullscreen && !editingRange && !pickingColour && (!editingBrush || state.brush.mode == BrushMode.MOVE)) vm::transformMask else null,
                         zoomForPainting = shaping && editingBrush && state.brush.mode != BrushMode.MOVE && !fullscreen,
                         // View: one finger moves the zoomed picture, nothing is painted.
                         panView = shaping && editingBrush && state.brush.mode == BrushMode.VIEW && !fullscreen,
                         maskOverlay = state.maskOverlay,
-                        onBrush = if (shaping && !fullscreen && editingBrush && state.brush.mode != BrushMode.MOVE && state.brush.mode != BrushMode.VIEW) vm::brushStroke else null,
+                        onBrush = if (shaping && !fullscreen && editingBrush && !pickingColour && state.brush.mode != BrushMode.MOVE && state.brush.mode != BrushMode.VIEW) vm::brushStroke else null,
                         guideIndex = state.selectedMask,
                         lassoPath = state.lassoPath,
                         onPictureHeight = vm::notePictureHeight,
@@ -392,7 +398,12 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
                         effects = if (showOriginal) app.headsup.render.EffectSettings(dashboard = false) else state.compareEffects ?: state.effects,
                         onHoldOriginal = if (tool == Tool.COLOUR && !editingMasks && !measuring) { held -> showOriginal = held } else null,
                         showingOriginal = showOriginal,
-                        onSample = if (measuring && !fullscreen) vm::sampleFrame else null,
+                        onSample = when {
+                            fullscreen -> null
+                            measuring -> vm::sampleFrame
+                            pickingColour -> vm::pickMaskColour
+                            else -> null
+                        },
                         marker = if (measuring) state.scope?.let { Offset(it.markerX, it.markerY) } else null,
                         maxHeight = previewMaxHeight,
                         edgeToEdge = fullscreen,
@@ -2375,7 +2386,7 @@ private fun ColourPage(
     var lookKind by rememberSaveable { mutableStateOf(EffectKind.GRAIN) }
     // Shaping a mask is a mode of its own: only its tools show (and only then does a finger on the
     // picture change it); Done goes back to its corrections, which stay as they are.
-    if (editingShape != null && mask != null) {
+    if (target == GradeTarget.MASK && maskTools && mask != null && (editingShape != null || mask.kind == MaskKind.RANGE)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(
                 if (state.removing) "Remove · select what goes" else "Shape · ${state.selectedMask + 1} · ${maskName(mask)}",
@@ -2401,7 +2412,7 @@ private fun ColourPage(
                 SmallAction("Clear", { vm.clearBrush() })
             }
             BrushControls(state, vm, pictureSource)
-        } else {
+        } else if (editingShape != null) {
             LazyRow(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
                 items(shapes) { m -> CircleOption(m.symbol, m.label, selected = m == editingShape, modified = false) { shape = m } }
             }
@@ -2417,7 +2428,21 @@ private fun ColourPage(
             )
             Hint("Drag the mask on the picture to move it; two fingers resize and turn it.")
         }
-        MaskMotion(state, clip, mask, vm, playhead, onSeek)
+        // Any mask can be narrowed to a colour or a brightness; a range mask is only that.
+        MaskRanges(state, mask, vm)
+        if (state.selectedMask > 0) MaskJoinControls(clip, state.selectedMask, mask, vm)
+        if (mask.kind != MaskKind.RANGE) MaskMotion(state, clip, mask, vm, playhead, onSeek)
+        return
+    }
+    // A mask joined to the one before it changes that layer's coverage; the layer has the corrections.
+    if (target == GradeTarget.MASK && mask != null && state.selectedMask > 0 && mask.join != MaskJoin.NEW) {
+        val layer = MaskRange.layerOf(clip.masks, state.selectedMask)
+        SectionCaption("${mask.join.label} · ${maskName(mask)}")
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Hint("Changes where mask ${layer + 1} (${maskName(clip.masks[layer])}) applies; its corrections are that mask's.", Modifier.weight(1f))
+            Spacer(Modifier.width(8.dp))
+            PillAction("→", "Mask ${layer + 1}", { vm.selectMask(layer) })
+        }
         return
     }
     // Which layer the corrections below are for.
@@ -3140,7 +3165,7 @@ private fun Layers(state: UiState, clip: ClipState, vm: HeadsupViewModel, pictur
         }
         items(clip.masks.size) { i ->
             val m = clip.masks[i]
-            LayerChip(maskSymbol(m), "${i + 1} ${maskName(m)}", selected = onMask && i == state.selectedMask && !adding, modified = m.grade != ColorGrade()) {
+            LayerChip(maskSymbol(m), if (i > 0 && m.join != MaskJoin.NEW) "${m.join.symbol} ${maskName(m)}" else "${i + 1} ${maskName(m)}", selected = onMask && i == state.selectedMask && !adding, modified = m.grade != ColorGrade()) {
                 adding = false
                 vm.selectMask(i)
                 vm.setTarget(GradeTarget.MASK)
@@ -3175,10 +3200,12 @@ private fun Layers(state: UiState, clip: ClipState, vm: HeadsupViewModel, pictur
             item { CircleOption("✎", "Brush", selected = false, modified = false) { add { vm.addBrushMask(BrushMode.PAINT) } } }
             item { CircleOption("⟋", "Line", selected = false, modified = false) { add { vm.addMask(MaskKind.LINEAR) } } }
             item { CircleOption("◯", "Oval", selected = false, modified = false) { add { vm.addMask(MaskKind.ELLIPSE) } } }
+            item { CircleOption("◈", "Colour", selected = false, modified = false) { add { vm.addRangeMask(colour = true) } } }
+            item { CircleOption("☼", "Light", selected = false, modified = false) { add { vm.addRangeMask(colour = false) } } }
             // Photos: select something as a mask is selected, and it is removed (filled from around it).
             if (clip.meta.isPhoto) item { CircleOption("⌫", "Remove", selected = false, modified = false) { add { vm.startRemoval() } } }
         }
-        Hint("Object: tap what to correct (found by AI). Sky: the sky, found at once. Brush: paint it. Line: a graduated filter (a sky, a foreground). Oval: a face, a vignette of your own." + if (clip.meta.isPhoto) " Remove: select something and it is taken out of the photo, filled from what is around it." else "")
+        Hint("Object: tap what to correct (found by AI). Sky: the sky, found at once. Brush: paint it. Line: a graduated filter (a sky, a foreground). Oval: a face, a vignette of your own. Colour: everything of a colour you tap. Light: everything in a range of brightness." + if (clip.meta.isPhoto) " Remove: select something and it is taken out of the photo, filled from what is around it." else "")
         return true
     }
     if (!onMask) {
@@ -3202,6 +3229,84 @@ private fun Layers(state: UiState, clip: ClipState, vm: HeadsupViewModel, pictur
     return false
 }
 
+/**
+ * The colour and luminance ranges of [mask]: everything of a colour picked on the picture, and/or
+ * of a range of brightness. On a range mask they are the mask; on another they narrow it.
+ */
+@Composable
+private fun MaskRanges(state: UiState, mask: ColourMask, vm: HeadsupViewModel) {
+    val colour = mask.colour
+    SectionCaption("Colour range") {
+        if (colour != null) SmallAction("Remove", { vm.updateMask { it.copy(colour = null) } })
+    }
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+        if (colour != null) {
+            Box(
+                Modifier.size(28.dp).clip(CircleShape)
+                    .background(Color(colour.r, colour.g, colour.b))
+                    .border(1.dp, HeadsupColors.Outline, CircleShape),
+            )
+        }
+        PillAction("◈", if (colour == null) "Pick a colour" else "Pick again", { vm.setPickingColour(!state.pickingColour) }, selected = state.pickingColour)
+    }
+    if (state.pickingColour) Hint("Tap the colour on the picture (hold and slide to aim).")
+    if (colour != null) {
+        ValueHeader("Range", String.format(Locale.US, "%.0f %%", colour.tolerance * 100))
+        RulerSlider(
+            value = colour.tolerance,
+            range = 0f..1f,
+            step = 0.01f,
+            onChange = { v -> vm.updateMask { m -> m.copy(colour = m.colour?.copy(tolerance = v)) } },
+            onReset = { vm.updateMask { m -> m.copy(colour = m.colour?.copy(tolerance = 0.35f)) } },
+        )
+    }
+    val luma = mask.luma
+    SectionCaption("Luminance range") {
+        if (luma != null) SmallAction("Remove", { vm.updateMask { it.copy(luma = null) } })
+    }
+    if (luma == null) {
+        PillAction("☼", "Limit by brightness", { vm.updateMask { it.copy(luma = LumaRange()) } })
+        return
+    }
+    var part by rememberSaveable { mutableStateOf(0) }
+    Segmented(listOf("From", "To", "Softness"), part, { part = it })
+    val value = when (part) { 0 -> luma.low; 1 -> luma.high; else -> luma.soft }
+    ValueHeader(listOf("From", "To", "Softness")[part], String.format(Locale.US, "%.0f %%", value * 100))
+    RulerSlider(
+        value = value,
+        range = if (part == 2) 0f..0.5f else 0f..1f,
+        step = 0.01f,
+        onChange = { v ->
+            vm.updateMask { m ->
+                val l = m.luma ?: return@updateMask m
+                m.copy(
+                    luma = when (part) {
+                        0 -> l.copy(low = v.coerceAtMost(l.high))
+                        1 -> l.copy(high = v.coerceAtLeast(l.low))
+                        else -> l.copy(soft = v)
+                    },
+                )
+            }
+        },
+        onReset = {
+            val d = LumaRange()
+            vm.updateMask { m -> m.copy(luma = m.luma?.let { l -> when (part) { 0 -> l.copy(low = d.low); 1 -> l.copy(high = d.high); else -> l.copy(soft = d.soft) } }) }
+        },
+    )
+}
+
+/** How mask [index] works with the one before it: its own layer, or added to, taken from, or crossed with it. */
+@Composable
+private fun MaskJoinControls(clip: ClipState, index: Int, mask: ColourMask, vm: HeadsupViewModel) {
+    val layer = MaskRange.layerOf(clip.masks.take(index), index - 1)
+    SectionCaption("Combine")
+    Segmented(MaskJoin.entries.map { if (it == MaskJoin.NEW) "Own" else it.label }, mask.join.ordinal, { vm.setMaskJoin(MaskJoin.entries[it]) })
+    Hint(
+        if (mask.join == MaskJoin.NEW) "Its own corrections. Add, Subtract or Intersect make it change where mask ${layer + 1} applies instead."
+        else "${mask.join.label} with mask ${layer + 1} (${maskName(clip.masks[layer])}), which keeps the corrections.",
+    )
+}
+
 /** A painted mask on video that is not tracked, or changed since it was. */
 private fun maskNeedsTracking(clip: ClipState, mask: ColourMask): Boolean =
     !clip.meta.isPhoto && mask.kind == MaskKind.BRUSH && mask.strokes.isNotEmpty() &&
@@ -3211,6 +3316,11 @@ private fun maskNeedsTracking(clip: ClipState, mask: ColourMask): Boolean =
 private fun maskName(m: ColourMask): String = when (m.kind) {
     MaskKind.LINEAR -> "Line"
     MaskKind.ELLIPSE -> "Oval"
+    MaskKind.RANGE -> when {
+        m.colour != null && m.luma == null -> "Colour"
+        m.luma != null && m.colour == null -> "Light"
+        else -> "Range"
+    }
     MaskKind.BRUSH -> {
         val adds = m.strokes.filter { !it.erase }
         when {
@@ -3226,6 +3336,8 @@ private fun maskSymbol(m: ColourMask): String = when (maskName(m)) {
     "Oval" -> "◯"
     "Sky" -> "☁"
     "Object" -> "◎"
+    "Colour", "Range" -> "◈"
+    "Light" -> "☼"
     else -> "✎"
 }
 

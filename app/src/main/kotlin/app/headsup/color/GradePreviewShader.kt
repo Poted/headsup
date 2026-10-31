@@ -149,6 +149,9 @@ class GradePreviewShader {
             shader.setFloatUniform("mp$i", p.texture, p.clarity, p.dehaze)
             val g = masks.getOrNull(i)?.grade
             shader.setFloatUniform("mg$i", g?.glow ?: 0f, g?.halation ?: 0f)
+            val (q, k) = (masks.getOrNull(i) ?: NO_MASK).rangeParams()
+            shader.setFloatUniform("mq$i", q)
+            shader.setFloatUniform("mc$i", k)
         }
         shader.setFloatUniform("maskGlow", if (masks.take(ColourMask.MAX_PER_CLIP).any { it.grade.glow > 0f || it.grade.halation > 0f }) 1f else 0f)
         shader.setFloatUniform("fromWeight", fromWeight)
@@ -160,6 +163,9 @@ class GradePreviewShader {
     }
 
     private companion object {
+        /** Stands in for a mask slot not used: no range, its own layer. */
+        val NO_MASK = ColourMask()
+
         val identity by lazy { LutBaker.bake(null, ColorGrade()) }
 
         /** Trilinear lookup in table [name]; AGSL cannot pass shaders to functions, so one per table. */
@@ -212,6 +218,8 @@ class GradePreviewShader {
             // Glow and halation of each mask, and whether any mask has them.
             ${List(ColourMask.MAX_PER_CLIP) { "uniform float2 mg$it;" }.joinToString("\n")}
             uniform float maskGlow;
+            // Each mask's luminance range and join, and its colour range (ColourMask.rangeParams).
+            ${List(ColourMask.MAX_PER_CLIP) { "uniform float4 mq$it;\nuniform float4 mc$it;" }.joinToString("\n")}
 
             uniform float hasWarp;
             uniform float3x3 warp;
@@ -274,6 +282,67 @@ class GradePreviewShader {
 
             float luma(float3 c) { return dot(c, float3(0.2126, 0.7152, 0.0722)); }
 
+            // Oklab of an encoded colour (MaskRange.oklab).
+            float3 oklab(float3 c) {
+                c = clamp(c, 0.0, 1.0);
+                float3 lin = mix(c / 12.92, pow((c + 0.055) / 1.055, float3(2.4)), step(float3(0.04045), c));
+                float l = pow(max(dot(lin, float3(0.4122214708, 0.5363325363, 0.0514459929)), 0.0), 1.0 / 3.0);
+                float m = pow(max(dot(lin, float3(0.2119034982, 0.6806995451, 0.1073969566)), 0.0), 1.0 / 3.0);
+                float s = pow(max(dot(lin, float3(0.0883024619, 0.2817188376, 0.6299787005)), 0.0), 1.0 / 3.0);
+                return float3(
+                    0.2104542553 * l + 0.7936177850 * m - 0.0040720468 * s,
+                    1.9779984951 * l - 2.4285922050 * m + 0.4505937099 * s,
+                    0.0259040371 * l + 0.7827717662 * m - 0.8086757660 * s);
+            }
+
+            // MaskRange.cover: the shape narrowed by the mask's ranges at a pixel of colour c; a range
+            // mask (kind 3) is its ranges alone, inverted when the mask is.
+            float cover(float4 a, float4 b, float4 q, float4 k, float shape, float3 c) {
+                float w = 1.0;
+                if (q.x > -0.5) {
+                    float l = luma(c);
+                    w *= smooth01(q.x - q.z, q.x, l) * (1.0 - smooth01(q.y, q.y + q.z, l));
+                }
+                if (k.w > 0.0) {
+                    float3 d = (oklab(c) - k.xyz) * float3(0.35, 1.0, 1.0);
+                    w *= 1.0 - smooth01(k.w, k.w * 2.0, length(d));
+                }
+                if (a.x > 2.5) return b.w > 0.5 ? 1.0 - w : w;
+                return shape * w;
+            }
+
+            float shapeAt(float4 a, float4 b, float2 p, float slot) {
+                if (a.x > 2.5) return 1.0;
+                if (a.x > 1.5) return brushWeight(a, b, p, slot);
+                return maskWeight(a, b, p);
+            }
+
+            // MaskRange.combine (j: 1 add, 2 subtract, 3 intersect).
+            float joinOf(float a, float b, float j) {
+                if (j < 1.5) return max(a, b);
+                if (j < 2.5) return a * (1.0 - b);
+                return a * b;
+            }
+
+            float4 putAt(float4 f, float h, float v) {
+                if (h < 0.5) f.x = v; else if (h < 1.5) f.y = v; else if (h < 2.5) f.z = v; else f.w = v;
+                return f;
+            }
+
+            // Each mask's coverage at p (colour c there), joined masks combined into the layer they
+            // join (MaskRange.joined).
+            float4 weightsAt(float2 p, float3 c) {
+                ${List(ColourMask.MAX_PER_CLIP) { i -> """
+                float w$i = 0.0;
+                if (maskCount > $i.5) w$i = cover(m${i}a, m${i}b, mq$i, mc$i, shapeAt(m${i}a, m${i}b, p, $i.0), c);""" }.joinToString("")}
+                float acc = w0;
+                float h = 0.0;
+                float4 f = float4(0.0);
+                ${(1 until ColourMask.MAX_PER_CLIP).joinToString("") { i -> """
+                if (mq$i.w < 0.5) { f = putAt(f, h, acc); acc = w$i; h = $i.0; } else { acc = joinOf(acc, w$i, mq$i.w); }""" }}
+                return putAt(f, h, acc);
+            }
+
             float3 bright(float2 p) {
                 float3 c = float3(gradeNearest(img(p).rgb));
                 float k = max(luma(c) - threshold, 0.0) / max(1.0 - threshold, 0.01);
@@ -282,11 +351,10 @@ class GradePreviewShader {
 
             // Where each mask is at p, for masks that glow: their glow and halation there, added up.
             float2 maskGlowAt(float2 p) {
+                float4 w = weightsAt(p, float3(img(p).rgb));
                 float2 g = float2(0.0);
                 ${List(ColourMask.MAX_PER_CLIP) { i -> """
-                if (maskCount > ${i}.5 && (mg$i.x > 0.0 || mg$i.y > 0.0)) {
-                    g += mg$i * (m${i}a.x > 1.5 ? brushWeight(m${i}a, m${i}b, p, $i.0) : maskWeight(m${i}a, m${i}b, p));
-                }""" }.joinToString("")}
+                if (maskCount > ${i}.5 && (mg$i.x > 0.0 || mg$i.y > 0.0)) g += mg$i * w.${"xyzw"[i]};""" }.joinToString("")}
                 return g;
             }
 
@@ -358,12 +426,10 @@ class GradePreviewShader {
                 if (sharpen > 0.0 || chromaNR > 0.0) src = half4(half3(detailed(coord, float3(src.rgb))), src.a);
                 // Masks first: inside one, its texture, clarity and dehaze add to the clip's.
                 float3 pr = float3(lcTexture, lcClarity, lcDehaze);
+                float4 mw = maskCount > 0.5 ? weightsAt(coord, float3(src.rgb)) : float4(0.0);
                 ${List(ColourMask.MAX_PER_CLIP) { i -> """
-                float w$i = 0.0;
-                if (maskCount > ${i}.5) {
-                    w$i = m${i}a.x > 1.5 ? brushWeight(m${i}a, m${i}b, coord, $i.0) : maskWeight(m${i}a, m${i}b, coord);
-                    pr += mp$i * w$i;
-                }""" }.joinToString("")}
+                float w$i = mw.${"xyzw"[i]};
+                pr += mp$i * w$i;""" }.joinToString("")}
                 if (pr.x != 0.0 || pr.y != 0.0) src = half4(half3(presence(coord, float3(src.rgb), pr)), src.a);
                 float3 c = float3(grade_lut(src.rgb));
                 ${List(ColourMask.MAX_PER_CLIP) { i -> """
