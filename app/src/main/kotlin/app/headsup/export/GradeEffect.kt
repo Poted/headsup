@@ -130,9 +130,12 @@ class GradeEffect(
                     program.setFloatsUniform("uM${i}b", b)
                     val p = masks.getOrNull(i)?.grade?.presence ?: Presence.NONE
                     program.setFloatsUniform("uMp$i", floatArrayOf(p.texture, p.clarity, p.dehaze))
+                    val g = masks.getOrNull(i)?.grade
+                    program.setFloatsUniform("uMg$i", floatArrayOf(g?.glow ?: 0f, g?.halation ?: 0f))
                 }
                 val fromWeight = if (from != null) ColourTransition.fromWeight(positionMs + timeOffsetMs, transitionMs) else 0f
                 program.setFloatUniform("uFromWeight", fromWeight)
+                program.setFloatUniform("uMaskGlow", if (masks.take(ColourMask.MAX_PER_CLIP).any { it.grade.glow > 0f || it.grade.halation > 0f }) 1f else 0f)
                 program.setIntUniform("uHdrIn", if (hdrInput == HdrInput.HLG) 2 else if (hdrInput != null) 1 else 0)
                 program.setFloatsUniform("uHlgFix", if (hdrInput == HdrInput.RELABELLED_BT709) HdrRoute.HLG_FIX else HdrRoute.IDENTITY)
                 program.setFloatUniform("uSdrWhite", HdrRoute.SDR_WHITE)
@@ -192,6 +195,8 @@ class GradeEffect(
             uniform float uHasWarp;
             uniform mat3 uWarp;
             ${List(ColourMask.MAX_PER_CLIP) { "uniform vec3 uMp$it;" }.joinToString("\n")}
+            ${List(ColourMask.MAX_PER_CLIP) { "uniform vec2 uMg$it;" }.joinToString("\n")}
+            uniform float uMaskGlow;
             const mat3 BT2020_TO_BT709 = mat3(
                 1.6605, -0.1246, -0.0182,
                 -0.5876, 1.1329, -0.1006,
@@ -320,6 +325,16 @@ class GradeEffect(
                 return clamp(c, 0.0, 1.0);
             }
 
+            // As the preview shader's maskGlowAt(): each glowing mask's glow and halation at px, added up.
+            vec2 maskGlowAt(vec2 px) {
+                vec2 g = vec2(0.0);
+                ${List(ColourMask.MAX_PER_CLIP) { i -> """
+                if (uMaskCount > $i.5 && (uMg$i.x > 0.0 || uMg$i.y > 0.0)) {
+                    g += uMg$i * (uM${i}a.x > 1.5 ? brushWeight(uM${i}a, uM${i}b, px, $i.0) : maskWeight(uM${i}a, uM${i}b, px));
+                }""" }.joinToString("")}
+                return g;
+            }
+
             void main() {
                 vec4 src = texture2D(uTexSampler, vTexSamplingCoord);
                 vec3 srcRgb = source(vTexSamplingCoord);
@@ -337,6 +352,24 @@ class GradeEffect(
                 ${List(ColourMask.MAX_PER_CLIP) { i -> """
                 if (w$i > 0.0) c = mix(c, grade(uLutM$i, srcRgb), w$i);""" }.joinToString("")}
                 if (uFromWeight > 0.0) c = mix(c, grade(uLutFrom, srcRgb), uFromWeight);
+                // As the preview: a mask's glow comes only from what is bright inside it and spreads past its edge.
+                if (uMaskGlow > 0.5) {
+                    float r = min(uSize.x, uSize.y) * 0.012;
+                    vec3 accG = vec3(0.0);
+                    vec3 accH = vec3(0.0);
+                    for (int i = 0; i < 18; i++) {
+                        float a = i < 12 ? float(i) * 0.5236 : float(i - 12) * 1.0472 + 0.26;
+                        vec2 q = px + vec2(cos(a), sin(a)) * (i < 12 ? r : 2.2 * r);
+                        vec2 k = maskGlowAt(q);
+                        if (k.x <= 0.0 && k.y <= 0.0) continue;
+                        vec3 s = grade(uLut, source(vec2(q.x / uSize.x, 1.0 - q.y / uSize.y)));
+                        vec3 b = s * (max(luma(s) - 0.6, 0.0) / 0.4);
+                        accG += b * k.x;
+                        accH += b * k.y;
+                    }
+                    vec3 g = clamp(accG / 18.0 * 1.5 + dot(accH / 18.0, vec3(0.33)) * 2.0 * vec3(1.0, 0.3, 0.1), 0.0, 1.0);
+                    c = 1.0 - (1.0 - c) * (1.0 - g);
+                }
                 gl_FragColor = vec4(c, src.a);
             }
         """

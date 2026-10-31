@@ -2160,7 +2160,7 @@ private fun ScopeMenu(state: UiState, vm: HeadsupViewModel, adjust: Boolean, onD
 }
 
 /** Sections of the colour corrections, so the picker row stays short. */
-private enum class ColourSection(val label: String) { LIGHT("Light"), PRESENCE("Presence"), COLOUR("Colour"), MIXER("Mixer"), FILM("Film"), LOOKS("Looks"), TOOLS("Tools") }
+private enum class ColourSection(val label: String) { LIGHT("Light"), PRESENCE("Presence"), COLOUR("Colour"), MIXER("Mixer"), FILM("Film"), EFFECTS("Effects"), LOOKS("Looks"), TOOLS("Tools") }
 
 private val Adjustment.section: ColourSection
     get() = when (this) {
@@ -2172,6 +2172,7 @@ private val Adjustment.section: ColourSection
         Adjustment.CINE, Adjustment.LUT, Adjustment.MATCH, Adjustment.BLEND -> ColourSection.TOOLS
         Adjustment.MIXER, Adjustment.CHANNELS, Adjustment.BW, Adjustment.CALIBRATION -> ColourSection.MIXER
         Adjustment.LOOK -> ColourSection.LOOKS
+        Adjustment.GLOW, Adjustment.HALATION -> ColourSection.EFFECTS
     }
 
 /** A row of text tabs: the selected one white and underlined, the others muted. */
@@ -2230,6 +2231,9 @@ internal enum class Adjustment(
     TEXTURE("Tx", "Texture", -1f..1f, 0.02f, "%+.2f", { it.texture }, { g, v -> g.copy(texture = v) }),
     CLARITY("Cl", "Clarity", -1f..1f, 0.02f, "%+.2f", { it.clarity }, { g, v -> g.copy(clarity = v) }),
     DEHAZE("Dh", "Dehaze", -1f..1f, 0.02f, "%+.2f", { it.dehaze }, { g, v -> g.copy(dehaze = v) }),
+    // Masks only (a clip's glow and halation are in Effects): light from what is bright inside the mask.
+    GLOW("✧", "Glow", 0f..1f, 0.02f, "%.2f", { it.glow }, { g, v -> g.copy(glow = v) }),
+    HALATION("◌", "Halation", 0f..1f, 0.02f, "%.2f", { it.halation }, { g, v -> g.copy(halation = v) }),
 
     /** Not a ruler value: opens the LUT library (the LUT is applied last, after all corrections). */
     LUT("LUT", "LUT", 0f..1f, 1f, "", { 0f }, { g, _ -> g }),
@@ -2309,10 +2313,12 @@ private fun ColourPage(
     // The LUT belongs to the clip (it depends on how the clip was shot); the mask has only tonal
     // and colour corrections, with its shape in front.
     // Blending in from the previous clip is a property of the clip, so it is only on its own tab.
+    // Glow and halation are a mask's own (the clip's are in Effects).
+    val maskOnly = setOf(Adjustment.GLOW, Adjustment.HALATION)
     val options = when (target) {
-        GradeTarget.CLIP -> if (index > 0) Adjustment.entries else Adjustment.entries - Adjustment.BLEND
-        GradeTarget.GROUP -> Adjustment.entries - Adjustment.BLEND - Adjustment.CINE - Adjustment.MATCH
-        GradeTarget.GLOBAL -> Adjustment.entries - Adjustment.LUT - Adjustment.BLEND - Adjustment.CINE - Adjustment.MATCH
+        GradeTarget.CLIP -> (if (index > 0) Adjustment.entries else Adjustment.entries - Adjustment.BLEND) - maskOnly
+        GradeTarget.GROUP -> Adjustment.entries - Adjustment.BLEND - Adjustment.CINE - Adjustment.MATCH - maskOnly
+        GradeTarget.GLOBAL -> Adjustment.entries - Adjustment.LUT - Adjustment.BLEND - Adjustment.CINE - Adjustment.MATCH - maskOnly
         GradeTarget.MASK -> Adjustment.entries - Adjustment.LUT - Adjustment.SKIN - Adjustment.VIGNETTE - Adjustment.BLEND -
             Adjustment.CINE - Adjustment.MATCH - Adjustment.LOOK
     }

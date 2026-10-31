@@ -56,6 +56,13 @@ data class ColorGrade(
     val bw: List<Float> = BlackAndWhite.NEUTRAL,
     /** Calibration ([Calibration]): hue and saturation of the red, green and blue primaries. */
     val calibration: List<Float> = Calibration.NEUTRAL,
+    /**
+     * Masks only: the bright parts inside the mask glow (0..1), the light spreading past its edge
+     * as light does; not a colour operation (drawn by the shaders).
+     */
+    val glow: Float = 0f,
+    /** Masks only: film's red-orange bleed around the bright parts inside the mask (0..1). */
+    val halation: Float = 0f,
 ) {
     /** The corrections that look at a pixel's surroundings, drawn by the shader before the colour table. */
     val presence: Presence get() = Presence(texture, clarity, dehaze)
@@ -80,6 +87,7 @@ data class ColorGrade(
         // On stays on; the bands scale.
         bw.mapIndexed { i, v -> if (i == 0) v else v * k },
         calibration.map { it * k },
+        glow * k, halation * k,
     )
 
     /**
@@ -128,6 +136,8 @@ data class ColorGrade(
             else (bw.getOrElse(i) { 0f } + other.bw.getOrElse(i) { 0f }).coerceIn(-1f, 1f)
         },
         calibration = List(Calibration.SIZE) { i -> (calibration.getOrElse(i) { 0f } + other.calibration.getOrElse(i) { 0f }).coerceIn(-1f, 1f) },
+        glow = (glow + other.glow).coerceIn(0f, 1f),
+        halation = (halation + other.halation).coerceIn(0f, 1f),
     )
 
     /**
@@ -182,6 +192,8 @@ data class ColorGrade(
             val a = after.calibration.getOrElse(i) { 0f }
             if (a != before.calibration.getOrElse(i) { 0f }) a else calibration.getOrElse(i) { 0f }
         },
+        glow = if (after.glow != before.glow) after.glow else glow,
+        halation = if (after.halation != before.halation) after.halation else halation,
     )
 
     companion object {

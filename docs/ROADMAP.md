@@ -102,6 +102,10 @@ project's files), the preview resized left/right when held sideways, Edit called
       tracking, Clean up) can be stopped; tracking keeps what it found.
 - [x] Sky model: DeepLab v3+ Xception65 (ADE20K) instead of MobileNetV2 (it took a sunset sea for
       sky); built by CI from the TensorFlow graph (tools/models/sky_model.py).
+- [x] Effects in masks (as DaVinci's effects on a windowed node): Glow and Halation in a mask's
+      Effects tab. Only what is bright inside the mask gives light, and the light spreads past its
+      edge as light does (no cut-off at the mask's edge). Preview, photo and video export.
+      Later, if wanted: Blur / Sharpen inside a mask.
 - [ ] Masks, next: (1) edges at full resolution in export (the mask is kept at 640 px: refine it
       against the full picture in the shader); (2) faster tracking (the encoder takes about a
       second per frame on a phone: GPU/NNAPI, or a smaller encoder); (3) more prompts: + / − points

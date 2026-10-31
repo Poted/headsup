@@ -147,7 +147,10 @@ class GradePreviewShader {
             shader.setFloatUniform("m${i}b", b)
             val p = masks.getOrNull(i)?.grade?.presence ?: Presence.NONE
             shader.setFloatUniform("mp$i", p.texture, p.clarity, p.dehaze)
+            val g = masks.getOrNull(i)?.grade
+            shader.setFloatUniform("mg$i", g?.glow ?: 0f, g?.halation ?: 0f)
         }
+        shader.setFloatUniform("maskGlow", if (masks.take(ColourMask.MAX_PER_CLIP).any { it.grade.glow > 0f || it.grade.halation > 0f }) 1f else 0f)
         shader.setFloatUniform("fromWeight", fromWeight)
         shader.setFloatUniform("grain", effects.grain)
         shader.setFloatUniform("grainSize", effects.grainSize)
@@ -206,6 +209,9 @@ class GradePreviewShader {
             uniform float lcClarity;
             uniform float lcDehaze;
             ${List(ColourMask.MAX_PER_CLIP) { "uniform float3 mp$it;" }.joinToString("\n")}
+            // Glow and halation of each mask, and whether any mask has them.
+            ${List(ColourMask.MAX_PER_CLIP) { "uniform float2 mg$it;" }.joinToString("\n")}
+            uniform float maskGlow;
 
             uniform float hasWarp;
             uniform float3x3 warp;
@@ -272,6 +278,16 @@ class GradePreviewShader {
                 float3 c = float3(gradeNearest(img(p).rgb));
                 float k = max(luma(c) - threshold, 0.0) / max(1.0 - threshold, 0.01);
                 return c * k;
+            }
+
+            // Where each mask is at p, for masks that glow: their glow and halation there, added up.
+            float2 maskGlowAt(float2 p) {
+                float2 g = float2(0.0);
+                ${List(ColourMask.MAX_PER_CLIP) { i -> """
+                if (maskCount > ${i}.5 && (mg$i.x > 0.0 || mg$i.y > 0.0)) {
+                    g += mg$i * (m${i}a.x > 1.5 ? brushWeight(m${i}a, m${i}b, p, $i.0) : maskWeight(m${i}a, m${i}b, p));
+                }""" }.joinToString("")}
+                return g;
             }
 
             // Colour noise: the colour averaged over a small ring, the brightness kept; then the
@@ -362,6 +378,25 @@ class GradePreviewShader {
                         acc += bright(coord + float2(cos(a), sin(a)) * 2.2 * r);
                     }
                     float3 g = clamp(acc / 18.0 * glow * 1.5 + dot(acc / 18.0, float3(0.33)) * halation * 2.0 * float3(1.0, 0.3, 0.1), 0.0, 1.0);
+                    c = 1.0 - (1.0 - c) * (1.0 - g);
+                }
+                // A mask's glow: only what is bright inside the mask gives light, which spreads past
+                // its edge as light does (the mask is read where the light comes from).
+                if (maskGlow > 0.5) {
+                    float r = shortSide * 0.012;
+                    float3 accG = float3(0.0);
+                    float3 accH = float3(0.0);
+                    for (int i = 0; i < 18; i++) {
+                        float a = i < 12 ? float(i) * 0.5236 : float(i - 12) * 1.0472 + 0.26;
+                        float2 q = coord + float2(cos(a), sin(a)) * (i < 12 ? r : 2.2 * r);
+                        float2 k = maskGlowAt(q);
+                        if (k.x <= 0.0 && k.y <= 0.0) continue;
+                        float3 s = float3(gradeNearest(img(q).rgb));
+                        float3 b = s * (max(luma(s) - 0.6, 0.0) / 0.4);
+                        accG += b * k.x;
+                        accH += b * k.y;
+                    }
+                    float3 g = clamp(accG / 18.0 * 1.5 + dot(accH / 18.0, float3(0.33)) * 2.0 * float3(1.0, 0.3, 0.1), 0.0, 1.0);
                     c = 1.0 - (1.0 - c) * (1.0 - g);
                 }
                 if (grain > 0.0) {
