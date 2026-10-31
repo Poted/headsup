@@ -11,7 +11,8 @@ import kotlin.math.min
  */
 class MaskSequence(val width: Int, val height: Int, val timesMs: LongArray, val frames: List<ByteArray>) {
     init {
-        require(timesMs.size == frames.size && frames.all { it.size == width * height })
+        // Only the count: the maps may be kept packed, and are not opened to be checked.
+        require(timesMs.size == frames.size)
     }
 
     val isEmpty: Boolean get() = timesMs.isEmpty()
@@ -51,7 +52,8 @@ class MaskSequence(val width: Int, val height: Int, val timesMs: LongArray, val 
 
     /**
      * This sequence with [newer]'s maps in place of its own between [newer]'s first and last time
-     * (a part tracked again); the rest kept. Both must be the same size.
+     * (a part tracked again); the rest kept. Both must be the same size. No map is opened: the
+     * result reads them from the two sequences as it is read.
      */
     fun merged(newer: MaskSequence): MaskSequence {
         if (newer.isEmpty) return this
@@ -59,13 +61,75 @@ class MaskSequence(val width: Int, val height: Int, val timesMs: LongArray, val 
         val from = newer.timesMs.first()
         val to = newer.timesMs.last()
         val kept = timesMs.indices.filter { timesMs[it] < from || timesMs[it] > to }
-        val all = (kept.map { timesMs[it] to frames[it] } + newer.timesMs.indices.map { newer.timesMs[it] to newer.frames[it] }).sortedBy { it.first }
-        return MaskSequence(width, height, LongArray(all.size) { all[it].first }, all.map { it.second })
+        // (time, which sequence, index in it), in time order.
+        val all = (kept.map { Triple(timesMs[it], 0, it) } + newer.timesMs.indices.map { Triple(newer.timesMs[it], 1, it) }).sortedBy { it.first }
+        val frames = object : AbstractList<ByteArray>() {
+            override val size: Int get() = all.size
+            override fun get(index: Int): ByteArray = all[index].let { (_, which, i) -> if (which == 0) this@MaskSequence.frames[i] else newer.frames[i] }
+        }
+        return MaskSequence(width, height, LongArray(all.size) { all[it].first }, frames)
     }
 
     companion object {
         /** [coverage] (0..1) as a map. */
         fun bytes(coverage: FloatArray): ByteArray = ByteArray(coverage.size) { (coverage[it] * 255f + 0.5f).toInt().coerceIn(0, 255).toByte() }
+    }
+}
+
+/**
+ * Maps kept compressed (a mask's map is mostly all in or all out: a few kB instead of a few
+ * hundred), each opened when it is read; the last few opened are kept open. A long clip tracked
+ * twelve times a second holds thousands of maps: open, they would not fit in memory.
+ */
+class PackedFrames(private val packed: List<ByteArray>, private val frameSize: Int) : AbstractList<ByteArray>() {
+    private val recent = LinkedHashMap<Int, ByteArray>(8, 0.75f, true)
+
+    override val size: Int get() = packed.size
+
+    /** Map [index] as kept (compressed). */
+    fun packedAt(index: Int): ByteArray = packed[index]
+
+    override fun get(index: Int): ByteArray {
+        synchronized(recent) { recent[index]?.let { return it } }
+        val open = unpack(packed[index], frameSize)
+        synchronized(recent) {
+            recent[index] = open
+            while (recent.size > 4) recent.remove(recent.keys.first())
+        }
+        return open
+    }
+
+    companion object {
+        fun pack(map: ByteArray): ByteArray {
+            val deflater = java.util.zip.Deflater(java.util.zip.Deflater.BEST_SPEED)
+            try {
+                deflater.setInput(map)
+                deflater.finish()
+                val out = java.io.ByteArrayOutputStream(map.size / 16 + 64)
+                val buffer = ByteArray(16 * 1024)
+                while (!deflater.finished()) out.write(buffer, 0, deflater.deflate(buffer))
+                return out.toByteArray()
+            } finally {
+                deflater.end()
+            }
+        }
+
+        fun unpack(packed: ByteArray, size: Int): ByteArray {
+            val inflater = java.util.zip.Inflater()
+            try {
+                inflater.setInput(packed)
+                val out = ByteArray(size)
+                var n = 0
+                while (n < size && !inflater.finished()) {
+                    val got = inflater.inflate(out, n, size - n)
+                    if (got == 0 && (inflater.needsInput() || inflater.needsDictionary())) break
+                    n += got
+                }
+                return out
+            } finally {
+                inflater.end()
+            }
+        }
     }
 }
 

@@ -61,4 +61,19 @@ class MaskSequenceTest {
         assertNull(MaskFollow.pick(previous, listOf(elsewhere to 0.99f)))
         assertEquals(0.25f, MaskFollow.area(rect(0, 0, 20, 15)), 1e-4f)
     }
+
+    @Test
+    fun `maps kept packed read back the same and are small`() {
+        val maps = List(50) { k -> MaskSequence.bytes(rect(k % 20, 5, k % 20 + 15, 25)) }
+        val packed = PackedFrames(maps.map { PackedFrames.pack(it) }, w * h)
+        assertTrue((0 until 50).all { packed[it].contentEquals(maps[it]) })
+        assertTrue((0 until 50).sumOf { packed.packedAt(it).size } < maps.sumOf { it.size } / 5)
+        val seq = MaskSequence(w, h, LongArray(50) { it * 100L }, packed)
+        assertEquals(1f, seq.at(0)[10 * w + 5], 1e-3f)
+        // Merged without opening every map: still reads right.
+        val newer = MaskSequence(w, h, longArrayOf(1000, 1100), List(2) { MaskSequence.bytes(FloatArray(w * h)) })
+        val m = seq.merged(newer)
+        assertEquals(0f, m.at(1050)[10 * w + 15], 1e-3f)
+        assertEquals(51 - 2 + 2 - 1, m.timesMs.size)
+    }
 }

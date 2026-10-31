@@ -2413,17 +2413,17 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                                 // model does not find there (the fixes) is carried on.
                                 first = false
                                 follower.begin(picture)
-                                times += ms; maps += app.headsup.core.color.MaskSequence.bytes(start)
+                                times += ms; maps += app.headsup.core.color.PackedFrames.pack(app.headsup.core.color.MaskSequence.bytes(start))
                                 return@forEachPicture true
                             }
                             val map = follower.next(picture)
                             if (map == null) {
                                 // Nothing from here: the mask disappears.
-                                times += ms; maps += ByteArray(w * h)
+                                times += ms; maps += app.headsup.core.color.PackedFrames.pack(ByteArray(w * h))
                                 if (follower.lost) lostAhead = ms else goneAhead = ms
                                 return@forEachPicture false
                             }
-                            times += ms; maps += app.headsup.core.color.MaskSequence.bytes(map)
+                            times += ms; maps += app.headsup.core.color.PackedFrames.pack(app.headsup.core.color.MaskSequence.bytes(map))
                             true
                         }
                     }
@@ -2442,7 +2442,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                         val follower = app.headsup.color.MaskFollower(context, w, h, sky, start)
                         var last = t0
                         if (times.isEmpty()) {
-                            times += t0; maps += app.headsup.core.color.MaskSequence.bytes(start)
+                            times += t0; maps += app.headsup.core.color.PackedFrames.pack(app.headsup.core.color.MaskSequence.bytes(start))
                         }
                         // The frame at the playhead starts the run back (it is not stored again).
                         val startFrame = kept.lastOrNull()?.takeIf { kotlin.math.abs(it.first - t0) <= step / 2 }
@@ -2458,16 +2458,17 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                             val map = follower.next(picture)
                             picture.recycle()
                             if (map == null) {
-                                times += ms; maps += ByteArray(w * h)
+                                times += ms; maps += app.headsup.core.color.PackedFrames.pack(ByteArray(w * h))
                                 if (follower.lost) lostBehind = ms else goneBehind = ms
                                 break
                             }
-                            times += ms; maps += app.headsup.core.color.MaskSequence.bytes(map)
+                            times += ms; maps += app.headsup.core.color.PackedFrames.pack(app.headsup.core.color.MaskSequence.bytes(map))
                         }
                     }
                     if (times.isEmpty()) return@withContext null
                     val order = times.indices.sortedBy { times[it] }
-                    val tracked = app.headsup.core.color.MaskSequence(w, h, LongArray(order.size) { times[order[it]] }, order.map { maps[it] })
+                    // Kept packed as they come: a long clip's maps would not fit in memory open.
+                    val tracked = app.headsup.core.color.MaskSequence(w, h, LongArray(order.size) { times[order[it]] }, app.headsup.core.color.PackedFrames(order.map { maps[it] }, w * h))
                     val merged = old?.merged(tracked) ?: tracked
                     val id = app.headsup.color.MaskSequences.create(context, merged)
                     TrackedAi(id, tracked.timesMs.first(), tracked.timesMs.last(), tracked.timesMs.size, lostAhead, lostBehind, goneAhead, goneBehind, stopRequested)

@@ -84,7 +84,11 @@ class GradeEffect(
         override fun configure(inputWidth: Int, inputHeight: Int): Size {
             width = inputWidth
             height = inputHeight
-            uploadBrush(fileStartMs)
+            try {
+                uploadBrush(fileStartMs)
+            } catch (e: Throwable) {
+                throw VideoFrameProcessingException(e)
+            }
             return Size(inputWidth, inputHeight)
         }
 
@@ -147,6 +151,12 @@ class GradeEffect(
                 program.bindAttributesAndUniforms()
                 GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4)
             } catch (e: GlUtil.GlException) {
+                throw VideoFrameProcessingException(e, presentationTimeUs)
+            } catch (e: VideoFrameProcessingException) {
+                throw e
+            } catch (e: Throwable) {
+                // Anything else (out of memory drawing a mask, a missing file) ends the export with
+                // its cause, instead of the pipeline stopping silently until the muxer gives up.
                 throw VideoFrameProcessingException(e, presentationTimeUs)
             }
         }
