@@ -333,6 +333,9 @@ class ExportManager(private val context: Context) {
         val output = File(workDir, "job-${job.id}.mp4").apply { delete() }
 
         val t = Transformer.Builder(context)
+            // A heavy frame (masks tracked with AI, glow) may take long on a slow phone: the muxer
+            // waits a minute for it, not 10 s, before calling the export stuck.
+            .setMaxDelayBetweenMuxerSamplesMs(60_000L)
             .setVideoMimeType(if (out.tenBit) MimeTypes.VIDEO_H265 else out.codec.mimeType)
             .apply { if (out.tenBit) setAssetLoaderFactory(HdrRoute.assetLoaderFactory(context)) }
             .setEncoderFactory(if (out.tenBit && !out.hlg) HdrRoute.sdrEncoderFactory(context, out.bitrate, encoderFactory) else encoderFactory)

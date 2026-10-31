@@ -111,6 +111,10 @@ project's files), the preview resized left/right when held sideways, Edit called
       (CameraMotion, tested) onto each next frame's answer. Frames tracked from are keys: tracking
       from a frame runs to the next key either way, never over it. Copy / Opposite of a mask (with
       its tracking). View mode moves the zoomed picture again.
+- [x] Track on an AI-tracked mask always runs both ways from the playhead (up to the frames fixed
+      earlier). Export: a tracked mask's fixes are drawn once (not on every frame), its pictures are
+      not read from the disk again on each frame, and the muxer waits up to a minute for a slow
+      frame (the export failed with MUXING_TIMEOUT after 10 s).
 - [ ] Masks, next: (1) edges at full resolution in export (the mask is kept at 640 px: refine it
       against the full picture in the shader); (2) faster tracking (the encoder takes about a
       second per frame on a phone: GPU/NNAPI, or a smaller encoder); (3) more prompts: + / − points

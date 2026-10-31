@@ -3191,9 +3191,8 @@ private fun MaskMotion(state: UiState, clip: ClipState, mask: ColourMask, vm: He
             color = HeadsupColors.TextMuted,
         )
         if (mask.sequence != null) {
-            // Tracked with AI: continue from a fix made at the playhead, or go back to the strokes.
-            SmallAction("◀ Track", { vm.trackMask(HeadsupViewModel.TrackDirection.BACKWARD) }, enabled = !state.busy)
-            SmallAction("Track ▶", { vm.trackMask(HeadsupViewModel.TrackDirection.FORWARD) }, enabled = !state.busy)
+            // Tracked with AI: from a fix at the playhead both ways (up to the frames fixed before), or back to the strokes.
+            SmallAction("Track", { vm.trackMask(HeadsupViewModel.TrackDirection.BOTH) }, enabled = !state.busy)
             SmallAction("Untrack", { vm.clearMaskSequence() }, enabled = !state.busy)
         } else if (mask.keys.isEmpty()) {
             SmallAction("Track", { vm.trackMask(HeadsupViewModel.TrackDirection.BOTH) }, enabled = !state.busy)
@@ -3217,7 +3216,7 @@ private fun MaskMotion(state: UiState, clip: ClipState, mask: ColourMask, vm: He
     }
     Hint(
         when {
-            mask.kind == MaskKind.BRUSH && mask.sequence != null -> "Found again on each frame by AI. Where it slips, go there, fix it (Select, Paint, Erase) and Track ▶ or ◀ Track: the fix moves with the picture onto the next frames, up to the next frame fixed before (${mask.anchors.size} so far), which stays as it is."
+            mask.kind == MaskKind.BRUSH && mask.sequence != null -> "Found again on each frame by AI. Where it slips, go there, fix it (Select, Paint, Erase) and Track: the fix moves with the picture onto the frames before and after, up to the frames fixed earlier (${mask.anchors.size} so far), which stay as they are."
             mask.kind == MaskKind.BRUSH -> "Track finds the mask again on each frame with AI (about a second a frame on a phone; Stop keeps what was found): it keeps the object's shape and ends when the object leaves the picture."
             mask.keys.isEmpty() -> "Place the mask, then Track (it follows the picture both ways from here), or pause, + Key, and move the mask at a few moments."
             else -> "Pause on a key (or tap its diamond) and move the mask to change it; between keys it glides."

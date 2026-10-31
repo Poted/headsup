@@ -57,8 +57,20 @@ object BrushAtlas {
         val maps = seq.at(timeMs, w, h)
         val base = if (mask.edge == 0f) maps else app.headsup.core.color.MaskEdge.shape(maps, w, h, mask.edge)
         val extra = mask.strokes.drop(mask.sequenceStrokes)
-        return if (extra.isEmpty()) base else BrushMask.rasterize(extra, w, h, mask.softness, references(context, extra), start = base, edge = mask.edge)
+        if (extra.isEmpty()) return base
+        if (extra.any { it.erase }) return BrushMask.rasterize(extra, w, h, mask.softness, references(context, extra), start = base, edge = mask.edge)
+        // Strokes that only add are drawn once and laid over each frame's map (the same sum as
+        // drawing them on it: 1 − (1 − map)(1 − strokes)), so a frame costs no drawing.
+        val key = Drawn(extra, mask.softness, mask.edge, w, h, FloatArray(0))
+        val added = synchronized(drawn) { extras[mask.sequence]?.takeIf { it.strokes == key.strokes && it.softness == key.softness && it.edge == key.edge && it.width == w && it.height == h }?.map }
+            ?: BrushMask.rasterize(extra, w, h, mask.softness, references(context, extra), edge = mask.edge).also { map ->
+                synchronized(drawn) { extras[mask.sequence] = Drawn(extra, mask.softness, mask.edge, w, h, map) }
+            }
+        return FloatArray(base.size) { i -> base[i] + (1f - base[i]) * added[i] }
     }
+
+    /** Strokes added on top of tracked masks since they were tracked, drawn: by the mask's maps. */
+    private val extras = HashMap<String?, Drawn>()
 
     /** True when a mask changes from frame to frame (tracked with AI): the atlas is drawn again for each. */
     fun changesOverTime(masks: List<ColourMask>): Boolean = masks.take(ColourMask.MAX_PER_CLIP).any { it.kind == MaskKind.BRUSH && it.sequence != null }

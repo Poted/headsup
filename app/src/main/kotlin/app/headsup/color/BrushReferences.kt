@@ -17,7 +17,7 @@ import java.util.zip.GZIPOutputStream
  * so edges are found the same way however the clip is graded.
  */
 object BrushReferences {
-    private val cache = HashMap<String, BrushReference?>()
+    private val cache = LinkedHashMap<String, BrushReference?>(16, 0.75f, true)
 
     private fun file(context: Context, id: String) = File(File(context.filesDir, "brush"), "$id.ref")
 
@@ -81,8 +81,10 @@ object BrushReferences {
             }
         }.getOrNull()
         synchronized(cache) {
-            if (cache.size > 16) cache.clear()
             cache[id] = ref
+            // The longest unused go first (never all at once: a mask drawn again on every frame
+            // must not read its pictures from the disk each time).
+            while (cache.size > 16) cache.remove(cache.keys.first())
         }
         return ref
     }
