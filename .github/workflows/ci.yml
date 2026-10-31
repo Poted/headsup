@@ -34,7 +34,7 @@ jobs:
           java-version: '17'
       - uses: gradle/actions/setup-gradle@v4
       # Models too large for the repository: the inpainting model (downloaded by the build) and the
-      # sky model (built from DeepLab's TensorFlow graph), kept between runs.
+      # scene model (built from DeepLab's TensorFlow graph), kept between runs.
       - uses: actions/cache@v4
         id: models
         with:
@@ -44,11 +44,11 @@ jobs:
         if: steps.models.outputs.cache-hit != 'true'
         with:
           python-version: '3.13'
-      - name: Sky model
+      - name: Scene model
         if: steps.models.outputs.cache-hit != 'true'
         run: |
           pip install tensorflow-cpu==2.21.0 tf2onnx==1.17.0 onnx==1.23.2 onnxruntime numpy
-          python tools/models/sky_model.py app/build/models/assets/sky.onnx
+          python tools/models/scene_model.py app/build/models/assets/scene.onnx
       - name: Build debug APK
         run: ./gradlew :app:assembleDebug
       - name: Upload APK

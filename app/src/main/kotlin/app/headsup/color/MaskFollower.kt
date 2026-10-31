@@ -7,10 +7,10 @@ import app.headsup.core.color.GrayFrame
 import app.headsup.core.color.MaskFollow
 
 /**
- * Carries a brush mask through a clip, finding it again on each frame: the sky by the sky model,
- * anything else by MobileSAM, told where the mask was on the frame before (its box, a point well
- * inside it and the model's own answer there), so it takes the object's new shape, not just its
- * place. Maps are [width]×[height]; [start] is the mask on the first frame. What the user's mask
+ * Carries a brush mask through a clip, finding it again on each frame: an area of the scene (the
+ * sky, plants, water… [scene]) by the scene model, anything else by MobileSAM, told where the
+ * mask was on the frame before (its box, a point well inside it and the model's own answer there),
+ * so it takes the object's new shape, not just its place. Maps are [width]×[height]; [start] is the mask on the first frame. What the user's mask
  * has beyond what the model finds (fixes painted in or out, [begin]) is carried with the picture's
  * movement ([CameraMotion]) and laid over each frame's answer.
  */
@@ -18,11 +18,19 @@ class MaskFollower(
     private val context: Context,
     val width: Int,
     val height: Int,
-    private val sky: Boolean,
+    /** An area found again by the scene model on each frame; null for a thing followed by MobileSAM. */
+    private val scene: Scene?,
+    /**
+     * The mask is all but what is followed (the background: all but the subject): the subject is
+     * followed, and each frame's answer turned inside out.
+     */
+    private val invert: Boolean,
     start: FloatArray,
 ) {
+    private val sky = scene != null
+
     /** The mask the model is asked to find again (its own answer on the frame before). */
-    private var previous = start
+    private var previous = if (invert) FloatArray(start.size) { 1f - start[it] } else start
     private var rough: FloatArray? = null
 
     /**
@@ -85,7 +93,8 @@ class MaskFollower(
         }
         previous = found.first
         rough = found.second
-        return withFixes(found.first)
+        val out = withFixes(found.first)
+        return if (invert) FloatArray(out.size) { 1f - out[it] } else out
     }
 
     /** The model's answer with the user's fixes laid over it. */
@@ -101,7 +110,7 @@ class MaskFollower(
 
     /** What the model finds on [picture] for the mask [like] (its box, a point inside, its last rough answer). */
     private fun find(picture: Bitmap, small: Bitmap, guide: FloatArray, like: FloatArray): Pair<FloatArray, FloatArray?>? {
-        if (sky) return sharp(Segmenter.refine(guide, Segmenter.sky(context, small, width, height), width, height)) to null
+        if (scene != null) return sharp(Segmenter.refine(guide, Segmenter.scene(context, small, width, height)[scene.ordinal], width, height)) to null
         val box = MaskFollow.box(like, width, height) ?: return null
         val prompts = buildList {
             add(Segmenter.Prompt(box[0], box[1], Segmenter.Prompt.Label.BOX_START))

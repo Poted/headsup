@@ -1805,10 +1805,10 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
         _state.update { it.copy(brush = it.brush.copy(mode = mode, subtract = false)) }
     }
 
-    /** A new mask that is the sky of the picture on screen. */
-    fun addSkyMask(grab: (Int) -> android.graphics.Bitmap?) {
+    /** A new mask that is what [key] names in the picture on screen (the subject, people, the sky…). */
+    fun addSceneMask(key: String, grab: (Int) -> android.graphics.Bitmap?) {
         addBrushMask(BrushMode.SELECT)
-        selectSky(grab)
+        selectScene(key, grab)
     }
 
     /**
@@ -2166,8 +2166,15 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    /** The sky of the picture on screen (the sky model, laid onto the picture's edges) added to the selected brush mask, or taken from it with Subtract. */
-    fun selectSky(grab: (Int) -> android.graphics.Bitmap?) {
+    /** The sky of the picture on screen added to the selected brush mask, or taken from it with Subtract. */
+    fun selectSky(grab: (Int) -> android.graphics.Bitmap?) = selectScene(app.headsup.color.Scene.SKY.name, grab)
+
+    /**
+     * What [key] names ([app.headsup.color.SceneKeys]: an area or things of the scene, the subject,
+     * the background) in the picture on screen, added to the selected brush mask or taken from it
+     * with Subtract. Areas are laid onto the picture's edges; things are made exact by MobileSAM.
+     */
+    fun selectScene(key: String, grab: (Int) -> android.graphics.Bitmap?) {
         val s = _state.value
         val index = s.selectedClip ?: return
         val clip = s.selected ?: return
@@ -2176,22 +2183,57 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
         val aspect = if (clip.meta.width > 0 && clip.meta.height > 0) clip.meta.width.toFloat() / clip.meta.height else 16f / 9f
         val (w, h) = app.headsup.color.BrushAtlas.slotSize(aspect)
         val bitmap = grab(w) ?: return
+        val keys = app.headsup.color.SceneKeys
+        val scene = keys.scene(key)
+        val things = scene?.thing ?: true
+        // Things are made exact on the picture as large as MobileSAM reads it.
+        val large = if (things) grab(app.headsup.color.Segmenter.INPUT) else null
         val subtract = s.brush.subtract
+        val label = keys.label(key)
         viewModelScope.launch {
-            _state.update { it.copy(busy = true, loadingMessage = "Finding the sky", loadingProgress = null) }
+            _state.update { it.copy(busy = true, loadingMessage = "Finding ${label.lowercase(java.util.Locale.ROOT)}", loadingProgress = null) }
             try {
                 val stroke = withContext(Dispatchers.Default) {
                     runCatching {
+                        val context: Application = getApplication()
+                        val seg = app.headsup.color.Segmenter
                         val small = Bitmap.createScaledBitmap(bitmap, w, h, true)
-                        val sky = app.headsup.color.Segmenter.sky(getApplication(), small, w, h)
-                        if (sky.count { it > 0.5f } < w * h / 500) return@runCatching null
-                        val refined = app.headsup.color.Segmenter.refine(app.headsup.color.Segmenter.rgb(small), sky, w, h)
-                        val id = app.headsup.color.BrushReferences.create(getApplication(), w, h, refined, placement)
-                        app.headsup.core.color.BrushStroke(listOf(0.5f, 0.1f), radius = 0.01f, flow = 1f, erase = subtract, reference = id, segment = true, sky = true)
+                        val guide = seg.rgb(small)
+                        val groups = seg.scene(context, small, w, h)
+                        fun enough(m: FloatArray) = m.count { it > 0.5f } >= w * h / 500
+                        val found: FloatArray = when {
+                            scene != null && !scene.thing -> groups[scene.ordinal]
+                            scene != null -> {
+                                val coarse = groups[scene.ordinal]
+                                if (!enough(coarse)) return@runCatching null
+                                seg.exact(context, large ?: small, coarse, w, h)
+                            }
+                            else -> {
+                                // The subject: the people, animals and vehicles the scene model finds,
+                                // else what MobileSAM finds in the middle of the picture.
+                                val coarse = FloatArray(w * h) { i -> app.headsup.color.Scene.entries.filter { it.thing }.maxOf { groups[it.ordinal][i] } }
+                                val subject = if (enough(coarse)) seg.exact(context, large ?: small, coarse, w, h) else {
+                                    val reading = seg.read(context, large ?: small)
+                                    seg.objects(context, reading, listOf(app.headsup.color.Segmenter.Prompt(0.5f, 0.5f, app.headsup.color.Segmenter.Prompt.Label.IN)), w, h)
+                                        .map { it.first }
+                                        .firstOrNull { m -> app.headsup.core.color.MaskFollow.area(m) in 0.01f..0.6f }
+                                        ?: return@runCatching null
+                                }
+                                if (key == keys.BACKGROUND) FloatArray(subject.size) { 1f - subject[it] } else subject
+                            }
+                        }
+                        if (!enough(found)) return@runCatching null
+                        val refined = seg.refine(guide, found, w, h)
+                        val id = app.headsup.color.BrushReferences.create(context, w, h, refined, placement)
+                        app.headsup.core.color.BrushStroke(
+                            listOf(0.5f, 0.1f), radius = 0.01f, flow = 1f, erase = subtract, reference = id, segment = true,
+                            // Areas are found again by the scene model on video; things and the background by following.
+                            sky = scene != null && !scene.thing, scene = key,
+                        )
                     }.onFailure { if (it is kotlinx.coroutines.CancellationException) throw it else it.printStackTrace() }.getOrNull()
                 }
                 if (stroke == null) {
-                    _state.update { it.copy(messages = it.messages + "No sky found in this picture.") }
+                    _state.update { it.copy(messages = it.messages + "No ${label.lowercase(java.util.Locale.ROOT)} found in this picture.") }
                     return@launch
                 }
                 addStroke(index, clip, stroke)
@@ -2408,6 +2450,9 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
         val uri = s.previewSource(clip)
         val adds = mask.strokes.filter { !it.erase }
         val sky = adds.isNotEmpty() && adds.all { it.sky }
+        // An area (sky, plants…) is found again by the scene model; the background by following the subject.
+        val scene = if (sky) app.headsup.color.SceneKeys.scene(adds.first().scene) ?: app.headsup.color.Scene.SKY else null
+        val invert = adds.isNotEmpty() && adds.all { it.scene == app.headsup.color.SceneKeys.BACKGROUND }
         val context: Application = getApplication()
         // The sky model is larger and the sky changes slowly: 4 maps a second, faded between.
         val step = if (sky) AI_TRACK_SKY_STEP_MS else AI_TRACK_STEP_MS
@@ -2448,7 +2493,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                     var goneAhead: Long? = null
                     var goneBehind: Long? = null
                     if (forward) {
-                        val follower = app.headsup.color.MaskFollower(context, w, h, sky, start)
+                        val follower = app.headsup.color.MaskFollower(context, w, h, scene, invert, start)
                         var first = true
                         var last = t0
                         TrackingFrames.forEachPicture(context, uri, t0, endAhead, step, app.headsup.color.Segmenter.INPUT) { ms, picture ->
@@ -2486,7 +2531,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                             kept += ms to out.toByteArray()
                             true
                         }
-                        val follower = app.headsup.color.MaskFollower(context, w, h, sky, start)
+                        val follower = app.headsup.color.MaskFollower(context, w, h, scene, invert, start)
                         var last = t0
                         if (times.isEmpty()) {
                             times += t0; maps += app.headsup.core.color.PackedFrames.pack(app.headsup.core.color.MaskSequence.bytes(start))

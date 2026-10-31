@@ -35,6 +35,11 @@ data class BrushStroke(
     val segment: Boolean = false,
     /** A [segment] that is the sky (found by the sky model): on video it is found again on each frame. */
     val sky: Boolean = false,
+    /**
+     * What a [segment] found at once by AI is (the app's scene keys: "SKY", "PEOPLE", "SUBJECT",
+     * "BACKGROUND"…); null for one tapped or outlined.
+     */
+    val scene: String? = null,
 )
 
 /**

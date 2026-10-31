@@ -76,4 +76,15 @@ class MaskSequenceTest {
         assertEquals(0f, m.at(1050)[10 * w + 15], 1e-3f)
         assertEquals(51 - 2 + 2 - 1, m.timesMs.size)
     }
+
+    @Test
+    fun `separate parts of a map, largest first, small ones left out`() {
+        val two = FloatArray(w * h) { i -> maxOf(rect(2, 2, 8, 8)[i], rect(20, 10, 35, 25)[i], rect(38, 0, 39, 1)[i]) }
+        val parts = MaskFollow.components(two, w, h, minArea = 0.01f)
+        assertEquals(2, parts.size)
+        assertEquals(15 * 15, parts[0].count { it > 0.5f })
+        assertEquals(36, parts[1].count { it > 0.5f })
+        assertEquals(1f, parts[1][3 * w + 3])
+        assertEquals(0f, parts[1][15 * w + 25])
+    }
 }

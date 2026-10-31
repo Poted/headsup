@@ -3192,11 +3192,18 @@ private fun Layers(state: UiState, clip: ClipState, vm: HeadsupViewModel, pictur
             vm.setTarget(GradeTarget.MASK)
             action()
         }
-        SectionCaption("New mask")
-        // What a new mask is: found by AI, painted, or a shape.
+        // What a new mask is: found by AI at once (or by a tap), or drawn and picked.
+        SectionCaption("Found by AI")
         LazyRow(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
             item { CircleOption("◎", "Object", selected = false, modified = false) { add { vm.addBrushMask(BrushMode.SELECT) } } }
-            item { CircleOption("☁", "Sky", selected = false, modified = false) { add { pictureSource?.let(vm::addSkyMask) } } }
+            items(app.headsup.color.SceneKeys.offered) { key ->
+                CircleOption(app.headsup.color.SceneKeys.symbol(key), app.headsup.color.SceneKeys.label(key), selected = false, modified = false) {
+                    add { pictureSource?.let { grab -> vm.addSceneMask(key, grab) } }
+                }
+            }
+        }
+        SectionCaption("Drawn or picked")
+        LazyRow(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
             item { CircleOption("✎", "Brush", selected = false, modified = false) { add { vm.addBrushMask(BrushMode.PAINT) } } }
             item { CircleOption("⟋", "Line", selected = false, modified = false) { add { vm.addMask(MaskKind.LINEAR) } } }
             item { CircleOption("◯", "Oval", selected = false, modified = false) { add { vm.addMask(MaskKind.ELLIPSE) } } }
@@ -3205,7 +3212,11 @@ private fun Layers(state: UiState, clip: ClipState, vm: HeadsupViewModel, pictur
             // Photos: select something as a mask is selected, and it is removed (filled from around it).
             if (clip.meta.isPhoto) item { CircleOption("⌫", "Remove", selected = false, modified = false) { add { vm.startRemoval() } } }
         }
-        Hint("Object: tap what to correct (found by AI). Sky: the sky, found at once. Brush: paint it. Line: a graduated filter (a sky, a foreground). Oval: a face, a vignette of your own. Colour: everything of a colour you tap. Light: everything in a range of brightness." + if (clip.meta.isPhoto) " Remove: select something and it is taken out of the photo, filled from what is around it." else "")
+        Hint(
+            "Object: tap what to correct. Subject, People, Sky, Background and the rest are found at once (on video they are followed when tracked). " +
+                "Brush: paint it. Line: a graduated filter. Oval: a face, a vignette of your own. Colour: everything of a colour you tap. Light: a range of brightness." +
+                if (clip.meta.isPhoto) " Remove: select something and it is taken out of the photo, filled from what is around it." else "",
+        )
         return true
     }
     if (!onMask) {
@@ -3323,7 +3334,9 @@ private fun maskName(m: ColourMask): String = when (m.kind) {
     }
     MaskKind.BRUSH -> {
         val adds = m.strokes.filter { !it.erase }
+        val scene = adds.firstOrNull()?.scene
         when {
+            scene != null && adds.all { it.scene == scene } -> app.headsup.color.SceneKeys.label(scene)
             adds.isNotEmpty() && adds.all { it.sky } -> "Sky"
             adds.any { it.segment || it.lasso } -> "Object"
             else -> "Brush"
@@ -3331,7 +3344,10 @@ private fun maskName(m: ColourMask): String = when (m.kind) {
     }
 }
 
-private fun maskSymbol(m: ColourMask): String = when (maskName(m)) {
+private fun maskSymbol(m: ColourMask): String = m.strokes.filter { !it.erase }.let { adds ->
+    val scene = adds.firstOrNull()?.scene
+    if (m.kind == MaskKind.BRUSH && scene != null && adds.all { it.scene == scene }) app.headsup.color.SceneKeys.symbol(scene) else null
+} ?: when (maskName(m)) {
     "Line" -> "⟋"
     "Oval" -> "◯"
     "Sky" -> "☁"

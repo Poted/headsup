@@ -235,6 +235,39 @@ object MaskFollow {
         return best.takeIf { it >= 0 }
     }
 
+    /**
+     * The separate parts of [map] (pixels over half, joined side by side), largest first, each as
+     * a map of its own (its pixels as in [map], 0 elsewhere); parts smaller than [minArea] of the
+     * frame are left out. Several people in one picture are several parts.
+     */
+    fun components(map: FloatArray, width: Int, height: Int, minArea: Float = 0.002f): List<FloatArray> {
+        val label = IntArray(map.size)
+        val parts = ArrayList<IntArray>()
+        val queue = IntArray(map.size)
+        for (start in map.indices) {
+            if (label[start] != 0 || map[start] <= IN) continue
+            val id = parts.size + 1
+            var head = 0
+            var tail = 0
+            queue[tail++] = start
+            label[start] = id
+            while (head < tail) {
+                val i = queue[head++]
+                val x = i % width
+                val y = i / width
+                if (x > 0 && label[i - 1] == 0 && map[i - 1] > IN) { label[i - 1] = id; queue[tail++] = i - 1 }
+                if (x < width - 1 && label[i + 1] == 0 && map[i + 1] > IN) { label[i + 1] = id; queue[tail++] = i + 1 }
+                if (y > 0 && label[i - width] == 0 && map[i - width] > IN) { label[i - width] = id; queue[tail++] = i - width }
+                if (y < height - 1 && label[i + width] == 0 && map[i + width] > IN) { label[i + width] = id; queue[tail++] = i + width }
+            }
+            parts += queue.copyOf(tail)
+        }
+        val least = (minArea * map.size).toInt().coerceAtLeast(1)
+        return parts.filter { it.size >= least }.sortedByDescending { it.size }.map { pixels ->
+            FloatArray(map.size).also { out -> for (i in pixels) out[i] = map[i] }
+        }
+    }
+
     /** The relative change of the mask's size from [before] to [after] (0 = the same). */
     fun growth(before: Float, after: Float): Float = if (before <= 0f) 1f else abs(after - before) / before
 }

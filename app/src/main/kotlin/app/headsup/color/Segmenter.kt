@@ -50,7 +50,7 @@ object Segmenter {
 
     @Synchronized private fun encoder(context: Context) = encoder ?: session(context, "sam_encoder.onnx").also { encoder = it }
     @Synchronized private fun decoder(context: Context) = decoder ?: session(context, "sam_decoder.onnx").also { decoder = it }
-    @Synchronized private fun skyModel(context: Context) = skyModel ?: session(context, "sky.onnx").also { skyModel = it }
+    @Synchronized private fun skyModel(context: Context) = skyModel ?: session(context, "scene.onnx").also { skyModel = it }
 
     /** [bitmap] scaled so its long side is [side] (never up). */
     fun scaled(bitmap: Bitmap, side: Int): Bitmap {
@@ -182,8 +182,15 @@ object Segmenter {
     /** Size of the model's own rough answers. */
     private const val ROUGH = 256
 
-    /** How sure the sky model is that each pixel of [picture] is sky (0..1, [width]×[height], row by row). */
-    fun sky(context: Context, picture: Bitmap, width: Int, height: Int): FloatArray {
+    /** How sure the scene model is that each pixel of [picture] is sky (0..1, [width]×[height], row by row). */
+    fun sky(context: Context, picture: Bitmap, width: Int, height: Int): FloatArray = scene(context, picture, width, height)[Scene.SKY.ordinal]
+
+    /**
+     * How sure the scene model (DeepLab on ADE20K, tools/models/scene_model.py) is that each pixel
+     * of [picture] belongs to each [Scene] group: one map per group (0..1, [width]×[height], row by
+     * row), in the enum's order. One run gives them all.
+     */
+    fun scene(context: Context, picture: Bitmap, width: Int, height: Int): List<FloatArray> {
         val size = 513
         val s = size.toFloat() / max(picture.width, picture.height)
         val rw = (picture.width * s).roundToInt().coerceIn(1, size)
@@ -209,26 +216,59 @@ object Segmenter {
                 FloatArray(out.remaining()).also { out.get(it) }
             }
         }
-        // A 129 × 129 grid over the 513 square: grid point k sits at pixel k × 4.
+        // A 129 × 129 grid over the 513 square (grid point k sits at pixel k × 4), the groups last.
         val g = 129
-        val out = FloatArray(width * height)
-        for (y in 0 until height) {
-            val gy = ((y + 0.5f) / height * rh - 0.5f) / 4f
-            val y0 = gy.toInt().coerceIn(0, g - 1)
-            val y1 = (y0 + 1).coerceAtMost(g - 1)
-            val fy = (gy - y0).coerceIn(0f, 1f)
-            for (x in 0 until width) {
-                val gx = ((x + 0.5f) / width * rw - 0.5f) / 4f
-                val x0 = gx.toInt().coerceIn(0, g - 1)
-                val x1 = (x0 + 1).coerceAtMost(g - 1)
-                val fx = (gx - x0).coerceIn(0f, 1f)
-                val top = grid[y0 * g + x0] * (1 - fx) + grid[y0 * g + x1] * fx
-                val bottom = grid[y1 * g + x0] * (1 - fx) + grid[y1 * g + x1] * fx
-                out[y * width + x] = top * (1 - fy) + bottom * fy
+        val groups = Scene.entries.size
+        check(grid.size == g * g * groups) { "The scene model gives ${grid.size} values" }
+        return List(groups) { k ->
+            val out = FloatArray(width * height)
+            fun at(gx: Int, gy: Int) = grid[(gy * g + gx) * groups + k]
+            for (y in 0 until height) {
+                val gy = ((y + 0.5f) / height * rh - 0.5f) / 4f
+                val y0 = gy.toInt().coerceIn(0, g - 1)
+                val y1 = (y0 + 1).coerceAtMost(g - 1)
+                val fy = (gy - y0).coerceIn(0f, 1f)
+                for (x in 0 until width) {
+                    val gx = ((x + 0.5f) / width * rw - 0.5f) / 4f
+                    val x0 = gx.toInt().coerceIn(0, g - 1)
+                    val x1 = (x0 + 1).coerceAtMost(g - 1)
+                    val fx = (gx - x0).coerceIn(0f, 1f)
+                    val top = at(x0, y0) * (1 - fx) + at(x1, y0) * fx
+                    val bottom = at(x0, y1) * (1 - fx) + at(x1, y1) * fx
+                    out[y * width + x] = top * (1 - fy) + bottom * fy
+                }
             }
+            out
+        }
+    }
+
+    /**
+     * Things the scene model finds ([coarse]: people, vehicles, animals) made exact by MobileSAM:
+     * each separate part asked for by its box and a point well inside it, the answer most like the
+     * part kept (the part itself where none is). All parts together, 0..1, [width]×[height].
+     */
+    fun exact(context: Context, picture: Bitmap, coarse: FloatArray, width: Int, height: Int): FloatArray {
+        val parts = app.headsup.core.color.MaskFollow.components(coarse, width, height)
+        if (parts.isEmpty()) return coarse
+        val reading = read(context, picture)
+        val out = FloatArray(width * height)
+        for (part in parts.take(MAX_PARTS)) {
+            val box = app.headsup.core.color.MaskFollow.box(part, width, height, grow = 0.05f) ?: continue
+            val prompts = buildList {
+                add(Prompt(box[0], box[1], Prompt.Label.BOX_START))
+                add(Prompt(box[2], box[3], Prompt.Label.BOX_END))
+                app.headsup.core.color.MaskFollow.inside(part, width, height)?.let { (x, y) -> add(Prompt(x, y, Prompt.Label.IN)) }
+            }
+            val found = objects(context, reading, prompts, width, height)
+            val k = app.headsup.core.color.MaskFollow.pick(part, found, minOverlap = 0.4f)
+            val best = if (k != null) found[k].first else part
+            for (i in out.indices) if (best[i] > out[i]) out[i] = best[i]
         }
         return out
     }
+
+    /** At most this many separate things are made exact (each takes a model run). */
+    private const val MAX_PARTS = 8
 
     /** [mask] laid onto the edges of [guide] (RGB 0..1 of the same size). */
     fun refine(guide: FloatArray, mask: FloatArray, width: Int, height: Int): FloatArray =
