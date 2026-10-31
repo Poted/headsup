@@ -1804,6 +1804,19 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
 
     fun toggleMaskOverlay() = _state.update { it.copy(maskOverlay = !it.maskOverlay) }
 
+    /**
+     * A copy of the selected mask (shape, tracking and corrections) as a new mask, [inverted] or
+     * not: e.g. the sky's mask turned into the land's.
+     */
+    fun duplicateMask(inverted: Boolean) {
+        val index = _state.value.selectedClip ?: return
+        val clip = _state.value.selected ?: return
+        val mask = clip.masks.getOrNull(_state.value.selectedMask) ?: return
+        if (clip.masks.size >= ColourMask.MAX_PER_CLIP) return
+        updateClip(index) { it.copy(masks = it.masks + mask.copy(inverted = if (inverted) !mask.inverted else mask.inverted, grade = if (inverted) ColorGrade() else mask.grade)) }
+        _state.update { it.copy(selectedMask = clip.masks.size) }
+    }
+
     fun removeMask(maskIndex: Int) {
         val index = _state.value.selectedClip ?: return
         updateClip(index) { it.copy(masks = it.masks.filterIndexed { i, _ -> i != maskIndex }) }
@@ -2296,7 +2309,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /** Wipes the selected brush mask's strokes. */
-    fun clearBrush() = editSelectedMask { it.copy(strokes = emptyList(), sequence = null, sequenceStrokes = 0) }
+    fun clearBrush() = editSelectedMask { it.copy(strokes = emptyList(), sequence = null, sequenceStrokes = 0, anchors = emptyList()) }
 
     private fun editSelectedMask(transform: (ColourMask) -> ColourMask) {
         val s = _state.value
@@ -2372,7 +2385,10 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                     if (!sky && app.headsup.core.color.MaskFollow.area(start) == 0f) return@withContext null
                     val forward = direction != TrackDirection.BACKWARD
                     val backward = direction != TrackDirection.FORWARD
-                    val total = ((if (forward) clip.trimEndMs - t0 else 0L) + (if (backward) t0 - clip.trimStartMs else 0L)).coerceAtLeast(1L)
+                    // Frames fixed and tracked from before (keys) bound this run: what was set there stays.
+                    val endAhead = mask.anchors.filter { it > t0 + step / 2 }.minOrNull()?.let { it - step / 2 }?.coerceAtMost(clip.trimEndMs) ?: clip.trimEndMs
+                    val endBehind = mask.anchors.filter { it < t0 - step / 2 }.maxOrNull()?.let { it + step / 2 }?.coerceAtLeast(clip.trimStartMs) ?: clip.trimStartMs
+                    val total = ((if (forward) endAhead - t0 else 0L) + (if (backward) t0 - endBehind else 0L)).coerceAtLeast(1L)
                     var done = 0L
                     fun progress(more: Long) {
                         done += more
@@ -2388,13 +2404,15 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                         val follower = app.headsup.color.MaskFollower(context, w, h, sky, start)
                         var first = true
                         var last = t0
-                        TrackingFrames.forEachPicture(context, uri, t0, clip.trimEndMs, step, app.headsup.color.Segmenter.INPUT) { ms, picture ->
+                        TrackingFrames.forEachPicture(context, uri, t0, endAhead, step, app.headsup.color.Segmenter.INPUT) { ms, picture ->
                             if (stopRequested) return@forEachPicture false
                             progress(ms - last)
                             last = ms
                             if (first) {
-                                // The frame the mask was made on: it is the start.
+                                // The frame the mask was made (or fixed) on: it is the start, and what the
+                                // model does not find there (the fixes) is carried on.
                                 first = false
+                                follower.begin(picture)
                                 times += ms; maps += app.headsup.core.color.MaskSequence.bytes(start)
                                 return@forEachPicture true
                             }
@@ -2409,10 +2427,11 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                             true
                         }
                     }
-                    if (backward && t0 - clip.trimStartMs > step / 2 && !stopRequested) {
-                        // Frames come only forward: kept small (as JPEG) and followed from the playhead back.
+                    if (backward && t0 - endBehind > step / 2 && !stopRequested) {
+                        // Frames come only forward: kept small (as JPEG) and followed from the playhead
+                        // back; the playhead's own frame last, to start from.
                         val kept = ArrayList<Pair<Long, ByteArray>>()
-                        TrackingFrames.forEachPicture(context, uri, clip.trimStartMs, t0 - step / 2, step, app.headsup.color.Segmenter.INPUT) { ms, picture ->
+                        TrackingFrames.forEachPicture(context, uri, endBehind, t0 + step / 2, step, app.headsup.color.Segmenter.INPUT) { ms, picture ->
                             if (stopRequested) return@forEachPicture false
                             val out = java.io.ByteArrayOutputStream()
                             picture.compress(Bitmap.CompressFormat.JPEG, 92, out)
@@ -2425,7 +2444,12 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                         if (times.isEmpty()) {
                             times += t0; maps += app.headsup.core.color.MaskSequence.bytes(start)
                         }
-                        for ((ms, jpeg) in kept.asReversed()) {
+                        // The frame at the playhead starts the run back (it is not stored again).
+                        val startFrame = kept.lastOrNull()?.takeIf { kotlin.math.abs(it.first - t0) <= step / 2 }
+                        startFrame?.let { (_, jpeg) ->
+                            android.graphics.BitmapFactory.decodeByteArray(jpeg, 0, jpeg.size)?.let { follower.begin(it); it.recycle() }
+                        }
+                        for ((ms, jpeg) in (if (startFrame != null) kept.dropLast(1) else kept).asReversed()) {
                             coroutineContext.ensureActive()
                             if (stopRequested) break
                             progress(last - ms)
@@ -2456,7 +2480,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                 _state.update { st ->
                     st.copy(
                         clips = st.clips.map { c ->
-                            if (c.id != clipId) c else c.copy(masks = c.masks.mapIndexed { i, m -> if (i != maskIndex) m else m.copy(sequence = result.id, sequenceStrokes = m.strokes.size, keys = emptyList()) })
+                            if (c.id != clipId) c else c.copy(masks = c.masks.mapIndexed { i, m -> if (i != maskIndex) m else m.copy(sequence = result.id, sequenceStrokes = m.strokes.size, keys = emptyList(), anchors = (m.anchors + t0).distinct().sorted()) })
                         },
                         messages = st.messages + listOfNotNull(
                             "Mask found on ${result.frames} frames, ${at(result.fromMs)}–${at(result.toMs)}." +
@@ -2482,7 +2506,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
     )
 
     /** Ends the selected mask's tracking with AI: it is drawn from its strokes again, where they were made. */
-    fun clearMaskSequence() = editSelectedMask { it.copy(sequence = null, sequenceStrokes = 0) }
+    fun clearMaskSequence() = editSelectedMask { it.copy(sequence = null, sequenceStrokes = 0, anchors = emptyList()) }
 
     /**
      * Tracks the selected mask from the playhead towards the end, the start or both ends of the

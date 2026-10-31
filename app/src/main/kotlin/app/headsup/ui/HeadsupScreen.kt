@@ -3132,13 +3132,18 @@ private fun MaskList(state: UiState, clip: ClipState, vm: HeadsupViewModel, pict
     }
     val mask = clip.masks.getOrNull(state.selectedMask) ?: return false
     // The selected mask's own actions, always in the same place.
-    Row(verticalAlignment = Alignment.CenterVertically) {
+    Row(Modifier.horizontalScroll(rememberScrollState()), verticalAlignment = Alignment.CenterVertically) {
         CircleOption("◑", "Invert", selected = mask.inverted, modified = false) { vm.updateMask { it.copy(inverted = !it.inverted) } }
         if (mask.kind == MaskKind.BRUSH) {
             CircleOption("◉", "Overlay", selected = state.maskOverlay, modified = false) { vm.toggleMaskOverlay() }
             CircleOption("⌀", "Clear", selected = false, modified = false) { vm.clearBrush() }
         }
-        Spacer(Modifier.weight(1f))
+        // A copy, or its opposite (the sky's mask as the land's), with its tracking.
+        if (clip.masks.size < ColourMask.MAX_PER_CLIP) {
+            CircleOption("⧉", "Copy", selected = false, modified = false) { vm.duplicateMask(inverted = false) }
+            CircleOption("◐", "Opposite", selected = false, modified = false) { vm.duplicateMask(inverted = true) }
+        }
+        Spacer(Modifier.width(12.dp))
         if (mask.grade != ColorGrade()) CircleOption("↺", "Reset", selected = false, modified = false) { vm.updateGrade { ColorGrade() } }
         CircleOption("✕", "Delete", selected = false, modified = false) { vm.removeMask(state.selectedMask) }
     }
@@ -3212,7 +3217,7 @@ private fun MaskMotion(state: UiState, clip: ClipState, mask: ColourMask, vm: He
     }
     Hint(
         when {
-            mask.kind == MaskKind.BRUSH && mask.sequence != null -> "Found again on each frame by AI, so it keeps the object's shape and ends when it leaves the picture. Where it slips, go there, fix it (Select or Paint) and Track from that frame."
+            mask.kind == MaskKind.BRUSH && mask.sequence != null -> "Found again on each frame by AI. Where it slips, go there, fix it (Select, Paint, Erase) and Track ▶ or ◀ Track: the fix moves with the picture onto the next frames, up to the next frame fixed before (${mask.anchors.size} so far), which stays as it is."
             mask.kind == MaskKind.BRUSH -> "Track finds the mask again on each frame with AI (about a second a frame on a phone; Stop keeps what was found): it keeps the object's shape and ends when the object leaves the picture."
             mask.keys.isEmpty() -> "Place the mask, then Track (it follows the picture both ways from here), or pause, + Key, and move the mask at a few moments."
             else -> "Pause on a key (or tap its diamond) and move the mask to change it; between keys it glides."

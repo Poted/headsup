@@ -554,6 +554,8 @@ fun ClipPreview(
     // Where a finger measuring colour is now (fractions of the view), shown before it lifts.
     var liveMarker by remember { mutableStateOf<Offset?>(null) }
     val brushPainter by rememberUpdatedState(onBrush)
+    // Read by a gesture that lives as long as the preview: always the current setting.
+    val panNow by rememberUpdatedState(panView)
     val reframer by rememberUpdatedState(onReframe)
     val currentReframe by rememberUpdatedState(reframe)
     // Sizes of the frame and the picture under it, for gestures (read when they happen).
@@ -857,7 +859,7 @@ fun ClipPreview(
                                 val event = awaitPointerEvent(androidx.compose.ui.input.pointer.PointerEventPass.Initial)
                                 if (event.changes.none { it.pressed }) break
                                 event.changes.firstOrNull()?.let { if ((it.position - first.position).getDistance() > 12.dp.toPx()) moved = true }
-                                if (panView && event.changes.count { it.pressed } == 1) {
+                                if (panNow && event.changes.count { it.pressed } == 1) {
                                     val maxX = size.width * (viewZoom - 1f) / 2f
                                     val maxY = size.height * (viewZoom - 1f) / 2f
                                     viewPan = if (viewZoom <= 1.001f) Offset.Zero

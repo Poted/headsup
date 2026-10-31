@@ -58,6 +58,11 @@ data class ColourMask(
     val sequenceStrokes: Int = 0,
     /** Where the edge of what was found (Select, Sky, AI tracking) lies: -1 tighter … 1 fuller ([MaskEdge]). */
     val edge: Float = 0f,
+    /**
+     * Frames (file time) a mask tracked with AI was fixed on and tracked from: keys of its
+     * tracking. Tracking again from a frame runs to the next key either way, never over it.
+     */
+    val anchors: List<Long> = emptyList(),
 ) {
     /** The mask at [fileMs] into the clip's file: between keys it moves smoothly, outside them it holds. */
     fun at(fileMs: Long): ColourMask {

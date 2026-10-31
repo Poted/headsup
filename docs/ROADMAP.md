@@ -106,6 +106,11 @@ project's files), the preview resized left/right when held sideways, Edit called
       Effects tab. Only what is bright inside the mask gives light, and the light spreads past its
       edge as light does (no cut-off at the mask's edge). Preview, photo and video export.
       Later, if wanted: Blur / Sharpen inside a mask.
+- [x] Fixes on AI-tracked masks last: on the frame tracking starts from, what the user's mask has
+      beyond the model's answer (painted in or out) is kept and carried with the picture's movement
+      (CameraMotion, tested) onto each next frame's answer. Frames tracked from are keys: tracking
+      from a frame runs to the next key either way, never over it. Copy / Opposite of a mask (with
+      its tracking). View mode moves the zoomed picture again.
 - [ ] Masks, next: (1) edges at full resolution in export (the mask is kept at 640 px: refine it
       against the full picture in the shader); (2) faster tracking (the encoder takes about a
       second per frame on a phone: GPU/NNAPI, or a smaller encoder); (3) more prompts: + / − points
