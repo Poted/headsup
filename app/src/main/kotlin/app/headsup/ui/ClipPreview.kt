@@ -208,6 +208,8 @@ fun ClipPreview(
     onAutoPlayStarted: () -> Unit = {},
     /** Playback reached the end of the clip. */
     onEnded: () -> Unit = {},
+    /** To the clip before (-1) or after (+1): ⇤ pressed again at a clip's start, ⇥ at its end. */
+    onStepClip: ((Int) -> Unit)? = null,
     /** Position in the clip to jump to once (e.g. a highlight), then [onSeekDone]. */
     seekRequest: Long? = null,
     onSeekDone: () -> Unit = {},
@@ -1368,11 +1370,15 @@ fun ClipPreview(
             // To the clip's first or last frame exactly (where a mask is made or tracked from).
             if (!photoMode && !photo) {
                 Spacer(Modifier.width(6.dp))
-                ToggleDot("⇤", false) { jumpInClip(0L) }
+                // Pressed again where it already is (the first or last frame): the clip before or after.
+                val frameMs = (1000f / (clip.meta.frameRate ?: 30f)).toLong().coerceAtLeast(1L)
+                ToggleDot("⇤", false) {
+                    if (playerMs <= frameMs && onStepClip != null) onStepClip(-1) else jumpInClip(0L)
+                }
                 Spacer(Modifier.width(4.dp))
                 ToggleDot("⇥", false) {
-                    val frameMs = (1000f / (clip.meta.frameRate ?: 30f)).toLong().coerceAtLeast(1L)
-                    jumpInClip((clip.durationMs - frameMs).coerceAtLeast(0L))
+                    if (playerMs >= clip.durationMs - 2 * frameMs && onStepClip != null) onStepClip(1)
+                    else jumpInClip((clip.durationMs - frameMs).coerceAtLeast(0L))
                 }
             }
             // Timeline time (the timeline below is scrubbed by dragging it); file time while a cut handle moves.

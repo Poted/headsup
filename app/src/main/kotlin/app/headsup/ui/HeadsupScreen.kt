@@ -442,6 +442,11 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
                         timelineOffsetMs = state.clips.take(state.selectedClip ?: 0).sumOf { it.timelineDurationMs },
                         timelineTotalMs = state.clips.sumOf { it.timelineDurationMs },
                         onAutoPlayStarted = { continuePlaying = false },
+                        // ⇤ at a clip's start, ⇥ at its end: to the start of the clip before or after.
+                        onStepClip = { step ->
+                            val i = (state.selectedClip ?: 0) + step
+                            if (i in state.clips.indices) jumpTo(clipStarts[i])
+                        },
                         onEnded = {
                             // The timeline plays through: the next clip follows.
                             val next = (state.selectedClip ?: -1) + 1
