@@ -1775,6 +1775,11 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /** Fill or fit for every clip, e.g. after changing the frame's shape. */
+    /** Bars of fitted clips filled with the picture blurred, or black: for the whole film at once. */
+    fun setBlurBars(blur: Boolean) {
+        _state.update { s -> s.copy(clips = s.clips.map { c -> c.copy(reframe = c.reframe.copy(blur = blur)) }) }
+    }
+
     fun setFitForAll(fit: Boolean, blur: Boolean = false) {
         _state.update { s -> s.copy(clips = s.clips.map { c -> c.copy(reframe = c.reframe.copy(fit = fit, blur = blur).clampedFor(c, s.timelineAspect)) }) }
         refreshPreview()

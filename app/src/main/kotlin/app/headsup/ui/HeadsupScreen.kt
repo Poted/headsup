@@ -3399,13 +3399,14 @@ private fun FramePanel(state: UiState, vm: HeadsupViewModel) {
         // What fills the bars: black, or the picture itself blurred behind it (as social apps do).
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text("Bars", Modifier.padding(end = 12.dp), style = MaterialTheme.typography.labelLarge, color = HeadsupColors.TextMuted)
-            FilterChip(selected = !r.blur, onClick = { vm.updateReframe { it.copy(blur = false) } }, label = { Text("Black") })
+            // For the whole film: one look for every fitted clip.
+            FilterChip(selected = !r.blur, onClick = { vm.setBlurBars(false) }, label = { Text("Black") })
             Spacer(Modifier.width(8.dp))
-            FilterChip(selected = r.blur, onClick = { vm.updateReframe { it.copy(blur = true) } }, label = { Text("Blur") })
+            FilterChip(selected = r.blur, onClick = { vm.setBlurBars(true) }, label = { Text("Blur") })
         }
     }
     Hint(
-        if (r.fit && r.blur) "The whole picture inside the frame, the bars filled with it blurred; zoom in to fill more."
+        if (r.fit && r.blur) "The whole picture inside the frame, the bars filled with it blurred (every fitted clip of the film); zoom in to fill more."
         else if (r.fit) "The whole picture inside the frame, black bars where the shapes differ; zoom in to fill more."
         else "The picture fills the frame; drag it to choose what stays, pinch to zoom. The grid shows the thirds.",
     )

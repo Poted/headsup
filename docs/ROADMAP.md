@@ -125,9 +125,11 @@ project's files), the preview resized left/right when held sideways, Edit called
 - [x] Fit with blurred bars (Edit > Frame: Bars Black / Blur, also for Fit all clips): the bars are
       the picture itself covering the frame, blurred and a little darker, in preview (a 32 px frame
       scaled up) and export (BlurFillEffect: a 64-tap spiral blur behind the fitted picture).
-- [ ] Export stuck at 25 % (MUXING_TIMEOUT) on a timeline of three screen recordings at 2× and an
-      earlier export with fades, 3:4 fit: not masks. Media3's debug trace is now on, so the error
-      says which stage stopped; fix from that report.
+- [x] Export stuck at 25 % (MUXING_TIMEOUT), found from Media3's trace: a screen recording's picture
+      begins 2.8 s after its sound; Media3 changes a picture's speed from its first frame, the
+      sound's from its start, so at 2× the picture ran 0.8 s past the clip's end and the next
+      clip's sound could not start (deadlock). Sped-up clips now start at their first frame of
+      picture. Bars (Black / Blur) are set for the whole film.
 - [ ] Masks, next: (1) edges at full resolution in export (the mask is kept at 640 px: refine it
       against the full picture in the shader); (2) faster tracking (the encoder takes about a
       second per frame on a phone: GPU/NNAPI, or a smaller encoder); (3) more prompts: + / − points

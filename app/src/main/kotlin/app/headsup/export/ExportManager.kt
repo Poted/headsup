@@ -183,6 +183,35 @@ class ExportManager(private val context: Context) {
         return matrix
     }
 
+    /**
+     * [request] starting no earlier than its file's first frame of picture, when its speed is
+     * changed. Media3 changes a picture's speed from its first frame on, a sound's from its start:
+     * in a file whose picture begins after its sound (screen recordings: 2.8 s), the picture of a
+     * clip at 2× ended 1.4 s late, past the clip's end, and the next clip's sound could not start:
+     * the export stalled (MUXING_TIMEOUT). Cut at the picture's start, both begin together.
+     */
+    private fun startedWithPicture(request: ExportRequest): ExportRequest {
+        if (request.isPhoto || request.speed == 1f) return request
+        val first = firstPictureMs(request.uri) ?: return request
+        if (first <= request.trimStartMs + 20 || first >= request.trimEndMs - 100) return request
+        return request.copy(trimStartMs = first, durationMs = request.trimEndMs - first)
+    }
+
+    /** When the file's picture begins (its first video sample), in ms; null if unknown. */
+    private fun firstPictureMs(uri: android.net.Uri): Long? = runCatching {
+        val extractor = android.media.MediaExtractor()
+        try {
+            extractor.setDataSource(context, uri, null)
+            val track = (0 until extractor.trackCount).firstOrNull {
+                extractor.getTrackFormat(it).getString(android.media.MediaFormat.KEY_MIME)?.startsWith("video/") == true
+            } ?: return@runCatching null
+            extractor.selectTrack(track)
+            extractor.sampleTime.takeIf { it >= 0 }?.let { it / 1000 }
+        } finally {
+            extractor.release()
+        }
+    }.getOrNull()
+
     /** A constant speed for Media3's speed effects. */
     private class ConstantSpeed(private val speed: Float) : SpeedProvider {
         override fun getSpeed(timeUs: Long) = speed
@@ -194,7 +223,8 @@ class ExportManager(private val context: Context) {
      * scaling to the output, dashboard, then speed and frame rate. The dashboard comes before the
      * speed change so it reads the clip's own time and slows down with the picture.
      */
-    private fun editedItem(request: ExportRequest, out: OutputSpec, soundGain: Float = 1f): EditedMediaItem {
+    private fun editedItem(asked: ExportRequest, out: OutputSpec, soundGain: Float = 1f): EditedMediaItem {
+        val request = startedWithPicture(asked)
         val sampler = request.telemetry?.let { TelemetrySampler(it.track) }
         val hdr = out.tenBit
         val overlay = TelemetryOverlay(
@@ -327,8 +357,10 @@ class ExportManager(private val context: Context) {
     private fun runVideo(job: ExportJob) {
         val spec = job.spec
         val out = requireNotNull(spec.output)
-        val items = spec.parts.map { editedItem(it, out, soundGain = spec.clipSound * it.soundLevel) }
-        val totalMs = spec.parts.sumOf { if (it.isPhoto) it.durationMs else (it.durationMs / it.speed).toLong() }
+        // Sped-up clips start at their first frame of picture (startedWithPicture): the length counts that.
+        val parts = spec.parts.map(::startedWithPicture)
+        val items = parts.map { editedItem(it, out, soundGain = spec.clipSound * it.soundLevel) }
+        val totalMs = parts.sumOf { if (it.isPhoto) it.durationMs else (it.durationMs / it.speed).toLong() }
         val tracks = audioTracks(spec.audio, totalMs)
         // Clips without sound (drones) or muted slow motion get silence, so the parts join cleanly.
         val video = EditedMediaItemSequence.Builder(items).experimentalSetForceAudioTrack(items.size > 1 || tracks.isNotEmpty()).build()
