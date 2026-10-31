@@ -13,6 +13,8 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -46,6 +48,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import kotlin.math.abs
 import kotlin.math.ceil
 import kotlin.math.floor
@@ -236,6 +239,97 @@ fun PillTabs(options: List<String>, selected: Int, onSelect: (Int) -> Unit) {
                 )
             }
         }
+    }
+}
+
+/**
+ * A small caption over a part of a panel, with a hairline after it (and optional actions at its
+ * end): what gives a panel its order, so its rows do not run together.
+ */
+@Composable
+fun SectionCaption(text: String, modifier: Modifier = Modifier, trailing: @Composable RowScope.() -> Unit = {}) {
+    Row(modifier.fillMaxWidth().padding(top = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+        Text(
+            text.uppercase(),
+            style = MaterialTheme.typography.labelSmall.copy(letterSpacing = 1.2.sp, fontWeight = FontWeight.Medium),
+            color = HeadsupColors.TextMuted,
+            maxLines = 1,
+        )
+        Spacer(Modifier.width(10.dp))
+        Box(Modifier.weight(1f).height(1.dp).background(HeadsupColors.Outline))
+        trailing()
+    }
+}
+
+/** A compact segmented choice (what a page works on): one line, the chosen part light. */
+@Composable
+fun Segmented(options: List<String>, selected: Int, onSelect: (Int) -> Unit, modifier: Modifier = Modifier) {
+    Row(
+        modifier.fillMaxWidth().clip(CircleShape).border(1.dp, HeadsupColors.Outline, CircleShape).padding(3.dp),
+        horizontalArrangement = Arrangement.spacedBy(3.dp),
+    ) {
+        options.forEachIndexed { i, label ->
+            val on = i == selected
+            Box(
+                Modifier
+                    .weight(1f)
+                    .clip(CircleShape)
+                    .background(if (on) HeadsupColors.Highlight else Color.Transparent)
+                    .clickable { onSelect(i) }
+                    .padding(vertical = 6.dp),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(label, style = MaterialTheme.typography.labelMedium, color = if (on) HeadsupColors.OnHighlight else HeadsupColors.TextMuted, maxLines = 1)
+            }
+        }
+    }
+}
+
+/** A layer (the picture's base or a mask) as a chip: symbol and name, a dot when it changes the picture. */
+@Composable
+fun LayerChip(symbol: String, label: String, selected: Boolean, modified: Boolean, onClick: () -> Unit) {
+    Row(
+        Modifier
+            .height(34.dp)
+            .clip(CircleShape)
+            .background(if (selected) HeadsupColors.SurfaceHigh else Color.Transparent)
+            .border(1.dp, if (selected) HeadsupColors.Accent else HeadsupColors.Outline, CircleShape)
+            .clickable(onClick = onClick)
+            .padding(horizontal = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(symbol, style = MaterialTheme.typography.labelLarge, color = if (selected) HeadsupColors.Accent else Color.White)
+        if (label.isNotEmpty()) {
+            Spacer(Modifier.width(6.dp))
+            Text(label, style = MaterialTheme.typography.labelMedium, color = if (selected) Color.White else HeadsupColors.TextMuted, maxLines = 1)
+        }
+        if (modified) {
+            Spacer(Modifier.width(6.dp))
+            Box(Modifier.size(5.dp).background(HeadsupColors.Accent, CircleShape))
+        }
+    }
+}
+
+/** A small action as a pill (symbol and word), for the actions of what is selected. */
+@Composable
+fun PillAction(symbol: String, text: String, onClick: () -> Unit, selected: Boolean = false, enabled: Boolean = true) {
+    val content = when {
+        !enabled -> HeadsupColors.TextMuted.copy(alpha = 0.5f)
+        selected -> HeadsupColors.OnHighlight
+        else -> HeadsupColors.Highlight
+    }
+    Row(
+        Modifier
+            .height(30.dp)
+            .clip(CircleShape)
+            .background(if (selected) HeadsupColors.Highlight else HeadsupColors.SurfaceHigh)
+            .clickable(enabled = enabled, onClick = onClick)
+            .padding(horizontal = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(symbol, style = MaterialTheme.typography.labelMedium, color = content)
+        Spacer(Modifier.width(5.dp))
+        Text(text, style = MaterialTheme.typography.labelMedium, color = content, maxLines = 1)
     }
 }
 
