@@ -351,6 +351,9 @@ class GradePreviewShader {
             }
 
             half4 main(float2 coord) {
+                // Android draws an effect beyond the layer it is on: outside the picture nothing is
+                // drawn (the picture's edge, repeated there, showed as streaks over blurred bars).
+                if (coord.x < 0.0 || coord.y < 0.0 || coord.x > size.x || coord.y > size.y) return half4(0.0);
                 half4 src = img(coord);
                 if (sharpen > 0.0 || chromaNR > 0.0) src = half4(half3(detailed(coord, float3(src.rgb))), src.a);
                 // Masks first: inside one, its texture, clarity and dehaze add to the clip's.

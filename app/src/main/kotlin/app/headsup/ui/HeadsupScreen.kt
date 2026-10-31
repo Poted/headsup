@@ -302,6 +302,8 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
     // Sideways the transport and timeline can fold away (play on the picture, the timeline a line).
     var compact by rememberSaveable { mutableStateOf(false) }
     val folded = compact && wide && !fullscreen && !state.photoProject
+    // An album's photo with its info row and the album folded away (any way the phone is held).
+    val photoFolded = compact && state.photoProject && !fullscreen && tool != Tool.FILES
     // Full screen keeps a line to scrub along under a film's picture, and play on it.
     val fullscreenFilm = fullscreen && !state.photoProject && state.clips.isNotEmpty()
     // The picture grows and shrinks smoothly when the transport folds or full screen changes.
@@ -310,6 +312,8 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
             fullscreenFilm -> configuration.screenHeightDp.dp - 40.dp
             fullscreen -> configuration.screenHeightDp.dp
             folded -> (configuration.screenHeightDp * 0.84f).dp
+            photoFolded && wide -> (configuration.screenHeightDp - 40).dp
+            photoFolded -> (configuration.screenHeightDp * albumShare + 110).dp
             // Sideways in an album with the photos folded into their bar: the photo takes the height
             // left over by the info row and the bar.
             wide && state.photoProject && tool != Tool.FILES && !albumOpen -> (configuration.screenHeightDp - 150).dp
@@ -419,8 +423,8 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
                         texts = if (state.photoProject) state.texts.filter { it.showsOn(selected.id, selected.groupId) } else state.texts,
                         photoMode = state.photoProject,
                         showTransport = fullscreenFilm || (!fullscreen && (!state.photoProject || tool == Tool.EDIT || tool == Tool.COLOUR)),
-                        compactTransport = folded || fullscreenFilm,
-                        onCompact = if (wide && !fullscreen && !state.photoProject) { c -> compact = c } else null,
+                        compactTransport = folded || fullscreenFilm || photoFolded,
+                        onCompact = if (!fullscreen && (wide || state.photoProject)) { c -> compact = c } else null,
                         // Read here so arriving place names redraw the texts.
                         textValues = state.placesVersion.let { _ -> { pos -> vm.textValues(state, selected, pos) } },
                         routeOverlay = if (state.routeMap.enabled) routeOverlayFor(vm, state, selected) else null,
@@ -487,7 +491,12 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
                 // The album's photos stay under the picture on every page (to move between them); arranging
                 // them (mark, move, remove) is on the Project page.
                 // Elsewhere it folds into a slim bar (previous, next) to leave room for the picture.
-                if (state.clips.isNotEmpty() && tool != Tool.EXPORT) {
+                if (photoFolded) {
+                    // Folded: a small handle brings the info row and the album back (or a swipe up).
+                    Box(Modifier.fillMaxWidth().clickable { compact = false }.padding(vertical = 2.dp), contentAlignment = Alignment.Center) {
+                        Text("⌃", color = HeadsupColors.TextMuted, style = MaterialTheme.typography.titleMedium)
+                    }
+                } else if (state.clips.isNotEmpty() && tool != Tool.EXPORT) {
                     if (tool == Tool.FILES || albumOpen) {
                         PhotoStrip(state, vm, onAdd = addPhotos, arrange = tool == Tool.FILES, onFold = if (tool == Tool.FILES) null else ({ albumOpen = false }))
                     } else {
@@ -685,8 +694,8 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
                                 // Down folds the transport and timeline; up unfolds them, or when
                                 // unfolded goes full screen.
                                 when {
-                                    it == Swipe.DOWN && !state.photoProject -> compact = true
-                                    it == Swipe.UP && folded -> compact = false
+                                    it == Swipe.DOWN && (!state.photoProject || tool != Tool.FILES) -> compact = true
+                                    it == Swipe.UP && (folded || photoFolded) -> compact = false
                                     it == Swipe.UP -> fullscreen = true
                                     else -> Unit
                                 }
@@ -709,7 +718,13 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
             Column(Modifier.fillMaxSize().systemBarsPadding().padding(top = 8.dp)) {
                 // Upright, a swipe up on the picture goes full screen (down in full screen leaves it).
                 Column(Modifier.freeSwipe(pictureFree) { if (it == Swipe.UP) fullscreen = true }, content = pictureAndTimeline)
-                tools()
+                // In an album, a swipe down over the tools folds the photo's info row and the album
+                // away (more room for the photo), up brings them back.
+                Column(
+                    Modifier.weight(1f).fillMaxWidth().freeSwipe(state.photoProject) {
+                        if (it == Swipe.DOWN && tool != Tool.FILES) compact = true else if (it == Swipe.UP) compact = false
+                    },
+                ) { tools() }
             }
         }
     }
