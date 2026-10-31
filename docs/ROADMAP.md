@@ -136,6 +136,17 @@ project's files), the preview resized left/right when held sideways, Edit called
       blurs them with the system's blur (Android 12+).
 - [ ] Layers: an image (PNG, logo, photo) over a photo or video; a second video as picture in
       picture or side by side (Media3 composes several video sequences). To plan.
+- [x] Blurred bars, done properly: export averages the covering picture down to 48 px, blurs it
+      there (Gaussian across and down) and draws it up with a cubic B-spline: a smooth cloud, no
+      streaks or blocks. The preview's cloud fills the whole view behind the frame (as YouTube's
+      ambient light).
+- [x] Clean up is part of masks on photos: Adjust > Masks > + > Remove makes a mask in Select
+      (tap, outline, paint, Edge), Remove fills what it covers; "N removed · Undo last · Restore
+      all" under the masks. The separate tool is gone.
+- [x] Albums sideways: with the photos folded into their bar the photo takes the screen's height.
+- [ ] Masks as Lightroom's, still missing: Color range (pick a colour), Luminance range (only the
+      lights or shadows), Select Subject / People / Background without a tap, and combining masks
+      (add, subtract, intersect: e.g. only the lights inside an oval).
 - [ ] Masks, next: (1) edges at full resolution in export (the mask is kept at 640 px: refine it
       against the full picture in the shader); (2) faster tracking (the encoder takes about a
       second per frame on a phone: GPU/NNAPI, or a smaller encoder); (3) more prompts: + / − points

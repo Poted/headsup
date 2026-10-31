@@ -185,8 +185,6 @@ private enum class Tool(val label: String, val icon: ImageVector) {
     // The project holds the files: it comes first and is named for it.
     FILES("Project", HeadsupIcons.Video),
     EDIT("Edit", HeadsupIcons.Cut),
-    // Albums only: removing things from a photo.
-    CLEANUP("Clean up", HeadsupIcons.Erase),
     // Light, colour, mixer, looks… : adjustments, not only colour.
     COLOUR("Adjust", HeadsupIcons.Colour),
     EFFECTS("Effects", HeadsupIcons.Dashboard),
@@ -312,6 +310,9 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
             fullscreenFilm -> configuration.screenHeightDp.dp - 40.dp
             fullscreen -> configuration.screenHeightDp.dp
             folded -> (configuration.screenHeightDp * 0.84f).dp
+            // Sideways in an album with the photos folded into their bar: the photo takes the height
+            // left over by the info row and the bar.
+            wide && state.photoProject && tool != Tool.FILES && !albumOpen -> (configuration.screenHeightDp - 150).dp
             else -> (configuration.screenHeightDp * share).dp
         },
         androidx.compose.animation.core.tween(220),
@@ -324,8 +325,7 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
         settle.animateTo(1f, androidx.compose.animation.core.tween(220))
     }
     // Swipes on what the picture's tools leave alone: they never fight a mask, framing or a text being moved.
-    val cleaning = tool == Tool.CLEANUP && state.selected?.meta?.isPhoto == true
-    val pictureFree = !(tool == Tool.COLOUR && state.target == GradeTarget.MASK) && !framing && !editingTexts && !measuring && !cleaning
+    val pictureFree = !(tool == Tool.COLOUR && state.target == GradeTarget.MASK) && !framing && !editingTexts && !measuring
     // Full screen hides the status and navigation bars too (a swipe from the edge shows them for a moment).
     val activityWindow = (LocalContext.current as? android.app.Activity)?.window
     val rootView = androidx.compose.ui.platform.LocalView.current
@@ -372,11 +372,11 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
                         onMoveMask = if (shaping && !fullscreen && !editingBrush) { x, y -> vm.updateMask { it.copy(centerX = x, centerY = y) } } else null,
                         // A painted mask moves with two fingers only in Move; otherwise they zoom the view.
                         onTransformMask = if (shaping && !fullscreen && (!editingBrush || state.brush.mode == BrushMode.MOVE)) vm::transformMask else null,
-                        zoomForPainting = (shaping && editingBrush && state.brush.mode != BrushMode.MOVE || cleaning) && !fullscreen,
+                        zoomForPainting = shaping && editingBrush && state.brush.mode != BrushMode.MOVE && !fullscreen,
                         // View: one finger moves the zoomed picture, nothing is painted.
                         panView = shaping && editingBrush && state.brush.mode == BrushMode.VIEW && !fullscreen,
                         maskOverlay = state.maskOverlay,
-                        onBrush = if (cleaning && !fullscreen) vm::cleanupStroke else if (shaping && !fullscreen && editingBrush && state.brush.mode != BrushMode.MOVE && state.brush.mode != BrushMode.VIEW) vm::brushStroke else null,
+                        onBrush = if (shaping && !fullscreen && editingBrush && state.brush.mode != BrushMode.MOVE && state.brush.mode != BrushMode.VIEW) vm::brushStroke else null,
                         guideIndex = state.selectedMask,
                         lassoPath = state.lassoPath,
                         onPictureHeight = vm::notePictureHeight,
@@ -621,7 +621,6 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
                         playhead, onSeek = { seekRequest = it }, pictureSource = pictureSource.value,
                         maskTools = maskTools, onMaskTools = { maskTools = it },
                     )
-                    Tool.CLEANUP -> CleanupPanel(state, vm)
                     Tool.EFFECTS -> if (effectKind == EffectKind.TEXT) {
                         EffectKinds(state, effectKind) { effectKind = it }
                         TextPanel(state, vm, at = { scrubT.value ?: timelineOf(playhead.longValue) })
@@ -638,7 +637,7 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
                 }
             }
             // Photos have no sound.
-            val tools = Tool.entries.filter { if (state.photoProject) it != Tool.AUDIO else it != Tool.CLEANUP }
+            val tools = Tool.entries.filter { !(state.photoProject && it == Tool.AUDIO) }
             LaunchedEffect(state.photoProject) { if (tool !in tools) tool = Tool.COLOUR }
             // In an album the Edit page only crops: it is named so.
             // Adjust and Effects say what they work on unless it is this clip, and that they open a menu.
@@ -2356,8 +2355,15 @@ private fun ColourPage(
     // picture change it); Done goes back to its corrections, which stay as they are.
     if (editingShape != null && mask != null) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Text("Shape · ${state.selectedMask + 1} · ${maskName(mask)}", Modifier.weight(1f), style = MaterialTheme.typography.titleSmall)
+            Text(
+                if (state.removing) "Remove · select what goes" else "Shape · ${state.selectedMask + 1} · ${maskName(mask)}",
+                Modifier.weight(1f), style = MaterialTheme.typography.titleSmall,
+            )
             Spacer(Modifier.width(8.dp))
+            if (state.removing) {
+                SmallAction("Cancel", { vm.cancelRemoval(); onMaskTools(false) })
+                Button(onClick = { vm.removeMaskArea(); onMaskTools(false) }, enabled = mask.strokes.isNotEmpty() && !state.busy) { Text("Remove") }
+            } else
             // On video, a painted mask not tracked since it changed would stay where it is drawn:
             // tracking is the main way out of Shape then, so it is not forgotten.
             if (maskNeedsTracking(clip, mask)) {
@@ -3049,41 +3055,6 @@ private fun BrushPreview(radius: Float, softness: Float, pictureHeightPx: Float)
     }
 }
 
-/**
- * Clean up (a photo): tap something to remove it, or paint over it; the brush's size; taking back
- * the last removal or all of them. The photo itself is never changed: what is removed lies over it.
- */
-@Composable
-private fun CleanupPanel(state: UiState, vm: HeadsupViewModel) {
-    val clip = state.selected
-    if (clip == null || !clip.meta.isPhoto) {
-        Hint("Select a photo.")
-        return
-    }
-    val removed = clip.retouch.map { it.hole }.distinct().size
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        Text(
-            if (removed == 0) "Nothing removed" else if (removed == 1) "1 thing removed" else "$removed things removed",
-            Modifier.weight(1f),
-            style = MaterialTheme.typography.labelLarge,
-            color = HeadsupColors.TextMuted,
-        )
-        if (removed > 0) {
-            SmallAction("Undo last", { vm.undoLastCleanup() }, enabled = !state.busy)
-            SmallAction("Restore all", { vm.clearCleanup() }, enabled = !state.busy)
-        }
-    }
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        Box(Modifier.weight(1f)) { ValueHeader("Brush", String.format(Locale.US, "%.0f %%", state.brush.radius * 100f)) }
-        BrushPreview(state.brush.radius, 0f, state.pictureHeightPx)
-    }
-    RulerSlider(
-        value = state.brush.radius, range = BrushSetting.SIZE.range, step = 0.005f,
-        onChange = { v -> vm.updateBrush { it.copy(radius = v) } }, onReset = { vm.updateBrush { it.copy(radius = BrushSetting.SIZE.default) } },
-    )
-    Hint("Tap something to remove it, or paint over it. Two fingers zoom in for small things. Filled on the phone by an AI model (LaMa) from what is around it; the photo itself is never changed, and a raw photo developed differently is cleaned again by itself.")
-}
-
 /** Shape controls of a mask, edited with the same ruler as the corrections. */
 private enum class MaskShape(
     val symbol: String,
@@ -3122,6 +3093,15 @@ private fun MaskList(state: UiState, clip: ClipState, vm: HeadsupViewModel, pict
         }
         if (!full) item { CircleOption("+", "Add", selected = adding || clip.masks.isEmpty(), modified = false) { adding = !adding } }
     }
+    // What was removed from the photo (Remove), taken back one by one or all at once.
+    val removed = clip.retouch.map { it.hole }.distinct().size
+    if (clip.meta.isPhoto && removed > 0) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(if (removed == 1) "1 thing removed" else "$removed things removed", Modifier.weight(1f), style = MaterialTheme.typography.labelLarge, color = HeadsupColors.TextMuted)
+            SmallAction("Undo last", { vm.undoLastCleanup() }, enabled = !state.busy)
+            SmallAction("Restore all", { vm.clearCleanup() }, enabled = !state.busy)
+        }
+    }
     if (adding || clip.masks.isEmpty()) {
         if (full) {
             Hint("Up to ${ColourMask.MAX_PER_CLIP} masks.")
@@ -3139,8 +3119,10 @@ private fun MaskList(state: UiState, clip: ClipState, vm: HeadsupViewModel, pict
             item { CircleOption("✎", "Brush", selected = false, modified = false) { adding = false; vm.addBrushMask(BrushMode.PAINT) } }
             item { CircleOption("⟋", "Line", selected = false, modified = false) { adding = false; vm.addMask(MaskKind.LINEAR) } }
             item { CircleOption("◯", "Oval", selected = false, modified = false) { adding = false; vm.addMask(MaskKind.ELLIPSE) } }
+            // Photos: select something as a mask is selected, and it is removed (filled from around it).
+            if (clip.meta.isPhoto) item { CircleOption("⌫", "Remove", selected = false, modified = false) { adding = false; vm.startRemoval() } }
         }
-        Hint("Object: tap what to correct (found by AI). Sky: the sky, found at once. Brush: paint it. Line: a graduated filter (a sky, a foreground). Oval: a face, a vignette of your own.")
+        Hint("Object: tap what to correct (found by AI). Sky: the sky, found at once. Brush: paint it. Line: a graduated filter (a sky, a foreground). Oval: a face, a vignette of your own." + if (clip.meta.isPhoto) " Remove: select something and it is taken out of the photo, filled from what is around it." else "")
         return true
     }
     val mask = clip.masks.getOrNull(state.selectedMask) ?: return false

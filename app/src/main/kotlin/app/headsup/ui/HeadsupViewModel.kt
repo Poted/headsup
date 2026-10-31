@@ -299,6 +299,8 @@ data class UiState(
     val brush: BrushSettings = BrushSettings(),
     /** The selected mask shown filled in red (otherwise only its outline). */
     val maskOverlay: Boolean = false,
+    /** A mask is being made to remove what it covers from the photo ([HeadsupViewModel.startRemoval]). */
+    val removing: Boolean = false,
     /** An outline being drawn around an object (x, y pairs, fractions of the picture), until the finger lifts. */
     val lassoPath: List<Float> = emptyList(),
     /** A brush stroke being painted (x, y pairs, fractions of the picture), until the finger lifts. */
@@ -1829,7 +1831,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun selectMask(maskIndex: Int) {
-        _state.update { it.copy(selectedMask = maskIndex, compareGrade = null) }
+        _state.update { it.copy(selectedMask = maskIndex, compareGrade = null, removing = false) }
         refreshPreview()
     }
 
@@ -2148,50 +2150,37 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /**
-     * Clean up on a photo: a tap removes the object under it (found by MobileSAM), a stroke the
-     * area painted. Shown as painted while the finger is down.
+     * Removing something from a photo (Adjust > Masks > Remove): a painted mask made for it, in
+     * Select, where what is to go is selected as any mask is; [removeMaskArea] then fills it.
      */
-    fun cleanupStroke(phase: Int, x: Float, y: Float, grab: (Int) -> android.graphics.Bitmap?) {
-        if (phase == 4) return dropTap()
+    fun startRemoval() {
+        addBrushMask(BrushMode.SELECT)
+        _state.update { it.copy(removing = true) }
+    }
+
+    /** Leaves removing without removing: the mask made for it goes. */
+    fun cancelRemoval() {
+        val m = _state.value.selectedMask
+        _state.update { it.copy(removing = false) }
+        if (_state.value.selected?.masks?.getOrNull(m)?.kind == MaskKind.BRUSH) removeMask(m)
+    }
+
+    /** Removes from the photo what the selected mask covers (filled from around it), and the mask with it. */
+    fun removeMaskArea() {
         val s = _state.value
         val index = s.selectedClip ?: return
         val clip = s.selected?.takeIf { it.meta.isPhoto } ?: return
-        when (phase) {
-            0 -> {
-                // Read now, so a tap is answered at once.
-                segmentPicture(clip, grab)
-                _state.update { it.copy(paintPath = listOf(x, y)) }
-            }
-            1 -> _state.update { st ->
-                val p = st.paintPath
-                val aspect = if (clip.meta.width > 0 && clip.meta.height > 0) clip.meta.width.toFloat() / clip.meta.height else 1f
-                if (p.size >= 2 && kotlin.math.hypot((x - p[p.size - 2]) * aspect, y - p.last()) < st.brush.radius * 0.15f) st else st.copy(paintPath = p + x + y)
-            }
-            3 -> _state.update { it.copy(paintPath = emptyList()) }
-            else -> {
-                val path = s.paintPath
-                _state.update { it.copy(paintPath = emptyList()) }
-                if (path.size < 2 || s.busy) return
-                val xs = path.filterIndexed { i, _ -> i % 2 == 0 }
-                val ys = path.filterIndexed { i, _ -> i % 2 == 1 }
-                val tap = path.size < 6 || maxOf(xs.max() - xs.min(), ys.max() - ys.min()) < 0.02f
-                val picture = if (tap) segmentPicture(clip, grab) else null
-                val radius = s.brush.radius
-                val run = { cleanup(index, clip) { w, h ->
-                    if (tap) {
-                        val seg = picture?.await() ?: return@cleanup null
-                        val found = app.headsup.color.Segmenter.objects(
-                            getApplication(), seg.reading,
-                            listOf(app.headsup.color.Segmenter.Prompt(path[0], path[1], app.headsup.color.Segmenter.Prompt.Label.IN)), w, h,
-                        )
-                        found.firstOrNull()?.first
-                    } else {
-                        val stroke = app.headsup.core.color.BrushStroke(path, radius, flow = 1f)
-                        app.headsup.core.color.BrushMask.rasterize(listOf(stroke), w, h, softness = 0f)
-                    }
-                } }
-                if (tap) afterTap(run) else run()
-            }
+        val maskIndex = s.selectedMask
+        val mask = clip.masks.getOrNull(maskIndex)?.takeIf { it.kind == MaskKind.BRUSH && it.strokes.isNotEmpty() } ?: return
+        _state.update { it.copy(removing = false) }
+        removeMask(maskIndex)
+        val context: Application = getApplication()
+        cleanup(index, clip) { w, h ->
+            val refs = mask.strokes.mapNotNull { it.reference }.distinct()
+                .mapNotNull { id -> app.headsup.color.BrushReferences.get(context, id)?.let { id to it } }.toMap()
+            val drawn = app.headsup.core.color.BrushMask.rasterize(mask.strokes, w, h, mask.softness, refs, edge = mask.edge)
+            val placed = app.headsup.core.color.BrushMask.placed(drawn, w, h, MaskKey.of(mask.at(0L), 0L))
+            if (mask.inverted) FloatArray(placed.size) { 1f - placed[it] } else placed
         }
     }
 
