@@ -363,6 +363,7 @@ internal object Json {
         .put("dehaze", g.dehaze)
         .put("glow", g.glow)
         .put("halation", g.halation)
+        .put("density", g.density)
         .put("channelMix", JSONArray(g.channelMix.map { it.toDouble() }))
         .put("bw", JSONArray(g.bw.map { it.toDouble() }))
         .put("calibration", JSONArray(g.calibration.map { it.toDouble() }))
@@ -403,6 +404,7 @@ internal object Json {
             dehaze = f("dehaze"),
             glow = f("glow"),
             halation = f("halation"),
+            density = f("density"),
             channelMix = o.optJSONArray("channelMix")?.let { a -> List(app.headsup.core.color.ChannelMixer.SIZE) { a.optDouble(it, 0.0).toFloat() } }
                 ?: app.headsup.core.color.ChannelMixer.NEUTRAL,
             bw = o.optJSONArray("bw")?.let { a -> List(app.headsup.core.color.BlackAndWhite.SIZE) { a.optDouble(it, 0.0).toFloat() } }
@@ -418,6 +420,11 @@ internal object Json {
         .put("glow", e.glow)
         .put("glowThreshold", e.glowThreshold)
         .put("halation", e.halation)
+        .put("grainColour", e.grainColour.toDouble())
+        .put("glowSpread", e.glowSpread.toDouble())
+        .put("glowWarmth", e.glowWarmth.toDouble())
+        .put("lensAberration", e.lensAberration.toDouble())
+        .put("lensSoftness", e.lensSoftness.toDouble())
         .putOpt("barsRatio", e.barsRatio)
         .putOpt("graph", e.graph?.name)
         .put("dashboard", e.dashboard)
@@ -431,6 +438,11 @@ internal object Json {
             glow = o.optDouble("glow", d.glow.toDouble()).toFloat(),
             glowThreshold = o.optDouble("glowThreshold", d.glowThreshold.toDouble()).toFloat(),
             halation = o.optDouble("halation", 0.0).toFloat(),
+            grainColour = o.optDouble("grainColour", d.grainColour.toDouble()).toFloat(),
+            glowSpread = o.optDouble("glowSpread", d.glowSpread.toDouble()).toFloat(),
+            glowWarmth = o.optDouble("glowWarmth", d.glowWarmth.toDouble()).toFloat(),
+            lensAberration = o.optDouble("lensAberration", d.lensAberration.toDouble()).toFloat(),
+            lensSoftness = o.optDouble("lensSoftness", d.lensSoftness.toDouble()).toFloat(),
             barsRatio = if (o.has("barsRatio")) o.getDouble("barsRatio").toFloat() else null,
             graph = GraphMetric.entries.firstOrNull { it.name == o.optStringOrNull("graph") },
             dashboard = o.optBoolean("dashboard", true),

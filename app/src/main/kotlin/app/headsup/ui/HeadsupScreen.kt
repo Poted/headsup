@@ -2205,7 +2205,7 @@ private val Adjustment.section: ColourSection
     get() = when (this) {
         Adjustment.EXPOSURE, Adjustment.BRIGHTNESS, Adjustment.CONTRAST, Adjustment.HIGHLIGHTS, Adjustment.SHADOWS,
         Adjustment.WHITES, Adjustment.BLACKS, Adjustment.ROLLOFF, Adjustment.CURVE -> ColourSection.LIGHT
-        Adjustment.TEMPERATURE, Adjustment.TINT, Adjustment.SATURATION, Adjustment.VIBRANCE, Adjustment.SKIN -> ColourSection.COLOUR
+        Adjustment.TEMPERATURE, Adjustment.TINT, Adjustment.SATURATION, Adjustment.VIBRANCE, Adjustment.DENSITY, Adjustment.SKIN -> ColourSection.COLOUR
         Adjustment.SPLIT, Adjustment.SHADOW_HUE, Adjustment.HIGHLIGHT_HUE, Adjustment.TAME, Adjustment.VIGNETTE, Adjustment.WHEELS -> ColourSection.FILM
         Adjustment.TEXTURE, Adjustment.CLARITY, Adjustment.DEHAZE -> ColourSection.PRESENCE
         Adjustment.CINE, Adjustment.LUT, Adjustment.MATCH, Adjustment.BLEND -> ColourSection.TOOLS
@@ -2254,6 +2254,8 @@ internal enum class Adjustment(
     BLACKS("Bk", "Blacks", -1f..1f, 0.02f, "%+.2f", { it.blacks }, { g, v -> g.copy(blacks = v) }),
     SATURATION("Sat", "Saturation", -1f..1f, 0.02f, "%+.2f", { it.saturation }, { g, v -> g.copy(saturation = v) }),
     VIBRANCE("Vib", "Vibrance", -1f..1f, 0.02f, "%+.2f", { it.vibrance }, { g, v -> g.copy(vibrance = v) }),
+    // Subtractive saturation: saturated colours deeper (+) or paler (−).
+    DENSITY("Dn", "Density", -1f..1f, 0.02f, "%+.2f", { it.density }, { g, v -> g.copy(density = v) }),
     TEMPERATURE("K", "Temperature", -1f..1f, 0.02f, "%+.2f", { it.temperature }, { g, v -> g.copy(temperature = v) }),
     TINT("Tn", "Tint", -1f..1f, 0.02f, "%+.2f", { it.tint }, { g, v -> g.copy(tint = v) }),
     SKIN("Sk", "Skin tone", -30f..30f, 0.5f, "%+.1f°", { it.skinHue }, { g, v -> g.copy(skinHue = v) }),
@@ -3611,6 +3613,7 @@ private fun EffectKinds(state: UiState, kind: EffectKind, kinds: List<EffectKind
                 EffectKind.GRAIN -> effects.grain > 0f
                 EffectKind.GLOW -> effects.glow > 0f
                 EffectKind.HALATION -> effects.halation > 0f
+                EffectKind.LENS -> effects.lens
                 EffectKind.BARS -> effects.barsRatio != null
             }
             CircleOption(e.symbol, e.label, selected = e == kind, modified = active) { onKind(e) }
@@ -3627,13 +3630,14 @@ private enum class EffectKind(val symbol: String, val label: String) {
     GLOW("Gl", "Glow"),
     HALATION("Ha", "Halation"),
     BARS("Cin", "Bars"),
+    LENS("Lens", "Lens"),
 }
 
 /** Drawn over the picture: the Overlays tool. */
 private val OVERLAY_KINDS = listOf(EffectKind.TEXT, EffectKind.MAP, EffectKind.DASHBOARD, EffectKind.GRAPH)
 
 /** Part of the picture's look: the base layer's Effects in Adjust. */
-private val LOOK_KINDS = listOf(EffectKind.GRAIN, EffectKind.GLOW, EffectKind.HALATION, EffectKind.BARS)
+private val LOOK_KINDS = listOf(EffectKind.GRAIN, EffectKind.GLOW, EffectKind.HALATION, EffectKind.LENS, EffectKind.BARS)
 
 /** Effects over the picture, picked from round options like the colour corrections. */
 @Composable
@@ -3692,23 +3696,55 @@ private fun EffectsPanel(state: UiState, vm: HeadsupViewModel, kind: EffectKind,
             }
         }
         EffectKind.GRAIN -> {
-            ValueHeader("Grain", String.format(Locale.US, "%.0f %%", effects.grain * 100))
-            RulerSlider(effects.grain, 0f..1f, 0.02f, { v -> updateEffects { it.copy(grain = v) } }, onReset = { updateEffects { it.copy(grain = 0f) } })
-            ValueHeader("Size", String.format(Locale.US, "%.1f", effects.grainSize))
-            RulerSlider(effects.grainSize, 0.5f..3f, 0.1f, { v -> updateEffects { it.copy(grainSize = v) } }, onReset = { updateEffects { it.copy(grainSize = 1f) } })
+            // Film stocks as starting points: grain size and how much of it is in colour.
+            val stocks = listOf(Triple("Fine", 0.7f, 0.15f), Triple("35 mm", 1f, 0.3f), Triple("16 mm", 1.8f, 0.4f), Triple("Super 8", 2.6f, 0.5f))
+            LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                items(stocks) { (label, size, colour) ->
+                    FilterChip(
+                        selected = effects.grainSize == size && effects.grainColour == colour,
+                        onClick = { updateEffects { it.copy(grainSize = size, grainColour = colour, grain = if (it.grain == 0f) 0.35f else it.grain) } },
+                        label = { Text(label) },
+                    )
+                }
+            }
+            EffectRuler(
+                listOf(
+                    EffectParam("Amount", effects.grain, 0f..1f, 0.02f, 0f, percent = true) { v -> updateEffects { it.copy(grain = v) } },
+                    EffectParam("Size", effects.grainSize, 0.5f..3f, 0.1f, 1f, format = "%.1f") { v -> updateEffects { it.copy(grainSize = v) } },
+                    EffectParam("Colour", effects.grainColour, 0f..1f, 0.02f, 0.3f, percent = true) { v -> updateEffects { it.copy(grainColour = v) } },
+                ),
+            )
+            Hint("Clumps of grain, strongest in the midtones as on film; it also softens hard digital steps in gradients.")
         }
         EffectKind.GLOW -> {
-            ValueHeader("Glow", String.format(Locale.US, "%.0f %%", effects.glow * 100))
-            RulerSlider(effects.glow, 0f..1f, 0.02f, { v -> updateEffects { it.copy(glow = v) } }, onReset = { updateEffects { it.copy(glow = 0f) } })
-            ValueHeader("Threshold", String.format(Locale.US, "%.0f %%", effects.glowThreshold * 100))
-            RulerSlider(effects.glowThreshold, 0.4f..0.98f, 0.02f, { v -> updateEffects { it.copy(glowThreshold = v) } }, onReset = { updateEffects { it.copy(glowThreshold = 0.75f) } })
+            EffectRuler(
+                listOf(
+                    EffectParam("Glow", effects.glow, 0f..1f, 0.02f, 0f, percent = true) { v -> updateEffects { it.copy(glow = v) } },
+                    EffectParam("Threshold", effects.glowThreshold, 0.4f..0.98f, 0.02f, 0.75f, percent = true) { v -> updateEffects { it.copy(glowThreshold = v) } },
+                    EffectParam("Spread", effects.glowSpread, 0.5f..2.5f, 0.05f, 1f, format = "× %.2f") { v -> updateEffects { it.copy(glowSpread = v) } },
+                    EffectParam("Colour", effects.glowWarmth, -1f..1f, 0.02f, 0f, format = "%+.2f") { v -> updateEffects { it.copy(glowWarmth = v) } },
+                ),
+            )
+            Hint("Light around what is brighter than the threshold. A small spread keeps it subtle; Colour: cool (−) to warm (+).")
         }
         EffectKind.HALATION -> {
-            ValueHeader("Halation", String.format(Locale.US, "%.0f %%", effects.halation * 100))
-            RulerSlider(effects.halation, 0f..1f, 0.02f, { v -> updateEffects { it.copy(halation = v) } }, onReset = { updateEffects { it.copy(halation = 0f) } })
-            ValueHeader("Threshold", String.format(Locale.US, "%.0f %%", effects.glowThreshold * 100))
-            RulerSlider(effects.glowThreshold, 0.4f..0.98f, 0.02f, { v -> updateEffects { it.copy(glowThreshold = v) } }, onReset = { updateEffects { it.copy(glowThreshold = 0.75f) } })
-            Hint("Red-orange bleed around bright highlights, as on motion picture film.")
+            EffectRuler(
+                listOf(
+                    EffectParam("Halation", effects.halation, 0f..1f, 0.02f, 0f, percent = true) { v -> updateEffects { it.copy(halation = v) } },
+                    EffectParam("Threshold", effects.glowThreshold, 0.4f..0.98f, 0.02f, 0.75f, percent = true) { v -> updateEffects { it.copy(glowThreshold = v) } },
+                    EffectParam("Spread", effects.glowSpread, 0.5f..2.5f, 0.05f, 1f, format = "× %.2f") { v -> updateEffects { it.copy(glowSpread = v) } },
+                ),
+            )
+            Hint("Red-orange bleed around bright highlights, as on motion picture film. Threshold and spread are the glow's.")
+        }
+        EffectKind.LENS -> {
+            EffectRuler(
+                listOf(
+                    EffectParam("Fringes", effects.lensAberration, 0f..1f, 0.02f, 0f, percent = true) { v -> updateEffects { it.copy(lensAberration = v) } },
+                    EffectParam("Soft corners", effects.lensSoftness, 0f..1f, 0.02f, 0f, percent = true) { v -> updateEffects { it.copy(lensSoftness = v) } },
+                ),
+            )
+            Hint("An older lens: colour fringes and softness that grow towards the corners; the middle stays sharp. A little goes a long way.")
         }
         EffectKind.BARS -> {
             LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -3720,6 +3756,28 @@ private fun EffectsPanel(state: UiState, vm: HeadsupViewModel, kind: EffectKind,
             if (state.timelineAspect < 16f / 9f - 0.01f) Hint("On this frame the bars take as much of the height as they would on 16:9, for the same look.")
         }
     }
+}
+
+/** One value an effect's ruler can edit. */
+private class EffectParam(
+    val label: String,
+    val value: Float,
+    val range: ClosedFloatingPointRange<Float>,
+    val step: Float,
+    val neutral: Float,
+    val format: String = "%.2f",
+    val percent: Boolean = false,
+    val set: (Float) -> Unit,
+)
+
+/** An effect's values: which one the ruler edits (when there are several), its value, the ruler. */
+@Composable
+private fun EffectRuler(params: List<EffectParam>) {
+    var index by rememberSaveable(params.map { it.label }.joinToString()) { mutableStateOf(0) }
+    val p = params[index.coerceIn(0, params.size - 1)]
+    if (params.size > 1) Segmented(params.map { it.label }, index, { index = it })
+    ValueHeader(p.label, if (p.percent) String.format(Locale.US, "%.0f %%", p.value * 100) else String.format(Locale.US, p.format, p.value))
+    RulerSlider(p.value, p.range, p.step, { v -> p.set(v) }, onReset = { p.set(p.neutral) })
 }
 
 @Composable

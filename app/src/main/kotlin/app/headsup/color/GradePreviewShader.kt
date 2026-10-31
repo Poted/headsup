@@ -12,6 +12,7 @@ import app.headsup.core.color.ColourMask
 import app.headsup.core.color.LutBaker
 import app.headsup.core.color.Presence
 import app.headsup.core.raw.RawDevelop
+import app.headsup.render.EffectLook
 import app.headsup.render.EffectSettings
 
 /** Colour tables for one clip: outside any mask, one per mask, and the previous clip's for a transition. */
@@ -160,6 +161,11 @@ class GradePreviewShader {
         shader.setFloatUniform("glow", effects.glow)
         shader.setFloatUniform("threshold", effects.glowThreshold)
         shader.setFloatUniform("halation", effects.halation)
+        shader.setFloatUniform("grainColour", effects.grainColour)
+        shader.setFloatUniform("glowSpread", effects.glowSpread)
+        shader.setFloatUniform("glowTint", EffectLook.glowTint(effects.glowWarmth))
+        shader.setFloatUniform("lensCA", effects.lensAberration)
+        shader.setFloatUniform("lensSoft", effects.lensSoftness)
     }
 
     private companion object {
@@ -209,6 +215,11 @@ class GradePreviewShader {
             uniform float glow;
             uniform float threshold;
             uniform float halation;
+            uniform float grainColour;
+            uniform float glowSpread;
+            uniform float3 glowTint;
+            uniform float lensCA;
+            uniform float lensSoft;
             uniform float sharpen;
             uniform float chromaNR;
             uniform float lcTexture;
@@ -349,6 +360,66 @@ class GradePreviewShader {
                 return c * k;
             }
 
+            // Film grain (as FinishEffect): smooth noise in two sizes (clumps, not square cells).
+            float hash21(float2 p) {
+                float3 p3 = fract(float3(p.xyx) * 0.1031);
+                p3 += dot(p3, p3.yzx + 33.33);
+                return fract((p3.x + p3.y) * p3.z);
+            }
+            float vnoise(float2 p) {
+                float2 i = floor(p);
+                float2 f = fract(p);
+                f = f * f * (3.0 - 2.0 * f);
+                return mix(mix(hash21(i), hash21(i + float2(1.0, 0.0)), f.x), mix(hash21(i + float2(0.0, 1.0)), hash21(i + float2(1.0, 1.0)), f.x), f.y) - 0.5;
+            }
+            float grainAt(float2 p, float cell, float seed) {
+                float2 o = float2(seed * 7.31, seed * 3.17);
+                return (vnoise(p / cell + o) * 0.75 + vnoise(p / (cell * 0.5) + o * 1.93 + 11.0) * 0.45) * 1.9;
+            }
+            float3 filmGrain(float2 p, float3 c) {
+                float cellSize = max(0.8, shortSide / 1000.0 * 1.5 * grainSize);
+                float seed = mod(time, 61.0);
+                float l = luma(c);
+                // Strongest in the midtones, as on film; less in deep shadows and bright highlights.
+                float resp = 0.3 + 2.8 * l * (1.0 - l);
+                float m = grainAt(p, cellSize, seed);
+                float3 n = float3(m);
+                if (grainColour > 0.0) n = mix(n, float3(m, grainAt(p, cellSize, seed + 17.0), grainAt(p, cellSize, seed + 33.0)), grainColour);
+                return clamp(c + n * grain * 0.16 * resp, 0.0, 1.0);
+            }
+
+            // Turns the glow's taps a little per pixel when it reaches far, so its rings do not show.
+            float glowTurn(float2 p) {
+                return fract(52.9829189 * fract(dot(p, float2(0.06711056, 0.00583715)))) * 6.2832 * smooth01(1.1, 2.0, glowSpread);
+            }
+
+            // A lens (as FinishEffect): colour fringes and softness growing towards the corners.
+            float3 fringed(float2 q, float2 shift) {
+                if (lensCA <= 0.0) return float3(img(q).rgb);
+                return float3(float(img(q - shift).r), float(img(q).g), float(img(q + shift).b));
+            }
+            half4 lensed(float2 p) {
+                float2 c = size * 0.5;
+                float2 d = (p - c) / length(c);
+                float r2 = dot(d, d);
+                float2 shift = d * r2 * lensCA * shortSide * 0.005;
+                float3 col = fringed(p, shift);
+                float rad = lensSoft * shortSide * 0.006 * smooth01(0.15, 1.0, r2);
+                if (rad > 0.3) {
+                    float3 acc = col;
+                    for (int i = 0; i < 8; i++) {
+                        float a = float(i) * 0.7854 + 0.39;
+                        acc += fringed(p + float2(cos(a), sin(a)) * rad, shift);
+                    }
+                    for (int i = 0; i < 4; i++) {
+                        float a = float(i) * 1.5708;
+                        acc += fringed(p + float2(cos(a), sin(a)) * rad * 0.5, shift);
+                    }
+                    col = acc / 13.0;
+                }
+                return half4(half3(col), img(p).a);
+            }
+
             // Where each mask is at p, for masks that glow: their glow and halation there, added up.
             float2 maskGlowAt(float2 p) {
                 float4 w = weightsAt(p, float3(img(p).rgb));
@@ -422,7 +493,7 @@ class GradePreviewShader {
                 // Android draws an effect beyond the layer it is on: outside the picture nothing is
                 // drawn (the picture's edge, repeated there, showed as streaks over blurred bars).
                 if (coord.x < 0.0 || coord.y < 0.0 || coord.x > size.x || coord.y > size.y) return half4(0.0);
-                half4 src = img(coord);
+                half4 src = (lensCA > 0.0 || lensSoft > 0.0) ? lensed(coord) : img(coord);
                 if (sharpen > 0.0 || chromaNR > 0.0) src = half4(half3(detailed(coord, float3(src.rgb))), src.a);
                 // Masks first: inside one, its texture, clarity and dehaze add to the clip's.
                 float3 pr = float3(lcTexture, lcClarity, lcDehaze);
@@ -436,23 +507,24 @@ class GradePreviewShader {
                 if (w$i > 0.0) c = mix(c, float3(grade_lutM$i(src.rgb)), w$i);""" }.joinToString("")}
                 if (fromWeight > 0.0) c = mix(c, float3(grade_lutFrom(src.rgb)), fromWeight);
                 if (glow > 0.0 || halation > 0.0) {
-                    float r = shortSide * 0.012;
+                    float r = shortSide * 0.012 * glowSpread;
+                    float turn = glowTurn(coord);
                     float3 acc = float3(0.0);
                     for (int i = 0; i < 12; i++) {
-                        float a = float(i) * 0.5236;
+                        float a = float(i) * 0.5236 + turn;
                         acc += bright(coord + float2(cos(a), sin(a)) * r);
                     }
                     for (int i = 0; i < 6; i++) {
-                        float a = float(i) * 1.0472 + 0.26;
+                        float a = float(i) * 1.0472 + 0.26 + turn;
                         acc += bright(coord + float2(cos(a), sin(a)) * 2.2 * r);
                     }
-                    float3 g = clamp(acc / 18.0 * glow * 1.5 + dot(acc / 18.0, float3(0.33)) * halation * 2.0 * float3(1.0, 0.3, 0.1), 0.0, 1.0);
+                    float3 g = clamp(acc / 18.0 * glow * 1.5 * glowTint + dot(acc / 18.0, float3(0.33)) * halation * 2.0 * float3(1.0, 0.3, 0.1), 0.0, 1.0);
                     c = 1.0 - (1.0 - c) * (1.0 - g);
                 }
                 // A mask's glow: only what is bright inside the mask gives light, which spreads past
                 // its edge as light does (the mask is read where the light comes from).
                 if (maskGlow > 0.5) {
-                    float r = shortSide * 0.012;
+                    float r = shortSide * 0.012 * glowSpread;
                     float3 accG = float3(0.0);
                     float3 accH = float3(0.0);
                     for (int i = 0; i < 18; i++) {
@@ -465,15 +537,10 @@ class GradePreviewShader {
                         accG += b * k.x;
                         accH += b * k.y;
                     }
-                    float3 g = clamp(accG / 18.0 * 1.5 + dot(accH / 18.0, float3(0.33)) * 2.0 * float3(1.0, 0.3, 0.1), 0.0, 1.0);
+                    float3 g = clamp(accG / 18.0 * 1.5 * glowTint + dot(accH / 18.0, float3(0.33)) * 2.0 * float3(1.0, 0.3, 0.1), 0.0, 1.0);
                     c = 1.0 - (1.0 - c) * (1.0 - g);
                 }
-                if (grain > 0.0) {
-                    float cellSize = max(1.0, shortSide / 1000.0 * 1.5 * grainSize);
-                    float2 p = floor(coord / cellSize);
-                    float noise = fract(sin(dot(p + float2(time * 37.0, time * 17.0), float2(12.9898, 78.233))) * 43758.5453) - 0.5;
-                    c += noise * grain * 0.25 * (1.0 - 0.6 * luma(c));
-                }
+                if (grain > 0.0) c = filmGrain(coord, c);
                 // Zebra: stripes where the picture is at or near clipping.
                 if (zebra > 0.5 && luma(c) > 0.95 && mod(coord.x + coord.y, 12.0) < 6.0) {
                     c = float3(0.15);

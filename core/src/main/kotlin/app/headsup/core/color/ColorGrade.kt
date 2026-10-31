@@ -63,6 +63,11 @@ data class ColorGrade(
     val glow: Float = 0f,
     /** Masks only: film's red-orange bleed around the bright parts inside the mask (0..1). */
     val halation: Float = 0f,
+    /**
+     * Colour density (−1..1), as DaVinci's: saturated colours made deeper and darker (+), or lighter
+     * and paler (−); greys stay ([ColourDensity]).
+     */
+    val density: Float = 0f,
 ) {
     /** The corrections that look at a pixel's surroundings, drawn by the shader before the colour table. */
     val presence: Presence get() = Presence(texture, clarity, dehaze)
@@ -72,7 +77,7 @@ data class ColorGrade(
             highlights == 0f && saturation == 0f && temperature == 0f &&
             blacks == 0f && whites == 0f && vibrance == 0f && tint == 0f && skinHue == 0f &&
             rolloff == 0f && toneAmount == 0f && tame == 0f && mixer.all { it == 0f } && look == null && curves.all { it.isEmpty() } && wheels.all { it == 0f } &&
-            channelMix.all { it == 0f } && bw.all { it == 0f } && calibration.all { it == 0f } && dehaze == 0f
+            channelMix.all { it == 0f } && bw.all { it == 0f } && calibration.all { it == 0f } && dehaze == 0f && density == 0f
 
     /** The corrections scaled by [k] (hues stay), e.g. a suggestion at partial strength. */
     operator fun times(k: Float) = ColorGrade(
@@ -87,7 +92,7 @@ data class ColorGrade(
         // On stays on; the bands scale.
         bw.mapIndexed { i, v -> if (i == 0) v else v * k },
         calibration.map { it * k },
-        glow * k, halation * k,
+        glow * k, halation * k, density * k,
     )
 
     /**
@@ -138,6 +143,7 @@ data class ColorGrade(
         calibration = List(Calibration.SIZE) { i -> (calibration.getOrElse(i) { 0f } + other.calibration.getOrElse(i) { 0f }).coerceIn(-1f, 1f) },
         glow = (glow + other.glow).coerceIn(0f, 1f),
         halation = (halation + other.halation).coerceIn(0f, 1f),
+        density = (density + other.density).coerceIn(-1f, 1f),
     )
 
     /**
@@ -194,6 +200,7 @@ data class ColorGrade(
         },
         glow = if (after.glow != before.glow) after.glow else glow,
         halation = if (after.halation != before.halation) after.halation else halation,
+        density = if (after.density != before.density) after.density else density,
     )
 
     companion object {
@@ -264,6 +271,7 @@ object LutBaker {
         // Film look and the skin line work on display-referred (Rec.709) colours, so they run last.
         FilmLook.apply(grade, rgb)
         ColourMixer.apply(grade.mixer, rgb)
+        ColourDensity.apply(grade.density, rgb)
         // Black and white after the colour mixer; curves and grading wheels can still tint it.
         BlackAndWhite.apply(grade.bw, rgb)
         for (i in 0..2) rgb[i] = rgb[i].coerceIn(0f, 1f)
