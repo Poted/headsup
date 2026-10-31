@@ -14,7 +14,8 @@ import androidx.media3.effect.GlShaderProgram
 
 /**
  * A clip fitted inside a frame of another shape, its bars filled with the picture itself: scaled
- * to cover the frame, blurred and a little darker (as social apps do), the picture placed on top as
+ * to cover the frame and blurred into a soft cloud of its colours (as YouTube's ambient light and
+ * social apps do), the picture placed on top as
  * [toFrame] puts it (source → frame, both in Media3's normalised coordinates). Replaces the plain
  * framing matrix for such clips; the output is [outWidth]×[outHeight].
  */
@@ -45,9 +46,13 @@ class BlurFillEffect(
             floatArrayOf(m[0], m[3], m[6], m[1], m[4], m[7], m[2], m[5], m[8]).copyInto(toSource)
         }
 
+        /** How far down the picture's mipmaps the backdrop is read: about 24 px across. */
+        private var lod = 5f
+
         override fun configure(inputWidth: Int, inputHeight: Int): Size {
             val frame = outWidth.toFloat() / outHeight
             val picture = inputWidth.toFloat() / inputHeight.coerceAtLeast(1)
+            lod = (kotlin.math.ln(maxOf(inputWidth, inputHeight) / 24f) / kotlin.math.ln(2f)).coerceAtLeast(0f)
             // The part of the picture that covers the frame (fractions of its width and height).
             cover = if (frame > picture) floatArrayOf(1f, picture / frame) else floatArrayOf(frame / picture, 1f)
             aspect = picture
@@ -56,13 +61,22 @@ class BlurFillEffect(
 
         override fun drawFrame(inputTexId: Int, presentationTimeUs: Long) {
             try {
+                // The picture made small on the GPU (its mipmaps): the backdrop reads it a few dozen
+                // pixels across, so a short blur on top makes a smooth cloud of its colours.
+                GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, inputTexId)
+                GLES20.glGenerateMipmap(GLES20.GL_TEXTURE_2D)
+                GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MIN_FILTER, GLES20.GL_LINEAR_MIPMAP_LINEAR)
                 program.use()
                 program.setSamplerTexIdUniform("uTexSampler", inputTexId, 0)
+                program.setFloatUniform("uLod", lod)
                 program.setFloatsUniform("uToSource", toSource)
                 program.setFloatsUniform("uCover", cover)
                 program.setFloatUniform("uAspect", aspect)
                 program.bindAttributesAndUniforms()
                 GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4)
+                // The texture goes back as it came (it belongs to the step before).
+                GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, inputTexId)
+                GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MIN_FILTER, GLES20.GL_LINEAR)
             } catch (e: GlUtil.GlException) {
                 throw VideoFrameProcessingException(e, presentationTimeUs)
             }
@@ -94,6 +108,7 @@ class BlurFillEffect(
             uniform mat3 uToSource;
             uniform vec2 uCover;
             uniform float uAspect;
+            uniform float uLod;
             varying vec2 vTexSamplingCoord;
 
             void main() {
@@ -104,20 +119,24 @@ class BlurFillEffect(
                     gl_FragColor = texture2D(uTexSampler, src * 0.5 + 0.5);
                     return;
                 }
-                // Behind it: the picture covering the frame, blurred over 6 % of its height (a
-                // spiral of taps, nearer ones counting more) and a little darker.
+                // Behind it: the picture covering the frame, read from its smallest mipmaps (about
+                // 24 px across) and blurred a little more with a soft 5×5 kernel: a cloud of its
+                // colours, a little richer and a touch darker (as YouTube's ambient light).
                 vec2 uv = (vTexSamplingCoord - 0.5) * uCover + 0.5;
+                vec2 pitch = vec2(1.0 / uAspect, 1.0) * 0.045;
                 vec3 acc = vec3(0.0);
                 float sum = 0.0;
-                for (int i = 0; i < 64; i++) {
-                    float t = (float(i) + 0.5) / 64.0;
-                    float a = float(i) * 2.39996;
-                    vec2 o = vec2(cos(a) / uAspect, sin(a)) * sqrt(t) * 0.06;
-                    float w = 1.0 - 0.7 * t;
-                    acc += texture2D(uTexSampler, clamp(uv + o, vec2(0.0), vec2(1.0))).rgb * w;
-                    sum += w;
+                for (int j = -2; j <= 2; j++) {
+                    for (int i = -2; i <= 2; i++) {
+                        float w = exp(-float(i * i + j * j) / 4.5);
+                        acc += texture2D(uTexSampler, clamp(uv + vec2(float(i), float(j)) * pitch, vec2(0.0), vec2(1.0)), uLod).rgb * w;
+                        sum += w;
+                    }
                 }
-                gl_FragColor = vec4(acc / sum * 0.8, 1.0);
+                vec3 c = acc / sum;
+                float l = dot(c, vec3(0.2126, 0.7152, 0.0722));
+                c = max(mix(vec3(l), c, 1.3) * 0.88, 0.0);
+                gl_FragColor = vec4(c, 1.0);
             }
         """
     }

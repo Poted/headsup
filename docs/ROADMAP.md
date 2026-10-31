@@ -130,6 +130,12 @@ project's files), the preview resized left/right when held sideways, Edit called
       sound's from its start, so at 2× the picture ran 0.8 s past the clip's end and the next
       clip's sound could not start (deadlock). Sped-up clips now start at their first frame of
       picture. Bars (Black / Blur) are set for the whole film.
+- [x] Blurred bars as a cloud (as YouTube's ambient light): export reads the picture from its
+      mipmaps (~24 px across) with a soft 5×5 kernel, colours richer, a touch darker; the preview
+      reads frames from the file (the TextureView gives nothing for HDR screen recordings) and
+      blurs them with the system's blur (Android 12+).
+- [ ] Layers: an image (PNG, logo, photo) over a photo or video; a second video as picture in
+      picture or side by side (Media3 composes several video sequences). To plan.
 - [ ] Masks, next: (1) edges at full resolution in export (the mask is kept at 640 px: refine it
       against the full picture in the shader); (2) faster tracking (the encoder takes about a
       second per frame on a phone: GPU/NNAPI, or a smaller encoder); (3) more prompts: + / − points

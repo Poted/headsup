@@ -933,19 +933,52 @@ fun ClipPreview(
                     }
                 }
                 geometryRef.value = geometry
-                // Fitted with blurred bars: the picture itself behind it, taken tiny so that scaled up
-                // to cover the frame it is smoothly blurred (any Android version), a little darker.
+                // Fitted with blurred bars: the picture itself behind it, covering the frame and
+                // blurred into a cloud of its colours (as the export draws it). Frames are read from
+                // the file (not the TextureView, which gives nothing for HDR clips such as screen
+                // recordings), small, every few tenths of a second while playing.
                 if (reframe.fit && reframe.blur) {
                     var backdrop by remember { mutableStateOf<ImageBitmap?>(null) }
-                    LaunchedEffect(clip.id, photoBitmap) {
+                    val momentNow by rememberUpdatedState(fileMs)
+                    val source = if (photo) null else sourceOf(clip)
+                    val retriever = remember(source) {
+                        source?.let { uri -> runCatching { android.media.MediaMetadataRetriever().apply { setDataSource(context, uri) } }.getOrNull() }
+                    }
+                    DisposableEffect(retriever) { onDispose { runCatching { retriever?.release() } } }
+                    LaunchedEffect(clip.id, photoBitmap, retriever) {
                         while (true) {
-                            grab(32)?.let { backdrop = it.asImageBitmap() }
-                            delay(if (wantsPlay) 150L else 600L)
+                            val frame = if (photo) {
+                                grab(64)
+                            } else retriever?.let { r ->
+                                withContext(Dispatchers.IO) {
+                                    runCatching {
+                                        val us = momentNow * 1000L
+                                        // Exact while paused; the nearest key frame while playing (quick).
+                                        val option = if (wantsPlay) android.media.MediaMetadataRetriever.OPTION_CLOSEST_SYNC else android.media.MediaMetadataRetriever.OPTION_CLOSEST
+                                        r.getScaledFrameAtTime(us, option, 96, 96)
+                                    }.getOrNull()
+                                }
+                            }
+                            frame?.let { backdrop = it.asImageBitmap() }
+                            delay(if (wantsPlay) 300L else 500L)
                         }
                     }
                     backdrop?.let {
-                        Image(it, contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.matchParentSize())
-                        Box(Modifier.matchParentSize().background(Color.Black.copy(alpha = 0.2f)))
+                        // Richer colours, a touch darker; blurred by the system where it can (Android 12+),
+                        // else smooth enough from being so small.
+                        val richer = androidx.compose.ui.graphics.ColorMatrix().apply { setToSaturation(1.3f) }
+                        Image(
+                            it,
+                            contentDescription = null,
+                            contentScale = ContentScale.Crop,
+                            colorFilter = androidx.compose.ui.graphics.ColorFilter.colorMatrix(richer),
+                            modifier = Modifier.matchParentSize().graphicsLayer {
+                                if (Build.VERSION.SDK_INT >= 31) {
+                                    renderEffect = androidx.compose.ui.graphics.BlurEffect(40.dp.toPx(), 40.dp.toPx(), androidx.compose.ui.graphics.TileMode.Clamp)
+                                }
+                            },
+                        )
+                        Box(Modifier.matchParentSize().background(Color.Black.copy(alpha = 0.12f)))
                     }
                 }
                 val density = LocalDensity.current
