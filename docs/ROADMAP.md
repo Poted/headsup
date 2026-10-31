@@ -122,6 +122,12 @@ project's files), the preview resized left/right when held sideways, Edit called
 - [x] Tracked masks' maps are kept packed (a few kB each, opened when read; older files are
       read too): a long clip's ~1300 maps took ~300 MB open and stalled export (MUXING_TIMEOUT at
       the same point every time). An error in the grade effect now ends the export with its cause.
+- [x] Fit with blurred bars (Edit > Frame: Bars Black / Blur, also for Fit all clips): the bars are
+      the picture itself covering the frame, blurred and a little darker, in preview (a 32 px frame
+      scaled up) and export (BlurFillEffect: a 64-tap spiral blur behind the fitted picture).
+- [ ] Export stuck at 25 % (MUXING_TIMEOUT) on a timeline of three screen recordings at 2× and an
+      earlier export with fades, 3:4 fit: not masks. Media3's debug trace is now on, so the error
+      says which stage stopped; fix from that report.
 - [ ] Masks, next: (1) edges at full resolution in export (the mask is kept at 640 px: refine it
       against the full picture in the shader); (2) faster tracking (the encoder takes about a
       second per frame on a phone: GPU/NNAPI, or a smaller encoder); (3) more prompts: + / − points

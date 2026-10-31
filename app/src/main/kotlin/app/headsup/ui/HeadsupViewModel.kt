@@ -1775,8 +1775,8 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /** Fill or fit for every clip, e.g. after changing the frame's shape. */
-    fun setFitForAll(fit: Boolean) {
-        _state.update { s -> s.copy(clips = s.clips.map { c -> c.copy(reframe = c.reframe.copy(fit = fit).clampedFor(c, s.timelineAspect)) }) }
+    fun setFitForAll(fit: Boolean, blur: Boolean = false) {
+        _state.update { s -> s.copy(clips = s.clips.map { c -> c.copy(reframe = c.reframe.copy(fit = fit, blur = blur).clampedFor(c, s.timelineAspect)) }) }
         refreshPreview()
     }
 

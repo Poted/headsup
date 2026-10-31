@@ -933,6 +933,21 @@ fun ClipPreview(
                     }
                 }
                 geometryRef.value = geometry
+                // Fitted with blurred bars: the picture itself behind it, taken tiny so that scaled up
+                // to cover the frame it is smoothly blurred (any Android version), a little darker.
+                if (reframe.fit && reframe.blur) {
+                    var backdrop by remember { mutableStateOf<ImageBitmap?>(null) }
+                    LaunchedEffect(clip.id, photoBitmap) {
+                        while (true) {
+                            grab(32)?.let { backdrop = it.asImageBitmap() }
+                            delay(if (wantsPlay) 150L else 600L)
+                        }
+                    }
+                    backdrop?.let {
+                        Image(it, contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.matchParentSize())
+                        Box(Modifier.matchParentSize().background(Color.Black.copy(alpha = 0.2f)))
+                    }
+                }
                 val density = LocalDensity.current
                 // A TextureView (unlike PlayerView's default SurfaceView) is drawn by the UI, so the
                 // colour shader can be applied to it.

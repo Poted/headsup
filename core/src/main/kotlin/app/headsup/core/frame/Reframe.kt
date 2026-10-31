@@ -28,6 +28,8 @@ data class Reframe(
     val aspect: Float? = null,
     /** The whole picture inside the frame, with bars where the shapes differ (instead of cropping). */
     val fit: Boolean = false,
+    /** With [fit]: the bars filled with the picture itself, scaled to cover the frame and blurred (as social apps do). */
+    val blur: Boolean = false,
     /** Perspective correction, −1..1 ([Perspective]): lines leaning together up/down, and sideways. */
     val vertical: Float = 0f,
     val horizontal: Float = 0f,

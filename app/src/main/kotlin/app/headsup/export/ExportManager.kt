@@ -153,7 +153,18 @@ class ExportManager(private val context: Context) {
      * picture zoomed, moved and turned into it; bars stay black. Working in normalised coordinates
      * keeps any size in between (an 8K clip fitted into a wide frame) from being drawn.
      */
-    private fun reframeEffect(reframe: Reframe, width: Int, height: Int, outW: Int, outH: Int): MatrixTransformation? {
+    private fun reframeEffect(reframe: Reframe, width: Int, height: Int, outW: Int, outH: Int): androidx.media3.common.Effect? {
+        val matrix = reframeMatrix(reframe, width, height) ?: return null
+        // Fitted with the bars filled by the picture blurred: drawn by an effect of its own.
+        if (reframe.fit && reframe.blur) return BlurFillEffect(matrix, outW, outH)
+        return object : MatrixTransformation {
+            override fun configure(inputWidth: Int, inputHeight: Int) = Size(outW, outH)
+            override fun getMatrix(presentationTimeUs: Long) = matrix
+        }
+    }
+
+    /** Source → frame (Media3's normalised coordinates) for [reframe]; null when it changes nothing. */
+    private fun reframeMatrix(reframe: Reframe, width: Int, height: Int): Matrix? {
         if (reframe.isIdentity || width <= 0 || height <= 0) return null
         val w = width.toFloat()
         val h = height.toFloat()
@@ -169,10 +180,7 @@ class ExportManager(private val context: Context) {
             postScale(scale, scale)
             postScale(2f / fw, 2f / fh)
         }
-        return object : MatrixTransformation {
-            override fun configure(inputWidth: Int, inputHeight: Int) = Size(outW, outH)
-            override fun getMatrix(presentationTimeUs: Long) = matrix
-        }
+        return matrix
     }
 
     /** A constant speed for Media3's speed effects. */
@@ -332,6 +340,9 @@ class ExportManager(private val context: Context) {
             .build()
         val output = File(workDir, "job-${job.id}.mp4").apply { delete() }
 
+        // Media3 then says, when an export fails, which of its stages last did what (decoding,
+        // effects, encoding, muxing): an error report that tells where it stuck.
+        androidx.media3.effect.DebugTraceUtil.enableTracing = true
         val t = Transformer.Builder(context)
             // A heavy frame (masks tracked with AI, glow) may take long on a slow phone: the muxer
             // waits a minute for it, not 10 s, before calling the export stuck.
