@@ -269,20 +269,25 @@ class GradePreviewShader {
 
             // A brush mask (BrushMask): the pixel taken back to where its strokes were painted
             // (the mask at BrushMask.BASE: centred, upright, scale 1), then read from its atlas slot.
-            float brushWeight(float4 a, float4 b, float2 coord, float slot) {
+            // The atlas at coord: the mask's coverage (r) and where its edge was made gradual (g).
+            float2 brushRG(float4 a, float4 b, float2 coord, float slot) {
                 float aspect = size.x / size.y;
                 float2 d = float2((coord.x / size.x - a.y) * aspect, coord.y / size.y - a.z);
                 float c = cos(a.w);
                 float s = sin(a.w);
                 float2 u = float2(d.x * c + d.y * s, -d.x * s + d.y * c) / max(b.xy, float2(0.001));
                 float2 q = float2(0.5 + u.x / aspect, 0.5 + u.y);
-                float w = 0.0;
                 if (q.x >= 0.0 && q.x <= 1.0 && q.y >= 0.0 && q.y <= 1.0) {
                     float2 p = float2(
                         slot * brushSlot.x + clamp(q.x * brushSlot.x, 0.5, brushSlot.x - 0.5),
                         clamp(q.y * brushSlot.y, 0.5, brushSlot.y - 0.5));
-                    w = float(brush.eval(p).r);
+                    return float2(brush.eval(p).rg);
                 }
+                return float2(0.0);
+            }
+
+            float brushWeight(float4 a, float4 b, float2 coord, float slot) {
+                float w = brushRG(a, b, coord, slot).x;
                 return b.w > 0.5 ? 1.0 - w : w;
             }
 
@@ -327,8 +332,10 @@ class GradePreviewShader {
             // looks like this pixel (a joint bilateral upsample), so the edge follows the picture's.
             float brushFine(float4 a, float4 b, float2 p, float slot, float3 c) {
                 float w = brushWeight(a, b, p, slot);
-                // Feathered (b.z): its soft band is wanted, not laid onto the picture's edges.
+                // Feathered (b.z) or softened here (g): its soft band is wanted, not laid onto the picture's edges.
                 if (w <= 0.02 || w >= 0.98 || b.z > 0.001) return w;
+                float soft = brushRG(a, b, p, slot).y;
+                if (soft >= 0.98) return w;
                 float2 st = size / brushSlot * max(b.xy, float2(0.001));
                 float acc = 0.0;
                 float sum = 0.0;
@@ -341,7 +348,7 @@ class GradePreviewShader {
                         sum += k;
                     }
                 }
-                return acc / max(sum, 0.0001);
+                return mix(acc / max(sum, 0.0001), w, soft);
             }
 
             float shapeAt(float4 a, float4 b, float2 p, float slot, float3 c, bool fine) {

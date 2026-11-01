@@ -58,7 +58,7 @@ object BrushAtlas {
         val base = if (mask.edge == 0f) maps else app.headsup.core.color.MaskEdge.shape(maps, w, h, mask.edge)
         val extra = mask.strokes.drop(mask.sequenceStrokes)
         if (extra.isEmpty()) return base
-        if (extra.any { it.erase }) return BrushMask.rasterize(extra, w, h, mask.softness, references(context, extra), start = base, edge = mask.edge)
+        if (extra.any { it.erase || it.soften }) return BrushMask.rasterize(extra, w, h, mask.softness, references(context, extra), start = base, edge = mask.edge)
         // Strokes that only add are drawn once and laid over each frame's map (the same sum as
         // drawing them on it: 1 − (1 − map)(1 − strokes)), so a frame costs no drawing.
         val key = Drawn(extra, mask.softness, mask.edge, w, h, FloatArray(0))
@@ -67,6 +67,21 @@ object BrushAtlas {
                 synchronized(drawn) { extras[mask.sequence] = Drawn(extra, mask.softness, mask.edge, w, h, map) }
             }
         return FloatArray(base.size) { i -> base[i] + (1f - base[i]) * added[i] }
+    }
+
+    private val softCache = HashMap<List<BrushStroke>, FloatArray?>()
+
+    /** Where the mask's Soften strokes went (null when it has none), kept while its strokes stay. */
+    private fun softened(mask: ColourMask, w: Int, h: Int): FloatArray? {
+        if (mask.strokes.none { it.soften }) return null
+        val key = mask.strokes.filter { it.soften }
+        synchronized(softCache) { softCache[key]?.takeIf { it.size == w * h }?.let { return it } }
+        val map = app.headsup.core.color.BrushMask.softened(key, w, h)
+        synchronized(softCache) {
+            if (softCache.size > 8) softCache.clear()
+            softCache[key] = map
+        }
+        return map
     }
 
     /** Strokes added on top of tracked masks since they were tracked, drawn: by the mask's maps. */
@@ -86,10 +101,13 @@ object BrushAtlas {
             val drawnMap = tracked(context, m, w, h, timeMs) ?: if (m.strokes.isEmpty()) return@forEachIndexed else coverage(context, slot, m, w, h)
             // A feathered edge: the coverage blurred (the cached drawings stay sharp).
             val map = if (m.feather > 0f) app.headsup.core.color.MaskFeather.apply(drawnMap, w, h, m.feather * ColourMask.FEATHER_REACH * h) else drawnMap
+            // Green: where Soften made the edge gradual (kept soft by the shaders).
+            val soft = softened(m, w, h)
             for (y in 0 until h) {
                 for (x in 0 until w) {
                     val v = (map[y * w + x] * 255f + 0.5f).toInt().coerceIn(0, 255)
-                    pixels[y * stride + slot * w + x] = (0xFF shl 24) or (v shl 16) or (v shl 8) or v
+                    val g = soft?.let { (it[y * w + x] * 255f + 0.5f).toInt().coerceIn(0, 255) } ?: 0
+                    pixels[y * stride + slot * w + x] = (0xFF shl 24) or (v shl 16) or (g shl 8) or v
                 }
             }
         }

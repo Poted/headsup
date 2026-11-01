@@ -2287,7 +2287,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                 val points = path.chunked(2).flatMap { (px, py) -> app.headsup.core.color.BrushMask.unmove(px, py, placed, aspect).toList() }
                 // Radius in the strokes' own frame: as big as it looks on the mask now.
                 val radius = b.radius / placed.sizeX.coerceAtLeast(0.05f)
-                val stroke = app.headsup.core.color.BrushStroke(points, radius, b.flow, b.mode == BrushMode.ERASE)
+                val stroke = app.headsup.core.color.BrushStroke(points, radius, b.flow, b.mode == BrushMode.ERASE, soften = b.mode == BrushMode.SOFTEN)
                 val m = s.selectedMask
                 val add = {
                     _state.update { st ->
@@ -2752,7 +2752,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
         val clipId = clip.id
         val t0 = playheadFileMs.coerceIn(clip.trimStartMs, clip.trimEndMs)
         val uri = s.previewSource(clip)
-        val adds = mask.strokes.filter { !it.erase }
+        val adds = mask.strokes.filter { !it.erase && !it.soften }
         val sky = adds.isNotEmpty() && adds.all { it.sky }
         // An area (sky, plants…) is found again by the scene model; the background by following the subject.
         val scene = if (sky) app.headsup.color.SceneKeys.scene(adds.first().scene) ?: app.headsup.color.Scene.SKY else null
@@ -3487,7 +3487,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
  * the mask, or only look (VIEW: one finger moves the zoomed picture, nothing is painted).
  */
 enum class BrushMode(val symbol: String, val label: String) {
-    SELECT("◎", "Select"), PAINT("✎", "Paint"), ERASE("⌫", "Erase"), MOVE("✥", "Move"), VIEW("✋", "View"),
+    SELECT("◎", "Select"), PAINT("✎", "Paint"), ERASE("⌫", "Erase"), SOFTEN("≈", "Soften"), MOVE("✥", "Move"), VIEW("✋", "View"),
 }
 
 /** The brush: its radius (of the picture's height) and flow, 0..1. */

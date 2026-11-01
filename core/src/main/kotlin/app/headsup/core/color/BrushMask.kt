@@ -40,6 +40,11 @@ data class BrushStroke(
      * "BACKGROUND"…); null for one tapped or outlined.
      */
     val scene: String? = null,
+    /**
+     * Neither paints nor erases: makes the mask's edge gradual where painted (blurred over about
+     * the brush's size, by its flow), the cut elsewhere left sharp.
+     */
+    val soften: Boolean = false,
 )
 
 /**
@@ -166,6 +171,18 @@ object BrushMask {
                 }
             }
             val flow = stroke.flow.coerceIn(0f, 1f)
+            if (stroke.soften) {
+                // The mask blurred over about the brush's size, taken in where the brush went.
+                val blurred = MaskFeather.apply(out, width, height, r * 0.6f)
+                for (y in y0..y1) {
+                    for (x in x0..x1) {
+                        val i = y * width + x
+                        val v = layer[i] * flow
+                        if (v > 0f) out[i] += (blurred[i] - out[i]) * v
+                    }
+                }
+                continue
+            }
             for (y in y0..y1) {
                 for (x in x0..x1) {
                     val i = y * width + x
@@ -176,6 +193,16 @@ object BrushMask {
             }
         }
         return out
+    }
+
+    /**
+     * Where [strokes] made the edge gradual (Soften), 0..1: there the mask is not laid onto the
+     * picture's edges again at full resolution, so its softness stays.
+     */
+    fun softened(strokes: List<BrushStroke>, width: Int, height: Int): FloatArray? {
+        val soft = strokes.filter { it.soften }
+        if (soft.isEmpty()) return null
+        return rasterize(soft.map { it.copy(soften = false, erase = false, flow = 1f) }, width, height, softness = 0.5f)
     }
 
     /**
@@ -491,7 +518,7 @@ object BrushMask {
      * so tracking follows what was painted rather than the middle of the frame. Null with nothing painted.
      */
     fun centreOf(strokes: List<BrushStroke>, now: MaskKey, aspect: Float): Pair<Float, Float>? {
-        val pts = strokes.filter { !it.erase }.flatMap { it.points.chunked(2).filter { p -> p.size == 2 } }
+        val pts = strokes.filter { !it.erase && !it.soften }.flatMap { it.points.chunked(2).filter { p -> p.size == 2 } }
         if (pts.isEmpty()) return null
         return place(pts.sumOf { it[0].toDouble() }.toFloat() / pts.size, pts.sumOf { it[1].toDouble() }.toFloat() / pts.size, now, aspect)
     }
@@ -501,7 +528,7 @@ object BrushMask {
      * the area tracking follows. Null with nothing painted.
      */
     fun extentOf(strokes: List<BrushStroke>, now: MaskKey, aspect: Float): Pair<Float, Float>? {
-        val painted = strokes.filter { !it.erase }
+        val painted = strokes.filter { !it.erase && !it.soften }
         val pts = painted.flatMap { it.points.chunked(2).filter { p -> p.size == 2 } }.map { place(it[0], it[1], now, aspect) }
         if (pts.isEmpty()) return null
         val r = painted.filter { !it.lasso }.maxOfOrNull { it.radius * now.sizeX } ?: 0f

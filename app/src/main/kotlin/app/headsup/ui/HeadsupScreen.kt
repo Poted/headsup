@@ -3229,7 +3229,7 @@ private fun BrushControls(state: UiState, vm: HeadsupViewModel, pictureSource: (
             RulerSlider(value = e, range = -1f..1f, step = 0.05f, onChange = { v -> vm.updateMask { it.copy(edge = v) } }, onReset = { vm.updateMask { it.copy(edge = 0f) } })
             Hint("Tap an object to select all of it (tap again for a smaller or larger part), draw round it, or draw a line across to split the picture. Edge: tighter keeps away from what is around it, fuller takes in its rim. Found on the phone by AI models and laid onto the picture's edges.")
         }
-        BrushMode.PAINT, BrushMode.ERASE -> {
+        BrushMode.PAINT, BrushMode.ERASE, BrushMode.SOFTEN -> {
             val settings = BrushSetting.entries
             var chosen by rememberSaveable { mutableStateOf(BrushSetting.SIZE) }
             val setting = chosen.takeIf { it in settings } ?: settings.first()
@@ -3256,7 +3256,8 @@ private fun BrushControls(state: UiState, vm: HeadsupViewModel, pictureSource: (
             ValueHeader(setting.label, String.format(Locale.US, "%.0f %%", value * 100f))
             RulerSlider(value = value, range = setting.range, step = 0.005f, onChange = { set(it) }, onReset = { set(setting.default) })
             Hint(
-                if (brush.mode == BrushMode.ERASE) "Erase takes the mask's corrections away where you paint. Two fingers zoom the picture; View moves around it."
+                if (brush.mode == BrushMode.SOFTEN) "Soften makes the mask's edge gradual where you paint along it; elsewhere the cut stays sharp. Size: how wide the soft band is; Strength: how soft. Two fingers zoom the picture; View moves around it."
+                else if (brush.mode == BrushMode.ERASE) "Erase takes the mask's corrections away where you paint. Two fingers zoom the picture; View moves around it."
                 else "Paint where the mask's corrections go. Strength: how much one stroke adds; Softness: the painting's edge. Two fingers zoom the picture; View moves around it.",
             )
         }
@@ -3484,7 +3485,7 @@ private fun maskName(m: ColourMask): String = when (m.kind) {
         else -> "Range"
     }
     MaskKind.BRUSH -> {
-        val adds = m.strokes.filter { !it.erase }
+        val adds = m.strokes.filter { !it.erase && !it.soften }
         val scene = adds.firstOrNull()?.scene
         when {
             scene != null && adds.all { it.scene == scene } -> app.headsup.color.SceneKeys.label(scene)
@@ -3495,7 +3496,7 @@ private fun maskName(m: ColourMask): String = when (m.kind) {
     }
 }
 
-private fun maskSymbol(m: ColourMask): String = m.strokes.filter { !it.erase }.let { adds ->
+private fun maskSymbol(m: ColourMask): String = m.strokes.filter { !it.erase && !it.soften }.let { adds ->
     val scene = adds.firstOrNull()?.scene
     if (m.kind == MaskKind.BRUSH && scene != null && adds.all { it.scene == scene }) app.headsup.color.SceneKeys.symbol(scene) else null
 } ?: when (maskName(m)) {

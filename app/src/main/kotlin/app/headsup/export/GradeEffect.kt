@@ -255,20 +255,25 @@ class GradeEffect(
             }
 
             // As the preview shader's brushWeight(): back to where the strokes were painted, then the atlas slot.
-            float brushWeight(vec4 a, vec4 b, vec2 px, float slot) {
+            // The atlas at px: coverage (r) and where the edge was made gradual (g).
+            vec2 brushRG(vec4 a, vec4 b, vec2 px, float slot) {
                 float aspect = uSize.x / uSize.y;
                 vec2 d = vec2((px.x / uSize.x - a.y) * aspect, px.y / uSize.y - a.z);
                 float c = cos(a.w);
                 float s = sin(a.w);
                 vec2 u = vec2(d.x * c + d.y * s, -d.x * s + d.y * c) / max(b.xy, vec2(0.001));
                 vec2 q = vec2(0.5 + u.x / aspect, 0.5 + u.y);
-                float w = 0.0;
                 if (q.x >= 0.0 && q.x <= 1.0 && q.y >= 0.0 && q.y <= 1.0) {
                     vec2 t = vec2(
                         (slot * uBrushSlot.x + clamp(q.x * uBrushSlot.x, 0.5, uBrushSlot.x - 0.5)) / (uBrushSlot.x * uBrushSlots),
                         clamp(q.y * uBrushSlot.y, 0.5, uBrushSlot.y - 0.5) / uBrushSlot.y);
-                    w = texture2D(uBrush, t).r;
+                    return texture2D(uBrush, t).rg;
                 }
+                return vec2(0.0);
+            }
+
+            float brushWeight(vec4 a, vec4 b, vec2 px, float slot) {
+                float w = brushRG(a, b, px, slot).x;
                 return b.w > 0.5 ? 1.0 - w : w;
             }
 
@@ -336,6 +341,8 @@ class GradeEffect(
             float brushFine(vec4 a, vec4 b, vec2 px, float slot, vec3 c) {
                 float w = brushWeight(a, b, px, slot);
                 if (w <= 0.02 || w >= 0.98 || b.z > 0.001) return w;
+                float soft = brushRG(a, b, px, slot).y;
+                if (soft >= 0.98) return w;
                 vec2 st = uSize / uBrushSlot * max(b.xy, vec2(0.001));
                 float acc = 0.0;
                 float sum = 0.0;
@@ -348,7 +355,7 @@ class GradeEffect(
                         sum += k;
                     }
                 }
-                return acc / max(sum, 0.0001);
+                return mix(acc / max(sum, 0.0001), w, soft);
             }
 
             float shapeAt(vec4 a, vec4 b, vec2 px, float slot, vec3 c, bool fine) {
