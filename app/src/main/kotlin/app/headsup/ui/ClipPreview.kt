@@ -772,8 +772,10 @@ fun ClipPreview(
     val audioNow by rememberUpdatedState(audio)
     val timelineNow by rememberUpdatedState(timelineOffsetMs + clipTimelineMs)
     val totalNow by rememberUpdatedState(timelineTotalMs)
-    LaunchedEffect(playing, clip.id) {
-        if (!playing) {
+    // Keyed to wanting to play, not to the picture actually moving: very slow parts can make the
+    // picture's player wait a moment (buffering), and the music must not stop each time.
+    LaunchedEffect(wantsPlay, clip.id) {
+        if (!wantsPlay) {
             audioPlayers.values.forEach { it.second.pause() }
             return@LaunchedEffect
         }

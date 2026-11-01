@@ -162,6 +162,8 @@ object SpeedCurve {
         return ((lo + f) / n).coerceIn(0f, 1f)
     }
 
+    private fun speedOf(base: Float, p: List<Pair<Float, Float>>, u: Float): Float = (base * factorOf(p, u)).coerceIn(MIN, MAX)
+
     private fun factorOf(p: List<Pair<Float, Float>>, u: Float): Float {
         if (p.isEmpty()) return 1f
         if (u <= p.first().first) return p.first().second
@@ -198,13 +200,14 @@ object SpeedCurve {
         val end = (sourceMs.toDouble() / spanMs).coerceIn(0.0, 1.0)
         val n = (STEPS * end).toInt().coerceAtLeast(1)
         val du = end / n
+        val p = points(curve)
         var t = 0.0
         for (k in 0 until n) {
             val u = ((k + 0.5) * du).toFloat()
-            t += du * spanMs / speedAt(base, curve, u)
+            t += du * spanMs / speedOf(base, p, u)
         }
         // Past the end of the cut (a trim being dragged): at the last speed.
-        if (sourceMs > spanMs) t += (sourceMs - spanMs) / speedAt(base, curve, 1f).toDouble()
+        if (sourceMs > spanMs) t += (sourceMs - spanMs) / speedOf(base, p, 1f).toDouble()
         return t.toLong()
     }
 
@@ -212,17 +215,18 @@ object SpeedCurve {
     fun sourceOf(timelineMs: Long, spanMs: Long, base: Float, curve: List<Float>): Long {
         if (curve.isEmpty() || spanMs <= 0L) return (timelineMs * base).toLong()
         val du = 1.0 / STEPS
+        val p = points(curve)
         var t = 0.0
         for (k in 0 until STEPS) {
             val u = ((k + 0.5) * du).toFloat()
-            val step = du * spanMs / speedAt(base, curve, u)
+            val step = du * spanMs / speedOf(base, p, u)
             if (t + step >= timelineMs) {
                 val f = ((timelineMs - t) / step).coerceIn(0.0, 1.0)
                 return ((k + f) * du * spanMs).toLong()
             }
             t += step
         }
-        return spanMs + ((timelineMs - t) * speedAt(base, curve, 1f)).toLong()
+        return spanMs + ((timelineMs - t) * speedOf(base, p, 1f)).toLong()
     }
 
     /**
