@@ -2313,10 +2313,13 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
         val session = s.fast?.takeIf { it.clipId == clip.id } ?: FastSession(clip.id, clip.grade, clip.effects, look)
         val k = strength.coerceIn(0f, 1f)
         // Measured: the look's character, plus what this clip needs to suit it.
-        val fit = s.lookStats?.takeIf { it.first == clip.id }?.second?.let { CineAssistant.fit(it, keepDark = look == app.headsup.color.FastLook.NIGHT) }
+        val stats = s.lookStats?.takeIf { it.first == clip.id }?.second
+        val fit = stats?.let { CineAssistant.fit(it, keepDark = look == app.headsup.color.FastLook.NIGHT) }
         val grade = if (fit != null) look.grade + fit else look.grade
-        // The curve, too, by the strength (a scaled grade keeps its curves as they are).
-        val scaled = (grade * k).copy(curves = grade.curves.map { app.headsup.core.color.ToneCurve.scaled(it, k) })
+        // Contrast from the cinematic curve, fitted to the clip's tones once measured (a dark clip
+        // keeps its shadow detail), and taken down with the strength.
+        val curve = app.headsup.core.color.ToneCurve.cinematic(look.contrast, low = stats?.low ?: 0.18f, median = stats?.median ?: 0.5f)
+        val scaled = (grade * k).copy(curves = listOf(app.headsup.core.color.ToneCurve.scaled(curve, k), emptyList(), emptyList(), emptyList()))
         _state.update { it.copy(fast = session.copy(look = look, strength = k)) }
         updateClip(index) { it.copy(grade = session.baseGrade + scaled, effects = look.effectsOn(session.baseEffects, k)) }
     }

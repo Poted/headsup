@@ -2889,7 +2889,9 @@ private fun CurveControls(state: UiState, vm: HeadsupViewModel) {
             Text("Cinematic", style = MaterialTheme.typography.labelLarge, color = HeadsupColors.TextMuted)
             Spacer(Modifier.width(8.dp))
             for ((label, amount) in listOf("Subtle" to 0.5f, "Film" to 1f, "Strong" to 1.4f)) {
-                val curve = app.headsup.core.color.ToneCurve.cinematic(amount)
+                // Fitted to the clip's tones when it has been analysed (Looks > Analyse clip).
+                val measured = state.lookStats?.takeIf { it.first == state.selected?.id }?.second
+                val curve = app.headsup.core.color.ToneCurve.cinematic(amount, low = measured?.low ?: 0.18f, median = measured?.median ?: 0.5f)
                 FilterChip(
                     selected = flat == curve,
                     onClick = { store(curve.chunked(2).map { it[0] to it[1] }) },

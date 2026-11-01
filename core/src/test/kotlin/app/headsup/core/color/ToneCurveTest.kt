@@ -42,4 +42,17 @@ class ToneCurveTest {
         val half = ToneCurve.scaled(c, 0.5f)
         kotlin.test.assertEquals(0.035f, ToneCurve.at(half, 0f), 1e-4f)
     }
+
+    @Test
+    fun `a dark clip keeps its shadow detail under the cinematic curve`() {
+        // A dusk shot: its darkest tenth below 4 %, its median at 15 %.
+        val dark = ToneCurve.cinematic(1f, low = 0.04f, median = 0.15f)
+        fun at(x: Float) = ToneCurve.at(dark, x)
+        // Where most of the picture is (5 to 25 %), tones stay apart: no mush.
+        val shadows = (at(0.25f) - at(0.05f)) / 0.2f
+        kotlin.test.assertTrue(shadows > 0.7f, "shadows $shadows")
+        // Its median stays about where it was.
+        kotlin.test.assertEquals(0.15f, at(0.15f), 0.03f)
+        kotlin.test.assertTrue((0 until 100).all { at(it / 100f) <= at((it + 1) / 100f) + 1e-6f })
+    }
 }

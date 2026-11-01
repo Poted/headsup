@@ -16,12 +16,28 @@ object ToneCurve {
      * shadows lifted and laid flat (a gentle toe, no crushed blacks), contrast in the middle, the
      * highlights pulled down into a soft shoulder (no hard white). [amount] 0 is a straight line,
      * 1 the usual strength, more is stronger. RGB points as (x, y) pairs.
+     *
+     * Fitted to the clip's tones when they are known ([low]: its darkest tenth begins there, its
+     * [median]): only what is really the shadows is laid flat, and the less room there is below the
+     * middle (a dark dusk shot, footage not in log), the steeper the toe stays, so detail in the
+     * shadows is not pressed into mush; the middle turns about the clip's own median, which stays.
      */
-    fun cinematic(amount: Float): List<Float> {
+    fun cinematic(amount: Float, low: Float = 0.18f, median: Float = 0.5f): List<Float> {
         val a = amount.coerceIn(0f, 1.5f)
         if (a == 0f) return emptyList()
-        val full = listOf(0f to 0.07f, 0.18f to 0.13f, 0.5f to 0.5f, 0.9f to 0.86f, 1f to 0.93f)
-        return full.flatMap { (x, y) -> listOf(x, (x + (y - x) * a).coerceIn(0f, 1f)) }
+        // The toe ends where the clip's darkest tenth ends (at most where it does for an average clip).
+        val toeX = low.coerceIn(0.03f, 0.18f)
+        // How much room the shadows have: 1 for an average clip, less for a dark one.
+        val room = ((median - 0.12f) / 0.33f).coerceIn(0f, 1f)
+        // The toe's slope: 1/3 (flat) with room, nearly straight (0.8) without.
+        val slope = 0.8f - 0.47f * room
+        val lift = 0.07f * (0.5f + 0.5f * room)
+        val toeY = lift + toeX * slope
+        val pivot = median.coerceIn(toeX + 0.1f, 0.6f)
+        val full = listOf(0f to lift, toeX to toeY, pivot to pivot, 0.9f to 0.86f, 1f to 0.93f)
+        // Dark footage gets a gentler curve overall.
+        val k = a * (0.6f + 0.4f * room)
+        return full.flatMap { (x, y) -> listOf(x, (x + (y - x) * k).coerceIn(0f, 1f)) }
     }
 
     /** [flat] taken towards a straight line: [k] 0 straight, 1 as it is. */
