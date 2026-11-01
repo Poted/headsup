@@ -787,7 +787,7 @@ private fun BottomToolbar(selected: Tool, tools: List<Tool>, labelOf: (Tool) -> 
     androidx.compose.foundation.layout.BoxWithConstraints(Modifier.fillMaxWidth()) {
         // Narrow (the tools beside the picture): smaller icons and labels, so the names fit.
         val each = (maxWidth - 44.dp) / tools.size.coerceAtLeast(1)
-        val narrow = each < 68.dp
+        val narrow = each < 48.dp
         Row(
             Modifier
                 .padding(horizontal = if (narrow) 8.dp else 16.dp, vertical = 10.dp)
