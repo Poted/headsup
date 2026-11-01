@@ -395,6 +395,8 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
                         paintRadius = state.brush.radius,
                         paintStrength = state.brush.flow,
                         paintErase = state.brush.mode == BrushMode.ERASE,
+                        brushRingAt = state.brushSizedAt,
+                        brushSoftness = selected.masks.getOrNull(state.selectedMask)?.softness ?: 0.5f,
                         vignette = if (selected.colorGrade && !showOriginal) state.appliedGrade(selected).vignette else 0f,
                         presence = if (selected.colorGrade && !showOriginal) state.appliedGrade(selected).presence else app.headsup.core.color.Presence.NONE,
                         effects = if (showOriginal) app.headsup.render.EffectSettings(dashboard = false) else state.compareEffects ?: state.effects,
@@ -3191,16 +3193,17 @@ private fun BrushControls(state: UiState, vm: HeadsupViewModel, pictureSource: (
                 BrushSetting.SOFTNESS -> mask.softness
                 BrushSetting.FLOW -> brush.flow
             }
-            fun set(v: Float) = when (setting) {
-                BrushSetting.SIZE -> vm.updateBrush { it.copy(radius = v) }
-                // The whole painting's edge, at once.
-                BrushSetting.SOFTNESS -> vm.updateMask { it.copy(softness = v) }
-                BrushSetting.FLOW -> vm.updateBrush { it.copy(flow = v) }
+            fun set(v: Float) {
+                when (setting) {
+                    BrushSetting.SIZE -> vm.updateBrush { it.copy(radius = v) }
+                    // The whole painting's edge, at once.
+                    BrushSetting.SOFTNESS -> vm.updateMask { it.copy(softness = v) }
+                    BrushSetting.FLOW -> vm.updateBrush { it.copy(flow = v) }
+                }
+                // The brush shows on the picture itself, at the picture's scale, for a moment.
+                vm.showBrush()
             }
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Box(Modifier.weight(1f)) { ValueHeader(setting.label, String.format(Locale.US, "%.0f %%", value * 100f)) }
-                BrushPreview(brush.radius, mask.softness, state.pictureHeightPx)
-            }
+            ValueHeader(setting.label, String.format(Locale.US, "%.0f %%", value * 100f))
             RulerSlider(value = value, range = setting.range, step = 0.005f, onChange = { set(it) }, onReset = { set(setting.default) })
             Hint(
                 if (brush.mode == BrushMode.ERASE) "Erase takes the mask's corrections away where you paint. Two fingers zoom the picture; View moves around it."
@@ -3209,36 +3212,6 @@ private fun BrushControls(state: UiState, vm: HeadsupViewModel, pictureSource: (
         }
         BrushMode.MOVE -> Hint("One finger moves the mask; two turn and scale it.")
         BrushMode.VIEW -> Hint("One finger moves around the zoomed picture, two zoom it, a double tap fits it again. Nothing is painted.")
-    }
-}
-
-/**
- * The brush as big as it paints on the picture on screen ([pictureHeightPx]), with its soft edge;
- * one larger than the box shows its middle part.
- */
-@Composable
-private fun BrushPreview(radius: Float, softness: Float, pictureHeightPx: Float) {
-    val density = LocalDensity.current
-    val rPx = (radius * pictureHeightPx).coerceAtLeast(1.5f)
-    // The box stays the same; only the brush in it changes.
-    androidx.compose.foundation.Canvas(
-        Modifier
-            .size(120.dp)
-            .clip(RoundedCornerShape(6.dp))
-            .background(Color.Black.copy(alpha = 0.45f))
-            .border(1.dp, HeadsupColors.Outline, RoundedCornerShape(6.dp)),
-    ) {
-        val r = rPx
-        val hard = (1f - softness).coerceIn(0f, 0.99f)
-        val red = Color(0xFFFF4A3D)
-        drawCircle(
-            androidx.compose.ui.graphics.Brush.radialGradient(
-                0f to red, hard to red, 1f to red.copy(alpha = 0f),
-                center = center, radius = r,
-            ),
-            radius = r,
-            center = center,
-        )
     }
 }
 

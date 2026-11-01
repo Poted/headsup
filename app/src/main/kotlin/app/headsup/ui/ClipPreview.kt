@@ -170,6 +170,10 @@ fun ClipPreview(
     paintRadius: Float = 0f,
     paintStrength: Float = 1f,
     paintErase: Boolean = false,
+    /** Changed when the brush's size, softness or strength is set: the brush shows on the picture for a moment. */
+    brushRingAt: Long = 0L,
+    /** The painted mask's softness, for the brush shown on the picture. */
+    brushSoftness: Float = 0.5f,
     vignette: Float,
     /** Texture, clarity and dehaze of the selected clip. */
     presence: app.headsup.core.color.Presence = app.headsup.core.color.Presence.NONE,
@@ -568,6 +572,14 @@ fun ClipPreview(
     // Where a finger measuring colour is now (fractions of the view), shown before it lifts.
     var liveMarker by remember { mutableStateOf<Offset?>(null) }
     val brushPainter by rememberUpdatedState(onBrush)
+    // The brush shown on the picture for a moment after its size is set.
+    var ringOn by remember { mutableStateOf(false) }
+    LaunchedEffect(brushRingAt) {
+        if (brushRingAt == 0L) return@LaunchedEffect
+        ringOn = true
+        delay(1400)
+        ringOn = false
+    }
     // Read by a gesture that lives as long as the preview: always the current setting.
     val panNow by rememberUpdatedState(panView)
     val reframer by rememberUpdatedState(onReframe)
@@ -1253,6 +1265,21 @@ fun ClipPreview(
                                 drawMaskGuide(m, geometry.pictureW, geometry.pictureH)
                             }
                         }
+                    }
+                    // The brush as it paints, in the middle of the picture, while its size is set.
+                    if (ringOn && paintRadius > 0f) {
+                        val r = paintRadius * geometry.pictureH * reframeTransform(reframe, geometry).zoom
+                        val c = center
+                        val hard = (1f - brushSoftness).coerceIn(0f, 0.99f)
+                        drawCircle(
+                            androidx.compose.ui.graphics.Brush.radialGradient(
+                                0f to Color.White.copy(alpha = 0.4f * paintStrength), hard to Color.White.copy(alpha = 0.4f * paintStrength), 1f to Color.Transparent,
+                                center = c, radius = r,
+                            ),
+                            r, c,
+                        )
+                        drawCircle(Color.Black.copy(alpha = 0.5f), r + 1.5f * density, c, style = Stroke(1f * density))
+                        drawCircle(Color.White, r, c, style = Stroke(1.5f * density))
                     }
                     // Clean up: the stroke over what is to be removed, as it is painted (white, so the photo shows through).
                     if (guideMask == null && paintPath.size >= 2) {

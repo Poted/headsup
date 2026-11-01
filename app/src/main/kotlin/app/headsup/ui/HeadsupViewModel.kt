@@ -338,6 +338,8 @@ data class UiState(
     val removing: Boolean = false,
     /** The next tap on the picture picks the selected mask's colour ([HeadsupViewModel.pickMaskColour]). */
     val pickingColour: Boolean = false,
+    /** When the brush's size (softness, strength) was last set: it shows on the picture for a moment. */
+    val brushSizedAt: Long = 0L,
     /** A Fast edit look being tried ([HeadsupViewModel.applyFastLook]). */
     val fast: FastSession? = null,
     /** Long jobs running in the background (tracking with AI, reversing). */
@@ -2158,6 +2160,9 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun updateBrush(transform: (BrushSettings) -> BrushSettings) = _state.update { it.copy(brush = transform(it.brush)) }
+
+    /** Shows the brush on the picture for a moment (its size is being set). */
+    fun showBrush() = _state.update { it.copy(brushSizedAt = android.os.SystemClock.uptimeMillis()) }
 
     fun notePictureHeight(px: Float) = _state.update { if (it.pictureHeightPx == px) it else it.copy(pictureHeightPx = px) }
 
