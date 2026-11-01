@@ -5218,13 +5218,14 @@ private fun PreviewHandle(onFold: (() -> Unit)? = null, onDrag: (Float) -> Unit)
             Box(
                 Modifier
                     .align(Alignment.CenterEnd)
-                    .padding(end = 16.dp)
-                    .size(28.dp)
+                    // Under the transport's last button (Z), the same size.
+                    .padding(end = 20.dp)
+                    .size(32.dp)
                     .clip(CircleShape)
                     .border(1.dp, HeadsupColors.Outline, CircleShape)
                     .clickable(onClick = fold),
                 contentAlignment = Alignment.Center,
-            ) { Icon(HeadsupIcons.ChevronDown, "Fold the transport and timeline", Modifier.size(16.dp), tint = HeadsupColors.TextMuted) }
+            ) { Icon(HeadsupIcons.ChevronDown, "Fold the transport and timeline", Modifier.size(18.dp), tint = HeadsupColors.TextMuted) }
         }
     }
 }

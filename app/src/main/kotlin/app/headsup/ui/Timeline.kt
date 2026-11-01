@@ -32,6 +32,12 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.foundation.gestures.draggable
+import androidx.compose.foundation.background
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.CornerRadius
@@ -125,17 +131,20 @@ fun Timeline(
     val lanes = if (!showAudio) 0 else used.coerceIn(1, MAX_LANES)
     // The sound tracks scroll up and down when there are more than fit (in px from the first).
     var laneScroll by remember { mutableFloatStateOf(0f) }
-    val shownLanes = lanes.coerceAtMost(VISIBLE_LANES)
+    // How many sound tracks show at once: set by the handle under them (more scroll).
+    var visibleLanes by rememberSaveable { mutableIntStateOf(VISIBLE_LANES) }
+    val shownLanes = lanes.coerceAtMost(visibleLanes)
+    val visibleNow by rememberUpdatedState(visibleLanes)
     val lanePx = with(androidx.compose.ui.platform.LocalDensity.current) { LANE.toPx() }
     // Within the tracks there are; the selected sound (a new one too) scrolled into view.
     val selectedLane = audio.firstOrNull { it.id == state.selectedAudio }?.lane
-    LaunchedEffect(lanes, selectedLane) {
-        val room = (lanes - VISIBLE_LANES).coerceAtLeast(0) * lanePx
+    LaunchedEffect(lanes, selectedLane, visibleLanes) {
+        val room = (lanes - visibleLanes).coerceAtLeast(0) * lanePx
         var v = laneScroll.coerceIn(0f, room)
         if (selectedLane != null) {
             val top = selectedLane * lanePx
             if (top < v) v = top
-            if (top + lanePx > v + VISIBLE_LANES * lanePx) v = top + lanePx - VISIBLE_LANES * lanePx
+            if (top + lanePx > v + visibleLanes * lanePx) v = top + lanePx - visibleLanes * lanePx
         }
         laneScroll = v.coerceIn(0f, room)
     }
@@ -304,8 +313,9 @@ fun Timeline(
                                 else -> if (held) Mode.NONE else Mode.SCROLL
                             }
                             // Up or down over the sound tracks scrolls them, when there are more than fit.
-                            val laneRoom = ((lanesNow - VISIBLE_LANES).coerceAtLeast(0) * LANE.toPx())
-                            if (upright && lanesNow > VISIBLE_LANES && down.position.y >= g.lanesTop) {
+                            // Over them it is never the screen's swipe (full screen, folding), scrolling or not.
+                            val laneRoom = ((lanesNow - visibleNow).coerceAtLeast(0) * LANE.toPx())
+                            if (upright && lanesNow > 0 && down.position.y >= g.lanesTop) {
                                 laneScroll = (laneScroll - (first.position.y - down.position.y)).coerceIn(0f, laneRoom)
                                 drag(first.id) { c ->
                                     laneScroll = (laneScroll - c.positionChange().y).coerceIn(0f, laneRoom)
@@ -483,7 +493,7 @@ fun Timeline(
                 }
                 // The sound tracks, scrolled, kept below the clips.
                 clipRect(0f, g.lanesTop, size.width, size.height) { drawAudio(g, state, text, accent, laneColour) }
-                if (lanes > VISIBLE_LANES) {
+                if (lanes > visibleLanes) {
                     // Where in the tracks the view is: a thin bar on the right.
                     val area = size.height - g.lanesTop
                     val total = lanes * g.laneH
@@ -541,6 +551,27 @@ fun Timeline(
                 }
             }
         }
+        // Under the sound tracks: dragged down shows more of them at once, up fewer.
+        if (lanes > 1) {
+            var pulled by remember { mutableFloatStateOf(0f) }
+            val dragState = androidx.compose.foundation.gestures.rememberDraggableState { dy ->
+                pulled += dy
+                val steps = (pulled / lanePx).toInt()
+                if (steps != 0) {
+                    visibleLanes = (visibleLanes + steps).coerceIn(1, lanes)
+                    pulled -= steps * lanePx
+                }
+            }
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .height(20.dp)
+                    .draggable(dragState, androidx.compose.foundation.gestures.Orientation.Vertical, onDragStopped = { pulled = 0f }),
+                contentAlignment = Alignment.Center,
+            ) {
+                Box(Modifier.width(40.dp).height(4.dp).clip(RoundedCornerShape(2.dp)).background(HeadsupColors.Outline))
+            }
+        }
     }
 }
 
@@ -553,8 +584,8 @@ private val HANDLE = 14.dp
 private const val MIN_MS = 300L
 const val MAX_LANES = 16
 
-/** Sound tracks shown at once; more scroll up and down. */
-private const val VISIBLE_LANES = 4
+/** Sound tracks shown at once at first; the handle under them sets it, more scroll up and down. */
+private const val VISIBLE_LANES = 2
 private const val MAX_ZOOM_DP = 0.4f
 
 /** Zoomed out at most to the whole content across half the width (the playhead can be at its end). */
