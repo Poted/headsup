@@ -76,7 +76,7 @@ import kotlinx.coroutines.launch
  *
  * Double-tap a clip to select it, with its menu (move, delete, group); a single tap or a finger
  * resting on it does nothing, so scrubbing never jumps to another clip; a tap on empty space lets
- * go of it. A selected clip has handles at its ends to trim it (the clips after it follow). Tap a
+ * go of it. A selected clip has handles at its ends to trim it (the clips after it follow). Double-tap a
  * sound to select it: it can be dragged (also to another track), trimmed at its handles, faded
  * with the dots on its top corners, or slid inside ([slip]). With [maskKeys] set, the selected clip shows the keys of the
  * mask being edited.
@@ -144,6 +144,7 @@ fun Timeline(
     var menu by remember { mutableStateOf<Pair<Int, Float>?>(null) }
     // The last tap on a clip (its index and when): a second one soon after selects it and opens its menu.
     var lastClipTap by remember { mutableStateOf<Pair<Int, Long>?>(null) }
+    var lastSoundTap by remember { mutableStateOf<Pair<Long, Long>?>(null) }
     var fling by remember { mutableStateOf<Job?>(null) }
 
     val clipsNow by rememberUpdatedState(clips)
@@ -212,13 +213,6 @@ fun Timeline(
                                     held = true
                                     // A clip held still is not selected: a finger resting while it scrubs
                                     // must not jump to another clip (a double tap selects it).
-                                    when (hit) {
-                                        is Hit.Sound -> {
-                                            haptics.performHapticFeedback(HapticFeedbackType.LongPress)
-                                            selectAudio(hit.id)
-                                        }
-                                        else -> Unit
-                                    }
                                     continue
                                 }
                                 if (event.changes.count { it.pressed } >= 2) {
@@ -241,7 +235,18 @@ fun Timeline(
                                                 lastClipTap = hit.index to now
                                             }
                                         }
-                                        is Hit.Sound -> selectAudio(hit.id)
+                                        is Hit.Sound -> {
+                                            // As with clips: a double tap selects a sound.
+                                            val now = System.currentTimeMillis()
+                                            val last = lastSoundTap
+                                            if (last != null && last.first == hit.id && now - last.second <= viewConfiguration.doubleTapTimeoutMillis) {
+                                                haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                                                selectAudio(hit.id)
+                                                lastSoundTap = null
+                                            } else {
+                                                lastSoundTap = hit.id to now
+                                            }
+                                        }
                                         is Hit.Text -> selectText(hit.id)
                                         Hit.Add -> add()
                                         Hit.AddSound -> addSound()
@@ -276,7 +281,7 @@ fun Timeline(
                                 is Hit.SoundEnd -> Mode.TRIM_SOUND_END
                                 is Hit.FadeIn -> Mode.FADE_IN
                                 is Hit.FadeOut -> Mode.FADE_OUT
-                                is Hit.Sound -> if (hit.id == audioSelectedNow || held) (if (slipNow) Mode.SLIP else Mode.MOVE) else Mode.SCROLL
+                                is Hit.Sound -> if (hit.id == audioSelectedNow) (if (slipNow) Mode.SLIP else Mode.MOVE) else if (held) Mode.NONE else Mode.SCROLL
                                 is Hit.Text -> if (hit.id == selectedTextNow || held) Mode.MOVE_TEXT else Mode.SCROLL
                                 is Hit.Clip -> Mode.SCROLL
                                 else -> if (held) Mode.NONE else Mode.SCROLL

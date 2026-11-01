@@ -1534,7 +1534,7 @@ private fun AudioPanel(
     if (clip == null && video == null) {
         ValueHeader("All clips' own sound", String.format(Locale.US, "%.0f %%", state.clipSound * 100))
         RulerSlider(state.clipSound, 0f..1f, 0.02f, vm::setClipSound, onReset = { vm.setClipSound(1f) })
-        Hint("Tap a clip or a sound on the timeline for its own level and fades.")
+        Hint("Double-tap a clip or a sound on the timeline for its own level and fades.")
         AddSoundButton(onAddSound)
         return
     }
