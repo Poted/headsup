@@ -2623,22 +2623,50 @@ private fun LookActions(state: UiState, vm: HeadsupViewModel) {
     }
 }
 
-/** The top of Adjust: what it works on (this clip, its group, all clips), always in view. */
+/**
+ * What Adjust works on (this clip, its group, all clips) as one small button with a list, so it
+ * shares a line with the layers or groups and the corrections come first.
+ */
 @Composable
-private fun ScopeSwitch(state: UiState, vm: HeadsupViewModel) {
+private fun ScopeChip(state: UiState, vm: HeadsupViewModel) {
     val album = state.photoProject
     val scope = when (state.target) {
         GradeTarget.GROUP -> 1
         GradeTarget.GLOBAL -> 2
         GradeTarget.CLIP, GradeTarget.MASK -> 0
     }
-    Segmented(listOf(if (album) "This photo" else "This clip", "Group", if (album) "All photos" else "All clips"), scope, { i ->
-        if (i != scope) {
-            vm.setTarget(listOf(GradeTarget.CLIP, GradeTarget.GROUP, GradeTarget.GLOBAL)[i])
-            // The looks (grain, glow…) follow the same choice: this clip's, or set on all.
-            vm.setEffectsOnAll(i == 2)
+    val names = listOf(if (album) "This photo" else "This clip", "Group", if (album) "All photos" else "All clips")
+    var open by remember { mutableStateOf(false) }
+    Box {
+        Row(
+            Modifier
+                .height(36.dp)
+                .clip(CircleShape)
+                .background(HeadsupColors.Highlight)
+                .clickable { open = true }
+                .padding(horizontal = 14.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(names[scope], style = MaterialTheme.typography.labelLarge, color = HeadsupColors.OnHighlight, maxLines = 1)
+            Spacer(Modifier.width(4.dp))
+            Icon(HeadsupIcons.ChevronDown, null, Modifier.size(16.dp), tint = HeadsupColors.OnHighlight)
         }
-    })
+        DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+            names.forEachIndexed { i, name ->
+                DropdownMenuItem(
+                    text = { Text((if (i == scope) "✓ " else "") + name) },
+                    onClick = {
+                        open = false
+                        if (i != scope) {
+                            vm.setTarget(listOf(GradeTarget.CLIP, GradeTarget.GROUP, GradeTarget.GLOBAL)[i])
+                            // The looks (grain, glow…) follow the same choice: this clip's, or set on all.
+                            vm.setEffectsOnAll(i == 2)
+                        }
+                    },
+                )
+            }
+        }
+    }
 }
 
 /**
@@ -2698,22 +2726,25 @@ private fun ColourPage(
     // From the top: what is worked on (scope, then layer or group, then a mask's part), its
     // settings, and at the bottom its actions.
     if (!removing) {
-        ScopeSwitch(state, vm)
         when (state.target) {
             GradeTarget.CLIP, GradeTarget.MASK -> {
                 // Choosing a new mask: only the layers and the kinds of mask.
-                if (Layers(state, clip, vm, pictureSource, adding) { adding = it }) return
+                if (Layers(state, clip, vm, pictureSource, adding, leading = { ScopeChip(state, vm) }) { adding = it }) return
                 // A mask: its shape (where it is: select, paint, shape, track) or what it changes
                 // in the picture; only while its shape is worked on does a finger on the picture change it.
                 if (state.target == GradeTarget.MASK && selectedMask != null) {
                     Segmented(listOf("Mask", "Adjust"), if (maskTools) 0 else 1, { onMaskTools(it == 0) })
                 }
             }
-            GradeTarget.GROUP -> GroupPicker(state, clip, index, state.groupOf(clip), vm)
-            GradeTarget.GLOBAL -> Hint(
-                if (state.photoProject) "A change is set on every photo: each shows it under This photo."
-                else "A change is set on every clip: each shows it under This clip.",
-            )
+            GradeTarget.GROUP -> GroupPicker(state, clip, index, state.groupOf(clip), vm) { ScopeChip(state, vm) }
+            GradeTarget.GLOBAL -> Row(verticalAlignment = Alignment.CenterVertically) {
+                ScopeChip(state, vm)
+                Spacer(Modifier.width(10.dp))
+                Hint(
+                    if (state.photoProject) "Set on every photo; each shows it under This photo." else "Set on every clip; each shows it under This clip.",
+                    Modifier.weight(1f),
+                )
+            }
         }
     }
     ColourBody(state, vm, adjustment, onAdjustment, onAddLut, frameSource, playhead, onSeek, pictureSource, maskTools, onMaskTools)
@@ -3685,13 +3716,14 @@ private fun Layers(
     vm: HeadsupViewModel,
     pictureSource: ((Int) -> Bitmap?)?,
     adding: Boolean,
+    leading: @Composable () -> Unit = {},
     onAdding: (Boolean) -> Unit,
 ): Boolean {
     val full = clip.masks.size >= ColourMask.MAX_PER_CLIP
     val onMask = state.target == GradeTarget.MASK
-    SectionCaption("Layers")
-    // What is there, then one chip to add: what exists and what can be made never mix.
+    // On one line: what Adjust works on, the layers there are, then one chip to add.
     LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+        item { leading() }
         item {
             LayerChip("▣", "Base", selected = !onMask && !adding, modified = clip.grade != ColorGrade()) {
                 onAdding(false)
@@ -3993,14 +4025,9 @@ private fun LutControls(
  * at most one group, so its colours always come from clip → group → all clips.
  */
 @Composable
-private fun GroupPicker(state: UiState, clip: ClipState, index: Int, group: ClipGroup?, vm: HeadsupViewModel) {
-    if (group == null) {
-        Hint(
-            if (state.photoProject) "Photos shot the same way (e.g. drone) get the same LUT and corrections: a change here is set on each photo of the group."
-            else "Clips shot the same way (e.g. drone) get the same LUT and corrections: a change here is set on each clip of the group.",
-        )
-    }
-    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+private fun GroupPicker(state: UiState, clip: ClipState, index: Int, group: ClipGroup?, vm: HeadsupViewModel, leading: @Composable () -> Unit = {}) {
+    Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+        leading()
         for (g in state.groups) {
             val count = state.clips.count { it.groupId == g.id }
             FilterChip(
@@ -4010,6 +4037,12 @@ private fun GroupPicker(state: UiState, clip: ClipState, index: Int, group: Clip
             )
         }
         FilterChip(selected = false, onClick = { vm.createGroup(index) }, label = { Text("+ New group") })
+    }
+    if (group == null) {
+        Hint(
+            if (state.photoProject) "Photos shot the same way (e.g. drone) get the same LUT and corrections: a change here is set on each photo of the group."
+            else "Clips shot the same way (e.g. drone) get the same LUT and corrections: a change here is set on each clip of the group.",
+        )
     }
 }
 
