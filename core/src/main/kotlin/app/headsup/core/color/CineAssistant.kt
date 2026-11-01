@@ -124,17 +124,19 @@ object CineAssistant {
                 exposure = exposure, contrast = contrast, blacks = blacks, saturation = -0.08f,
                 temperature = 0.12f * warmthRoom, rolloff = rolloff, toneAmount = 0.35f,
                 shadowHue = 250f, highlightHue = 135f, tame = tame.coerceAtMost(1f),
+                // Deeper colour rather than louder (subtractive, as film).
+                density = 0.3f,
             )
             CineStyle.TEAL_ORANGE -> ColorGrade(
                 exposure = exposure, contrast = contrast + 0.05f, blacks = blacks, saturation = 0.03f,
                 rolloff = rolloff, toneAmount = 0.6f * warmthRoom.coerceAtMost(1f),
                 shadowHue = ColorGrade.DEFAULT_SHADOW_HUE, highlightHue = ColorGrade.DEFAULT_HIGHLIGHT_HUE,
-                tame = tame.coerceAtMost(1f),
+                tame = tame.coerceAtMost(1f), density = 0.25f,
             )
             CineStyle.MUTED -> ColorGrade(
                 exposure = exposure, contrast = contrast, blacks = blacks, saturation = -0.25f,
                 rolloff = rolloff, toneAmount = 0.2f, shadowHue = 270f, highlightHue = 110f,
-                tame = tame.coerceAtMost(1f),
+                tame = tame.coerceAtMost(1f), density = 0.15f,
             )
         }
         val grain = when (style) {

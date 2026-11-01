@@ -86,6 +86,7 @@ import app.headsup.project.ProjectKind
 import app.headsup.project.ProjectStore
 import app.headsup.project.SavedClip
 import app.headsup.project.SavedGroup
+import app.headsup.project.SavedReverse
 import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.distinctUntilChanged
@@ -93,6 +94,16 @@ import kotlinx.coroutines.flow.map
 import java.time.ZoneId
 
 data class LoadedActivity(val name: String, val track: ActivityTrack, val uri: Uri? = null)
+
+/** Where a reversed clip came from: the file and the part of it ([startMs]..[endMs]) played backwards. */
+data class ReversedSource(val original: ClipMetadata, val startMs: Long, val endMs: Long)
+
+/**
+ * The description of a reversed copy ([uri], [durationMs] long) of part of [original]: the
+ * original's own (its name, shape, colours and times), so the clip is still that shot.
+ */
+internal fun reversedMetaOf(original: ClipMetadata, uri: Uri, durationMs: Long): ClipMetadata =
+    original.copy(uri = uri, durationMs = durationMs, info = original.info.copy(durationMs = durationMs), bytes = null)
 
 data class ClipState(
     val meta: ClipMetadata,
@@ -142,6 +153,10 @@ data class ClipState(
     val rawDevelop: RawDevelop = RawDevelop(),
     /** An album photo marked for export. */
     val picked: Boolean = false,
+    /** Moments flagged in the file (file time): to find again, cut at, work on. */
+    val flags: List<Long> = emptyList(),
+    /** Played backwards: [meta] is then the reversed copy of [ReversedSource.original]'s cut. */
+    val reversed: ReversedSource? = null,
 ) {
     val look: ClipLook get() = ClipLook(grade, effects, lutName, masks)
 
@@ -195,6 +210,15 @@ data class ClipGroup(val id: Long, val name: String, val grade: ColorGrade = Col
  * The cine assistant's state for one clip: what it measured, the clip's grade and effects before
  * the suggestion (so it can be scaled or undone), and the chosen style and strength.
  */
+/** A Fast edit look being tried on clip [clipId]: what it had before, the look and its strength. */
+data class FastSession(
+    val clipId: Long,
+    val baseGrade: ColorGrade,
+    val baseEffects: EffectSettings,
+    val look: app.headsup.color.FastLook,
+    val strength: Float = 1f,
+)
+
 data class CineSession(
     val clipId: Long,
     val stats: FrameStats,
@@ -303,6 +327,8 @@ data class UiState(
     val removing: Boolean = false,
     /** The next tap on the picture picks the selected mask's colour ([HeadsupViewModel.pickMaskColour]). */
     val pickingColour: Boolean = false,
+    /** A Fast edit look being tried ([HeadsupViewModel.applyFastLook]). */
+    val fast: FastSession? = null,
     /** An outline being drawn around an object (x, y pairs, fractions of the picture), until the finger lifts. */
     val lassoPath: List<Float> = emptyList(),
     /** A brush stroke being painted (x, y pairs, fractions of the picture), until the finger lifts. */
@@ -728,9 +754,11 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
             val fresh = mutableListOf<ClipState>()
             for (c in s.clips) {
                 // The pieces of a cut-up file, side by side, are one clip again.
-                if (fresh.lastOrNull()?.meta?.uri == c.meta.uri) continue
+                // A reversed clip plays forwards again: the file it came from.
+                val meta = c.reversed?.original ?: c.meta
+                if (fresh.lastOrNull()?.meta?.uri == meta.uri) continue
                 fresh += ClipState(
-                    meta = c.meta, sync = c.sync, id = c.id, manualOffsetMs = c.manualOffsetMs,
+                    meta = meta, sync = c.sync, id = c.id, manualOffsetMs = c.manualOffsetMs,
                     manualStart = c.manualStart, picked = c.picked, soundLevel = c.soundLevel,
                 )
             }
@@ -742,6 +770,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                 selectedMask = 0,
                 compareGrade = null,
                 cine = null,
+                fast = null,
                 matchSession = null,
                 scope = null,
             )
@@ -754,6 +783,24 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
         if (historyIndex >= history.lastIndex) return
         historyIndex++
         restore(history[historyIndex])
+    }
+
+    /**
+     * After undo or redo, the clip to show: the one holding the moment of the file the playhead is
+     * on (a split undone, a trim brought back), so the picture stays where it was; else the same
+     * clip, else the one at the same place.
+     */
+    private fun keptSelection(s: UiState, clips: List<ClipState>): Int? {
+        if (clips.isEmpty()) return null
+        val current = s.selected
+        if (current != null) {
+            val f = playheadFileMs
+            val holding = clips.indices.filter { clips[it].meta.uri == current.meta.uri && f >= clips[it].trimStartMs && f < clips[it].trimEndMs }
+            holding.firstOrNull { clips[it].id == current.id }?.let { return it }
+            holding.firstOrNull()?.let { return it }
+            clips.indexOfFirst { it.id == current.id }.takeIf { it >= 0 }?.let { return it }
+        }
+        return s.selectedClip?.coerceIn(0, clips.lastIndex) ?: 0
     }
 
     private fun restore(snapshot: EditSnapshot) {
@@ -774,7 +821,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                 texts = snapshot.texts,
                 routeMap = snapshot.routeMap,
                 selectedText = s.selectedText?.takeIf { id -> snapshot.texts.any { it.id == id } },
-                selectedClip = s.selectedClip?.coerceAtMost(snapshot.clips.lastIndex)?.takeIf { it >= 0 } ?: snapshot.clips.indices.firstOrNull(),
+                selectedClip = keptSelection(s, snapshot.clips),
                 compareGrade = null,
                 cine = null,
                 matchSession = null,
@@ -816,6 +863,8 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                 it.meta.uri, it.trimStartMs, it.trimEndMs, it.manualOffsetMs, it.colorGrade, it.lutName,
                 it.manualStart, it.grade, it.effects, it.masks, it.groupId, it.transitionMs, it.reframe, it.speed, it.muteChangedSpeed,
                 it.fadeInMs, it.fadeOutMs, it.soundLevel, it.rawDevelop, it.picked, it.speedCurve, it.retouch,
+                flags = it.flags,
+                reversed = it.reversed?.let { r -> SavedReverse(r.original.uri, r.startMs, r.endMs) },
             )
         },
         groups = groups.map { SavedGroup(it.id, it.name, it.grade, it.lutName) },
@@ -858,16 +907,24 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                     }.onFailure { missing += uri.lastPathSegment.orEmpty() }.getOrNull()
                 }
             }
+            // A reversed clip's copy is the app's own (made again if it is gone); its original is the file.
+            val copies = project.clips.mapNotNull { c -> c.reversed?.let { c.uri } }.toSet()
             val metas = withContext(Dispatchers.IO) {
-                project.clips.map { it.uri }.distinct().associateWith { uri ->
-                    runCatching { ClipMetadataReader.read(context, uri) }.onFailure { missing += uri.lastPathSegment.orEmpty() }.getOrNull()
+                (project.clips.map { it.uri } + project.clips.mapNotNull { it.reversed?.originalUri }).distinct().associateWith { uri ->
+                    runCatching { ClipMetadataReader.read(context, uri) }.onFailure { if (uri !in copies) missing += uri.lastPathSegment.orEmpty() }.getOrNull()
                 }
             }
-            val clips = project.clips.mapNotNull { c ->
-                val meta = metas[c.uri] ?: return@mapNotNull null
+            val clips = project.clips.mapNotNull { saved ->
+                // A reversed clip whose copy is gone plays forwards again (Reverse makes it anew).
+                val original = saved.reversed?.let { metas[it.originalUri] }
+                val reversedMeta = if (saved.reversed != null && original != null) metas[saved.uri]?.let { reversedMetaOf(original, it.uri, it.durationMs) } else null
+                val c = if (saved.reversed != null && reversedMeta == null) saved.copy(uri = saved.reversed.originalUri, trimStartMs = saved.reversed.startMs, trimEndMs = saved.reversed.endMs, reversed = null) else saved
+                val meta = reversedMeta ?: metas[c.uri] ?: return@mapNotNull null
                 val start = c.trimStartMs.coerceIn(0L, (meta.durationMs - MIN_CLIP_MS).coerceAtLeast(0L))
                 ClipState(
                     meta, sync = null,
+                    flags = c.flags,
+                    reversed = if (reversedMeta != null && original != null && c.reversed != null) ReversedSource(original, c.reversed.startMs, c.reversed.endMs) else null,
                     trimStartMs = start,
                     trimEndMs = c.trimEndMs.coerceIn(start, meta.durationMs),
                     manualOffsetMs = c.manualOffsetMs,
@@ -1211,6 +1268,88 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
      * The Stop of a long job: AI tracking stops after its frame and keeps what it found; other
      * jobs (copying, Clean up) are cancelled.
      */
+    // Flags
+
+    /** How near the playhead a flag counts as being on it. */
+    private val flagReachMs = 120L
+
+    /** A flag at [fileMs] of the selected clip, or the one there taken away. */
+    fun toggleFlag(fileMs: Long) {
+        val index = _state.value.selectedClip ?: return
+        updateClip(index) { c ->
+            val near = c.flags.firstOrNull { kotlin.math.abs(it - fileMs) <= flagReachMs }
+            c.copy(flags = if (near != null) c.flags - near else (c.flags + fileMs.coerceIn(c.trimStartMs, c.trimEndMs)).sorted())
+        }
+    }
+
+    /** Takes away the flag at [fileMs] of clip [index]. */
+    fun removeFlag(index: Int, fileMs: Long) = updateClip(index) { c -> c.copy(flags = c.flags - fileMs) }
+
+    /** Takes away every flag of the film. */
+    fun clearFlags() = _state.update { s -> s.copy(clips = s.clips.map { it.copy(flags = emptyList()) }) }
+
+    // Reverse
+
+    /**
+     * Plays clip [index] backwards ([app.headsup.media.Reverser]: a reversed copy of its cut is made,
+     * which takes a while), or forwards again when it is reversed. Its look and flags stay; masks
+     * stay where they are (their tracking, made forwards, is dropped).
+     */
+    fun reverseClip(index: Int) {
+        val s = _state.value
+        if (s.busy) return
+        val clip = s.clips.getOrNull(index)?.takeIf { !it.meta.isPhoto } ?: return
+        val back = clip.reversed
+        if (back != null) {
+            updateClip(index) { c ->
+                val len = c.meta.durationMs
+                c.copy(
+                    meta = back.original, trimStartMs = back.startMs, trimEndMs = back.endMs, reversed = null,
+                    flags = c.flags.map { back.startMs + (len - it) }.filter { it in back.startMs..back.endMs }.sorted(),
+                    masks = c.masks.map(::untracked),
+                )
+            }
+            return
+        }
+        val context: Application = getApplication()
+        _state.update { it.copy(busy = true, loadingMessage = "Reversing", loadingProgress = 0f) }
+        loadJob = viewModelScope.launch {
+            try {
+                val file = app.headsup.media.Reverser.reverse(context, clip.meta, clip.trimStartMs, clip.trimEndMs) { p ->
+                    _state.update { it.copy(loadingProgress = p.coerceIn(0f, 1f)) }
+                }
+                val read = withContext(Dispatchers.IO) { ClipMetadataReader.read(context, Uri.fromFile(file)) }
+                val meta = reversedMetaOf(clip.meta, read.uri, read.durationMs)
+                val len = meta.durationMs
+                _state.update { st ->
+                    st.copy(
+                        clips = st.clips.map { c ->
+                            if (c.id != clip.id) c else c.copy(
+                                meta = meta, trimStartMs = 0L, trimEndMs = len,
+                                reversed = ReversedSource(clip.meta, clip.trimStartMs, clip.trimEndMs),
+                                flags = c.flags.filter { it in clip.trimStartMs..clip.trimEndMs }.map { (clip.trimEndMs - it).coerceIn(0L, len) }.sorted(),
+                                masks = c.masks.map(::untracked),
+                            )
+                        },
+                    )
+                }
+                refreshPreview()
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: app.headsup.media.Reverser.NotIntraException) {
+                _state.update { it.copy(messages = it.messages + "This phone's video encoder could not make the reversed copy.") }
+            } catch (e: Exception) {
+                e.printStackTrace()
+                _state.update { it.copy(messages = it.messages + "Could not reverse this clip: ${e.message ?: e.javaClass.simpleName}") }
+            } finally {
+                _state.update { it.copy(busy = false, loadingMessage = null, loadingProgress = null) }
+            }
+        }
+    }
+
+    /** [m] without what was tracked in one direction of time (keys, maps over time). */
+    private fun untracked(m: ColourMask): ColourMask = m.copy(keys = emptyList(), sequence = null, sequenceStrokes = 0, anchors = emptyList())
+
     fun stopWork() {
         if (_state.value.loadingMessage?.startsWith("Tracking with AI") == true) {
             stopRequested = true
@@ -1228,7 +1367,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
 
     fun selectClip(index: Int) {
         scopeFrame = null
-        _state.update { it.copy(selectedClip = index, scope = null, selectedMask = 0, compareGrade = null, cine = null) }
+        _state.update { it.copy(selectedClip = index, scope = null, selectedMask = 0, compareGrade = null, cine = null, fast = null) }
         refreshPreview()
     }
 
@@ -1741,6 +1880,37 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /** Keeps the suggestion as ordinary corrections ([undo] = false) or restores the clip as it was. */
+    /**
+     * Fast edit: [look] on the selected clip at [strength], on top of what it had when the first
+     * look was tried (trying another look replaces it, not adds to it).
+     */
+    fun applyFastLook(look: app.headsup.color.FastLook, strength: Float = 1f) {
+        val s = _state.value
+        val index = s.selectedClip ?: return
+        val clip = s.selected ?: return
+        val session = s.fast?.takeIf { it.clipId == clip.id } ?: FastSession(clip.id, clip.grade, clip.effects, look)
+        val k = strength.coerceIn(0f, 1f)
+        _state.update { it.copy(fast = session.copy(look = look, strength = k)) }
+        updateClip(index) { it.copy(grade = session.baseGrade + look.grade * k, effects = look.effectsOn(session.baseEffects, k)) }
+    }
+
+    /** Hold to see the clip as it was before the Fast edit look. */
+    fun compareFast(held: Boolean) {
+        val session = _state.value.fast?.takeIf { held }
+        _state.update { it.copy(compareGrade = session?.baseGrade, compareEffects = session?.baseEffects) }
+        refreshPreview()
+    }
+
+    /** Keeps the look as ordinary corrections and effects, or with [undo] puts the clip back. */
+    fun closeFast(undo: Boolean) {
+        val session = _state.value.fast ?: return
+        if (undo) {
+            val index = _state.value.clips.indexOfFirst { it.id == session.clipId }
+            if (index >= 0) updateClip(index) { it.copy(grade = session.baseGrade, effects = session.baseEffects) }
+        }
+        _state.update { it.copy(fast = null) }
+    }
+
     fun closeCine(undo: Boolean) {
         val session = _state.value.cine ?: return
         if (undo) {

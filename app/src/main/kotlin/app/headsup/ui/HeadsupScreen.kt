@@ -457,6 +457,7 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
                         timelineTotalMs = state.clips.sumOf { it.timelineDurationMs },
                         onAutoPlayStarted = { continuePlaying = false },
                         // ⇤ at a clip's start, ⇥ at its end: to the start of the clip before or after.
+                        onFlag = vm::toggleFlag,
                         onStepClip = { step ->
                             val i = (state.selectedClip ?: 0) + step
                             if (i in state.clips.indices) jumpTo(clipStarts[i])
@@ -621,7 +622,16 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
                         onAddPhotos = addPhotos,
                         onShowClip = { i -> jumpTo(clipStarts[i]) },
                     )
-                    Tool.EDIT -> EditPanel(state, vm, playhead, editTab, { editTab = it }, onCutScrub = { cutScrub.value = it }) { f ->
+                    Tool.EDIT -> EditPanel(
+                        state, vm, playhead, editTab, { editTab = it }, onCutScrub = { cutScrub.value = it },
+                        onJump = { id, ms ->
+                            val i = state.clips.indexOfFirst { it.id == id }
+                            if (i >= 0) {
+                                if (i != state.selectedClip) vm.selectClip(i)
+                                seekRequest = ms
+                            }
+                        },
+                    ) { f ->
                         val index = state.clips.indexOfFirst { it.id == f.clipId }
                         if (index >= 0) {
                             if (index != state.selectedClip) vm.selectClip(index)
@@ -1165,6 +1175,8 @@ private fun EditPanel(
     tab: EditTab,
     onTab: (EditTab) -> Unit,
     onCutScrub: (Long?) -> Unit,
+    /** Shows the clip [clipId] at [clipMs] (from its cut). */
+    onJump: (clipId: Long, clipMs: Long) -> Unit,
     onShowHighlight: (FoundHighlight) -> Unit,
 ) {
     val clip = state.selected
@@ -1194,7 +1206,10 @@ private fun EditPanel(
         return
     }
     when (tab) {
-        EditTab.CUT -> CutTool(state, vm, playhead, onCutScrub)
+        EditTab.CUT -> CutTool(state, vm, playhead, onCutScrub) { i, fileMs ->
+            // A flag: its clip shown at that moment.
+            state.clips.getOrNull(i)?.let { c -> onJump(c.id, fileMs - c.trimStartMs) }
+        }
         EditTab.SPEED -> if (clip != null && index != null && !clip.meta.isPhoto) {
             SpeedControls(clip, state.effectiveTimelineFps, onSpeed = { vm.setSpeed(index, it) }, onMute = { vm.setMuteChangedSpeed(index, it) })
             if (!clip.meta.isPhoto) SpeedRamp(clip, state.effectiveTimelineFps) { vm.setSpeedCurve(index, it) }
@@ -1248,7 +1263,7 @@ private fun RateNotes(state: UiState, fps: Float) {
 
 /** The selected clip's cut (or a photo's time on screen), with split and delete. */
 @Composable
-private fun CutTool(state: UiState, vm: HeadsupViewModel, playhead: LongState, onCutScrub: (Long?) -> Unit) {
+private fun CutTool(state: UiState, vm: HeadsupViewModel, playhead: LongState, onCutScrub: (Long?) -> Unit, onFlag: (Int, Long) -> Unit) {
     val index = state.selectedClip ?: return
     val clip = state.selected ?: return
     if (clip.meta.isPhoto) {
@@ -1269,6 +1284,40 @@ private fun CutTool(state: UiState, vm: HeadsupViewModel, playhead: LongState, o
             onDelete = { vm.removeClip(index) },
             onScrub = onCutScrub,
         )
+        // Backwards: a reversed copy of the cut is made once (it takes a while on long clips).
+        SectionCaption("Direction")
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            PillAction("⇆", if (clip.reversed != null) "Reversed" else "Reverse", { vm.reverseClip(index) }, selected = clip.reversed != null, enabled = !state.busy)
+            Spacer(Modifier.width(10.dp))
+            Hint(
+                if (clip.reversed != null) "Plays backwards, without its sound. Tap again to play it forwards."
+                else "Plays the clip backwards (without its sound). Its look and flags stay.",
+                Modifier.weight(1f),
+            )
+        }
+        FlagList(state, vm, onFlag)
+    }
+}
+
+/** The film's flags in timeline order: tap one to go there (cut there with Split). */
+@Composable
+private fun FlagList(state: UiState, vm: HeadsupViewModel, onFlag: (Int, Long) -> Unit) {
+    val starts = state.clips.runningFold(0L) { a, c -> a + c.timelineDurationMs }
+    val flags = state.clips.flatMapIndexed { i, c ->
+        c.flags.filter { it >= c.trimStartMs && it <= c.trimEndMs }.map { f -> Triple(i, f, starts[i] + c.timelineOfSource(f - c.trimStartMs)) }
+    }.sortedBy { it.third }
+    SectionCaption("Flags") {
+        if (flags.isNotEmpty()) SmallAction("Clear all", { vm.clearFlags() })
+    }
+    if (flags.isEmpty()) {
+        Hint("⚑ under the picture flags the moment at the playhead: a place to cut or to work on later. On a flag it takes the flag away.")
+        return
+    }
+    FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        for ((i, f, t) in flags) {
+            val label = String.format(Locale.US, "%d:%04.1f", t / 60_000, (t % 60_000) / 1000f)
+            PillAction("⚑", label, { onFlag(i, f) })
+        }
     }
 }
 
@@ -2903,7 +2952,9 @@ private fun LookControls(state: UiState, vm: HeadsupViewModel) {
 @Composable
 private fun CinePanel(state: UiState, vm: HeadsupViewModel, frameSource: (() -> Bitmap?)?) {
     val session = state.cine
+    if (session == null) FastEdit(state, vm)
     if (session == null) {
+        SectionCaption("Cine assistant")
         Hint("Pause on a typical frame. The assistant measures its tones and colours and suggests a film grade.")
         Button(
             onClick = { frameSource?.invoke()?.let(vm::analyseForCine) },
@@ -2942,6 +2993,34 @@ private fun CinePanel(state: UiState, vm: HeadsupViewModel, frameSource: (() -> 
         SmallAction("Done", { vm.closeCine(undo = false) }, enabled = style != null)
     }
     if (style != null) Hint("Done keeps it as normal corrections: roll-off, split tone, tame colours and the rest stay adjustable.")
+}
+
+/**
+ * Fast edit: complete looks in one tap (colour, contrast, grain, glow, halation, lens), with their
+ * strength; Done keeps them as ordinary corrections and effects.
+ */
+@Composable
+private fun FastEdit(state: UiState, vm: HeadsupViewModel) {
+    val clip = state.selected ?: return
+    val fast = state.fast?.takeIf { it.clipId == clip.id }
+    SectionCaption("Fast edit")
+    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        for (look in app.headsup.color.FastLook.entries) {
+            FilterChip(selected = fast?.look == look, onClick = { vm.applyFastLook(look, fast?.strength ?: 1f) }, label = { Text(look.label) })
+        }
+    }
+    if (fast == null) {
+        Hint("A whole look at once: colour taken away rather than added, soft highlights, grain and light. Everything stays adjustable afterwards.")
+        return
+    }
+    ValueHeader("Strength", String.format(Locale.US, "%.0f %%", fast.strength * 100))
+    RulerSlider(fast.strength, 0f..1f, 0.02f, { v -> vm.applyFastLook(fast.look, v) }, onReset = { vm.applyFastLook(fast.look, 1f) }, onHold = vm::compareFast)
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        SmallAction("Undo", { vm.closeFast(undo = true) })
+        Spacer(Modifier.weight(1f))
+        SmallAction("Done", { vm.closeFast(undo = false) })
+    }
+    Hint("Hold the ruler to see the clip without it. Done keeps it as normal corrections (Density, Roll-off, Tame…) and effects (Grain, Glow, Lens…).")
 }
 
 /**

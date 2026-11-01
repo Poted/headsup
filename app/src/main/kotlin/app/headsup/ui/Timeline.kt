@@ -657,6 +657,15 @@ private fun DrawScope.drawVideo(
                 else -> HeadsupColors.Bad
             }
             drawCircle(dotColour, 3.5f.dp.toPx(), Offset(r - 8.dp.toPx(), top + 8.dp.toPx()))
+            // Flags: a line through the clip with a small flag on top.
+            for (f in c.flags) {
+                if (f < c.trimStartMs || f > c.trimEndMs) continue
+                val x = g.x(g.starts[i] + shift + c.timelineOfSource(f - c.trimStartMs))
+                if (x < l || x > r) continue
+                drawLine(HeadsupColors.AccentSoft, Offset(x, top), Offset(x, top + h), strokeWidth = 1.5f.dp.toPx())
+                val s = 6.dp.toPx()
+                drawPath(Path().apply { moveTo(x, top); lineTo(x + s * 1.3f, top + s * 0.5f); lineTo(x, top + s); close() }, HeadsupColors.AccentSoft)
+            }
         }
     }
     // Drawn over all clips, so the selected clip's right handle is not hidden by the next clip.

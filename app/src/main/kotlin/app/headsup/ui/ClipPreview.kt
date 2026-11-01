@@ -210,6 +210,8 @@ fun ClipPreview(
     onEnded: () -> Unit = {},
     /** To the clip before (-1) or after (+1): ⇤ pressed again at a clip's start, ⇥ at its end. */
     onStepClip: ((Int) -> Unit)? = null,
+    /** Flags (or unflags) the moment shown: the clip's file time. */
+    onFlag: ((Long) -> Unit)? = null,
     /** Position in the clip to jump to once (e.g. a highlight), then [onSeekDone]. */
     seekRequest: Long? = null,
     onSeekDone: () -> Unit = {},
@@ -320,6 +322,9 @@ fun ClipPreview(
     LaunchedEffect(players) { if (!shaderPreview) players.forEach { it.setVideoEffects(listOf<Effect>(liveLut)) } }
     // With one decoder (large clips), the next clip waits queued in the same player: its key.
     val queued = remember { arrayOfNulls<Any>(1) }
+    // The clip the active player shows, to keep the picture where it was when only its cut
+    // changes (a trim, a split undone): the same moment of the same file, not the clip's start.
+    val shown = remember { arrayOfNulls<ClipState>(1) }
     LaunchedEffect(keyOf(clip), scrubbing) {
         val exoPlayer = players[active]
         if (photo) {
@@ -347,13 +352,17 @@ fun ClipPreview(
                 players[active].seekTo(0L)
             } else {
                 // Only the used part of the file plays; positions count from the cut.
-                exoPlayer.setPlaybackSpeed(clip.speedAt(0L))
-                exoPlayer.setMediaItem(clipped(clip))
+                val before = shown[0]
+                val fileMs = before?.takeIf { sourceOf(it) == sourceOf(clip) }?.let { it.trimStartMs + exoPlayer.currentPosition }
+                val keep = fileMs?.takeIf { it > clip.trimStartMs && it < clip.trimEndMs }?.minus(clip.trimStartMs) ?: 0L
+                exoPlayer.setPlaybackSpeed(clip.speedAt(keep))
+                exoPlayer.setMediaItem(clipped(clip), keep)
                 exoPlayer.prepare()
                 holds[active] = key
                 queued[0] = null
             }
         }
+        if (!scrubbing) shown[0] = clip
         if (autoPlay && !scrubbing) {
             players[active].play()
             onAutoPlayStarted()
@@ -1428,6 +1437,12 @@ fun ClipPreview(
                 ToggleDot("⇥", false) {
                     if (playerMs >= clip.durationMs - 2 * frameMs && onStepClip != null) onStepClip(1)
                     else jumpInClip((clip.durationMs - frameMs).coerceAtLeast(0L))
+                }
+                // A flag here (lit when the moment shown has one; tapped then, it goes).
+                if (onFlag != null) {
+                    Spacer(Modifier.width(4.dp))
+                    val here = clip.trimStartMs + playerMs
+                    ToggleDot("⚑", clip.flags.any { kotlin.math.abs(it - here) <= 120L }) { onFlag(clip.trimStartMs + playerMs) }
                 }
             }
             // Timeline time (the timeline below is scrubbed by dragging it); file time while a cut handle moves.

@@ -47,7 +47,14 @@ data class SavedClip(
     val picked: Boolean = false,
     val speedCurve: List<Float> = emptyList(),
     val retouch: List<app.headsup.core.retouch.RetouchPatch> = emptyList(),
+    /** Flagged moments, file time. */
+    val flags: List<Long> = emptyList(),
+    /** Set when [uri] is the app's reversed copy of part of another file. */
+    val reversed: SavedReverse? = null,
 )
+
+/** A reversed clip's source: [originalUri] from [startMs] to [endMs], played backwards. */
+data class SavedReverse(val originalUri: Uri, val startMs: Long, val endMs: Long)
 
 /** A film made on a timeline, or an album of photos edited one by one. */
 enum class ProjectKind { VIDEO, PHOTOS }
@@ -262,6 +269,10 @@ internal object Json {
             ),
         )
         .put("muteChangedSpeed", c.muteChangedSpeed)
+        .put("flags", JSONArray(c.flags))
+        .apply {
+            c.reversed?.let { r -> put("reversed", JSONObject().put("uri", r.originalUri.toString()).put("start", r.startMs).put("end", r.endMs)) }
+        }
         .put("fadeInMs", c.fadeInMs)
         .put("fadeOutMs", c.fadeOutMs)
         .put("soundLevel", c.soundLevel)
@@ -295,6 +306,8 @@ internal object Json {
             )
         },
         muteChangedSpeed = o.optBoolean("muteChangedSpeed", false),
+        flags = o.optJSONArray("flags")?.let { a -> List(a.length()) { a.optLong(it) } } ?: emptyList(),
+        reversed = o.optJSONObject("reversed")?.let { r -> SavedReverse(Uri.parse(r.getString("uri")), r.optLong("start"), r.optLong("end")) },
         fadeInMs = o.optLong("fadeInMs", 0L),
         fadeOutMs = o.optLong("fadeOutMs", 0L),
         soundLevel = o.optDouble("soundLevel", 1.0).toFloat(),
