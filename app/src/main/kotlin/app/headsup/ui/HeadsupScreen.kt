@@ -671,6 +671,7 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
                     Tool.AUDIO -> AudioPanel(
                         state, vm, videoSelected, slip, onSlip = { slip = it },
                         at = { scrubT.value ?: timelineOf(playhead.longValue) }, videoEnd = clipStarts.last(),
+                        onAddSound = { addingSound = true },
                     )
                     Tool.COLOUR -> ColourPage(
                         state, vm, adjustment, { adjustment = it }, onAddLut = { lutPicker.launch(arrayOf("*/*")) }, frameSource.value,
@@ -1523,6 +1524,7 @@ private fun AudioPanel(
     onSlip: (Boolean) -> Unit,
     at: () -> Long,
     videoEnd: Long,
+    onAddSound: () -> Unit,
 ) {
     // As on the Colour page: what is edited in a row of tools, one ruler under it.
     var tool by rememberSaveable { mutableStateOf("Level") }
@@ -1532,7 +1534,8 @@ private fun AudioPanel(
     if (clip == null && video == null) {
         ValueHeader("All clips' own sound", String.format(Locale.US, "%.0f %%", state.clipSound * 100))
         RulerSlider(state.clipSound, 0f..1f, 0.02f, vm::setClipSound, onReset = { vm.setClipSound(1f) })
-        Hint("Tap a clip or a sound on the timeline for its own level and fades; + on the sound track adds a sound.")
+        Hint("Tap a clip or a sound on the timeline for its own level and fades.")
+        AddSoundButton(onAddSound)
         return
     }
     Row(verticalAlignment = Alignment.CenterVertically) {
@@ -1601,6 +1604,13 @@ private fun AudioPanel(
             }
         }
     }
+    AddSoundButton(onAddSound)
+}
+
+/** Adding a sound: the same as + on the timeline's sound track, here where it is looked for. */
+@Composable
+private fun AddSoundButton(onAddSound: () -> Unit) {
+    AddTile(HeadsupIcons.Music, "Add sound", onAddSound, Modifier.fillMaxWidth())
 }
 
 /** Picks a sound from the project's library and places it at the playhead, on a free track. */
@@ -1765,10 +1775,46 @@ private fun ProjectHeader(state: UiState, vm: HeadsupViewModel) {
     }
 }
 
+/** The header of the projects page: films or albums, each with how many there are. */
+@Composable
+private fun KindHeader(shown: ProjectKind, films: Int, albums: Int, onShow: (ProjectKind) -> Unit) {
+    val shape = RoundedCornerShape(24.dp)
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clip(shape)
+            .background(Color.Black.copy(alpha = 0.3f))
+            .border(1.dp, HeadsupColors.Outline, shape)
+            .padding(4.dp),
+    ) {
+        for ((kind, title, n) in listOf(Triple(ProjectKind.VIDEO, "Films", films), Triple(ProjectKind.PHOTOS, "Albums", albums))) {
+            val on = kind == shown
+            Row(
+                Modifier
+                    .weight(1f)
+                    .clip(RoundedCornerShape(20.dp))
+                    .background(if (on) HeadsupColors.Accent else Color.Transparent)
+                    .clickable { onShow(kind) }
+                    .padding(vertical = 10.dp),
+                horizontalArrangement = Arrangement.Center,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(if (kind == ProjectKind.VIDEO) HeadsupIcons.Video else HeadsupIcons.Colour, null, Modifier.size(18.dp), tint = if (on) Color.Black else HeadsupColors.TextMuted)
+                Spacer(Modifier.width(8.dp))
+                Text(title, style = MaterialTheme.typography.titleSmall, color = if (on) Color.Black else Color.White)
+                Spacer(Modifier.width(6.dp))
+                Text("$n", style = MaterialTheme.typography.labelMedium, color = if (on) Color.Black.copy(alpha = 0.6f) else HeadsupColors.TextMuted)
+            }
+        }
+    }
+}
+
 /** The saved projects (films and albums) and new ones. */
 @Composable
 private fun ProjectRow(state: UiState, vm: HeadsupViewModel, onOpen: () -> Unit, onNew: (ProjectKind) -> Unit) {
-    Label("Projects")
+    // Films and albums kept apart: a header to switch between them, each with its own New and list.
+    var kindShown by rememberSaveable { mutableStateOf(if (state.photoProject) ProjectKind.PHOTOS else ProjectKind.VIDEO) }
+    KindHeader(kindShown, films = state.projects.count { it.kind == ProjectKind.VIDEO }, albums = state.projects.count { it.kind == ProjectKind.PHOTOS }) { kindShown = it }
     // A project from the list being renamed.
     var renamingOther by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(Unit) { vm.refreshProjects() }
@@ -1780,24 +1826,14 @@ private fun ProjectRow(state: UiState, vm: HeadsupViewModel, onOpen: () -> Unit,
         }
     }
     // New: a film (timeline of clips and photos) or an album (photos edited one by one).
-    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-        AddTile(HeadsupIcons.Video, "New film", { onNew(ProjectKind.VIDEO) }, Modifier.weight(1f))
-        AddTile(HeadsupIcons.Colour, "New album", { onNew(ProjectKind.PHOTOS) }, Modifier.weight(1f))
+    if (kindShown == ProjectKind.VIDEO) {
+        AddTile(HeadsupIcons.Video, "New film", { onNew(ProjectKind.VIDEO) }, Modifier.fillMaxWidth())
+    } else {
+        AddTile(HeadsupIcons.Colour, "New album", { onNew(ProjectKind.PHOTOS) }, Modifier.fillMaxWidth())
     }
-    if (state.projects.isEmpty()) Hint("No saved projects yet. A project is saved once it has files.")
-    // Films and albums on tabs of their own, in an order that does not change with what is open:
-    // starred first, then the latest changed.
-    var kindShown by rememberSaveable { mutableStateOf(if (state.photoProject) ProjectKind.PHOTOS else ProjectKind.VIDEO) }
-    if (state.projects.isNotEmpty()) {
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            for ((k, label) in listOf(ProjectKind.VIDEO to "Films", ProjectKind.PHOTOS to "Albums")) {
-                val n = state.projects.count { it.kind == k }
-                FilterChip(selected = kindShown == k, onClick = { kindShown = k }, label = { Text("$label · $n") })
-            }
-        }
-    }
+    // In an order that does not change with what is open: starred first, then the latest changed.
     val listed = state.projects.filter { it.kind == kindShown }.sortedWith(compareByDescending<ProjectInfo> { it.starred }.thenByDescending { it.modifiedMs })
-    if (state.projects.isNotEmpty() && listed.isEmpty()) Hint(if (kindShown == ProjectKind.PHOTOS) "No albums yet." else "No films yet.")
+    if (listed.isEmpty()) Hint(if (kindShown == ProjectKind.PHOTOS) "No albums yet. An album is saved once it has photos." else "No films yet. A film is saved once it has files.")
     for (p in listed) {
         val current = p.name == state.projectName
         Row(
