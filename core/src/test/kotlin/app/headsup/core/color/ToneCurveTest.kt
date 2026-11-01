@@ -23,4 +23,23 @@ class ToneCurveTest {
             last = v
         }
     }
+
+    @Test
+    fun `cinematic contrast lifts and flattens the shadows, steepens the middle, softens the top`() {
+        val c = ToneCurve.cinematic(1f)
+        fun at(x: Float) = ToneCurve.at(c, x)
+        // No crushed black, no hard white.
+        kotlin.test.assertTrue(at(0f) > 0.05f && at(1f) < 0.95f)
+        // A flat toe: the shadows change slowly…
+        val toe = (at(0.15f) - at(0.02f)) / 0.13f
+        // …the middle has contrast, steeper than straight…
+        val middle = (at(0.6f) - at(0.4f)) / 0.2f
+        kotlin.test.assertTrue(toe < 0.6f && middle > 1.05f, "toe $toe middle $middle")
+        // …and the curve never turns back.
+        kotlin.test.assertTrue((0 until 100).all { at(it / 100f) <= at((it + 1) / 100f) + 1e-6f })
+        // Strength: 0 is straight, half is half way.
+        kotlin.test.assertTrue(ToneCurve.cinematic(0f).isEmpty())
+        val half = ToneCurve.scaled(c, 0.5f)
+        kotlin.test.assertEquals(0.035f, ToneCurve.at(half, 0f), 1e-4f)
+    }
 }

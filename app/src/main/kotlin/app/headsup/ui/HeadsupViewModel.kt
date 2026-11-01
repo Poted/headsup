@@ -2315,8 +2315,10 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
         // Measured: the look's character, plus what this clip needs to suit it.
         val fit = s.lookStats?.takeIf { it.first == clip.id }?.second?.let { CineAssistant.fit(it, keepDark = look == app.headsup.color.FastLook.NIGHT) }
         val grade = if (fit != null) look.grade + fit else look.grade
+        // The curve, too, by the strength (a scaled grade keeps its curves as they are).
+        val scaled = (grade * k).copy(curves = grade.curves.map { app.headsup.core.color.ToneCurve.scaled(it, k) })
         _state.update { it.copy(fast = session.copy(look = look, strength = k)) }
-        updateClip(index) { it.copy(grade = session.baseGrade + grade * k, effects = look.effectsOn(session.baseEffects, k)) }
+        updateClip(index) { it.copy(grade = session.baseGrade + scaled, effects = look.effectsOn(session.baseEffects, k)) }
     }
 
     /** Hold to see the clip as it was before the Fast edit look. */

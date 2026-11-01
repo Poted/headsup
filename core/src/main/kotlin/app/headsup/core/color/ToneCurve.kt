@@ -11,6 +11,26 @@ object ToneCurve {
     /** No curves: four empty point lists. */
     val NEUTRAL: List<List<Float>> = List(4) { emptyList() }
 
+    /**
+     * Cinematic contrast, as colourists build it on a curve instead of the contrast slider: the
+     * shadows lifted and laid flat (a gentle toe, no crushed blacks), contrast in the middle, the
+     * highlights pulled down into a soft shoulder (no hard white). [amount] 0 is a straight line,
+     * 1 the usual strength, more is stronger. RGB points as (x, y) pairs.
+     */
+    fun cinematic(amount: Float): List<Float> {
+        val a = amount.coerceIn(0f, 1.5f)
+        if (a == 0f) return emptyList()
+        val full = listOf(0f to 0.07f, 0.18f to 0.13f, 0.5f to 0.5f, 0.9f to 0.86f, 1f to 0.93f)
+        return full.flatMap { (x, y) -> listOf(x, (x + (y - x) * a).coerceIn(0f, 1f)) }
+    }
+
+    /** [flat] taken towards a straight line: [k] 0 straight, 1 as it is. */
+    fun scaled(flat: List<Float>, k: Float): List<Float> {
+        if (flat.isEmpty() || k >= 1f) return flat
+        if (k <= 0f) return emptyList()
+        return flat.chunked(2).filter { it.size == 2 }.flatMap { (x, y) -> listOf(x, x + (y - x) * k) }
+    }
+
     /** Points as (x, y) pairs, sorted by x, with the ends at x = 0 and 1 added when missing. */
     fun points(flat: List<Float>): List<Pair<Float, Float>> {
         val p = flat.chunked(2).filter { it.size == 2 }.map { it[0].coerceIn(0f, 1f) to it[1].coerceIn(0f, 1f) }.sortedBy { it.first }.toMutableList()

@@ -2883,6 +2883,22 @@ private fun CurveControls(state: UiState, vm: HeadsupViewModel) {
         }
         if (flat.isNotEmpty()) SmallAction("Reset", { store(listOf(0f to 0f, 1f to 1f)) })
     }
+    // Cinematic contrast: lifted, flat shadows, contrast in the middle, a soft top (the points stay editable).
+    if (channel == app.headsup.core.color.ToneCurve.Channel.RGB) {
+        Row(Modifier.horizontalScroll(rememberScrollState()), verticalAlignment = Alignment.CenterVertically) {
+            Text("Cinematic", style = MaterialTheme.typography.labelLarge, color = HeadsupColors.TextMuted)
+            Spacer(Modifier.width(8.dp))
+            for ((label, amount) in listOf("Subtle" to 0.5f, "Film" to 1f, "Strong" to 1.4f)) {
+                val curve = app.headsup.core.color.ToneCurve.cinematic(amount)
+                FilterChip(
+                    selected = flat == curve,
+                    onClick = { store(curve.chunked(2).map { it[0] to it[1] }) },
+                    label = { Text(label) },
+                )
+                Spacer(Modifier.width(8.dp))
+            }
+        }
+    }
     val points = app.headsup.core.color.ToneCurve.points(flat)
     val current by rememberUpdatedState(points)
     androidx.compose.foundation.Canvas(
