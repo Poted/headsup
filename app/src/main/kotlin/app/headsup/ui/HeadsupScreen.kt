@@ -1832,24 +1832,45 @@ private fun SpeedRamp(clip: ClipState, timelineFps: Float, onCurve: (List<Float>
     var deep by rememberSaveable { mutableStateOf(true) }
     val depth = if (deep) verySlow else slow
     val presets = app.headsup.core.edit.SpeedCurve.Preset.entries
-    val chosen = presets.firstOrNull { p -> clip.speedCurve == p.points(slow) || clip.speedCurve == p.points(verySlow) }
+    // The preset the curve is, with which slow speed and which rush (how fast its fast parts go).
+    val match = presets.firstNotNullOfOrNull { p ->
+        listOf(slow, verySlow).firstNotNullOfOrNull { sl -> SC.RUSHES.firstOrNull { r -> clip.speedCurve == p.points(sl, r) }?.let { r -> Triple(p, sl, r) } }
+    }
+    val chosen = match?.first
+    var rush by rememberSaveable { mutableStateOf(SC.DEFAULT_RUSH) }
+    LaunchedEffect(match?.third) { match?.third?.let { rush = it } }
     Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         FilterChip(selected = clip.speedCurve.isEmpty(), onClick = { onCurve(emptyList()) }, label = { Text("Steady") })
         for (p in presets) {
-            FilterChip(selected = p == chosen, onClick = { onCurve(p.points(depth)) }, label = { Text(p.label) })
+            FilterChip(selected = p == chosen, onClick = { onCurve(p.points(depth, rush)) }, label = { Text(p.label) })
         }
     }
-    Row(verticalAlignment = Alignment.CenterVertically) {
+    Row(Modifier.horizontalScroll(rememberScrollState()), verticalAlignment = Alignment.CenterVertically) {
         for ((isDeep, label, speed) in listOf(Triple(false, "Slow", slow), Triple(true, "Very slow", verySlow))) {
             FilterChip(
                 selected = deep == isDeep,
-                onClick = { deep = isDeep; chosen?.let { onCurve(it.points(if (isDeep) verySlow else slow)) } },
+                onClick = { deep = isDeep; chosen?.let { onCurve(it.points(if (isDeep) verySlow else slow, rush)) } },
                 label = { Text(label + " · " + String.format(Locale.US, "%.2g×", speed)) },
             )
             Spacer(Modifier.width(8.dp))
         }
     }
-    // Ratios on a log scale: 0.1× at the bottom, 1× a little below the middle, 8× at the top.
+    // How fast the fast parts rush: up to a move into the frame in a blink.
+    if (chosen == null || chosen.rushes) {
+        Row(Modifier.horizontalScroll(rememberScrollState()), verticalAlignment = Alignment.CenterVertically) {
+            Text("Rush", style = MaterialTheme.typography.labelLarge, color = HeadsupColors.TextMuted)
+            Spacer(Modifier.width(8.dp))
+            for (r in SC.RUSHES) {
+                FilterChip(
+                    selected = rush == r,
+                    onClick = { rush = r; chosen?.let { onCurve(it.points(depth, r)) } },
+                    label = { Text(String.format(Locale.US, "%.0f×", r)) },
+                )
+                Spacer(Modifier.width(8.dp))
+            }
+        }
+    }
+    // Ratios on a log scale: 0.1× at the bottom, 1× below the middle, 32× at the top.
     val lo = kotlin.math.ln(SC.MIN)
     val hi = kotlin.math.ln(SC.MAX)
     fun yOf(f: Float) = 1f - (kotlin.math.ln(f.coerceIn(SC.MIN, SC.MAX)) - lo) / (hi - lo)

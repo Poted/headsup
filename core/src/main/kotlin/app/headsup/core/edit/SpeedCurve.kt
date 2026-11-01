@@ -12,24 +12,44 @@ import kotlin.math.ln
 object SpeedCurve {
     /** Slowest and fastest speed a ramp can reach. */
     const val MIN = 0.1f
-    const val MAX = 8f
+    const val MAX = 32f
+
+    /** How fast the presets' fast parts go unless chosen otherwise. */
+    const val DEFAULT_RUSH = 3f
+
+    /** Rush speeds offered for the presets' fast parts: up to a lightning move into the frame. */
+    val RUSHES = listOf(3f, 6f, 12f, 24f)
 
     /**
      * Ready-made ramps. Their slow parts (0 in [template]) take the slow speed the footage allows
-     * ([slowSpeeds]); the rest are factors as they are.
+     * ([slowSpeeds]); their fast parts (−1) the rush speed chosen; the rest are factors as they are.
      */
     enum class Preset(val label: String, private val template: List<Float>) {
         // As in reels and property films: the camera rushes in, eases into slow motion, rushes on.
-        SPEED_RAMP("Speed ramp", listOf(0f, 3f, 0.15f, 3f, 0.38f, 0f, 0.62f, 0f, 0.85f, 3f, 1f, 3f)),
-        FAST_IN("Fast in", listOf(0f, 3f, 0.2f, 3f, 0.48f, 0f, 1f, 0f)),
-        FAST_OUT("Fast out", listOf(0f, 0f, 0.52f, 0f, 0.8f, 3f, 1f, 3f)),
-        DOUBLE("Double ramp", listOf(0f, 3f, 0.1f, 3f, 0.24f, 0f, 0.38f, 0f, 0.5f, 3f, 0.62f, 0f, 0.76f, 0f, 0.9f, 3f, 1f, 3f)),
+        SPEED_RAMP("Speed ramp", listOf(0f, -1f, 0.15f, -1f, 0.38f, 0f, 0.62f, 0f, 0.85f, -1f, 1f, -1f)),
+        // The camera shoots up to the door in a blink and brakes hard into slow motion.
+        RUSH_IN("Rush in", listOf(0f, -1f, 0.36f, -1f, 0.43f, 0f, 1f, 0f)),
+        // In a blink, slow through the moment, out in a blink.
+        RUSH_THROUGH("Rush through", listOf(0f, -1f, 0.3f, -1f, 0.36f, 0f, 0.64f, 0f, 0.7f, -1f, 1f, -1f)),
+        FAST_IN("Fast in", listOf(0f, -1f, 0.2f, -1f, 0.48f, 0f, 1f, 0f)),
+        FAST_OUT("Fast out", listOf(0f, 0f, 0.52f, 0f, 0.8f, -1f, 1f, -1f)),
+        DOUBLE("Double ramp", listOf(0f, -1f, 0.1f, -1f, 0.24f, 0f, 0.38f, 0f, 0.5f, -1f, 0.62f, 0f, 0.76f, 0f, 0.9f, -1f, 1f, -1f)),
         SLOW_IN("Slow in", listOf(0f, 0f, 0.45f, 1f, 1f, 1f)),
         SLOW_OUT("Slow out", listOf(0f, 1f, 0.55f, 1f, 1f, 0f)),
         ;
 
-        /** The ramp with its slow parts at [slow]. */
-        fun points(slow: Float): List<Float> = template.mapIndexed { i, v -> if (i % 2 == 1 && v == 0f) slow else v }
+        /** The ramp with its slow parts at [slow] and its fast parts at [rush]. */
+        fun points(slow: Float, rush: Float = DEFAULT_RUSH): List<Float> = template.mapIndexed { i, v ->
+            when {
+                i % 2 == 0 -> v
+                v == 0f -> slow
+                v < 0f -> rush.coerceIn(1f, MAX)
+                else -> v
+            }
+        }
+
+        /** Whether the ramp has fast parts (the rush speed matters). */
+        val rushes: Boolean get() = template.withIndex().any { it.index % 2 == 1 && it.value < 0f }
     }
 
     /**
@@ -110,12 +130,20 @@ object SpeedCurve {
      * The cut as pieces of steady speed, for an export that cannot change speed smoothly: (source
      * start, source end, speed), each piece's speed making it last exactly its share of the timeline.
      */
-    fun pieces(spanMs: Long, base: Float, curve: List<Float>, pieceMs: Long = 350L, maxPieces: Int = 32): List<Triple<Long, Long, Float>> {
+    fun pieces(spanMs: Long, base: Float, curve: List<Float>, pieceMs: Long = 250L, maxPieces: Int = 48): List<Triple<Long, Long, Float>> {
         if (curve.isEmpty() || spanMs <= 0L) return listOf(Triple(0L, spanMs, base))
-        val n = (spanMs / pieceMs).toInt().coerceIn(1, maxPieces)
-        val fine = (0 until n).map { k ->
-            val from = spanMs * k / n
-            val to = spanMs * (k + 1) / n
+        // Cut evenly both in timeline time (a slow part is cut as finely as it plays) and in file
+        // time (a fast rush braking into slow motion passes much file in little time): every
+        // change of speed is cut finely enough to show no steps. Steady stretches merge below.
+        val total = timelineOf(spanMs, spanMs, base, curve).coerceAtLeast(1L)
+        val byTime = (total / pieceMs).toInt().coerceIn(1, maxPieces)
+        val byFile = (spanMs / pieceMs).toInt().coerceIn(1, maxPieces)
+        val bounds = ((0..byTime).map { k -> sourceOf(total * k / byTime, spanMs, base, curve) } + (0..byFile).map { k -> spanMs * k / byFile })
+            .map { it.coerceIn(0L, spanMs) }.plus(listOf(0L, spanMs)).distinct().sorted()
+        val n = bounds.size - 1
+        val fine = (0 until n).filter { bounds[it + 1] > bounds[it] }.map { k ->
+            val from = bounds[k]
+            val to = bounds[k + 1]
             val length = (timelineOf(to, spanMs, base, curve) - timelineOf(from, spanMs, base, curve)).coerceAtLeast(1L)
             Triple(from, to, ((to - from).toFloat() / length).coerceIn(MIN, MAX))
         }
@@ -123,7 +151,7 @@ object SpeedCurve {
         val merged = mutableListOf<Triple<Long, Long, Float>>()
         for (p in fine) {
             val last = merged.lastOrNull()
-            if (last != null && kotlin.math.abs(p.third - last.third) < 0.03f * last.third) {
+            if (last != null && kotlin.math.abs(p.third - last.third) < 0.06f * last.third) {
                 val from = last.first
                 val to = p.second
                 val length = (timelineOf(to, spanMs, base, curve) - timelineOf(from, spanMs, base, curve)).coerceAtLeast(1L)
@@ -132,6 +160,8 @@ object SpeedCurve {
                 merged += p
             }
         }
+        // Every piece is a seam in the export: a curve changing all the time is cut coarser.
+        if (merged.size > maxPieces && pieceMs < 2_000L) return pieces(spanMs, base, curve, pieceMs * 3 / 2, maxPieces)
         return merged
     }
 }

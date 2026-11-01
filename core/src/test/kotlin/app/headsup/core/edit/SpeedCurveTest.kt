@@ -51,7 +51,24 @@ class SpeedCurveTest {
     fun `flat stretches make one piece`() {
         val pieces = SpeedCurve.pieces(20_000, 1f, SpeedCurve.Preset.SPEED_RAMP.points(0.4f))
         // The steady starts and ends are single pieces; only the ramps are cut finely.
-        assertTrue(pieces.size < 30, "${pieces.size}")
+        assertTrue(pieces.size <= 48, "${pieces.size}")
         assertTrue(pieces.first().second >= 2_500)
+    }
+
+    @Test
+    fun `a rush brakes into slow motion within a blink`() {
+        val curve = SpeedCurve.Preset.RUSH_IN.points(0.4f, rush = 24f)
+        assertEquals(24f, SpeedCurve.factor(curve, 0.1f), 1e-3f)
+        assertEquals(0.4f, SpeedCurve.factor(curve, 0.8f), 1e-4f)
+        // 10 s of file: the first 3.6 s fly by in a fraction of a second, the rest is slow.
+        val rush = SpeedCurve.timelineOf(3_600, 10_000, 1f, curve)
+        assertTrue(rush < 300, "$rush")
+        val pieces = SpeedCurve.pieces(10_000, 1f, curve)
+        val total = pieces.sumOf { (a, b, s) -> ((b - a) / s).toDouble() }
+        assertEquals(SpeedCurve.timelineOf(10_000, 10_000, 1f, curve).toDouble(), total, 60.0)
+        // The braking is cut into several pieces, each step small.
+        val braking = pieces.filter { it.third in 0.5f..20f }
+        assertTrue(braking.size >= 3, "$pieces")
+        assertTrue(SpeedCurve.Preset.RUSH_IN.rushes && !SpeedCurve.Preset.SLOW_IN.rushes)
     }
 }
