@@ -531,7 +531,9 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
             }
             if (!fullscreen && !wide && state.clips.isNotEmpty()) {
                 // Dragging this moves the line between the picture and the tools.
-                PreviewHandle { dy ->
+                // Upright, the arrow at its right folds the transport and timeline away (the transport
+                // is full; the arrow on the folded picture brings them back).
+                PreviewHandle(onFold = if (!state.photoProject && !folded) ({ compact = true }) else null) { dy ->
                     val d = dy / (configuration.screenHeightDp * density.density)
                     if (state.photoProject) albumShare = (albumShare + d).coerceIn(0.2f, 0.75f) else filmShare = (filmShare + d).coerceIn(0.18f, 0.6f)
                 }
@@ -5201,7 +5203,7 @@ private fun SideHandle(onDrag: (Float) -> Unit) {
 }
 
 @Composable
-private fun PreviewHandle(onDrag: (Float) -> Unit) {
+private fun PreviewHandle(onFold: (() -> Unit)? = null, onDrag: (Float) -> Unit) {
     val state = androidx.compose.foundation.gestures.rememberDraggableState(onDrag)
     // A tall touch area around the small bar, so it is easy to catch.
     Box(
@@ -5212,6 +5214,18 @@ private fun PreviewHandle(onDrag: (Float) -> Unit) {
         contentAlignment = Alignment.Center,
     ) {
         Box(Modifier.width(40.dp).height(4.dp).clip(RoundedCornerShape(2.dp)).background(HeadsupColors.Outline))
+        onFold?.let { fold ->
+            Box(
+                Modifier
+                    .align(Alignment.CenterEnd)
+                    .padding(end = 16.dp)
+                    .size(28.dp)
+                    .clip(CircleShape)
+                    .border(1.dp, HeadsupColors.Outline, CircleShape)
+                    .clickable(onClick = fold),
+                contentAlignment = Alignment.Center,
+            ) { Icon(HeadsupIcons.ChevronDown, "Fold the transport and timeline", Modifier.size(16.dp), tint = HeadsupColors.TextMuted) }
+        }
     }
 }
 

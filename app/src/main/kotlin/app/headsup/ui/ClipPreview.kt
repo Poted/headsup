@@ -434,6 +434,8 @@ fun ClipPreview(
     LaunchedEffect(clip.speed, clip.speedCurve) { players[active].setPlaybackSpeed(clip.speedAt(players[active].currentPosition)) }
     val clipVolume = if (clip.speedChanged && clip.muteChangedSpeed) 0f else clipSound * clip.soundLevel
     // One player per audio clip, kept while the clip exists.
+    // Held sideways (the transport folds by a finger going down only then).
+    val sideways = androidx.compose.ui.platform.LocalConfiguration.current.let { it.screenWidthDp > it.screenHeightDp }
     val audioPlayers = remember { HashMap<Long, Pair<android.net.Uri, ExoPlayer>>() }
     DisposableEffect(Unit) { onDispose { audioPlayers.values.forEach { it.second.release() }; audioPlayers.clear() } }
     LaunchedEffect(audio.map { it.id to it.uri }) {
@@ -1491,8 +1493,9 @@ fun ClipPreview(
             Modifier
                 .fillMaxWidth()
                 // Sideways, a finger going down the transport folds it and the timeline away.
-                .pointerInput(onCompact) {
-                    val fold = onCompact ?: return@pointerInput
+                .pointerInput(onCompact, sideways) {
+                    // Upright the arrow folds them; only sideways does a finger going down.
+                    val fold = onCompact?.takeIf { sideways } ?: return@pointerInput
                     var dy = 0f
                     detectVerticalDragGestures(onDragStart = { dy = 0f }) { change, amount ->
                         dy += amount
@@ -1567,8 +1570,9 @@ fun ClipPreview(
             ToggleDot("H", histogramOn) { histogramOn = !histogramOn }
             Spacer(Modifier.width(4.dp))
             if (Build.VERSION.SDK_INT >= 33) ToggleDot("Z", zebra) { zebra = !zebra }
-            // Sideways: fold the transport and the timeline away for a bigger picture.
-            onCompact?.let { fold ->
+            // Sideways: fold the transport and the timeline away for a bigger picture (upright the
+            // arrow is beside the handle under the transport: the transport has no room).
+            onCompact?.takeIf { sideways }?.let { fold ->
                 Spacer(Modifier.width(4.dp))
                 Box(
                     Modifier.size(32.dp).clip(CircleShape).border(1.dp, HeadsupColors.Outline, CircleShape).clickable { fold(true) },
