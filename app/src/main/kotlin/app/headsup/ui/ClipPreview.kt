@@ -1445,7 +1445,7 @@ fun ClipPreview(
                 if (onFlag != null) {
                     Spacer(Modifier.width(4.dp))
                     val here = clip.trimStartMs + playerMs
-                    ToggleDot("⚑", clip.flags.any { kotlin.math.abs(it - here) <= 120L }) { onFlag(clip.trimStartMs + playerMs) }
+                    ToggleDot("⚑", clip.flags.any { kotlin.math.abs(it - here) <= HeadsupViewModel.FLAG_REACH_MS }) { onFlag(clip.trimStartMs + playerMs) }
                 }
             }
             // Timeline time (the timeline below is scrubbed by dragging it); file time while a cut handle moves.

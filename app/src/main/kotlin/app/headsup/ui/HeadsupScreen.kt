@@ -1341,15 +1341,23 @@ private fun FlagList(state: UiState, vm: HeadsupViewModel, onFlag: (Int, Long) -
         if (flags.isNotEmpty()) SmallAction("Clear all", { vm.clearFlags() })
     }
     if (flags.isEmpty()) {
-        Hint("⚑ under the picture flags the moment at the playhead: a place to cut or to work on later. On a flag it takes the flag away.")
+        Hint("⚑ under the picture flags the moment at the playhead: a place to cut or to work on later. Lit, it is on a flag: tapped then, it takes the flag away.")
         return
     }
     FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
         for ((i, f, t) in flags) {
             val label = String.format(Locale.US, "%d:%04.1f", t / 60_000, (t % 60_000) / 1000f)
-            PillAction("⚑", label, { onFlag(i, f) })
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                PillAction("⚑", label, { onFlag(i, f) })
+                Text(
+                    "✕",
+                    Modifier.clip(CircleShape).clickable { vm.removeFlag(i, f) }.padding(horizontal = 8.dp, vertical = 4.dp),
+                    style = MaterialTheme.typography.labelMedium, color = HeadsupColors.TextMuted,
+                )
+            }
         }
     }
+    Hint("Tap a flag to go there (Split cuts there); ✕ takes it away.")
 }
 
 /** Fades of the selected clip: picture, dashboard and sound together. */

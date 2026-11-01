@@ -1339,14 +1339,12 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
 
     // Flags
 
-    /** How near the playhead a flag counts as being on it. */
-    private val flagReachMs = 120L
-
     /** A flag at [fileMs] of the selected clip, or the one there taken away. */
     fun toggleFlag(fileMs: Long) {
         val index = _state.value.selectedClip ?: return
         updateClip(index) { c ->
-            val near = c.flags.firstOrNull { kotlin.math.abs(it - fileMs) <= flagReachMs }
+            // The nearest flag within reach is taken away (a playhead dragged by eye is rarely exact).
+            val near = c.flags.filter { kotlin.math.abs(it - fileMs) <= FLAG_REACH_MS }.minByOrNull { kotlin.math.abs(it - fileMs) }
             c.copy(flags = if (near != null) c.flags - near else (c.flags + fileMs.coerceIn(c.trimStartMs, c.trimEndMs)).sorted())
         }
     }
@@ -3411,6 +3409,9 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
         private const val TAP_WAIT_MS = 280L
         /** Between the maps of a mask tracked with AI: 12 a second. */
         private const val AI_TRACK_STEP_MS = 83L
+
+        /** How near the playhead a flag counts as being on it (⚑ lit; tapped, it takes the flag away). */
+        const val FLAG_REACH_MS = 400L
         private const val AI_TRACK_SKY_STEP_MS = 250L
         private const val GLOBAL = "global_"
     }
