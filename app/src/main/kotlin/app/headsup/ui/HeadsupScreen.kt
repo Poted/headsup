@@ -322,9 +322,10 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
     // Sideways the screen is low: the picture leaves room under it for the transport and timeline.
     val share = if (wide) 0.48f else if (state.photoProject) albumShare else filmShare
     var wideShare by rememberSaveable { mutableStateOf(0.56f) }
-    // Sideways the transport and timeline can fold away (play on the picture, the timeline a line).
+    // The transport and timeline can fold away (play on the picture, the timeline a line), any way
+    // the phone is held.
     var compact by rememberSaveable { mutableStateOf(false) }
-    val folded = compact && wide && !fullscreen && !state.photoProject
+    val folded = compact && !fullscreen && !state.photoProject
     // An album's photo with its info row and the album folded away (any way the phone is held).
     val photoFolded = compact && state.photoProject && !fullscreen && tool != Tool.FILES
     // Full screen keeps a line to scrub along under a film's picture, and play on it.
@@ -334,7 +335,9 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
         when {
             fullscreenFilm -> configuration.screenHeightDp.dp - 40.dp
             fullscreen -> configuration.screenHeightDp.dp
-            folded -> (configuration.screenHeightDp * 0.84f).dp
+            folded && wide -> (configuration.screenHeightDp * 0.84f).dp
+            // Upright the picture takes the room the transport and timeline leave.
+            folded -> (configuration.screenHeightDp * share + 150).dp
             photoFolded && wide -> (configuration.screenHeightDp - 40).dp
             photoFolded -> (configuration.screenHeightDp * albumShare + 110).dp
             // Sideways in an album with the photos folded into their bar: the photo takes the height
@@ -352,7 +355,8 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
         settle.animateTo(1f, androidx.compose.animation.core.tween(220))
     }
     // Swipes on what the picture's tools leave alone: they never fight a mask, framing or a text being moved.
-    val pictureFree = !(tool == Tool.COLOUR && state.target == GradeTarget.MASK) && !framing && !editingTexts && !measuring
+    // A mask only takes the finger while its shape is worked on (Mask), not with its corrections (Adjust).
+    val pictureFree = !shaping && !framing && !editingTexts && !measuring
     // Full screen hides the status and navigation bars too (a swipe from the edge shows them for a moment).
     val activityWindow = (LocalContext.current as? android.app.Activity)?.window
     val rootView = androidx.compose.ui.platform.LocalView.current
@@ -468,7 +472,7 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
                         photoMode = state.photoProject,
                         showTransport = fullscreenFilm || (!fullscreen && (!state.photoProject || tool == Tool.EDIT || tool == Tool.COLOUR)),
                         compactTransport = folded || fullscreenFilm || photoFolded,
-                        onCompact = if (!fullscreen && (wide || state.photoProject)) { c -> compact = c } else null,
+                        onCompact = if (!fullscreen) { c -> compact = c } else null,
                         // Read here so arriving place names redraw the texts.
                         textValues = state.placesVersion.let { _ -> { pos -> vm.textValues(state, selected, pos) } },
                         routeOverlay = if (state.routeMap.enabled) routeOverlayFor(vm, state, selected) else null,
@@ -712,6 +716,16 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
             ) { tool = it }
     }
 
+    // Swipes over the picture and timeline: in the upper part they go full screen (up), in the lower
+    // part they fold the transport and timeline away (down) and bring them back (up).
+    fun onScreenSwipe(swipe: Swipe, upper: Boolean) {
+        when {
+            upper && swipe == Swipe.UP && !(folded || photoFolded) -> fullscreen = true
+            swipe == Swipe.UP && (folded || photoFolded) -> compact = false
+            !upper && swipe == Swipe.DOWN && (!state.photoProject || tool != Tool.FILES) -> compact = true
+            else -> Unit
+        }
+    }
     Box(Modifier.fillMaxSize().background(HeadsupColors.BackgroundGradient)) {
         // No title bar: the picture starts at the top, adding files lives in the Project tool.
         if (fullscreen) {
@@ -741,16 +755,7 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
                             .fillMaxHeight()
                             .clipToBounds()
                             .graphicsLayer { scaleX = settle.value; scaleY = settle.value }
-                            .freeSwipe(pictureFree) {
-                                // Down folds the transport and timeline; up unfolds them, or when
-                                // unfolded goes full screen.
-                                when {
-                                    it == Swipe.DOWN && (!state.photoProject || tool != Tool.FILES) -> compact = true
-                                    it == Swipe.UP && (folded || photoFolded) -> compact = false
-                                    it == Swipe.UP -> fullscreen = true
-                                    else -> Unit
-                                }
-                            },
+                            .zonedSwipe(pictureFree, ::onScreenSwipe),
                         content = pictureAndTimeline,
                     )
                     // Dragging this moves the line between the picture and the tools, left and right.
@@ -768,7 +773,7 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
         } else {
             Column(Modifier.fillMaxSize().systemBarsPadding().padding(top = 8.dp)) {
                 // Upright, a swipe up on the picture goes full screen (down in full screen leaves it).
-                Column(Modifier.freeSwipe(pictureFree) { if (it == Swipe.UP) fullscreen = true }, content = pictureAndTimeline)
+                Column(Modifier.zonedSwipe(pictureFree, ::onScreenSwipe), content = pictureAndTimeline)
                 // In an album, a swipe down over the tools folds the photo's info row and the album
                 // away (more room for the photo), up brings them back.
                 Column(
@@ -1031,6 +1036,39 @@ private fun Modifier.freeSwipe(enabled: Boolean, onSwipe: (Swipe) -> Unit): Modi
                 else -> null
             }
             if (swipe != null) onSwipe(swipe)
+            break
+        }
+    }
+}
+
+/**
+ * [freeSwipe] told apart by where it starts: in the upper half or the lower. Swipes in the upper
+ * half (over the picture) wait for [upperFree] (the picture's own tools leave it alone); in the
+ * lower half (the transport, timeline, the picture's foot) they always count, as anything there
+ * that uses the finger takes the moves first.
+ */
+private fun Modifier.zonedSwipe(upperFree: Boolean, onSwipe: (Swipe, Boolean) -> Unit): Modifier = pointerInput(upperFree) {
+    val distance = 56.dp.toPx()
+    awaitEachGesture {
+        val down = awaitFirstDown(requireUnconsumed = false, pass = androidx.compose.ui.input.pointer.PointerEventPass.Final)
+        val upper = down.position.y < size.height / 2f
+        if (upper && !upperFree) return@awaitEachGesture
+        var spoilt = false
+        while (true) {
+            val event = awaitPointerEvent(androidx.compose.ui.input.pointer.PointerEventPass.Final)
+            if (event.changes.count { it.pressed } > 1) spoilt = true
+            val change = event.changes.firstOrNull { it.id == down.id } ?: break
+            if (!change.pressed) break
+            if (change.isConsumed) spoilt = true
+            if (spoilt) continue
+            val d = change.position - down.position
+            if (d.getDistance() < distance) continue
+            val swipe = when {
+                abs(d.x) > 2 * abs(d.y) -> if (d.x > 0) Swipe.RIGHT else Swipe.LEFT
+                abs(d.y) > 2 * abs(d.x) -> if (d.y > 0) Swipe.DOWN else Swipe.UP
+                else -> null
+            }
+            if (swipe != null) onSwipe(swipe, upper)
             break
         }
     }
