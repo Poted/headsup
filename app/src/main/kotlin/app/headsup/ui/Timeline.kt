@@ -74,10 +74,11 @@ import kotlinx.coroutines.launch
  * video track shows the clips as frames; the audio tracks under it the sounds as waveforms, with
  * their beat grid and accents.
  *
- * Tap a clip or a sound to select it. A selected clip has handles at its ends to trim it (the
- * clips after it follow); a selected sound can be dragged (also to another track), trimmed at its
- * handles, faded with the dots on its top corners, or slid inside ([slip]). Long-press a clip for
- * its menu (move, delete, group). With [maskKeys] set, the selected clip shows the keys of the
+ * Double-tap a clip to select it, with its menu (move, delete, group); a single tap or a finger
+ * resting on it does nothing, so scrubbing never jumps to another clip; a tap on empty space lets
+ * go of it. A selected clip has handles at its ends to trim it (the clips after it follow). Tap a
+ * sound to select it: it can be dragged (also to another track), trimmed at its handles, faded
+ * with the dots on its top corners, or slid inside ([slip]). With [maskKeys] set, the selected clip shows the keys of the
  * mask being edited.
  */
 @Composable
@@ -141,6 +142,8 @@ fun Timeline(
     // While a clip's start is trimmed, it is drawn moved by this much; the rest ripples on release.
     var ghost by remember { mutableStateOf<Pair<Int, Long>?>(null) }
     var menu by remember { mutableStateOf<Pair<Int, Float>?>(null) }
+    // The last tap on a clip (its index and when): a second one soon after selects it and opens its menu.
+    var lastClipTap by remember { mutableStateOf<Pair<Int, Long>?>(null) }
     var fling by remember { mutableStateOf<Job?>(null) }
 
     val clipsNow by rememberUpdatedState(clips)
@@ -207,12 +210,9 @@ fun Timeline(
                                 val event = if (held || remaining <= 0) awaitPointerEvent() else withTimeoutOrNull(remaining) { awaitPointerEvent() }
                                 if (event == null) {
                                     held = true
+                                    // A clip held still is not selected: a finger resting while it scrubs
+                                    // must not jump to another clip (a double tap selects it).
                                     when (hit) {
-                                        is Hit.Clip -> {
-                                            haptics.performHapticFeedback(HapticFeedbackType.LongPress)
-                                            selectVideo(hit.index)
-                                            menu = hit.index to down.position.x
-                                        }
                                         is Hit.Sound -> {
                                             haptics.performHapticFeedback(HapticFeedbackType.LongPress)
                                             selectAudio(hit.id)
@@ -228,7 +228,19 @@ fun Timeline(
                                 val c = event.changes.firstOrNull { it.id == down.id } ?: return@awaitEachGesture
                                 if (!c.pressed) {
                                     if (!held) when (hit) {
-                                        is Hit.Clip -> selectVideo(hit.index)
+                                        is Hit.Clip -> {
+                                            val now = System.currentTimeMillis()
+                                            val last = lastClipTap
+                                            if (last != null && last.first == hit.index && now - last.second <= viewConfiguration.doubleTapTimeoutMillis) {
+                                                // Double tap: the clip selected (handles) and its menu.
+                                                haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                                                selectVideo(hit.index)
+                                                menu = hit.index to down.position.x
+                                                lastClipTap = null
+                                            } else {
+                                                lastClipTap = hit.index to now
+                                            }
+                                        }
                                         is Hit.Sound -> selectAudio(hit.id)
                                         is Hit.Text -> selectText(hit.id)
                                         Hit.Add -> add()
@@ -266,6 +278,7 @@ fun Timeline(
                                 is Hit.FadeOut -> Mode.FADE_OUT
                                 is Hit.Sound -> if (hit.id == audioSelectedNow || held) (if (slipNow) Mode.SLIP else Mode.MOVE) else Mode.SCROLL
                                 is Hit.Text -> if (hit.id == selectedTextNow || held) Mode.MOVE_TEXT else Mode.SCROLL
+                                is Hit.Clip -> Mode.SCROLL
                                 else -> if (held) Mode.NONE else Mode.SCROLL
                             }
                             if (mode == Mode.SCROLL && upright) return@awaitEachGesture
@@ -456,7 +469,7 @@ fun Timeline(
                 drawLine(Color.White, Offset(mid, 0f), Offset(mid, size.height), strokeWidth = 2.dp.toPx())
                 drawPath(Path().apply { moveTo(mid - 6.dp.toPx(), 0f); lineTo(mid + 6.dp.toPx(), 0f); lineTo(mid, 7.dp.toPx()); close() }, Color.White)
             }
-            // Long-press menu of a clip.
+            // A clip's menu (double tap).
             menu?.let { (index, x) ->
                 DropdownMenu(expanded = true, onDismissRequest = { menu = null }, offset = DpOffset(with(localDensity) { x.toDp() }, 0.dp)) {
                     val clip = clips.getOrNull(index)
