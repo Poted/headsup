@@ -333,18 +333,60 @@ fun PillAction(symbol: String, text: String, onClick: () -> Unit, selected: Bool
     }
 }
 
-/** Text action without a TextButton's 48 dp touch padding, for compact rows of small actions. */
+/**
+ * A small action (Rename, Remove, Reset…): a quiet pill of its own, so an action never reads as
+ * plain text, without a TextButton's 48 dp touch padding.
+ */
 @Composable
 fun SmallAction(text: String, onClick: () -> Unit, modifier: Modifier = Modifier, enabled: Boolean = true) {
-    Text(
-        text,
+    Box(
         modifier
-            .clip(MaterialTheme.shapes.small)
+            // A little room around it, so pills side by side never touch.
+            .padding(horizontal = 2.dp)
+            .height(32.dp)
+            .clip(CircleShape)
+            .background(HeadsupColors.SurfaceHigh)
             .clickable(enabled = enabled, onClick = onClick)
-            .padding(horizontal = 8.dp, vertical = 6.dp),
-        style = MaterialTheme.typography.labelLarge,
-        color = if (enabled) HeadsupColors.Highlight else HeadsupColors.TextMuted,
-    )
+            .padding(horizontal = 12.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            text,
+            style = MaterialTheme.typography.labelLarge,
+            color = if (enabled) HeadsupColors.Highlight else HeadsupColors.TextMuted,
+            maxLines = 1,
+        )
+    }
+}
+
+/**
+ * A main action of a panel (Start here, Split…): buttons of one row share its width equally, so
+ * rows line up and leave no gaps. [danger] marks one that takes something away.
+ */
+@Composable
+fun PanelAction(text: String, onClick: () -> Unit, modifier: Modifier = Modifier, enabled: Boolean = true, danger: Boolean = false) {
+    val shape = androidx.compose.foundation.shape.RoundedCornerShape(14.dp)
+    Box(
+        modifier
+            .height(44.dp)
+            .clip(shape)
+            .background(HeadsupColors.SurfaceHigh)
+            .border(1.dp, if (danger) Color(0x55FF6B5E) else HeadsupColors.Outline, shape)
+            .clickable(enabled = enabled, onClick = onClick)
+            .padding(horizontal = 8.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            text,
+            style = MaterialTheme.typography.labelLarge,
+            color = when {
+                !enabled -> HeadsupColors.TextMuted.copy(alpha = 0.5f)
+                danger -> Color(0xFFFF8A80)
+                else -> Color.White
+            },
+            maxLines = 1,
+        )
+    }
 }
 
 /**

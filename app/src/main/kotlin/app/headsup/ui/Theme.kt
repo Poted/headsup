@@ -116,6 +116,21 @@ object HeadsupIcons {
 
     val Add = icon("add") { stroke { moveTo(12f, 5f); lineTo(12f, 19f); moveTo(5f, 12f); lineTo(19f, 12f) } }
 
+    /** Chevron up: unfold. */
+    val ChevronUp = icon("chevron-up") { stroke { moveTo(6f, 15f); lineTo(12f, 9f); lineTo(18f, 15f) } }
+
+    /** A tick: milestones (moments of the edit marked as done). */
+    val Check = icon("check") { stroke { moveTo(5f, 12.5f); lineTo(10f, 17.5f); lineTo(19f, 7f) } }
+
+    /** Three dots: more actions. */
+    val More = icon("more") {
+        path(fill = white) {
+            for (y in listOf(6f, 12f, 18f)) {
+                moveTo(12f + 1.6f, y); arcTo(1.6f, 1.6f, 0f, true, true, 12f - 1.6f, y); arcTo(1.6f, 1.6f, 0f, true, true, 12f + 1.6f, y); close()
+            }
+        }
+    }
+
     /** Clock: synchronisation. */
     val Sync = icon("sync") {
         stroke {

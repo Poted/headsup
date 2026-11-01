@@ -47,6 +47,8 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -539,7 +541,7 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
                 if (photoFolded) {
                     // Folded: a small handle brings the info row and the album back (or a swipe up).
                     Box(Modifier.fillMaxWidth().clickable { compact = false }.padding(vertical = 2.dp), contentAlignment = Alignment.Center) {
-                        Text("⌃", color = HeadsupColors.TextMuted, style = MaterialTheme.typography.titleMedium)
+                        Icon(HeadsupIcons.ChevronUp, "Show the album", Modifier.size(20.dp), tint = HeadsupColors.TextMuted)
                     }
                 } else if (state.clips.isNotEmpty() && tool != Tool.EXPORT) {
                     if (tool == Tool.FILES || albumOpen) {
@@ -869,7 +871,7 @@ private fun UndoRedo(
                     )
                     for (m in milestones.asReversed()) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text("◆ Milestone ${m.number} · ${m.time}", Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
+                            Text("✓ Milestone ${m.number} · ${m.time}", Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
                             TextButton(onClick = { showMilestones = false; onBackToMilestone(m.id) }) { Text("Go back") }
                             Text(
                                 "✕",
@@ -894,7 +896,7 @@ private fun UndoRedo(
                 .clickable { showMilestones = true },
             contentAlignment = Alignment.Center,
         ) {
-            Text("◆", color = if (milestones.isNotEmpty()) HeadsupColors.Accent else Color.White.copy(alpha = 0.85f), style = MaterialTheme.typography.labelLarge)
+            Icon(HeadsupIcons.Check, "Milestones", Modifier.size(18.dp), tint = if (milestones.isNotEmpty()) HeadsupColors.Accent else Color.White.copy(alpha = 0.85f))
         }
         for ((icon, enabled, action, label) in listOf(
             Quad(HeadsupIcons.Undo, canUndo, onUndo, "Undo"),
@@ -1136,7 +1138,8 @@ private fun Hint(text: String, modifier: Modifier = Modifier) {
 
 @Composable
 private fun Label(text: String) {
-    Text(text, style = MaterialTheme.typography.labelLarge)
+    // A section's name with a line after it, as everywhere in the panels.
+    SectionCaption(text)
 }
 
 @Composable
@@ -1185,11 +1188,7 @@ private fun FilesPanel(
         )
         return
     }
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        SmallAction("‹ Projects", { browsing = true })
-        Spacer(Modifier.width(8.dp))
-        Box(Modifier.weight(1f)) { ProjectHeader(state, vm) }
-    }
+    ProjectHeader(state, vm, onBack = { browsing = true })
     // The project's files, by kind.
     LazyRow(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
         item { CircleOption("▶", if (state.photoProject) "Photos" else "Video", selected = section == "Video", modified = state.clips.isNotEmpty()) { section = "Video" } }
@@ -1367,7 +1366,8 @@ private fun CutTool(state: UiState, vm: HeadsupViewModel, playhead: LongState, o
             { v -> vm.setTrim(index, 0L, (v * 1000).toLong()) },
             onReset = { vm.setTrim(index, 0L, HeadsupViewModel.PHOTO_DEFAULT_MS) },
         )
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) { SmallAction("Delete clip", { vm.removeClip(index) }) }
+        SectionCaption("Clip")
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) { PanelAction("Delete clip", { vm.removeClip(index) }, Modifier.weight(1f), danger = true) }
     } else {
         CutControls(
             clip = clip,
@@ -1445,6 +1445,7 @@ private fun FlagList(state: UiState, vm: HeadsupViewModel, onFlag: (Int, Long) -
         c.flags.filter { it >= c.trimStartMs && it <= c.trimEndMs }.map { f -> Triple(i, f, starts[i] + c.timelineOfSource(f - c.trimStartMs)) }
     }.sortedBy { it.third }
     SectionCaption("Flags") {
+        Spacer(Modifier.width(8.dp))
         if (flags.isNotEmpty()) SmallAction("Clear all", { vm.clearFlags() })
     }
     if (flags.isEmpty()) {
@@ -1748,11 +1749,18 @@ private fun formatBytes(bytes: Long): String =
 
 /** The open project (saved automatically) and the list of saved ones. */
 @Composable
-private fun ProjectHeader(state: UiState, vm: HeadsupViewModel) {
+private fun ProjectHeader(state: UiState, vm: HeadsupViewModel, onBack: () -> Unit) {
     var renaming by remember { mutableStateOf(false) }
+    // Its actions on a line of their own (back to the list, rename), the name and facts under them.
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        SmallAction("‹ Projects", onBack)
+        Spacer(Modifier.weight(1f))
+        SmallAction("Rename", { renaming = true })
+    }
     Row(verticalAlignment = Alignment.CenterVertically) {
         Column(Modifier.weight(1f)) {
             val album = state.photoProject
+            Text(state.projectName, style = MaterialTheme.typography.titleMedium, maxLines = 2)
             Text(
                 (if (album) "Photo album" else "Film") + " · saved automatically" + when {
                     state.clips.isEmpty() -> ""
@@ -1766,9 +1774,7 @@ private fun ProjectHeader(state: UiState, vm: HeadsupViewModel) {
                 style = MaterialTheme.typography.labelSmall,
                 color = HeadsupColors.TextMuted,
             )
-            Text(state.projectName, style = MaterialTheme.typography.titleSmall, maxLines = 1)
         }
-        SmallAction("Rename", { renaming = true })
     }
     if (renaming) {
         RenameDialog(state.projectName, onDismiss = { renaming = false }, title = "Project name") { vm.renameProject(it); renaming = false }
@@ -1815,8 +1821,9 @@ private fun ProjectRow(state: UiState, vm: HeadsupViewModel, onOpen: () -> Unit,
     // Films and albums kept apart: a header to switch between them, each with its own New and list.
     var kindShown by rememberSaveable { mutableStateOf(if (state.photoProject) ProjectKind.PHOTOS else ProjectKind.VIDEO) }
     KindHeader(kindShown, films = state.projects.count { it.kind == ProjectKind.VIDEO }, albums = state.projects.count { it.kind == ProjectKind.PHOTOS }) { kindShown = it }
-    // A project from the list being renamed.
+    // A project from the list being renamed, or about to be deleted.
     var renamingOther by remember { mutableStateOf<String?>(null) }
+    var deletingOther by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(Unit) { vm.refreshProjects() }
     val external = with(vm) { state.externalMedia }
     if (external.isNotEmpty() && !state.busy) {
@@ -1860,18 +1867,37 @@ private fun ProjectRow(state: UiState, vm: HeadsupViewModel, onOpen: () -> Unit,
                 color = if (p.starred) HeadsupColors.Accent else HeadsupColors.TextMuted,
             )
             Column(Modifier.weight(1f)) {
-                Text(p.name, style = MaterialTheme.typography.bodyMedium, maxLines = 1)
+                Text(p.name, style = MaterialTheme.typography.bodyMedium, maxLines = 2)
                 Hint(
                     Instant.ofEpochMilli(p.modifiedMs).atZone(ZoneId.systemDefault()).toLocalDateTime()
                         .withNano(0).toString().replace('T', ' ') +
                         if (p.bytes > 0) " · " + formatBytes(p.bytes) else "",
                 )
             }
-            SmallAction("Rename", { renamingOther = p.name })
-            SmallAction("Delete", { vm.deleteProject(p.name) })
+            // Rename and delete behind ⋮, so the name has the row's width.
+            Box {
+                var open by remember { mutableStateOf(false) }
+                Box(
+                    Modifier.size(36.dp).clip(CircleShape).clickable { open = true },
+                    contentAlignment = Alignment.Center,
+                ) { Icon(HeadsupIcons.More, "More", Modifier.size(20.dp), tint = HeadsupColors.TextMuted) }
+                DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+                    DropdownMenuItem(text = { Text("Rename") }, onClick = { open = false; renamingOther = p.name })
+                    DropdownMenuItem(text = { Text("Delete") }, onClick = { open = false; deletingOther = p.name })
+                }
+            }
         }
     }
     if (state.projects.isNotEmpty()) Hint("Projects keep their own copies of their files. Deleting a project frees that space; the gallery is never touched.")
+    deletingOther?.let { name ->
+        AlertDialog(
+            onDismissRequest = { deletingOther = null },
+            title = { Text("Delete project") },
+            text = { Text("\"$name\" and the copies of its files are deleted. The gallery is not touched.") },
+            confirmButton = { TextButton(onClick = { deletingOther = null; vm.deleteProject(name) }) { Text("Delete") } },
+            dismissButton = { TextButton(onClick = { deletingOther = null }) { Text("Cancel") } },
+        )
+    }
     renamingOther?.let { old ->
         RenameDialog(old, onDismiss = { renamingOther = null }, title = "Project name") { vm.renameProject(it, old); renamingOther = null }
     }
@@ -2295,8 +2321,8 @@ private fun CutControls(
     var range by remember(clip.id, clip.trimStartMs, clip.trimEndMs) {
         mutableStateOf(clip.trimStartMs.toFloat()..clip.trimEndMs.toFloat())
     }
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        Text("Cut", Modifier.weight(1f), style = MaterialTheme.typography.labelLarge)
+    SectionCaption("Cut") {
+        Spacer(Modifier.width(10.dp))
         Hint("${Formats.duration((range.endInclusive - range.start).toLong())} of ${Formats.duration(clip.meta.durationMs)}")
     }
     RangeSlider(
@@ -2317,13 +2343,18 @@ private fun CutControls(
         Spacer(Modifier.weight(1f))
         Hint(Formats.duration(range.endInclusive.toLong()))
     }
-    // "Here" is the playhead; the watch data follows every cut automatically.
-    FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-        OutlinedButton(onClick = { onTrim(clip.trimStartMs + playhead.longValue, clip.trimEndMs) }) { Text("Start here") }
-        OutlinedButton(onClick = { onTrim(clip.trimStartMs, clip.trimStartMs + playhead.longValue) }) { Text("End here") }
-        OutlinedButton(onClick = { onSplit(playhead.longValue) }) { Text("Split") }
-        OutlinedButton(onClick = onDelete) { Text("Delete") }
-        if (clip.isTrimmed) SmallAction("Full clip", { onTrim(0L, clip.meta.durationMs) }, Modifier.align(Alignment.CenterVertically))
+    // "Here" is the playhead; the watch data follows every cut automatically. In the order they
+    // act along the clip: its start, a cut, its end.
+    SectionCaption("At the playhead")
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        PanelAction("Start here", { onTrim(clip.trimStartMs + playhead.longValue, clip.trimEndMs) }, Modifier.weight(1f))
+        PanelAction("Split", { onSplit(playhead.longValue) }, Modifier.weight(1f))
+        PanelAction("End here", { onTrim(clip.trimStartMs, clip.trimStartMs + playhead.longValue) }, Modifier.weight(1f))
+    }
+    SectionCaption("Clip")
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        PanelAction("Full clip", { onTrim(0L, clip.meta.durationMs) }, Modifier.weight(1f), enabled = clip.isTrimmed)
+        PanelAction("Delete clip", onDelete, Modifier.weight(1f), danger = true)
     }
 }
 
@@ -2613,9 +2644,9 @@ private fun AdjustHeader(
             false
         }
         2 -> {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Hint(if (album) "A change is set on every photo: each shows it under This photo." else "A change is set on every clip: each shows it under This clip.", Modifier.weight(1f))
-                Spacer(Modifier.width(8.dp))
+            // As everywhere on this page: what it does, then its actions in a row on the left.
+            Hint(if (album) "A change is set on every photo: each shows it under This photo." else "A change is set on every clip: each shows it under This clip.")
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 PillAction("↺", "Reset all", { vm.resetSyncedPhotos() })
             }
             false
@@ -4529,6 +4560,7 @@ private fun ExportControls(
         FilterChip(selected = settings.wholeTimeline, onClick = { vm.updateExportSettings { it.copy(wholeTimeline = true) } }, label = { Text("Whole timeline") })
         FilterChip(selected = !settings.wholeTimeline, onClick = { vm.updateExportSettings { it.copy(wholeTimeline = false) } }, label = { Text("Each clip") })
     }
+    SectionCaption("Picture")
     SettingRow("Resolution") {
         for ((height, label) in ExportSettings.HEIGHTS) {
             FilterChip(selected = settings.height == height, onClick = { vm.updateExportSettings { it.copy(height = height) } }, label = { Text(label) })
@@ -4541,6 +4573,7 @@ private fun ExportControls(
     }
     val tenBitBlocker = remember(state.clips) { vm.tenBitBlocker(state) }
     val tenBit = settings.tenBit && tenBitBlocker == null
+    SectionCaption("Encoding")
     SettingRow("Codec") {
         for (codec in VideoCodec.entries) {
             FilterChip(
@@ -4584,6 +4617,7 @@ private fun ExportControls(
             (if (!tenBit && tenBitBlocker == null && state.clips.any { it.meta.format?.tenBit == true }) " Your clips are 10-bit: the 10-bit export keeps that." else "") +
             (if (!tenBit && tenBitBlocker == null && state.clips.any { it.meta.format?.transfer == "HLG" }) " HDR (HLG) clips are always exported in 10-bit." else ""),
     )
+    SectionCaption("Export")
     Button(onClick = onExportVideos, enabled = state.clips.isNotEmpty(), modifier = Modifier.fillMaxWidth()) {
         Text(if (settings.wholeTimeline) "Export timeline" else "Export ${state.clips.size} clips")
     }
@@ -4599,12 +4633,15 @@ private fun ExportControls(
     if (state.clips.any { it.meta.isPhoto }) PhotoExport(state, vm)
 
     if (jobs.isNotEmpty()) {
-        jobs.forEach { JobRow(it) }
-        if (jobs.any { it.status == JobStatus.QUEUED || it.status == JobStatus.RUNNING }) {
-            SmallAction("Cancel all", vm::cancelExports)
-        } else {
-            SmallAction("Clear list", vm::clearFinishedExports)
+        SectionCaption("Exports") {
+            Spacer(Modifier.width(8.dp))
+            if (jobs.any { it.status == JobStatus.QUEUED || it.status == JobStatus.RUNNING }) {
+                SmallAction("Cancel all", vm::cancelExports)
+            } else {
+                SmallAction("Clear list", vm::clearFinishedExports)
+            }
         }
+        jobs.forEach { JobRow(it) }
     }
 }
 

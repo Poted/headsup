@@ -1480,7 +1480,7 @@ fun ClipPreview(
                             Box(
                                 Modifier.size(36.dp).clip(CircleShape).background(Color.Black.copy(alpha = 0.5f)).clickable { unfold(false) },
                                 contentAlignment = Alignment.Center,
-                            ) { Text("⌃", color = Color.White, style = MaterialTheme.typography.titleMedium) }
+                            ) { Icon(HeadsupIcons.ChevronUp, "Show the controls", Modifier.size(22.dp), tint = Color.White) }
                         }
                     }
                 }
