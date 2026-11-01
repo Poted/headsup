@@ -2694,6 +2694,118 @@ private fun ScopeActions(state: UiState, clip: ClipState, index: Int, vm: Headsu
     }
 }
 
+/** Sections of the colour corrections, so the picker row stays short. */
+private enum class ColourSection(val label: String) { LIGHT("Light"), PRESENCE("Presence"), COLOUR("Colour"), MIXER("Mixer"), FILM("Film"), EFFECTS("Effects"), LOOKS("Looks"), TOOLS("Tools") }
+
+private val Adjustment.section: ColourSection
+    get() = when (this) {
+        Adjustment.EXPOSURE, Adjustment.BRIGHTNESS, Adjustment.CONTRAST, Adjustment.HIGHLIGHTS, Adjustment.SHADOWS,
+        Adjustment.WHITES, Adjustment.BLACKS, Adjustment.ROLLOFF, Adjustment.CURVE -> ColourSection.LIGHT
+        Adjustment.TEMPERATURE, Adjustment.TINT, Adjustment.SATURATION, Adjustment.VIBRANCE, Adjustment.DENSITY, Adjustment.SKIN -> ColourSection.COLOUR
+        Adjustment.SPLIT, Adjustment.SHADOW_HUE, Adjustment.HIGHLIGHT_HUE, Adjustment.TAME, Adjustment.VIGNETTE, Adjustment.WHEELS -> ColourSection.FILM
+        Adjustment.TEXTURE, Adjustment.CLARITY, Adjustment.DEHAZE -> ColourSection.PRESENCE
+        Adjustment.CINE, Adjustment.LUT, Adjustment.MATCH, Adjustment.BLEND -> ColourSection.TOOLS
+        Adjustment.MIXER, Adjustment.CHANNELS, Adjustment.BW, Adjustment.CALIBRATION -> ColourSection.MIXER
+        // Looks sit with the other tools that set a whole look (LUT, shot match).
+        Adjustment.LOOK -> ColourSection.TOOLS
+        Adjustment.GLOW, Adjustment.HALATION -> ColourSection.EFFECTS
+    }
+
+/** A row of text tabs: the selected one white and underlined, the others muted. */
+@Composable
+private fun SectionTabs(labels: List<String>, selected: Int, onSelect: (Int) -> Unit) {
+    // Scrolls sideways when the column is too narrow for all of them (each stays on one line).
+    Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+        labels.forEachIndexed { i, label ->
+            val on = i == selected
+            Column(
+                Modifier.clip(RoundedCornerShape(8.dp)).clickable { onSelect(i) }.padding(horizontal = 10.dp, vertical = 4.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+                Text(label, style = MaterialTheme.typography.labelLarge, color = if (on) HeadsupColors.Highlight else HeadsupColors.TextMuted, maxLines = 1, softWrap = false)
+                Box(Modifier.padding(top = 3.dp).width(18.dp).height(2.dp).background(if (on) HeadsupColors.Highlight else Color.Transparent))
+            }
+        }
+    }
+}
+
+internal enum class Adjustment(
+    val symbol: String,
+    val label: String,
+    val range: ClosedFloatingPointRange<Float>,
+    val step: Float,
+    val format: String,
+    val get: (ColorGrade) -> Float,
+    val set: (ColorGrade, Float) -> ColorGrade,
+    /** Value meaning "no correction" (0 except for the toning hues). */
+    val neutral: Float = 0f,
+) {
+    /** Not a ruler value: the cine assistant, which analyses the frame and suggests a film grade. */
+    CINE("Cine", "Cine look", 0f..1f, 1f, "", { 0f }, { g, _ -> g }),
+    EXPOSURE("EV", "Exposure", -2f..2f, 0.1f, "%+.1f EV", { it.exposure }, { g, v -> g.copy(exposure = v) }),
+    BRIGHTNESS("Br", "Brightness", -1f..1f, 0.02f, "%+.2f", { it.brightness }, { g, v -> g.copy(brightness = v) }),
+    CONTRAST("Ct", "Contrast", -1f..1f, 0.02f, "%+.2f", { it.contrast }, { g, v -> g.copy(contrast = v) }),
+    HIGHLIGHTS("Hl", "Highlights", -1f..1f, 0.02f, "%+.2f", { it.highlights }, { g, v -> g.copy(highlights = v) }),
+    SHADOWS("Sh", "Shadows", -1f..1f, 0.02f, "%+.2f", { it.shadows }, { g, v -> g.copy(shadows = v) }),
+    WHITES("Wh", "Whites", -1f..1f, 0.02f, "%+.2f", { it.whites }, { g, v -> g.copy(whites = v) }),
+    BLACKS("Bk", "Blacks", -1f..1f, 0.02f, "%+.2f", { it.blacks }, { g, v -> g.copy(blacks = v) }),
+    SATURATION("Sat", "Saturation", -1f..1f, 0.02f, "%+.2f", { it.saturation }, { g, v -> g.copy(saturation = v) }),
+    VIBRANCE("Vib", "Vibrance", -1f..1f, 0.02f, "%+.2f", { it.vibrance }, { g, v -> g.copy(vibrance = v) }),
+    // Subtractive saturation: saturated colours deeper (+) or paler (−).
+    DENSITY("Dn", "Density", -1f..1f, 0.02f, "%+.2f", { it.density }, { g, v -> g.copy(density = v) }),
+    TEMPERATURE("K", "Temperature", -1f..1f, 0.02f, "%+.2f", { it.temperature }, { g, v -> g.copy(temperature = v) }),
+    TINT("Tn", "Tint", -1f..1f, 0.02f, "%+.2f", { it.tint }, { g, v -> g.copy(tint = v) }),
+    SKIN("Sk", "Skin tone", -30f..30f, 0.5f, "%+.1f°", { it.skinHue }, { g, v -> g.copy(skinHue = v) }),
+    VIGNETTE("Vig", "Vignette", 0f..1f, 0.02f, "%.2f", { it.vignette }, { g, v -> g.copy(vignette = v) }),
+    ROLLOFF("Rl", "Roll-off", 0f..1f, 0.02f, "%.2f", { it.rolloff }, { g, v -> g.copy(rolloff = v) }),
+    SPLIT("Sp", "Split tone", 0f..1f, 0.02f, "%.2f", { it.toneAmount }, { g, v -> g.copy(toneAmount = v) }),
+    SHADOW_HUE(
+        "S°", "Shadow hue", 0f..360f, 1f, "%.0f°", { it.shadowHue }, { g, v -> g.copy(shadowHue = v) }, ColorGrade.DEFAULT_SHADOW_HUE,
+    ),
+    HIGHLIGHT_HUE(
+        "H°", "Light hue", 0f..360f, 1f, "%.0f°", { it.highlightHue }, { g, v -> g.copy(highlightHue = v) }, ColorGrade.DEFAULT_HIGHLIGHT_HUE,
+    ),
+    TAME("Tm", "Tame colours", 0f..1f, 0.02f, "%.2f", { it.tame }, { g, v -> g.copy(tame = v) }),
+    TEXTURE("Tx", "Texture", -1f..1f, 0.02f, "%+.2f", { it.texture }, { g, v -> g.copy(texture = v) }),
+    CLARITY("Cl", "Clarity", -1f..1f, 0.02f, "%+.2f", { it.clarity }, { g, v -> g.copy(clarity = v) }),
+    DEHAZE("Dh", "Dehaze", -1f..1f, 0.02f, "%+.2f", { it.dehaze }, { g, v -> g.copy(dehaze = v) }),
+    // Masks only (a clip's glow and halation are in Effects): light from what is bright inside the mask.
+    GLOW("✧", "Glow", 0f..1f, 0.02f, "%.2f", { it.glow }, { g, v -> g.copy(glow = v) }),
+    HALATION("◌", "Halation", 0f..1f, 0.02f, "%.2f", { it.halation }, { g, v -> g.copy(halation = v) }),
+
+    /** Not a ruler value: opens the LUT library (the LUT is applied last, after all corrections). */
+    LUT("LUT", "LUT", 0f..1f, 1f, "", { 0f }, { g, _ -> g }),
+
+    /** Not a ruler value: matches the clip's colour to a reference frame from another clip. */
+    MATCH("≈", "Shot match", 0f..1f, 1f, "", { 0f }, { g, _ -> g }),
+
+    /** Not a ruler value: how the clip blends in from the previous clip's look. */
+    BLEND("⇢", "Blend in", 0f..1f, 1f, "", { 0f }, { g, _ -> g }),
+
+    /** Not a single ruler: colour wheels for shadows, midtones and highlights. */
+    WHEELS("◎", "Grading", 0f..1f, 1f, "", { 0f }, { g, _ -> g }),
+
+    /** Not a single ruler: point tone curves (RGB and per channel). */
+    CURVE("∿", "Curve", 0f..1f, 1f, "", { 0f }, { g, _ -> g }),
+
+    /** Not a single ruler: hue, saturation and luminance per hue band. */
+    MIXER("HSL", "Colour mixer", 0f..1f, 1f, "", { 0f }, { g, _ -> g }),
+
+    /** Not a single ruler: a look (profile) under the corrections, with its amount. */
+    LOOK("Look", "Looks", 0f..1f, 1f, "", { 0f }, { g, _ -> g }),
+
+    /** Not a single ruler: each output channel made from red, green and blue. */
+    CHANNELS("RGB", "Channel mixer", 0f..1f, 1f, "", { 0f }, { g, _ -> g }),
+
+    /** Not a single ruler: black and white, with a brightness per hue band. */
+    BW("B&W", "Black & white", 0f..1f, 1f, "", { 0f }, { g, _ -> g }),
+
+    /** Not a single ruler: hue and saturation of the red, green and blue primaries. */
+    CALIBRATION("Cal", "Calibration", 0f..1f, 1f, "", { 0f }, { g, _ -> g }),
+}
+
+private val BLEND_LENGTHS = listOf(0L to "Cut", 500L to "0.5 s", 1000L to "1 s", 2000L to "2 s", 4000L to "4 s", 8000L to "8 s")
+
 /**
  * Adjust: what it works on at the top, the corrections under it, and the scope's own things and
  * actions (layers, copy, reset; the group; reset all) at the bottom.
