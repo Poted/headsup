@@ -343,6 +343,8 @@ data class UiState(
     val pickingColour: Boolean = false,
     /** When the brush's size (softness, strength) was last set: it shows on the picture for a moment. */
     val brushSizedAt: Long = 0L,
+    /** The clip measured for looks ([HeadsupViewModel.analyseClip]): its id and what was measured. */
+    val lookStats: Pair<Long, app.headsup.core.color.FrameStats>? = null,
     /** A Fast edit look being tried ([HeadsupViewModel.applyFastLook]). */
     val fast: FastSession? = null,
     /** Long jobs running in the background (tracking with AI, reversing). */
@@ -1929,6 +1931,81 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
     // Cine assistant
 
     /** Measures [frame] (the paused preview, before colour) as graded now, and starts a suggestion session. */
+    /**
+     * Measures the selected clip for looks: five frames across its cut (a photo: the picture),
+     * through its current colours, as the Cine assistant measures one frame. The suggestions and
+     * the adaptive styles then fit the whole clip, not one moment of it.
+     */
+    fun analyseClip(frameSource: (() -> Bitmap?)?) {
+        val s = _state.value
+        val clip = s.selected ?: return
+        val photoFrame = if (clip.meta.isPhoto) frameSource?.invoke() ?: return else null
+        val uri = s.previewSource(clip)
+        val cube = s.previewCube
+        val context: Application = getApplication()
+        _state.update { it.copy(busy = true, loadingMessage = "Analysing the clip", loadingProgress = null) }
+        viewModelScope.launch {
+            try {
+                val stats = withContext(Dispatchers.Default) {
+                    val frames = if (photoFrame != null) listOf(photoFrame) else {
+                        val r = android.media.MediaMetadataRetriever()
+                        try {
+                            r.setDataSource(context, uri)
+                            val span = (clip.trimEndMs - clip.trimStartMs).coerceAtLeast(1L)
+                            (0 until 5).mapNotNull { k ->
+                                val t = clip.trimStartMs + span * (2 * k + 1) / 10
+                                val w = 256
+                                val h = if (clip.meta.width > 0) (w * clip.meta.height / clip.meta.width).coerceAtLeast(1) else 144
+                                runCatching { r.getScaledFrameAtTime(t * 1000, android.media.MediaMetadataRetriever.OPTION_CLOSEST_SYNC, w, h) }.getOrNull()
+                            }
+                        } finally {
+                            r.release()
+                        }
+                    }
+                    if (frames.isEmpty()) return@withContext null
+                    val pixels = frames.flatMap { f ->
+                        val small = if (f.width > 320) Bitmap.createScaledBitmap(f, 256, (256 * f.height / f.width).coerceAtLeast(1), true) else f
+                        IntArray(small.width * small.height).also { small.getPixels(it, 0, small.width, 0, 0, small.width, small.height) }.asList()
+                    }.toIntArray()
+                    graded(pixels, cube)
+                    CineAssistant.analyse(pixels)
+                }
+                if (stats == null) {
+                    _state.update { it.copy(messages = it.messages + "Could not read frames of this clip.") }
+                    return@launch
+                }
+                _state.update { it.copy(lookStats = clip.id to stats) }
+            } finally {
+                _state.update { it.copy(busy = false, loadingMessage = null) }
+            }
+        }
+    }
+
+    /** [pixels] (ARGB) through the clip's colour table [cube], in place, as the picture shows them. */
+    private fun graded(pixels: IntArray, cube: Array<Array<IntArray>>?) {
+        if (cube == null) return
+        val rgb = FloatArray(3)
+        for (i in pixels.indices) {
+            val p = pixels[i]
+            LutBaker.sampleBaked(cube, ((p shr 16) and 0xFF) / 255f, ((p shr 8) and 0xFF) / 255f, (p and 0xFF) / 255f, rgb)
+            pixels[i] = (0xFF shl 24) or ((rgb[0] * 255).toInt() shl 16) or ((rgb[1] * 255).toInt() shl 8) or (rgb[2] * 255).toInt()
+        }
+    }
+
+    /**
+     * An adaptive style ([CineStyle], fitted to the measured clip) on the selected clip, in place of
+     * a Fast edit look being tried.
+     */
+    fun applyAdaptiveLook(style: CineStyle, strength: Float = 1f) {
+        val s = _state.value
+        val clip = s.selected ?: return
+        val stats = s.lookStats?.takeIf { it.first == clip.id }?.second ?: return
+        if (s.fast?.clipId == clip.id) closeFast(undo = true)
+        val now = _state.value.selected ?: return
+        if (_state.value.cine?.clipId != clip.id) _state.update { it.copy(cine = CineSession(clip.id, stats, now.grade, now.effects)) }
+        applyCine(style, strength)
+    }
+
     fun analyseForCine(frame: Bitmap) {
         val s = _state.value
         val clip = s.selected ?: return frame.recycle()
@@ -2025,6 +2102,8 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
      * look was tried (trying another look replaces it, not adds to it).
      */
     fun applyFastLook(look: app.headsup.color.FastLook, strength: Float = 1f) {
+        // An adaptive style being tried gives way to it.
+        if (_state.value.cine?.let { it.style != null && it.clipId == _state.value.selected?.id } == true) closeCine(undo = true)
         val s = _state.value
         val index = s.selectedClip ?: return
         val clip = s.selected ?: return

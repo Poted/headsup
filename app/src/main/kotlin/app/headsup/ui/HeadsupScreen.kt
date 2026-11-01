@@ -2575,7 +2575,8 @@ private fun ColourPage(
     // Glow and halation are a mask's own (the clip's are in Effects).
     val maskOnly = setOf(Adjustment.GLOW, Adjustment.HALATION)
     val options = when (target) {
-        GradeTarget.CLIP -> (if (index > 0) Adjustment.entries else Adjustment.entries - Adjustment.BLEND) - maskOnly
+        // The Cine look is part of Looks (its Cinematic looks and the clip's analysis).
+        GradeTarget.CLIP -> (if (index > 0) Adjustment.entries else Adjustment.entries - Adjustment.BLEND) - maskOnly - Adjustment.CINE
         GradeTarget.GROUP -> Adjustment.entries - Adjustment.BLEND - Adjustment.CINE - Adjustment.MATCH - maskOnly
         GradeTarget.GLOBAL -> Adjustment.entries - Adjustment.LUT - Adjustment.BLEND - Adjustment.CINE - Adjustment.MATCH - maskOnly
         GradeTarget.MASK -> Adjustment.entries - Adjustment.LUT - Adjustment.SKIN - Adjustment.VIGNETTE - Adjustment.BLEND -
@@ -2772,7 +2773,7 @@ private fun ColourPage(
         return
     }
     if (adjustment == Adjustment.LOOK) {
-        LookControls(state, vm)
+        LooksPanel(state, vm, frameSource)
         return
     }
     if (adjustment == Adjustment.SKIN) SkinToneTool(state.scope, onMatch = vm::matchSkinLine)
@@ -3091,6 +3092,113 @@ private fun MixerControls(state: UiState, vm: HeadsupViewModel) {
 }
 
 /** Looks (profiles): a starting rendering under the corrections, and how strongly. */
+/** A look offered on the Looks tab: a complete Cinematic look, or a style fitted to the measured clip. */
+private sealed interface LookChoice {
+    val label: String
+    data class Complete(val look: app.headsup.color.FastLook) : LookChoice { override val label: String get() = look.label }
+    data class Adaptive(val style: CineStyle) : LookChoice { override val label: String get() = style.label + " ✦" }
+}
+
+/**
+ * Looks that suit what was measured in the clip: night, skin, loud greens and blues, a warm
+ * (sunset) cast; the best first.
+ */
+private fun suggestedLooks(s: app.headsup.core.color.FrameStats): List<LookChoice> {
+    val F = app.headsup.color.FastLook
+    val out = mutableListOf<LookChoice>()
+    if (s.median < 0.22f) out += LookChoice.Complete(F.NIGHT)
+    if (s.skin > 0.03f) { out += LookChoice.Complete(F.CLEAN); out += LookChoice.Adaptive(CineStyle.WARM_FILM) }
+    if (s.foliage > 0.15f) { out += LookChoice.Adaptive(CineStyle.TEAL_ORANGE); out += LookChoice.Adaptive(CineStyle.MUTED) }
+    if (s.warmth > 0.03f) { out += LookChoice.Complete(F.FILM_35); out += LookChoice.Complete(F.VINTAGE) }
+    if (s.colourfulness > 0.12f) out += LookChoice.Adaptive(CineStyle.MUTED)
+    out += listOf(LookChoice.Complete(F.CLEAN), LookChoice.Complete(F.FILM_35), LookChoice.Adaptive(CineStyle.TEAL_ORANGE))
+    return out.distinct().take(3)
+}
+
+/**
+ * Looks, in one place: Cinematic (complete looks: colour, contrast, grain, light, lens; and
+ * styles fitted to the clip once it is measured) and Profiles (a starting rendering under the
+ * corrections). Analyse clip measures frames across the clip and suggests looks that suit it.
+ * Groups and all clips have the profiles only (the rest is per clip).
+ */
+@Composable
+private fun LooksPanel(state: UiState, vm: HeadsupViewModel, frameSource: (() -> Bitmap?)?) {
+    val clip = state.selected
+    if (state.target != GradeTarget.CLIP || clip == null) {
+        LookControls(state, vm)
+        return
+    }
+    var category by rememberSaveable { mutableStateOf(0) }
+    Segmented(listOf("Cinematic", "Profiles"), category, { category = it })
+    if (category == 1) {
+        LookControls(state, vm)
+        return
+    }
+    val stats = state.lookStats?.takeIf { it.first == clip.id }?.second
+    val fast = state.fast?.takeIf { it.clipId == clip.id }
+    val adaptive = state.cine?.takeIf { it.clipId == clip.id && it.style != null }
+    fun choose(c: LookChoice) = when (c) {
+        is LookChoice.Complete -> vm.applyFastLook(c.look, fast?.strength ?: 1f)
+        is LookChoice.Adaptive -> vm.applyAdaptiveLook(c.style, adaptive?.strength ?: 1f)
+    }
+    fun isOn(c: LookChoice) = when (c) {
+        is LookChoice.Complete -> fast?.look == c.look
+        is LookChoice.Adaptive -> adaptive?.style == c.style
+    }
+    // The clip measured: what was found, and the looks that suit it.
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Hint(
+            if (stats == null) "Analyse the clip to get looks that suit it, and styles (✦) fitted to it."
+            else String.format(
+                Locale.US, "Mid-tones %.0f %% · %.1f %% clipped · %s%s",
+                stats.median * 100, stats.clipped * 100,
+                if (stats.foliage > 0.15f) "lots of green/blue" else "colours calm",
+                if (stats.skin > 0.03f) " · skin" else "",
+            ),
+            Modifier.weight(1f),
+        )
+        Spacer(Modifier.width(8.dp))
+        PillAction("⌕", if (stats == null) (if (clip.meta.isPhoto) "Analyse photo" else "Analyse clip") else "Again", { vm.analyseClip(frameSource) }, enabled = !state.busy)
+    }
+    if (stats != null) {
+        SectionCaption("Suggested for this clip")
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            for (c in suggestedLooks(stats)) FilterChip(selected = isOn(c), onClick = { choose(c) }, label = { Text(c.label) })
+        }
+    }
+    SectionCaption("Cinematic")
+    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        for (look in app.headsup.color.FastLook.entries) {
+            val c = LookChoice.Complete(look)
+            FilterChip(selected = isOn(c), onClick = { choose(c) }, label = { Text(c.label) })
+        }
+        // Fitted to the clip: they need it measured.
+        if (stats != null) for (style in CineStyle.entries) {
+            val c = LookChoice.Adaptive(style)
+            FilterChip(selected = isOn(c), onClick = { choose(c) }, label = { Text(c.label) })
+        }
+    }
+    // The look being tried: its strength, then keep it or put the clip back.
+    if (fast != null || adaptive != null) {
+        val strength = fast?.strength ?: adaptive?.strength ?: 1f
+        ValueHeader("Strength", String.format(Locale.US, "%.0f %%", strength * 100))
+        RulerSlider(
+            strength, 0f..1f, 0.02f,
+            { v -> if (fast != null) vm.applyFastLook(fast.look, v) else adaptive?.style?.let { vm.applyCine(it, v) } },
+            onReset = { if (fast != null) vm.applyFastLook(fast.look, 1f) else adaptive?.style?.let { vm.applyCine(it, 1f) } },
+            onHold = { held -> if (fast != null) vm.compareFast(held) else vm.compareCine(held) },
+        )
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            SmallAction("Undo", { if (fast != null) vm.closeFast(undo = true) else vm.closeCine(undo = true) })
+            Spacer(Modifier.weight(1f))
+            SmallAction("Done", { if (fast != null) vm.closeFast(undo = false) else vm.closeCine(undo = false) })
+        }
+        Hint("Hold the ruler to see the clip without it. Done keeps it as normal corrections and effects, adjustable afterwards.")
+    } else {
+        Hint("A complete look: colour taken away rather than added, soft highlights, grain and light. ✦ styles are fitted to the measured clip. Profiles: a starting rendering under your corrections.")
+    }
+}
+
 @Composable
 private fun LookControls(state: UiState, vm: HeadsupViewModel) {
     val current = app.headsup.core.color.Look.of(state.grade.look)
