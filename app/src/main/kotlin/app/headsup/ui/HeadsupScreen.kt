@@ -716,13 +716,17 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
             ) { tool = it }
     }
 
-    // Swipes over the picture and timeline: in the upper part they go full screen (up), in the lower
-    // part they fold the transport and timeline away (down) and bring them back (up).
+    // Swipes over the picture and timeline. Sideways: in the upper part up (or right) goes full
+    // screen, in the lower part down folds the transport and timeline away and up brings them back.
+    // Upright: up goes full screen; folding is by the arrows on the transport only.
     fun onScreenSwipe(swipe: Swipe, upper: Boolean) {
+        if (!wide) {
+            if (swipe == Swipe.UP) fullscreen = true
+            return
+        }
         when {
             upper && swipe == Swipe.UP && !(folded || photoFolded) -> fullscreen = true
-            // Sideways, to the right over the picture also goes full screen.
-            wide && swipe == Swipe.RIGHT -> fullscreen = true
+            swipe == Swipe.RIGHT -> fullscreen = true
             swipe == Swipe.UP && (folded || photoFolded) -> compact = false
             !upper && swipe == Swipe.DOWN && (!state.photoProject || tool != Tool.FILES) -> compact = true
             else -> Unit
