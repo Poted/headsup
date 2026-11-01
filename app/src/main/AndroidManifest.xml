@@ -32,6 +32,11 @@
             android:process=":raw" />
 
         <service
+            android:name=".work.WorkService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync|mediaProcessing" />
+
+        <service
             android:name=".export.ExportService"
             android:exported="false"
             android:foregroundServiceType="dataSync|mediaProcessing" />

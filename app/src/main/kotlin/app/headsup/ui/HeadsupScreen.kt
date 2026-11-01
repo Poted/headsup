@@ -357,6 +357,8 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
                     onCancel = if (listOf("Copying", "Tracking with AI", "Removing", "Reading frames").any { state.loadingMessage?.startsWith(it) == true }) vm::stopWork else null,
                 )
             }
+            // Work in the background: one slim line each, the app usable meanwhile.
+            for (w in state.work) WorkLine(w) { vm.stopBackground(w.id) }
 
             // The picture stays on screen while any tool below is being used.
             val selected = state.selected
@@ -458,6 +460,7 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
                         onAutoPlayStarted = { continuePlaying = false },
                         // ⇤ at a clip's start, ⇥ at its end: to the start of the clip before or after.
                         onFlag = vm::toggleFlag,
+                        startMs = vm.playheadInClip(),
                         onStepClip = { step ->
                             val i = (state.selectedClip ?: 0) + step
                             if (i in state.clips.indices) jumpTo(clipStarts[i])
@@ -1033,6 +1036,34 @@ private fun Group(content: @Composable ColumnScope.() -> Unit) {
         verticalArrangement = Arrangement.spacedBy(6.dp),
         content = content,
     )
+}
+
+/** A job running in the background: what it is, how far, and Stop. */
+@Composable
+private fun WorkLine(work: BackgroundWork, onStop: () -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 2.dp)
+            .clip(RoundedCornerShape(50)).background(HeadsupColors.Surface).border(1.dp, HeadsupColors.Outline, RoundedCornerShape(50))
+            .padding(start = 14.dp, end = 4.dp, top = 2.dp, bottom = 2.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            work.label + when {
+                work.waiting -> " · waiting"
+                work.progress != null -> String.format(Locale.US, " · %.0f %%", work.progress * 100)
+                else -> ""
+            },
+            style = MaterialTheme.typography.labelMedium, maxLines = 1,
+        )
+        Spacer(Modifier.width(10.dp))
+        val p = work.progress
+        if (p != null && !work.waiting) {
+            LinearProgressIndicator(progress = { p }, modifier = Modifier.weight(1f).height(3.dp), color = HeadsupColors.Accent, trackColor = HeadsupColors.Outline, drawStopIndicator = {})
+        } else {
+            Spacer(Modifier.weight(1f))
+        }
+        SmallAction("Stop", onStop)
+    }
 }
 
 @Composable
@@ -2215,7 +2246,8 @@ private fun AdjustHeader(
     index: Int,
     vm: HeadsupViewModel,
     pictureSource: ((Int) -> Bitmap?)?,
-    onShape: () -> Unit,
+    maskTools: Boolean,
+    onMaskTools: (Boolean) -> Unit,
 ): Boolean {
     val album = state.photoProject
     val scope = when (state.target) {
@@ -2243,7 +2275,7 @@ private fun AdjustHeader(
             }
             false
         }
-        else -> Layers(state, clip, vm, pictureSource, onShape)
+        else -> Layers(state, clip, vm, pictureSource, maskTools, onMaskTools)
     }
 }
 
@@ -2387,8 +2419,9 @@ private fun ColourPage(
     val selectedMask = clip.masks.getOrNull(state.selectedMask)
     // The mask worked on is gone (deleted, undone): back to the base.
     LaunchedEffect(target, selectedMask == null) { if (target == GradeTarget.MASK && selectedMask == null) vm.setTarget(GradeTarget.CLIP) }
-    val shapingMask = target == GradeTarget.MASK && maskTools && selectedMask != null
-    if (!shapingMask && AdjustHeader(state, clip, index, vm, pictureSource) { onMaskTools(true) }) return
+    // While something is removed from a photo only that shows; otherwise the scope and layers stay
+    // at the top in both of a mask's modes (Mask and Adjust).
+    if (!(target == GradeTarget.MASK && state.removing && selectedMask != null) && AdjustHeader(state, clip, index, vm, pictureSource, maskTools, onMaskTools)) return
     if (target != GradeTarget.GLOBAL && !clip.colorGrade) {
         // HDR files (already graded, e.g. Mimo exports) start with their own colours.
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -2438,24 +2471,22 @@ private fun ColourPage(
     // Shaping a mask is a mode of its own: only its tools show (and only then does a finger on the
     // picture change it); Done goes back to its corrections, which stay as they are.
     if (target == GradeTarget.MASK && maskTools && mask != null && (editingShape != null || mask.kind == MaskKind.RANGE)) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text(
-                if (state.removing) "Remove · select what goes" else "Shape · ${state.selectedMask + 1} · ${maskName(mask)}",
-                Modifier.weight(1f), style = MaterialTheme.typography.titleSmall,
-            )
-            Spacer(Modifier.width(8.dp))
-            if (state.removing) {
+        if (state.removing) {
+            SectionCaption("Remove from the photo")
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Hint("Select what goes.", Modifier.weight(1f))
                 SmallAction("Cancel", { vm.cancelRemoval(); onMaskTools(false) })
+                Spacer(Modifier.width(6.dp))
                 Button(onClick = { vm.removeMaskArea(); onMaskTools(false) }, enabled = mask.strokes.isNotEmpty() && !state.busy) { Text("Remove") }
-            } else
-            // On video, a painted mask not tracked since it changed would stay where it is drawn:
-            // tracking is the main way out of Shape then, so it is not forgotten.
-            if (maskNeedsTracking(clip, mask)) {
-                SmallAction("Done", { onMaskTools(false) }, enabled = !state.busy)
-                Button(onClick = { vm.trackMask(HeadsupViewModel.TrackDirection.BOTH); onMaskTools(false) }, enabled = !state.busy) { Text("Track & done") }
-            } else {
-                Button(onClick = { onMaskTools(false) }) { Text("Done") }
             }
+        } else if (maskNeedsTracking(clip, mask)) {
+            // On video, a painted mask not tracked since it changed stays where it is drawn: tracking
+            // is offered first, so it is not forgotten. It runs in the background.
+            Button(
+                onClick = { vm.trackMask(HeadsupViewModel.TrackDirection.BOTH) },
+                enabled = !vm.isTracking(clip.id, state.selectedMask, state),
+                modifier = Modifier.fillMaxWidth(),
+            ) { Text(if (mask.sequence != null) "Track again" else "Track") }
         }
         if (mask.kind == MaskKind.BRUSH) {
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -3231,7 +3262,14 @@ private enum class MaskShape(
  * chosen (only that shows).
  */
 @Composable
-private fun Layers(state: UiState, clip: ClipState, vm: HeadsupViewModel, pictureSource: ((Int) -> Bitmap?)?, onShape: () -> Unit): Boolean {
+private fun Layers(
+    state: UiState,
+    clip: ClipState,
+    vm: HeadsupViewModel,
+    pictureSource: ((Int) -> Bitmap?)?,
+    maskTools: Boolean,
+    onMaskTools: (Boolean) -> Unit,
+): Boolean {
     var adding by rememberSaveable { mutableStateOf(false) }
     val full = clip.masks.size >= ColourMask.MAX_PER_CLIP
     val onMask = state.target == GradeTarget.MASK
@@ -3307,8 +3345,6 @@ private fun Layers(state: UiState, clip: ClipState, vm: HeadsupViewModel, pictur
     val mask = clip.masks.getOrNull(state.selectedMask) ?: return false
     // The selected mask's own actions, always in the same place.
     Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
-        // Its shape is changed in a mode of its own (Shape), its corrections below.
-        PillAction("✎", "Shape", onShape)
         PillAction("◑", "Invert", { vm.updateMask { it.copy(inverted = !it.inverted) } }, selected = mask.inverted)
         // A copy, or its opposite (the sky's mask as the land's), with its tracking.
         if (clip.masks.size < ColourMask.MAX_PER_CLIP) {
@@ -3318,6 +3354,9 @@ private fun Layers(state: UiState, clip: ClipState, vm: HeadsupViewModel, pictur
         if (mask.grade != ColorGrade()) PillAction("↺", "Reset", { vm.updateGrade { ColorGrade() } })
         PillAction("✕", "Delete", { vm.removeMask(state.selectedMask) })
     }
+    // The mask itself (where it is: select, paint, shape, track) or what it changes in the picture.
+    // Only while the mask is worked on does a finger on the picture change it.
+    if (!state.removing) Segmented(listOf("Mask", "Adjust"), if (maskTools) 0 else 1, { onMaskTools(it == 0) })
     return false
 }
 

@@ -210,6 +210,17 @@ data class ClipGroup(val id: Long, val name: String, val grade: ColorGrade = Col
  * The cine assistant's state for one clip: what it measured, the clip's grade and effects before
  * the suggestion (so it can be scaled or undone), and the chosen style and strength.
  */
+/** A long job running in the background: what it is, how far it is, or waiting for the one before. */
+data class BackgroundWork(
+    val id: Long,
+    val label: String,
+    val clipId: Long? = null,
+    /** The mask it tracks; null for work on the whole clip. */
+    val maskIndex: Int? = null,
+    val progress: Float? = null,
+    val waiting: Boolean = true,
+)
+
 /** A Fast edit look being tried on clip [clipId]: what it had before, the look and its strength. */
 data class FastSession(
     val clipId: Long,
@@ -329,6 +340,8 @@ data class UiState(
     val pickingColour: Boolean = false,
     /** A Fast edit look being tried ([HeadsupViewModel.applyFastLook]). */
     val fast: FastSession? = null,
+    /** Long jobs running in the background (tracking with AI, reversing). */
+    val work: List<BackgroundWork> = emptyList(),
     /** An outline being drawn around an object (x, y pairs, fractions of the picture), until the finger lifts. */
     val lassoPath: List<Float> = emptyList(),
     /** A brush stroke being painted (x, y pairs, fractions of the picture), until the finger lifts. */
@@ -1268,6 +1281,62 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
      * The Stop of a long job: AI tracking stops after its frame and keeps what it found; other
      * jobs (copying, Clean up) are cancelled.
      */
+    // Work in the background
+
+    /** Long jobs (tracking with AI, reversing) run one at a time, each after the one before. */
+    private val workLock = kotlinx.coroutines.sync.Mutex()
+    private val workStops = java.util.concurrent.ConcurrentHashMap<Long, java.util.concurrent.atomic.AtomicBoolean>()
+    private val workJobs = java.util.concurrent.ConcurrentHashMap<Long, kotlinx.coroutines.Job>()
+    private var nextWorkId = 1L
+
+    private fun updateWork(id: Long, change: (BackgroundWork) -> BackgroundWork) {
+        _state.update { s -> s.copy(work = s.work.map { if (it.id == id) change(it) else it }) }
+        app.headsup.work.WorkService.show(_state.value.work)
+    }
+
+    /**
+     * Runs [block] in the background (in turn with other such jobs), shown as a line with its
+     * progress and Stop; the app stays usable and keeps running with the screen off.
+     * [block] reports progress (0..1) and asks whether to stop.
+     */
+    private fun runInBackground(label: String, clipId: Long?, maskIndex: Int?, block: suspend (report: (Float) -> Unit, stopped: () -> Boolean) -> Unit) {
+        val id = nextWorkId++
+        val stop = java.util.concurrent.atomic.AtomicBoolean(false)
+        workStops[id] = stop
+        _state.update { it.copy(work = it.work + BackgroundWork(id, label, clipId, maskIndex)) }
+        app.headsup.work.WorkService.show(_state.value.work)
+        app.headsup.work.WorkService.start(getApplication())
+        workJobs[id] = viewModelScope.launch {
+            try {
+                workLock.lock()
+                try {
+                    updateWork(id) { it.copy(waiting = false, progress = 0f) }
+                    var last = 0f
+                    block({ p -> if (kotlin.math.abs(p - last) >= 0.005f || p >= 1f) { last = p; updateWork(id) { it.copy(progress = p) } } }, { stop.get() })
+                } finally {
+                    workLock.unlock()
+                }
+            } finally {
+                workStops.remove(id)
+                workJobs.remove(id)
+                _state.update { s -> s.copy(work = s.work.filter { it.id != id }) }
+                app.headsup.work.WorkService.show(_state.value.work)
+            }
+        }
+    }
+
+    /** Stops background job [id]: what it found so far is kept where it can be (tracking), else it ends. */
+    fun stopBackground(id: Long) {
+        val w = _state.value.work.firstOrNull { it.id == id } ?: return
+        workStops[id]?.set(true)
+        // Waiting, or work that cannot stop part way (reversing): cancelled.
+        if (w.waiting || w.maskIndex == null) workJobs[id]?.cancel()
+        updateWork(id) { it.copy(label = "Stopping…") }
+    }
+
+    /** Whether mask [maskIndex] of clip [clipId] is being tracked (or waits to be). */
+    fun isTracking(clipId: Long, maskIndex: Int, s: UiState = _state.value): Boolean = s.work.any { it.clipId == clipId && it.maskIndex == maskIndex }
+
     // Flags
 
     /** How near the playhead a flag counts as being on it. */
@@ -1297,7 +1366,6 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
      */
     fun reverseClip(index: Int) {
         val s = _state.value
-        if (s.busy) return
         val clip = s.clips.getOrNull(index)?.takeIf { !it.meta.isPhoto } ?: return
         val back = clip.reversed
         if (back != null) {
@@ -1312,19 +1380,18 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
             return
         }
         val context: Application = getApplication()
-        _state.update { it.copy(busy = true, loadingMessage = "Reversing", loadingProgress = 0f) }
-        loadJob = viewModelScope.launch {
+        if (_state.value.work.any { it.clipId == clip.id && it.maskIndex == null }) return
+        runInBackground("Reversing clip ${index + 1}", clip.id, null) { report, _ ->
             try {
-                val file = app.headsup.media.Reverser.reverse(context, clip.meta, clip.trimStartMs, clip.trimEndMs) { p ->
-                    _state.update { it.copy(loadingProgress = p.coerceIn(0f, 1f)) }
-                }
+                val file = app.headsup.media.Reverser.reverse(context, clip.meta, clip.trimStartMs, clip.trimEndMs) { p -> report(p.coerceIn(0f, 1f)) }
                 val read = withContext(Dispatchers.IO) { ClipMetadataReader.read(context, Uri.fromFile(file)) }
                 val meta = reversedMetaOf(clip.meta, read.uri, read.durationMs)
                 val len = meta.durationMs
                 _state.update { st ->
                     st.copy(
                         clips = st.clips.map { c ->
-                            if (c.id != clip.id) c else c.copy(
+                            // Cut again meanwhile, or already reversed: left as it is now.
+                            if (c.id != clip.id || c.reversed != null || c.trimStartMs != clip.trimStartMs || c.trimEndMs != clip.trimEndMs) c else c.copy(
                                 meta = meta, trimStartMs = 0L, trimEndMs = len,
                                 reversed = ReversedSource(clip.meta, clip.trimStartMs, clip.trimEndMs),
                                 flags = c.flags.filter { it in clip.trimStartMs..clip.trimEndMs }.map { (clip.trimEndMs - it).coerceIn(0L, len) }.sorted(),
@@ -1341,8 +1408,6 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
             } catch (e: Exception) {
                 e.printStackTrace()
                 _state.update { it.copy(messages = it.messages + "Could not reverse this clip: ${e.message ?: e.javaClass.simpleName}") }
-            } finally {
-                _state.update { it.copy(busy = false, loadingMessage = null, loadingProgress = null) }
             }
         }
     }
@@ -2585,6 +2650,12 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
         playheadFileMs = (_state.value.selected?.trimStartMs ?: 0L) + clipMs
     }
 
+    /** The playhead in the selected clip, from its cut (0 when it is elsewhere): where a new preview starts. */
+    fun playheadInClip(): Long {
+        val c = _state.value.selected ?: return 0L
+        return if (playheadFileMs in c.trimStartMs..c.trimEndMs) playheadFileMs - c.trimStartMs else 0L
+    }
+
     /** [mask] as it is at the playhead (for the shape rulers). */
     fun maskAtPlayhead(mask: ColourMask): ColourMask = mask.at(playheadFileMs)
 
@@ -2626,10 +2697,11 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
         val context: Application = getApplication()
         // The sky model is larger and the sky changes slowly: 4 maps a second, faded between.
         val step = if (sky) AI_TRACK_SKY_STEP_MS else AI_TRACK_STEP_MS
-        stopRequested = false
-        _state.update { it.copy(busy = true, loadingMessage = "Tracking with AI", loadingProgress = 0f) }
-        loadJob = viewModelScope.launch {
-            try {
+        if (isTracking(clipId, maskIndex, s)) return
+        val strokesAtStart = mask.strokes
+        // In the background: the rest of the app can be used meanwhile (another track waits its turn).
+        runInBackground("Tracking ${maskIndex + 1}", clipId, maskIndex) { report, stopped ->
+            run {
                 val result = withContext(Dispatchers.Default) {
                     val aspect = if (clip.meta.width > 0 && clip.meta.height > 0) clip.meta.width.toFloat() / clip.meta.height else 16f / 9f
                     val (w, h) = app.headsup.color.BrushAtlas.slotSize(aspect)
@@ -2654,7 +2726,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                     var done = 0L
                     fun progress(more: Long) {
                         done += more
-                        _state.update { it.copy(loadingProgress = (done.toFloat() / total).coerceIn(0f, 1f)) }
+                        report((done.toFloat() / total).coerceIn(0f, 1f))
                     }
                     val times = ArrayList<Long>()
                     val maps = ArrayList<ByteArray>()
@@ -2665,9 +2737,10 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                     if (forward) {
                         val follower = app.headsup.color.MaskFollower(context, w, h, scene, invert, start)
                         var first = true
+                        var ahead = 0
                         var last = t0
                         TrackingFrames.forEachPicture(context, uri, t0, endAhead, step, app.headsup.color.Segmenter.INPUT) { ms, picture ->
-                            if (stopRequested) return@forEachPicture false
+                            if (stopped()) return@forEachPicture false
                             progress(ms - last)
                             last = ms
                             if (first) {
@@ -2678,7 +2751,9 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                                 times += ms; maps += app.headsup.core.color.PackedFrames.pack(app.headsup.core.color.MaskSequence.bytes(start))
                                 return@forEachPicture true
                             }
-                            val map = follower.next(picture)
+                            // Things: the model reads every other frame, the ones between follow the picture.
+                            ahead++
+                            val map = if (scene == null && ahead % 2 == 1) follower.between(picture) else follower.next(picture)
                             if (map == null) {
                                 // Nothing from here: the mask disappears.
                                 times += ms; maps += app.headsup.core.color.PackedFrames.pack(ByteArray(w * h))
@@ -2689,12 +2764,12 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                             true
                         }
                     }
-                    if (backward && t0 - endBehind > step / 2 && !stopRequested) {
+                    if (backward && t0 - endBehind > step / 2 && !stopped()) {
                         // Frames come only forward: kept small (as JPEG) and followed from the playhead
                         // back; the playhead's own frame last, to start from.
                         val kept = ArrayList<Pair<Long, ByteArray>>()
                         TrackingFrames.forEachPicture(context, uri, endBehind, t0 + step / 2, step, app.headsup.color.Segmenter.INPUT) { ms, picture ->
-                            if (stopRequested) return@forEachPicture false
+                            if (stopped()) return@forEachPicture false
                             val out = java.io.ByteArrayOutputStream()
                             picture.compress(Bitmap.CompressFormat.JPEG, 92, out)
                             picture.recycle()
@@ -2703,6 +2778,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                         }
                         val follower = app.headsup.color.MaskFollower(context, w, h, scene, invert, start)
                         var last = t0
+                        var behind = 0
                         if (times.isEmpty()) {
                             times += t0; maps += app.headsup.core.color.PackedFrames.pack(app.headsup.core.color.MaskSequence.bytes(start))
                         }
@@ -2713,11 +2789,12 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                         }
                         for ((ms, jpeg) in (if (startFrame != null) kept.dropLast(1) else kept).asReversed()) {
                             coroutineContext.ensureActive()
-                            if (stopRequested) break
+                            if (stopped()) break
                             progress(last - ms)
                             last = ms
                             val picture = android.graphics.BitmapFactory.decodeByteArray(jpeg, 0, jpeg.size) ?: continue
-                            val map = follower.next(picture)
+                            behind++
+                            val map = if (scene == null && behind % 2 == 1) follower.between(picture) else follower.next(picture)
                             picture.recycle()
                             if (map == null) {
                                 times += ms; maps += app.headsup.core.color.PackedFrames.pack(ByteArray(w * h))
@@ -2733,11 +2810,17 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                     val tracked = app.headsup.core.color.MaskSequence(w, h, LongArray(order.size) { times[order[it]] }, app.headsup.core.color.PackedFrames(order.map { maps[it] }, w * h))
                     val merged = old?.merged(tracked) ?: tracked
                     val id = app.headsup.color.MaskSequences.create(context, merged)
-                    TrackedAi(id, tracked.timesMs.first(), tracked.timesMs.last(), tracked.timesMs.size, lostAhead, lostBehind, goneAhead, goneBehind, stopRequested)
+                    TrackedAi(id, tracked.timesMs.first(), tracked.timesMs.last(), tracked.timesMs.size, lostAhead, lostBehind, goneAhead, goneBehind, stopped())
                 }
                 if (result == null) {
                     _state.update { it.copy(messages = it.messages + "Nothing to track: select something in the mask first (Select, or paint it).") }
-                    return@launch
+                    return@runInBackground
+                }
+                // Fixed (or changed) while it was tracked: what was found is for the mask as it was.
+                val now = _state.value.clips.firstOrNull { it.id == clipId }?.masks?.getOrNull(maskIndex)
+                if (now == null || now.strokes != strokesAtStart) {
+                    _state.update { it.copy(messages = it.messages + "Mask ${maskIndex + 1} changed while it was tracked: track it again.") }
+                    return@runInBackground
                 }
                 fun at(ms: Long) = Formats.duration(ms - clip.trimStartMs)
                 _state.update { st ->
@@ -2756,8 +2839,6 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                     )
                 }
                 refreshPreview()
-            } finally {
-                _state.update { it.copy(busy = false, loadingMessage = null, loadingProgress = null) }
             }
         }
     }

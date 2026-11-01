@@ -322,9 +322,30 @@ class GradePreviewShader {
                 return shape * w;
             }
 
-            float shapeAt(float4 a, float4 b, float2 p, float slot) {
+            // A painted (or found) mask is kept small (640 px); its edge is laid onto the full picture
+            // here: where it is soft, each neighbouring mask value counts as much as the picture there
+            // looks like this pixel (a joint bilateral upsample), so the edge follows the picture's.
+            float brushFine(float4 a, float4 b, float2 p, float slot, float3 c) {
+                float w = brushWeight(a, b, p, slot);
+                if (w <= 0.02 || w >= 0.98) return w;
+                float2 st = size / brushSlot * max(b.xy, float2(0.001));
+                float acc = 0.0;
+                float sum = 0.0;
+                for (int j = -1; j <= 1; j++) {
+                    for (int i = -1; i <= 1; i++) {
+                        float2 q = p + float2(float(i), float(j)) * st;
+                        float3 d = float3(img(q).rgb) - c;
+                        float k = exp(-dot(d, d) * 60.0) * ((i == 0 && j == 0) ? 1.0 : 0.6);
+                        acc += brushWeight(a, b, q, slot) * k;
+                        sum += k;
+                    }
+                }
+                return acc / max(sum, 0.0001);
+            }
+
+            float shapeAt(float4 a, float4 b, float2 p, float slot, float3 c, bool fine) {
                 if (a.x > 2.5) return 1.0;
-                if (a.x > 1.5) return brushWeight(a, b, p, slot);
+                if (a.x > 1.5) return fine ? brushFine(a, b, p, slot, c) : brushWeight(a, b, p, slot);
                 return maskWeight(a, b, p);
             }
 
@@ -342,10 +363,10 @@ class GradePreviewShader {
 
             // Each mask's coverage at p (colour c there), joined masks combined into the layer they
             // join (MaskRange.joined).
-            float4 weightsAt(float2 p, float3 c) {
+            float4 weightsAt(float2 p, float3 c, bool fine) {
                 ${List(ColourMask.MAX_PER_CLIP) { i -> """
                 float w$i = 0.0;
-                if (maskCount > $i.5) w$i = cover(m${i}a, m${i}b, mq$i, mc$i, shapeAt(m${i}a, m${i}b, p, $i.0), c);""" }.joinToString("")}
+                if (maskCount > $i.5) w$i = cover(m${i}a, m${i}b, mq$i, mc$i, shapeAt(m${i}a, m${i}b, p, $i.0, c, fine), c);""" }.joinToString("")}
                 float acc = w0;
                 float h = 0.0;
                 float4 f = float4(0.0);
@@ -422,7 +443,7 @@ class GradePreviewShader {
 
             // Where each mask is at p, for masks that glow: their glow and halation there, added up.
             float2 maskGlowAt(float2 p) {
-                float4 w = weightsAt(p, float3(img(p).rgb));
+                float4 w = weightsAt(p, float3(img(p).rgb), false);
                 float2 g = float2(0.0);
                 ${List(ColourMask.MAX_PER_CLIP) { i -> """
                 if (maskCount > ${i}.5 && (mg$i.x > 0.0 || mg$i.y > 0.0)) g += mg$i * w.${"xyzw"[i]};""" }.joinToString("")}
@@ -497,7 +518,7 @@ class GradePreviewShader {
                 if (sharpen > 0.0 || chromaNR > 0.0) src = half4(half3(detailed(coord, float3(src.rgb))), src.a);
                 // Masks first: inside one, its texture, clarity and dehaze add to the clip's.
                 float3 pr = float3(lcTexture, lcClarity, lcDehaze);
-                float4 mw = maskCount > 0.5 ? weightsAt(coord, float3(src.rgb)) : float4(0.0);
+                float4 mw = maskCount > 0.5 ? weightsAt(coord, float3(src.rgb), true) : float4(0.0);
                 ${List(ColourMask.MAX_PER_CLIP) { i -> """
                 float w$i = mw.${"xyzw"[i]};
                 pr += mp$i * w$i;""" }.joinToString("")}

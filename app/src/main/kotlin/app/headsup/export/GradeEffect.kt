@@ -332,9 +332,28 @@ class GradeEffect(
                 return shape * w;
             }
 
-            float shapeAt(vec4 a, vec4 b, vec2 px, float slot) {
+            // As the preview shader's brushFine(): the small mask's soft edge laid onto the full picture.
+            float brushFine(vec4 a, vec4 b, vec2 px, float slot, vec3 c) {
+                float w = brushWeight(a, b, px, slot);
+                if (w <= 0.02 || w >= 0.98) return w;
+                vec2 st = uSize / uBrushSlot * max(b.xy, vec2(0.001));
+                float acc = 0.0;
+                float sum = 0.0;
+                for (int j = -1; j <= 1; j++) {
+                    for (int i = -1; i <= 1; i++) {
+                        vec2 q = px + vec2(float(i), float(j)) * st;
+                        vec3 d = source(vec2(q.x / uSize.x, 1.0 - q.y / uSize.y)) - c;
+                        float k = exp(-dot(d, d) * 60.0) * ((i == 0 && j == 0) ? 1.0 : 0.6);
+                        acc += brushWeight(a, b, q, slot) * k;
+                        sum += k;
+                    }
+                }
+                return acc / max(sum, 0.0001);
+            }
+
+            float shapeAt(vec4 a, vec4 b, vec2 px, float slot, vec3 c, bool fine) {
                 if (a.x > 2.5) return 1.0;
-                if (a.x > 1.5) return brushWeight(a, b, px, slot);
+                if (a.x > 1.5) return fine ? brushFine(a, b, px, slot, c) : brushWeight(a, b, px, slot);
                 return maskWeight(a, b, px);
             }
 
@@ -350,10 +369,10 @@ class GradeEffect(
             }
 
             // As the preview shader's weightsAt() (MaskRange.joined).
-            vec4 weightsAt(vec2 px, vec3 c) {
+            vec4 weightsAt(vec2 px, vec3 c, bool fine) {
                 ${List(ColourMask.MAX_PER_CLIP) { i -> """
                 float w$i = 0.0;
-                if (uMaskCount > $i.5) w$i = cover(uM${i}a, uM${i}b, uMq$i, uMc$i, shapeAt(uM${i}a, uM${i}b, px, $i.0), c);""" }.joinToString("")}
+                if (uMaskCount > $i.5) w$i = cover(uM${i}a, uM${i}b, uMq$i, uMc$i, shapeAt(uM${i}a, uM${i}b, px, $i.0, c, fine), c);""" }.joinToString("")}
                 float acc = w0;
                 float h = 0.0;
                 vec4 f = vec4(0.0);
@@ -399,7 +418,7 @@ class GradeEffect(
 
             // As the preview shader's maskGlowAt(): each glowing mask's glow and halation at px, added up.
             vec2 maskGlowAt(vec2 px) {
-                vec4 w = weightsAt(px, source(vec2(px.x / uSize.x, 1.0 - px.y / uSize.y)));
+                vec4 w = weightsAt(px, source(vec2(px.x / uSize.x, 1.0 - px.y / uSize.y)), false);
                 vec2 g = vec2(0.0);
                 ${List(ColourMask.MAX_PER_CLIP) { i -> """
                 if (uMaskCount > $i.5 && (uMg$i.x > 0.0 || uMg$i.y > 0.0)) g += uMg$i * w.${"xyzw"[i]};""" }.joinToString("")}
@@ -412,7 +431,7 @@ class GradeEffect(
                 vec2 px = vec2(vTexSamplingCoord.x, 1.0 - vTexSamplingCoord.y) * uSize;
                 // Masks first: inside one, its texture, clarity and dehaze add to the clip's.
                 vec3 pr = uPresence;
-                vec4 mw = uMaskCount > 0.5 ? weightsAt(px, srcRgb) : vec4(0.0);
+                vec4 mw = uMaskCount > 0.5 ? weightsAt(px, srcRgb, true) : vec4(0.0);
                 ${List(ColourMask.MAX_PER_CLIP) { i -> """
                 float w$i = mw.${"xyzw"[i]};
                 pr += uMp$i * w$i;""" }.joinToString("")}

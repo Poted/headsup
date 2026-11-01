@@ -210,6 +210,8 @@ fun ClipPreview(
     onEnded: () -> Unit = {},
     /** To the clip before (-1) or after (+1): ⇤ pressed again at a clip's start, ⇥ at its end. */
     onStepClip: ((Int) -> Unit)? = null,
+    /** Where a newly made preview starts in [clip] (from its cut): after turning the phone, where it was. */
+    startMs: Long = 0L,
     /** Flags (or unflags) the moment shown: the clip's file time. */
     onFlag: ((Long) -> Unit)? = null,
     /** Position in the clip to jump to once (e.g. a highlight), then [onSeekDone]. */
@@ -354,7 +356,8 @@ fun ClipPreview(
                 // Only the used part of the file plays; positions count from the cut.
                 val before = shown[0]
                 val fileMs = before?.takeIf { sourceOf(it) == sourceOf(clip) }?.let { it.trimStartMs + exoPlayer.currentPosition }
-                val keep = fileMs?.takeIf { it > clip.trimStartMs && it < clip.trimEndMs }?.minus(clip.trimStartMs) ?: 0L
+                val keep = if (before == null) startMs.coerceIn(0L, (clip.trimEndMs - clip.trimStartMs).coerceAtLeast(0L))
+                else fileMs?.takeIf { it > clip.trimStartMs && it < clip.trimEndMs }?.minus(clip.trimStartMs) ?: 0L
                 exoPlayer.setPlaybackSpeed(clip.speedAt(keep))
                 exoPlayer.setMediaItem(clipped(clip), keep)
                 exoPlayer.prepare()

@@ -97,6 +97,27 @@ class MaskFollower(
         return if (invert) FloatArray(out.size) { 1f - out[it] } else out
     }
 
+    /**
+     * A frame between two the model reads (it takes most of the time): the last answer moved as
+     * the picture moved and laid onto this frame's edges, with the fixes. Null once gone or lost.
+     */
+    fun between(picture: Bitmap): FloatArray? {
+        if (gone || lost) return null
+        val small = Bitmap.createScaledBitmap(picture, width, height, true)
+        val guide = Segmenter.rgb(small)
+        val gray = gray(guide)
+        val motion = lastGray?.let { CameraMotion.between(it, gray) }
+        lastGray = gray
+        if (motion != null) {
+            previous = CameraMotion.carry(previous, width, height, motion)
+            added = added?.let { CameraMotion.carry(it, width, height, motion) }
+            removed = removed?.let { CameraMotion.carry(it, width, height, motion) }
+        }
+        previous = sharp(Segmenter.refine(guide, previous, width, height))
+        val out = withFixes(previous)
+        return if (invert) FloatArray(out.size) { 1f - out[it] } else out
+    }
+
     /** The model's answer with the user's fixes laid over it. */
     private fun withFixes(map: FloatArray): FloatArray {
         val a = added
