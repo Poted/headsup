@@ -920,7 +920,7 @@ private fun UndoRedo(
 
 private data class Quad<A, B, C, D>(val a: A, val b: B, val c: C, val d: D)
 
-private const val UNDO_ALL_HOLD_MS = 2_000L
+private const val UNDO_ALL_HOLD_MS = 900L
 
 /** Animations at their written length, whatever the system's animation scale. */
 private object RealTimeMotion : androidx.compose.ui.MotionDurationScale {
@@ -2364,7 +2364,10 @@ private fun LookActions(state: UiState, vm: HeadsupViewModel) {
         PillAction("⧉", "Copy", vm::copyLook)
         if (state.copiedLook != null) PillAction("⎘", "Paste", { vm.pasteLook(index) })
         if (state.clips.size > 1) PillAction("⇉", "Copy to all", vm::applyLookToAll)
-        if (state.grade != ColorGrade()) PillAction("↺", "Reset", { vm.updateGrade { ColorGrade() } })
+        // Reset: no corrections, and none of the look's effects either.
+        val e = state.selected?.effects
+        val looked = e != null && (e.grain > 0f || e.glow > 0f || e.halation > 0f || e.lens || e.barsRatio != null)
+        if (state.grade != ColorGrade() || looked) PillAction("↺", "Reset", vm::resetBase)
     }
 }
 
@@ -2425,7 +2428,8 @@ private val Adjustment.section: ColourSection
         Adjustment.TEXTURE, Adjustment.CLARITY, Adjustment.DEHAZE -> ColourSection.PRESENCE
         Adjustment.CINE, Adjustment.LUT, Adjustment.MATCH, Adjustment.BLEND -> ColourSection.TOOLS
         Adjustment.MIXER, Adjustment.CHANNELS, Adjustment.BW, Adjustment.CALIBRATION -> ColourSection.MIXER
-        Adjustment.LOOK -> ColourSection.LOOKS
+        // Looks sit with the other tools that set a whole look (LUT, shot match).
+        Adjustment.LOOK -> ColourSection.TOOLS
         Adjustment.GLOW, Adjustment.HALATION -> ColourSection.EFFECTS
     }
 

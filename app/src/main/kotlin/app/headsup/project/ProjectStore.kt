@@ -56,6 +56,9 @@ data class SavedClip(
 /** A reversed clip's source: [originalUri] from [startMs] to [endMs], played backwards. */
 data class SavedReverse(val originalUri: Uri, val startMs: Long, val endMs: Long)
 
+/** A project's saved undo history ([ProjectStore.loadHistory]). */
+data class SavedHistory(val steps: List<ProjectData>, val index: Int, val base: ProjectData?)
+
 /** A film made on a timeline, or an album of photos edited one by one. */
 enum class ProjectKind { VIDEO, PHOTOS }
 
@@ -118,7 +121,35 @@ class ProjectStore(context: Context) {
 
     fun load(name: String): ProjectData? = fileFor(name).takeIf { it.exists() }?.let { Json.project(JSONObject(it.readText())) }
 
+    /**
+     * The undo history of project [name]: its steps (as projects), which one the edit is at, and
+     * the project as first opened. Kept beside the project, so undo works after the app is closed.
+     */
+    fun saveHistory(name: String, steps: List<ProjectData>, index: Int, base: ProjectData?) {
+        val o = JSONObject()
+            .put("index", index)
+            .put("steps", JSONArray(steps.map { Json.project(it) }))
+            .apply { base?.let { put("base", Json.project(it)) } }
+        val tmp = File(dir, "${safe(name)}.history.tmp")
+        tmp.writeText(o.toString())
+        tmp.renameTo(historyFor(name))
+    }
+
+    /** The saved undo history of project [name], or null. */
+    fun loadHistory(name: String): SavedHistory? = runCatching {
+        val f = historyFor(name).takeIf { it.exists() } ?: return null
+        val o = JSONObject(f.readText())
+        SavedHistory(
+            steps = o.optJSONArray("steps")?.let { a -> List(a.length()) { Json.project(a.getJSONObject(it)) } }.orEmpty(),
+            index = o.optInt("index", -1),
+            base = o.optJSONObject("base")?.let { Json.project(it) },
+        )
+    }.getOrNull()
+
+    private fun historyFor(name: String) = File(dir, "${safe(name)}.history")
+
     fun delete(name: String) {
+        historyFor(name).delete()
         fileFor(name).delete()
         if (lastProject == name) lastProject = null
     }
@@ -126,6 +157,7 @@ class ProjectStore(context: Context) {
     fun rename(from: String, to: String): Boolean {
         if (exists(to)) return false
         val ok = !exists(from) || fileFor(from).renameTo(fileFor(to))
+        if (ok) historyFor(from).takeIf { it.exists() }?.renameTo(historyFor(to))
         if (ok && lastProject == from) lastProject = to
         return ok
     }

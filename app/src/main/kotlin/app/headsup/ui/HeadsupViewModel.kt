@@ -733,6 +733,66 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
             historyIndex = history.lastIndex
         }
         updateHistoryFlags()
+        saveHistorySoon()
+    }
+
+    private var historySave: kotlinx.coroutines.Job? = null
+
+    /** Keeps the undo history on disk (a moment after it changes), so undo works after the app is closed. */
+    private fun saveHistorySoon() {
+        historySave?.cancel()
+        val s = _state.value
+        val name = s.projectName
+        val steps = history.toList()
+        val index = historyIndex
+        val base = historyBase
+        historySave = viewModelScope.launch {
+            kotlinx.coroutines.delay(1_500)
+            withContext(Dispatchers.IO) {
+                runCatching {
+                    projectStore.saveHistory(name, steps.map { snap -> snap.asState(s).toProject() }, index, base?.asState(s)?.toProject())
+                }
+            }
+        }
+    }
+
+    /** [s] with the edit of this snapshot. */
+    private fun EditSnapshot.asState(s: UiState) = s.copy(
+        activities = activities, clips = clips, groups = groups, globalGrade = globalGrade, style = style, timelineFps = timelineFps,
+        frameAspect = frameAspect, exportSettings = exportSettings, audioFiles = audioFiles, audioClips = audioClips, clipSound = clipSound,
+        texts = texts, routeMap = routeMap,
+    )
+
+    /**
+     * The undo history saved with project [name], read again onto the opened project ([opened]):
+     * each step built as the project is when opened. The step the edit was at is the project as it
+     * opened, so nothing is recorded twice. Files a step uses that are gone leave it out.
+     */
+    private suspend fun restoreHistory(name: String, opened: UiState, metas: Map<Uri, ClipMetadata?>) {
+        val saved = withContext(Dispatchers.IO) { projectStore.loadHistory(name) } ?: return
+        if (saved.steps.isEmpty() || saved.index !in saved.steps.indices) return
+        val context = getApplication<Application>()
+        // Files the history uses that the project no longer does.
+        val more = withContext(Dispatchers.IO) {
+            (saved.steps + listOfNotNull(saved.base)).flatMap { p -> p.clips.map { it.uri } + p.clips.mapNotNull { it.reversed?.originalUri } }
+                .distinct().filter { it !in metas }
+                .associateWith { uri -> runCatching { ClipMetadataReader.read(context, uri) }.getOrNull() }
+        }
+        val all = metas + more
+        fun snapshotOf(p: ProjectData): EditSnapshot {
+            val activities = opened.activities.filter { a -> a.uri in p.activities }
+            return resynced(editOf(opened, p, clipsOf(p, all), activities)).snapshot()
+        }
+        val steps = withContext(Dispatchers.Default) { saved.steps.map(::snapshotOf).toMutableList() }
+        steps[saved.index] = opened.snapshot()
+        history.clear()
+        history += steps
+        historyIndex = saved.index
+        historyBase = saved.base?.let { withContext(Dispatchers.Default) { snapshotOf(it) } } ?: steps.first()
+        historyStartsAgain = false
+        updateHistoryFlags()
+        // A step recorded while this was read would otherwise be saved over it.
+        saveHistorySoon()
     }
 
     /** The files a snapshot uses. */
@@ -748,6 +808,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
         if (historyIndex <= 0) return
         historyIndex--
         restore(history[historyIndex])
+        saveHistorySoon()
     }
 
     /**
@@ -831,6 +892,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
         if (historyIndex >= history.lastIndex) return
         historyIndex++
         restore(history[historyIndex])
+        saveHistorySoon()
     }
 
     /**
@@ -960,60 +1022,15 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                     runCatching { ClipMetadataReader.read(context, uri) }.onFailure { if (uri !in copies) missing += uri.lastPathSegment.orEmpty() }.getOrNull()
                 }
             }
-            val clips = project.clips.mapNotNull { saved ->
-                // A reversed clip whose copy is gone plays forwards again (Reverse makes it anew).
-                val original = saved.reversed?.let { metas[it.originalUri] }
-                val reversedMeta = if (saved.reversed != null && original != null) metas[saved.uri]?.let { reversedMetaOf(original, it.uri, it.durationMs) } else null
-                val c = if (saved.reversed != null && reversedMeta == null) saved.copy(uri = saved.reversed.originalUri, trimStartMs = saved.reversed.startMs, trimEndMs = saved.reversed.endMs, reversed = null) else saved
-                val meta = reversedMeta ?: metas[c.uri] ?: return@mapNotNull null
-                val start = c.trimStartMs.coerceIn(0L, (meta.durationMs - MIN_CLIP_MS).coerceAtLeast(0L))
-                ClipState(
-                    meta, sync = null,
-                    flags = c.flags,
-                    reversed = if (reversedMeta != null && original != null && c.reversed != null) ReversedSource(original, c.reversed.startMs, c.reversed.endMs) else null,
-                    trimStartMs = start,
-                    trimEndMs = c.trimEndMs.coerceIn(start, meta.durationMs),
-                    manualOffsetMs = c.manualOffsetMs,
-                    colorGrade = c.colorGrade,
-                    lutName = c.lutName,
-                    manualStart = c.manualStart,
-                    grade = c.grade,
-                    effects = c.effects,
-                    masks = c.masks,
-                    transitionMs = c.transitionMs,
-                    reframe = c.reframe,
-                    speed = c.speed,
-                    speedCurve = c.speedCurve,
-                    retouch = c.retouch,
-                    muteChangedSpeed = c.muteChangedSpeed,
-                    fadeInMs = c.fadeInMs,
-                    fadeOutMs = c.fadeOutMs,
-                    soundLevel = c.soundLevel,
-                    rawDevelop = c.rawDevelop,
-                    picked = c.picked,
-                    groupId = c.groupId,
-                )
-            }
+            val clips = clipsOf(project, metas)
             scopeFrame = null
             // Older projects of only photos open as albums.
             val kind = project.kind ?: if (clips.isNotEmpty() && clips.all { it.meta.isPhoto }) ProjectKind.PHOTOS else ProjectKind.VIDEO
             _state.update { s ->
                 resynced(
-                    s.copy(
+                    editOf(s, project, clips, activities).copy(
                         projectName = project.name,
                         projectKind = kind,
-                        activities = activities.sortedBy { it.track.startMs },
-                        clips = foldedIntoClips(clips, project),
-                        groups = project.groups.map { ClipGroup(it.id, it.name, ColorGrade(), null) },
-                        globalGrade = ColorGrade(),
-                        timelineFps = project.timelineFps,
-                        // Older projects kept the shape per clip: one shared by all becomes the frame's.
-                        frameAspect = project.frameAspect ?: clips.map { it.reframe.aspect }.distinct().singleOrNull(),
-                        audioFiles = project.audioFiles.distinctBy { it.uri },
-                        audioClips = compactLanes(project.audioClips),
-                        clipSound = project.clipSound,
-                        texts = project.texts,
-                        routeMap = project.routeMap,
                         selectedText = null,
                         selectedAudio = null,
                         selectedClip = clips.indices.firstOrNull(),
@@ -1036,9 +1053,63 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                 )
             }
             projectStore.lastProject = project.name
+            // Undo goes on where it was, even after the app was closed.
+            runCatching { restoreHistory(project.name, _state.value, metas) }
             analyseAudio()
             refreshPreview()
         }
+    }
+
+    /** [s] with the edit of a saved [project] (its [clips] and [activities] already read). */
+    private fun editOf(s: UiState, project: ProjectData, clips: List<ClipState>, activities: List<LoadedActivity>): UiState = s.copy(
+        activities = activities.sortedBy { it.track.startMs },
+        clips = foldedIntoClips(clips, project),
+        groups = project.groups.map { ClipGroup(it.id, it.name, ColorGrade(), null) },
+        globalGrade = ColorGrade(),
+        timelineFps = project.timelineFps,
+        // Older projects kept the shape per clip: one shared by all becomes the frame's.
+        frameAspect = project.frameAspect ?: clips.map { it.reframe.aspect }.distinct().singleOrNull(),
+        audioFiles = project.audioFiles.distinctBy { it.uri },
+        audioClips = compactLanes(project.audioClips),
+        clipSound = project.clipSound,
+        texts = project.texts,
+        routeMap = project.routeMap,
+    )
+
+    /** The clips of a saved [project], their files described by [metas] (missing ones left out). */
+    private fun clipsOf(project: ProjectData, metas: Map<Uri, ClipMetadata?>): List<ClipState> = project.clips.mapNotNull { saved ->
+        // A reversed clip whose copy is gone plays forwards again (Reverse makes it anew).
+        val original = saved.reversed?.let { metas[it.originalUri] }
+        val reversedMeta = if (saved.reversed != null && original != null) metas[saved.uri]?.let { reversedMetaOf(original, it.uri, it.durationMs) } else null
+        val c = if (saved.reversed != null && reversedMeta == null) saved.copy(uri = saved.reversed.originalUri, trimStartMs = saved.reversed.startMs, trimEndMs = saved.reversed.endMs, reversed = null) else saved
+        val meta = reversedMeta ?: metas[c.uri] ?: return@mapNotNull null
+        val start = c.trimStartMs.coerceIn(0L, (meta.durationMs - MIN_CLIP_MS).coerceAtLeast(0L))
+        ClipState(
+            meta, sync = null,
+            flags = c.flags,
+            reversed = if (reversedMeta != null && original != null && c.reversed != null) ReversedSource(original, c.reversed.startMs, c.reversed.endMs) else null,
+            trimStartMs = start,
+            trimEndMs = c.trimEndMs.coerceIn(start, meta.durationMs),
+            manualOffsetMs = c.manualOffsetMs,
+            colorGrade = c.colorGrade,
+            lutName = c.lutName,
+            manualStart = c.manualStart,
+            grade = c.grade,
+            effects = c.effects,
+            masks = c.masks,
+            transitionMs = c.transitionMs,
+            reframe = c.reframe,
+            speed = c.speed,
+            speedCurve = c.speedCurve,
+            retouch = c.retouch,
+            muteChangedSpeed = c.muteChangedSpeed,
+            fadeInMs = c.fadeInMs,
+            fadeOutMs = c.fadeOutMs,
+            soundLevel = c.soundLevel,
+            rawDevelop = c.rawDevelop,
+            picked = c.picked,
+            groupId = c.groupId,
+        )
     }
 
     /** Starts an empty project; the current one stays saved. */
@@ -2455,6 +2526,17 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
             sizeY = if (m.kind != MaskKind.LINEAR) (m.sizeY * zoom).coerceIn(0.05f, if (m.kind == MaskKind.BRUSH) 5f else 2f) else m.sizeY,
             softness = if (m.kind == MaskKind.LINEAR) (m.softness * zoom).coerceIn(0.02f, 1f) else m.softness,
         )
+    }
+
+    /** The base layer back to no corrections and none of the look's effects (grain, glow, halation, lens, bars). */
+    fun resetBase() {
+        val index = _state.value.selectedClip ?: return
+        updateClip(index) {
+            it.copy(
+                grade = ColorGrade(),
+                effects = it.effects.copy(grain = 0f, glow = 0f, halation = 0f, lensAberration = 0f, lensSoftness = 0f, barsRatio = null),
+            )
+        }
     }
 
     fun updateBrush(transform: (BrushSettings) -> BrushSettings) = _state.update { it.copy(brush = transform(it.brush)) }
