@@ -27,4 +27,18 @@ class ColourDensityTest {
         val m2 = muted.copyOf().also { ColourDensity.apply(0.6f, it) }
         assertTrue(luma(muted) - luma(m2) < luma(red) - luma(deeper))
     }
+
+    @Test
+    fun `a look is fitted to the clip only where it needs it`() {
+        fun stats(median: Float, clipped: Float = 0f, foliage: Float = 0f, crushed: Float = 0f) =
+            FrameStats(low = 0.05f, median = median, high = 0.9f, clipped = clipped, crushed = crushed, colourfulness = 0.05f, skin = 0f, foliage = foliage, warmth = 0f)
+        // A well exposed, calm clip needs nothing.
+        assertTrue(CineAssistant.fit(stats(0.4f)) == ColorGrade())
+        // Too dark: a little brighter; not for a look meant to stay dark.
+        assertTrue(CineAssistant.fit(stats(0.12f)).exposure in 0.1f..0.5f)
+        assertEquals(0f, CineAssistant.fit(stats(0.12f), keepDark = true).exposure)
+        // Clipping highlights and loud greens: a softer shoulder, calmer colours.
+        val f = CineAssistant.fit(stats(0.4f, clipped = 0.03f, foliage = 0.4f))
+        assertTrue(f.rolloff > 0.2f && f.tame > 0.3f)
+    }
 }

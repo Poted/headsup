@@ -2190,6 +2190,8 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                     return@launch
                 }
                 _state.update { it.copy(lookStats = clip.id to stats) }
+                // A look being tried is fitted to what was just measured.
+                _state.value.fast?.takeIf { it.clipId == clip.id }?.let { applyFastLook(it.look, it.strength) }
             } finally {
                 _state.update { it.copy(busy = false, loadingMessage = null) }
             }
@@ -2205,20 +2207,6 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
             LutBaker.sampleBaked(cube, ((p shr 16) and 0xFF) / 255f, ((p shr 8) and 0xFF) / 255f, (p and 0xFF) / 255f, rgb)
             pixels[i] = (0xFF shl 24) or ((rgb[0] * 255).toInt() shl 16) or ((rgb[1] * 255).toInt() shl 8) or (rgb[2] * 255).toInt()
         }
-    }
-
-    /**
-     * An adaptive style ([CineStyle], fitted to the measured clip) on the selected clip, in place of
-     * a Fast edit look being tried.
-     */
-    fun applyAdaptiveLook(style: CineStyle, strength: Float = 1f) {
-        val s = _state.value
-        val clip = s.selected ?: return
-        val stats = s.lookStats?.takeIf { it.first == clip.id }?.second ?: return
-        if (s.fast?.clipId == clip.id) closeFast(undo = true)
-        val now = _state.value.selected ?: return
-        if (_state.value.cine?.clipId != clip.id) _state.update { it.copy(cine = CineSession(clip.id, stats, now.grade, now.effects)) }
-        applyCine(style, strength)
     }
 
     fun analyseForCine(frame: Bitmap) {
@@ -2324,8 +2312,11 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
         val clip = s.selected ?: return
         val session = s.fast?.takeIf { it.clipId == clip.id } ?: FastSession(clip.id, clip.grade, clip.effects, look)
         val k = strength.coerceIn(0f, 1f)
+        // Measured: the look's character, plus what this clip needs to suit it.
+        val fit = s.lookStats?.takeIf { it.first == clip.id }?.second?.let { CineAssistant.fit(it, keepDark = look == app.headsup.color.FastLook.NIGHT) }
+        val grade = if (fit != null) look.grade + fit else look.grade
         _state.update { it.copy(fast = session.copy(look = look, strength = k)) }
-        updateClip(index) { it.copy(grade = session.baseGrade + look.grade * k, effects = look.effectsOn(session.baseEffects, k)) }
+        updateClip(index) { it.copy(grade = session.baseGrade + grade * k, effects = look.effectsOn(session.baseEffects, k)) }
     }
 
     /** Hold to see the clip as it was before the Fast edit look. */

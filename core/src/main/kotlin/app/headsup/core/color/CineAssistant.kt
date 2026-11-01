@@ -90,6 +90,27 @@ object CineAssistant {
         )
     }
 
+    /**
+     * What a complete look needs on top of its own character to suit this clip: brightness only
+     * when the clip is clearly too dark or too bright (and not for a look meant to stay dark,
+     * [keepDark]); a softer shoulder when highlights clip; calmer loud greens and blues; blacks
+     * lifted a touch when they are crushed. A clip that needs nothing gets nothing.
+     */
+    fun fit(stats: FrameStats, keepDark: Boolean = false): ColorGrade {
+        val m = stats.median.coerceIn(0.05f, 0.95f)
+        val exposure = when {
+            keepDark -> 0f
+            m < 0.22f || m > 0.62f -> ((stops(0.38f) - stops(m)) * 0.4f).coerceIn(-0.5f, 0.5f)
+            else -> 0f
+        }
+        return ColorGrade(
+            exposure = exposure,
+            rolloff = (stats.clipped * 8f).coerceIn(0f, 0.4f),
+            tame = ((stats.foliage - 0.1f) * 1.2f).coerceIn(0f, 0.35f),
+            blacks = if (stats.crushed > 0.05f) 0.06f else 0f,
+        )
+    }
+
     fun suggest(stats: FrameStats, style: CineStyle): CineSuggestion {
         // Film sits its mid-tones a little lower than video, leaving room for the highlights.
         val targetMedian = when (style) {

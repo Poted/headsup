@@ -20,6 +20,14 @@ enum class FastLook(val label: String, val grade: ColorGrade, val effects: Effec
         ColorGrade(highlights = -0.15f, blacks = 0.1f, saturation = -0.05f, rolloff = 0.5f, toneAmount = 0.25f, tame = 0.35f, density = 0.35f),
         EffectSettings(grain = 0.32f, grainSize = 1f, grainColour = 0.3f, glow = 0.1f, glowThreshold = 0.78f, halation = 0.25f),
     ),
+    WARM_FILM(
+        "Warm film",
+        ColorGrade(
+            temperature = 0.12f, saturation = -0.08f, blacks = 0.12f, rolloff = 0.4f, toneAmount = 0.35f,
+            shadowHue = 250f, highlightHue = 135f, tame = 0.3f, density = 0.3f,
+        ),
+        EffectSettings(grain = 0.2f, grainSize = 1f, grainColour = 0.3f, halation = 0.3f, glowThreshold = 0.78f),
+    ),
     VINTAGE(
         "Vintage lens",
         ColorGrade(temperature = 0.1f, blacks = 0.14f, saturation = -0.15f, rolloff = 0.45f, tame = 0.3f, density = 0.2f),
