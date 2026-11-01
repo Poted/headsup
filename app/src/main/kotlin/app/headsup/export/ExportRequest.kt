@@ -36,6 +36,10 @@ class GradeSetup(
     val warp: DoubleArray? = null,
     /** How far into the clip this part starts (file time), for the blend from the previous clip. */
     val timeOffsetMs: Long = 0L,
+    /** The masks of the clip blended in from, as at its end ([fromMaskMs], its file time), and their tables. */
+    val fromMasks: List<ColourMask> = emptyList(),
+    val fromMaskCubes: List<Array<Array<IntArray>>> = emptyList(),
+    val fromMaskMs: Long = 0L,
 ) {
     /** True when a single colour table is not enough. */
     val needsGradeEffect: Boolean get() = masks.isNotEmpty() || (fromCube != null && transitionMs > 0) || !presence.isNeutral || warp != null

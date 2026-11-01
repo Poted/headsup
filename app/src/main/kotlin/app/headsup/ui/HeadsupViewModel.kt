@@ -341,6 +341,10 @@ data class UiState(
     /** Colour tables inside the selected clip's masks, and the previous clip's for a transition. */
     val previewMaskCubes: List<Array<Array<IntArray>>> = emptyList(),
     val previewFromCube: Array<Array<IntArray>>? = null,
+    /** The masks of the clip blended in from (as at its end, [previewFromMaskMs]) and their tables. */
+    val previewFromMasks: List<ColourMask> = emptyList(),
+    val previewFromMaskCubes: List<Array<Array<IntArray>>> = emptyList(),
+    val previewFromMaskMs: Long = 0L,
     /** Looks of the clips before and after the selected one (null: untouched), for the preview at a cut. */
     val previewNeighbourCubes: Map<Long, Array<Array<IntArray>>?> = emptyMap(),
     /** The neighbours' blends in: the look of the clip before each (null when it has none). */
@@ -3440,6 +3444,8 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                     val cube = if (graded != null) bake(s.lutFor(graded), s.appliedGrade(graded), wide) else if (wide) bake(null, ColorGrade(), true) else null
                     val maskCubes = graded?.let { c -> s.maskedGrades(c).map { bakeAlways(s.lutFor(c), it, wide) } }.orEmpty()
                     val fromCube = graded?.let(s::transitionSource)?.let { prev -> bakeLook(s, prev) }
+                    val (fromMasks, fromMaskCubes) = graded?.let { fromMasksOf(s, it) } ?: (emptyList<ColourMask>() to emptyList())
+                    val fromMaskMs = graded?.let(s::transitionSource)?.let { it.trimEndMs - 1 } ?: 0L
                     val neighbours = s.selectedClip?.let { i -> listOfNotNull(s.clips.getOrNull(i - 1), s.clips.getOrNull(i + 1)) }.orEmpty()
                         .filter { !it.meta.isPhoto }
                         .associate { n -> n.id to neighbourLook(s, n) }
@@ -3451,6 +3457,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                         it.copy(
                             previewCube = cube, previewMaskCubes = maskCubes, previewFromCube = fromCube, previewNeighbourCubes = neighbours,
                             previewNeighbourFrom = neighbourFrom, previewCubesFor = clip?.id,
+                            previewFromMasks = fromMasks, previewFromMaskCubes = fromMaskCubes, previewFromMaskMs = fromMaskMs,
                         )
                     }
                     analyseScope()
@@ -3477,6 +3484,15 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
         val lut = loadLut(lutName)
         if (lut == null && grade.isNeutralColour && !wide) return null
         return withContext(Dispatchers.Default) { LutBaker.bake(lut, grade, wideGamut = wide) }
+    }
+
+    /**
+     * The masks of the clip [clip] blends in from, and the tables inside them: the blend starts
+     * from how that clip looked at its end, masks and all, not from its look outside them only.
+     */
+    private suspend fun fromMasksOf(s: UiState, clip: ClipState): Pair<List<ColourMask>, List<Array<Array<IntArray>>>> {
+        val prev = s.transitionSource(clip)?.takeIf { it.colorGrade && it.masks.isNotEmpty() } ?: return emptyList<ColourMask>() to emptyList()
+        return prev.masks to s.maskedGrades(prev).map { bakeAlways(s.lutFor(prev), it, prev.wideGamut) }
     }
 
     /** Table for [clip]'s whole look outside masks; untouched colours when its colour is off. */
@@ -3647,7 +3663,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                 timelineStartMs = r.timelineStartMs + clip.timelineOfSource(from),
                 telemetry = r.telemetry?.let { Telemetry(it.track, it.startUtcMs + from) },
                 grade = r.grade?.let { g ->
-                    GradeSetup(g.cube, g.vignette, g.masks, g.maskCubes, g.fromCube, g.transitionMs, g.presence, g.warp, timeOffsetMs = from)
+                    GradeSetup(g.cube, g.vignette, g.masks, g.maskCubes, g.fromCube, g.transitionMs, g.presence, g.warp, timeOffsetMs = from, fromMasks = g.fromMasks, fromMaskCubes = g.fromMaskCubes, fromMaskMs = g.fromMaskMs)
                 },
                 pieceOf = clip.id,
             )
@@ -3676,6 +3692,8 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                 val masks = if (graded) clip.masks else emptyList()
                 val maskCubes = if (graded) s.maskedGrades(clip).map { bakeAlways(lutName, it, wide) } else emptyList()
                 val fromCube = if (graded) s.transitionSource(clip)?.let { bakeLook(s, it) } else null
+                val (fromMasks, fromMaskCubes) = if (graded && fromCube != null) fromMasksOf(s, clip) else (emptyList<ColourMask>() to emptyList())
+                val fromMaskMs = s.transitionSource(clip)?.let { it.trimEndMs - 1 } ?: 0L
                 ExportRequest(
                     kind = kind,
                     uri = clip.meta.uri,
@@ -3692,7 +3710,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                     style = s.style,
                     effects = clip.effects,
                     grade = s.framing(clip).warp.let { warp ->
-                        if (graded) GradeSetup(cube, applied.vignette, masks, maskCubes, fromCube, clip.transitionMs, applied.presence, warp)
+                        if (graded) GradeSetup(cube, applied.vignette, masks, maskCubes, fromCube, clip.transitionMs, applied.presence, warp, fromMasks = fromMasks, fromMaskCubes = fromMaskCubes, fromMaskMs = fromMaskMs)
                         else if (cube != null || warp != null) GradeSetup(cube, 0f, warp = warp) else null
                     },
                     reframe = s.framing(clip),

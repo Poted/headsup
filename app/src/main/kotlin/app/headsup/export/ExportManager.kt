@@ -265,6 +265,9 @@ class ExportManager(private val context: Context) {
                 presence = grade?.presence ?: app.headsup.core.color.Presence.NONE,
                 warp = grade?.warp,
                 timeOffsetMs = grade?.timeOffsetMs ?: 0L,
+                fromMasks = grade?.fromMasks.orEmpty(),
+                fromMaskTables = grade?.fromMaskCubes.orEmpty(),
+                fromMaskMs = grade?.fromMaskMs ?: 0L,
             )
         } else {
             grade?.cube?.let { effects += SingleColorLut.createFromCube(it) }

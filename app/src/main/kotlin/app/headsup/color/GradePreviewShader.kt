@@ -20,6 +20,8 @@ class GradeTables(
     val base: Array<Array<IntArray>>?,
     val masks: List<Array<Array<IntArray>>> = emptyList(),
     val from: Array<Array<IntArray>>? = null,
+    /** The tables of the masks of the clip blended in from. */
+    val fromMasks: List<Array<Array<IntArray>>> = emptyList(),
 )
 
 /**
@@ -36,6 +38,7 @@ class GradePreviewShader {
     init {
         setTables(GradeTables(null))
         setBrush(null)
+        setFromBrush(null)
     }
 
     /** The clip's painted masks ([BrushAtlas]); null when it has none. */
@@ -48,6 +51,16 @@ class GradePreviewShader {
         shader.setFloatUniform("brushSlot", bitmap.width.toFloat() / slots, bitmap.height.toFloat())
     }
 
+    /** The painted masks of the clip blended in from, as at its end; null when it has none. */
+    fun setFromBrush(atlas: Bitmap?) {
+        val bitmap = atlas ?: BrushAtlas.EMPTY
+        shader.setInputShader("brushFrom", BitmapShader(bitmap, Shader.TileMode.CLAMP, Shader.TileMode.CLAMP).apply {
+            filterMode = BitmapShader.FILTER_MODE_LINEAR
+        })
+        val slots = if (atlas == null) 1 else ColourMask.MAX_PER_CLIP
+        shader.setFloatUniform("brushFromSlot", bitmap.width.toFloat() / slots, bitmap.height.toFloat())
+    }
+
     fun setTables(tables: GradeTables) {
         val base = tables.base ?: identity
         val baseShader = tableShader(base)
@@ -56,6 +69,9 @@ class GradePreviewShader {
             shader.setInputShader("lutM$i", tables.masks.getOrNull(i)?.let(::tableShader) ?: baseShader)
         }
         shader.setInputShader("lutFrom", tables.from?.let(::tableShader) ?: baseShader)
+        for (i in 0 until ColourMask.MAX_PER_CLIP) {
+            shader.setInputShader("lutFM$i", tables.fromMasks.getOrNull(i)?.let(::tableShader) ?: baseShader)
+        }
         tableSize = base.size
     }
 
@@ -75,7 +91,9 @@ class GradePreviewShader {
         detail: RawDevelop? = null,
         presence: Presence = Presence.NONE,
         warp: DoubleArray? = null,
-    ): androidx.compose.ui.graphics.RenderEffect = nativeEffect(effects, zebra, frame, width, height, masks, fromWeight, detail, presence, warp).asComposeRenderEffect()
+        /** The masks of the clip blended in from, as at its end. */
+        fromMasks: List<ColourMask> = emptyList(),
+    ): androidx.compose.ui.graphics.RenderEffect = nativeEffect(effects, zebra, frame, width, height, masks, fromWeight, detail, presence, warp, fromMasks).asComposeRenderEffect()
 
     /** The same, for drawing outside Compose (a photo export). */
     fun nativeEffect(
@@ -89,8 +107,9 @@ class GradePreviewShader {
         detail: RawDevelop? = null,
         presence: Presence = Presence.NONE,
         warp: DoubleArray? = null,
+        fromMasks: List<ColourMask> = emptyList(),
     ): RenderEffect {
-        setUniforms(effects, zebra, frame, width, height, masks, fromWeight, detail, presence, warp)
+        setUniforms(effects, zebra, frame, width, height, masks, fromWeight, detail, presence, warp, fromMasks)
         return RenderEffect.createRuntimeShaderEffect(shader, "image")
     }
 
@@ -124,6 +143,7 @@ class GradePreviewShader {
         detail: RawDevelop?,
         presence: Presence,
         warp: DoubleArray?,
+        fromMasks: List<ColourMask> = emptyList(),
     ) {
         // Perspective correction: the 3×3 (row by row) given to the shader column by column.
         shader.setFloatUniform("hasWarp", if (warp != null) 1f else 0f)
@@ -156,6 +176,16 @@ class GradePreviewShader {
         }
         shader.setFloatUniform("maskGlow", if (masks.take(ColourMask.MAX_PER_CLIP).any { it.grade.glow > 0f || it.grade.halation > 0f }) 1f else 0f)
         shader.setFloatUniform("fromWeight", fromWeight)
+        shader.setFloatUniform("fromMaskCount", if (fromWeight > 0f) fromMasks.size.coerceAtMost(ColourMask.MAX_PER_CLIP).toFloat() else 0f)
+        for (i in 0 until ColourMask.MAX_PER_CLIP) {
+            val m = fromMasks.getOrNull(i)
+            val (a, b) = m?.shaderParams() ?: (FloatArray(4) to FloatArray(4))
+            shader.setFloatUniform("fm${i}a", a)
+            shader.setFloatUniform("fm${i}b", b)
+            val (q, k) = (m ?: NO_MASK).rangeParams()
+            shader.setFloatUniform("fmq$i", q)
+            shader.setFloatUniform("fmc$i", k)
+        }
         shader.setFloatUniform("grain", effects.grain)
         shader.setFloatUniform("grainSize", effects.grainSize)
         shader.setFloatUniform("glow", effects.glow)
@@ -192,7 +222,81 @@ class GradePreviewShader {
             }
         """
 
-        val TABLES = listOf("lut") + List(ColourMask.MAX_PER_CLIP) { "lutM$it" } + "lutFrom"
+        val TABLES = listOf("lut") + List(ColourMask.MAX_PER_CLIP) { "lutM$it" } + "lutFrom" + List(ColourMask.MAX_PER_CLIP) { "lutFM$it" }
+
+        /**
+         * The functions for one set of masks: [m] names their uniforms (m0a…), [brush] their
+         * atlas, [slot] its slot size, [count] how many; [sfx] ends the functions' names.
+         */
+        fun maskCode(sfx: String, m: String, brush: String, slot: String, count: String): String = """
+            // A brush mask (BrushMask): the pixel taken back to where its strokes were painted
+            // (the mask at BrushMask.BASE: centred, upright, scale 1), then read from its atlas slot.
+            // The atlas at coord: the mask's coverage (r) and where its edge was made gradual (g).
+            float2 brushRG$sfx(float4 a, float4 b, float2 coord, float slot) {
+                float aspect = size.x / size.y;
+                float2 d = float2((coord.x / size.x - a.y) * aspect, coord.y / size.y - a.z);
+                float c = cos(a.w);
+                float s = sin(a.w);
+                float2 u = float2(d.x * c + d.y * s, -d.x * s + d.y * c) / max(b.xy, float2(0.001));
+                float2 q = float2(0.5 + u.x / aspect, 0.5 + u.y);
+                if (q.x >= 0.0 && q.x <= 1.0 && q.y >= 0.0 && q.y <= 1.0) {
+                    float2 p = float2(
+                        slot * $slot.x + clamp(q.x * $slot.x, 0.5, $slot.x - 0.5),
+                        clamp(q.y * $slot.y, 0.5, $slot.y - 0.5));
+                    return float2($brush.eval(p).rg);
+                }
+                return float2(0.0);
+            }
+
+            float brushWeight$sfx(float4 a, float4 b, float2 coord, float slot) {
+                float w = brushRG$sfx(a, b, coord, slot).x;
+                return b.w > 0.5 ? 1.0 - w : w;
+            }
+
+            // A painted (or found) mask is kept small (640 px); its edge is laid onto the full picture
+            // here: where it is soft, each neighbouring mask value counts as much as the picture there
+            // looks like this pixel (a joint bilateral upsample), so the edge follows the picture's.
+            float brushFine$sfx(float4 a, float4 b, float2 p, float slot, float3 c) {
+                float w = brushWeight$sfx(a, b, p, slot);
+                // Feathered (b.z) or softened here (g): its soft band is wanted, not laid onto the picture's edges.
+                if (w <= 0.02 || w >= 0.98 || b.z > 0.001) return w;
+                float soft = brushRG$sfx(a, b, p, slot).y;
+                if (soft >= 0.98) return w;
+                float2 st = size / $slot * max(b.xy, float2(0.001));
+                float acc = 0.0;
+                float sum = 0.0;
+                for (int j = -1; j <= 1; j++) {
+                    for (int i = -1; i <= 1; i++) {
+                        float2 q = p + float2(float(i), float(j)) * st;
+                        float3 d = float3(img(q).rgb) - c;
+                        float k = exp(-dot(d, d) * 60.0) * ((i == 0 && j == 0) ? 1.0 : 0.6);
+                        acc += brushWeight$sfx(a, b, q, slot) * k;
+                        sum += k;
+                    }
+                }
+                return mix(acc / max(sum, 0.0001), w, soft);
+            }
+
+            float shapeAt$sfx(float4 a, float4 b, float2 p, float slot, float3 c, bool fine) {
+                if (a.x > 2.5) return 1.0;
+                if (a.x > 1.5) return fine ? brushFine$sfx(a, b, p, slot, c) : brushWeight$sfx(a, b, p, slot);
+                return maskWeight(a, b, p);
+            }
+
+            // Each mask's coverage at p (colour c there), joined masks combined into the layer they
+            // join (MaskRange.joined).
+            float4 weightsAt$sfx(float2 p, float3 c, bool fine) {
+                ${List(ColourMask.MAX_PER_CLIP) { i -> """
+                float w$i = 0.0;
+                if ($count > $i.5) w$i = cover(${m}${i}a, ${m}${i}b, ${m}q$i, ${m}c$i, shapeAt$sfx(${m}${i}a, ${m}${i}b, p, $i.0, c, fine), c);""" }.joinToString("")}
+                float acc = w0;
+                float h = 0.0;
+                float4 f = float4(0.0);
+                ${(1 until ColourMask.MAX_PER_CLIP).joinToString("") { i -> """
+                if (${m}q$i.w < 0.5) { f = putAt(f, h, acc); acc = w$i; h = $i.0; } else { acc = joinOf(acc, w$i, ${m}q$i.w); }""" }}
+                return putAt(f, h, acc);
+            }
+        """
 
         // The tables are laid out like Media3's SingleColorLut: N wide, N² high, x = b, y = g + N·r.
         // They are sampled without filtering and interpolated here (trilinear); glow taps use the
@@ -205,6 +309,11 @@ class GradePreviewShader {
             uniform float n;
             uniform float2 size;
             uniform float maskCount;
+            // The clip blended in from: its masks as they were at its end, its atlas.
+            uniform shader brushFrom;
+            uniform float2 brushFromSlot;
+            uniform float fromMaskCount;
+            ${List(ColourMask.MAX_PER_CLIP) { "uniform float4 fm${it}a;\nuniform float4 fm${it}b;\nuniform float4 fmq$it;\nuniform float4 fmc$it;" }.joinToString("\n")}
             ${List(ColourMask.MAX_PER_CLIP) { "uniform float4 m${it}a;\nuniform float4 m${it}b;" }.joinToString("\n")}
             uniform float fromWeight;
             uniform float zebra;
@@ -267,29 +376,6 @@ class GradePreviewShader {
                 return b.w > 0.5 ? 1.0 - w : w;
             }
 
-            // A brush mask (BrushMask): the pixel taken back to where its strokes were painted
-            // (the mask at BrushMask.BASE: centred, upright, scale 1), then read from its atlas slot.
-            // The atlas at coord: the mask's coverage (r) and where its edge was made gradual (g).
-            float2 brushRG(float4 a, float4 b, float2 coord, float slot) {
-                float aspect = size.x / size.y;
-                float2 d = float2((coord.x / size.x - a.y) * aspect, coord.y / size.y - a.z);
-                float c = cos(a.w);
-                float s = sin(a.w);
-                float2 u = float2(d.x * c + d.y * s, -d.x * s + d.y * c) / max(b.xy, float2(0.001));
-                float2 q = float2(0.5 + u.x / aspect, 0.5 + u.y);
-                if (q.x >= 0.0 && q.x <= 1.0 && q.y >= 0.0 && q.y <= 1.0) {
-                    float2 p = float2(
-                        slot * brushSlot.x + clamp(q.x * brushSlot.x, 0.5, brushSlot.x - 0.5),
-                        clamp(q.y * brushSlot.y, 0.5, brushSlot.y - 0.5));
-                    return float2(brush.eval(p).rg);
-                }
-                return float2(0.0);
-            }
-
-            float brushWeight(float4 a, float4 b, float2 coord, float slot) {
-                float w = brushRG(a, b, coord, slot).x;
-                return b.w > 0.5 ? 1.0 - w : w;
-            }
 
             half3 gradeNearest(half3 c) {
                 float3 v = floor(clamp(float3(c), 0.0, 1.0) * (n - 1.0) + 0.5);
@@ -327,35 +413,6 @@ class GradePreviewShader {
                 return shape * w;
             }
 
-            // A painted (or found) mask is kept small (640 px); its edge is laid onto the full picture
-            // here: where it is soft, each neighbouring mask value counts as much as the picture there
-            // looks like this pixel (a joint bilateral upsample), so the edge follows the picture's.
-            float brushFine(float4 a, float4 b, float2 p, float slot, float3 c) {
-                float w = brushWeight(a, b, p, slot);
-                // Feathered (b.z) or softened here (g): its soft band is wanted, not laid onto the picture's edges.
-                if (w <= 0.02 || w >= 0.98 || b.z > 0.001) return w;
-                float soft = brushRG(a, b, p, slot).y;
-                if (soft >= 0.98) return w;
-                float2 st = size / brushSlot * max(b.xy, float2(0.001));
-                float acc = 0.0;
-                float sum = 0.0;
-                for (int j = -1; j <= 1; j++) {
-                    for (int i = -1; i <= 1; i++) {
-                        float2 q = p + float2(float(i), float(j)) * st;
-                        float3 d = float3(img(q).rgb) - c;
-                        float k = exp(-dot(d, d) * 60.0) * ((i == 0 && j == 0) ? 1.0 : 0.6);
-                        acc += brushWeight(a, b, q, slot) * k;
-                        sum += k;
-                    }
-                }
-                return mix(acc / max(sum, 0.0001), w, soft);
-            }
-
-            float shapeAt(float4 a, float4 b, float2 p, float slot, float3 c, bool fine) {
-                if (a.x > 2.5) return 1.0;
-                if (a.x > 1.5) return fine ? brushFine(a, b, p, slot, c) : brushWeight(a, b, p, slot);
-                return maskWeight(a, b, p);
-            }
 
             // MaskRange.combine (j: 1 add, 2 subtract, 3 intersect).
             float joinOf(float a, float b, float j) {
@@ -369,19 +426,10 @@ class GradePreviewShader {
                 return f;
             }
 
-            // Each mask's coverage at p (colour c there), joined masks combined into the layer they
-            // join (MaskRange.joined).
-            float4 weightsAt(float2 p, float3 c, bool fine) {
-                ${List(ColourMask.MAX_PER_CLIP) { i -> """
-                float w$i = 0.0;
-                if (maskCount > $i.5) w$i = cover(m${i}a, m${i}b, mq$i, mc$i, shapeAt(m${i}a, m${i}b, p, $i.0, c, fine), c);""" }.joinToString("")}
-                float acc = w0;
-                float h = 0.0;
-                float4 f = float4(0.0);
-                ${(1 until ColourMask.MAX_PER_CLIP).joinToString("") { i -> """
-                if (mq$i.w < 0.5) { f = putAt(f, h, acc); acc = w$i; h = $i.0; } else { acc = joinOf(acc, w$i, mq$i.w); }""" }}
-                return putAt(f, h, acc);
-            }
+            // The clip's masks, and the masks of the clip it blends in from (as they were at its end).
+            ${maskCode("", "m", "brush", "brushSlot", "maskCount")}
+            ${maskCode("F", "fm", "brushFrom", "brushFromSlot", "fromMaskCount")}
+
 
             float3 bright(float2 p) {
                 float3 c = float3(gradeNearest(img(p).rgb));
@@ -534,7 +582,16 @@ class GradePreviewShader {
                 float3 c = float3(grade_lut(src.rgb));
                 ${List(ColourMask.MAX_PER_CLIP) { i -> """
                 if (w$i > 0.0) c = mix(c, float3(grade_lutM$i(src.rgb)), w$i);""" }.joinToString("")}
-                if (fromWeight > 0.0) c = mix(c, float3(grade_lutFrom(src.rgb)), fromWeight);
+                // Blending in: from how the clip before looked at its end, masks and all.
+                if (fromWeight > 0.0) {
+                    float3 cf = float3(grade_lutFrom(src.rgb));
+                    if (fromMaskCount > 0.5) {
+                        float4 fw = weightsAtF(coord, float3(src.rgb), false);
+                        ${List(ColourMask.MAX_PER_CLIP) { i -> """
+                        if (fw.${"xyzw"[i]} > 0.0) cf = mix(cf, float3(grade_lutFM$i(src.rgb)), fw.${"xyzw"[i]});""" }.joinToString("")}
+                    }
+                    c = mix(c, cf, fromWeight);
+                }
                 if (glow > 0.0 || halation > 0.0) {
                     float r = shortSide * 0.012 * glowSpread;
                     float turn = glowTurn(coord);

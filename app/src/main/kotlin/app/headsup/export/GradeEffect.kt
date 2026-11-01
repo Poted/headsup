@@ -41,6 +41,10 @@ class GradeEffect(
     private val warp: DoubleArray? = null,
     /** How far into the clip this part starts, for the blend from the previous clip (a ramped clip's piece). */
     private val timeOffsetMs: Long = 0L,
+    /** The masks of the clip blended in from (as at its end, [fromMaskMs] of its file) and their tables. */
+    private val fromMasks: List<ColourMask> = emptyList(),
+    private val fromMaskTables: List<Array<Array<IntArray>>> = emptyList(),
+    private val fromMaskMs: Long = 0L,
 ) : GlEffect {
     override fun toGlShaderProgram(context: Context, useHdr: Boolean): GlShaderProgram = Program(context.applicationContext, useHdr)
 
@@ -51,7 +55,12 @@ class GradeEffect(
             throw VideoFrameProcessingException(e)
         }
         // Base, one per mask slot, previous clip; unused slots repeat the base table.
-        private val textures = IntArray(2 + ColourMask.MAX_PER_CLIP)
+        // …and one per mask slot of the clip blended in from.
+        private val textures = IntArray(2 + 2 * ColourMask.MAX_PER_CLIP)
+        private val fromIndex = 1 + ColourMask.MAX_PER_CLIP
+        private val fromBrushTexture = IntArray(1)
+        private var fromBrushSlot = floatArrayOf(1f, 1f)
+        private var fromBrushSlots = 1f
         // The painted masks ([BrushAtlas]), drawn when the frame size is known.
         private val brushTexture = IntArray(1)
         private var brushSlot = floatArrayOf(1f, 1f)
@@ -66,8 +75,10 @@ class GradeEffect(
             GLES20.glGenTextures(textures.size, textures, 0)
             upload(textures[0], base)
             for (i in 0 until ColourMask.MAX_PER_CLIP) upload(textures[1 + i], maskTables.getOrNull(i) ?: base)
-            upload(textures.last(), from ?: base)
+            upload(textures[fromIndex], from ?: base)
+            for (i in 0 until ColourMask.MAX_PER_CLIP) upload(textures[fromIndex + 1 + i], fromMaskTables.getOrNull(i) ?: base)
             GLES20.glGenTextures(1, brushTexture, 0)
+            GLES20.glGenTextures(1, fromBrushTexture, 0)
         }
 
         private fun upload(texture: Int, table: Array<Array<IntArray>>) {
@@ -86,6 +97,7 @@ class GradeEffect(
             height = inputHeight
             try {
                 uploadBrush(fileStartMs)
+                uploadFromBrush()
             } catch (e: Throwable) {
                 throw VideoFrameProcessingException(e)
             }
@@ -110,6 +122,21 @@ class GradeEffect(
             atlas?.recycle()
         }
 
+        /** The painted masks of the clip blended in from, as at its end: drawn once. */
+        private fun uploadFromBrush() {
+            val atlas = if (fromMasks.isEmpty()) null else BrushAtlas.build(context, fromMasks, width.toFloat() / height.coerceAtLeast(1), fromMaskMs)
+            val bitmap = atlas ?: BrushAtlas.EMPTY
+            fromBrushSlots = if (atlas == null) 1f else ColourMask.MAX_PER_CLIP.toFloat()
+            fromBrushSlot = floatArrayOf(bitmap.width / fromBrushSlots, bitmap.height.toFloat())
+            GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, fromBrushTexture[0])
+            GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MIN_FILTER, GLES20.GL_LINEAR)
+            GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MAG_FILTER, GLES20.GL_LINEAR)
+            GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_S, GLES20.GL_CLAMP_TO_EDGE)
+            GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_T, GLES20.GL_CLAMP_TO_EDGE)
+            GLUtils.texImage2D(GLES20.GL_TEXTURE_2D, 0, bitmap, 0)
+            atlas?.recycle()
+        }
+
         override fun drawFrame(inputTexId: Int, presentationTimeUs: Long) {
             try {
                 // Time counts from the first frame, however Media3 timestamps a clipped item.
@@ -121,8 +148,12 @@ class GradeEffect(
                 program.setSamplerTexIdUniform("uTexSampler", inputTexId, 0)
                 program.setSamplerTexIdUniform("uLut", textures[0], 1)
                 for (i in 0 until ColourMask.MAX_PER_CLIP) program.setSamplerTexIdUniform("uLutM$i", textures[1 + i], 2 + i)
-                program.setSamplerTexIdUniform("uLutFrom", textures.last(), 2 + ColourMask.MAX_PER_CLIP)
+                program.setSamplerTexIdUniform("uLutFrom", textures[fromIndex], 2 + ColourMask.MAX_PER_CLIP)
                 program.setSamplerTexIdUniform("uBrush", brushTexture[0], 3 + ColourMask.MAX_PER_CLIP)
+                program.setSamplerTexIdUniform("uBrushFrom", fromBrushTexture[0], 4 + ColourMask.MAX_PER_CLIP)
+                for (i in 0 until ColourMask.MAX_PER_CLIP) program.setSamplerTexIdUniform("uLutFM$i", textures[fromIndex + 1 + i], 5 + ColourMask.MAX_PER_CLIP + i)
+                program.setFloatsUniform("uBrushFromSlot", fromBrushSlot)
+                program.setFloatUniform("uBrushFromSlots", fromBrushSlots)
                 program.setFloatsUniform("uBrushSlot", brushSlot)
                 program.setFloatUniform("uBrushSlots", brushSlots)
                 program.setFloatUniform("uN", base.size.toFloat())
@@ -142,6 +173,16 @@ class GradeEffect(
                 }
                 val fromWeight = if (from != null) ColourTransition.fromWeight(positionMs + timeOffsetMs, transitionMs) else 0f
                 program.setFloatUniform("uFromWeight", fromWeight)
+                program.setFloatUniform("uFromMaskCount", if (fromWeight > 0f) fromMasks.size.coerceAtMost(ColourMask.MAX_PER_CLIP).toFloat() else 0f)
+                for (i in 0 until ColourMask.MAX_PER_CLIP) {
+                    val m = fromMasks.getOrNull(i)?.at(fromMaskMs)
+                    val (a, b) = m?.shaderParams() ?: (FloatArray(4) to FloatArray(4))
+                    program.setFloatsUniform("uFm${i}a", a)
+                    program.setFloatsUniform("uFm${i}b", b)
+                    val (q, k) = (m ?: ColourMask()).rangeParams()
+                    program.setFloatsUniform("uFmq$i", q)
+                    program.setFloatsUniform("uFmc$i", k)
+                }
                 program.setFloatUniform("uMaskGlow", if (masks.take(ColourMask.MAX_PER_CLIP).any { it.grade.glow > 0f || it.grade.halation > 0f }) 1f else 0f)
                 program.setIntUniform("uHdrIn", if (hdrInput == HdrInput.HLG) 2 else if (hdrInput != null) 1 else 0)
                 program.setFloatsUniform("uHlgFix", if (hdrInput == HdrInput.RELABELLED_BT709) HdrRoute.HLG_FIX else HdrRoute.IDENTITY)
@@ -170,6 +211,7 @@ class GradeEffect(
                 program.delete()
                 GLES20.glDeleteTextures(textures.size, textures, 0)
                 GLES20.glDeleteTextures(1, brushTexture, 0)
+                GLES20.glDeleteTextures(1, fromBrushTexture, 0)
             } catch (e: GlUtil.GlException) {
                 throw VideoFrameProcessingException(e)
             }
@@ -177,6 +219,72 @@ class GradeEffect(
     }
 
     private companion object {
+        /** As the preview's: the functions for one set of masks ([m]: their uniforms' prefix). */
+        fun maskCode(sfx: String, m: String, brush: String, slot: String, count: String): String = """
+            // As the preview shader's brushWeight$sfx(): back to where the strokes were painted, then the atlas slot.
+            // The atlas at px: coverage (r) and where the edge was made gradual (g).
+            vec2 brushRG$sfx(vec4 a, vec4 b, vec2 px, float slot) {
+                float aspect = uSize.x / uSize.y;
+                vec2 d = vec2((px.x / uSize.x - a.y) * aspect, px.y / uSize.y - a.z);
+                float c = cos(a.w);
+                float s = sin(a.w);
+                vec2 u = vec2(d.x * c + d.y * s, -d.x * s + d.y * c) / max(b.xy, vec2(0.001));
+                vec2 q = vec2(0.5 + u.x / aspect, 0.5 + u.y);
+                if (q.x >= 0.0 && q.x <= 1.0 && q.y >= 0.0 && q.y <= 1.0) {
+                    vec2 t = vec2(
+                        (slot * $slot.x + clamp(q.x * $slot.x, 0.5, $slot.x - 0.5)) / ($slot.x * ${slot}s),
+                        clamp(q.y * $slot.y, 0.5, $slot.y - 0.5) / $slot.y);
+                    return texture2D($brush, t).rg;
+                }
+                return vec2(0.0);
+            }
+
+            float brushWeight$sfx(vec4 a, vec4 b, vec2 px, float slot) {
+                float w = brushRG$sfx(a, b, px, slot).x;
+                return b.w > 0.5 ? 1.0 - w : w;
+            }
+
+            // As the preview shader's brushFine$sfx(): the small mask's soft edge laid onto the full picture.
+            float brushFine$sfx(vec4 a, vec4 b, vec2 px, float slot, vec3 c) {
+                float w = brushWeight$sfx(a, b, px, slot);
+                if (w <= 0.02 || w >= 0.98 || b.z > 0.001) return w;
+                float soft = brushRG$sfx(a, b, px, slot).y;
+                if (soft >= 0.98) return w;
+                vec2 st = uSize / $slot * max(b.xy, vec2(0.001));
+                float acc = 0.0;
+                float sum = 0.0;
+                for (int j = -1; j <= 1; j++) {
+                    for (int i = -1; i <= 1; i++) {
+                        vec2 q = px + vec2(float(i), float(j)) * st;
+                        vec3 d = source(vec2(q.x / uSize.x, 1.0 - q.y / uSize.y)) - c;
+                        float k = exp(-dot(d, d) * 60.0) * ((i == 0 && j == 0) ? 1.0 : 0.6);
+                        acc += brushWeight$sfx(a, b, q, slot) * k;
+                        sum += k;
+                    }
+                }
+                return mix(acc / max(sum, 0.0001), w, soft);
+            }
+
+            float shapeAt$sfx(vec4 a, vec4 b, vec2 px, float slot, vec3 c, bool fine) {
+                if (a.x > 2.5) return 1.0;
+                if (a.x > 1.5) return fine ? brushFine$sfx(a, b, px, slot, c) : brushWeight$sfx(a, b, px, slot);
+                return maskWeight(a, b, px);
+            }
+
+            // As the preview shader's weightsAt$sfx() (MaskRange.joined).
+            vec4 weightsAt$sfx(vec2 px, vec3 c, bool fine) {
+                ${List(ColourMask.MAX_PER_CLIP) { i -> """
+                float w$i = 0.0;
+                if ($count > $i.5) w$i = cover(${m}${i}a, ${m}${i}b, ${m}q$i, ${m}c$i, shapeAt$sfx(${m}${i}a, ${m}${i}b, px, $i.0, c, fine), c);""" }.joinToString("")}
+                float acc = w0;
+                float h = 0.0;
+                vec4 f = vec4(0.0);
+                ${(1 until ColourMask.MAX_PER_CLIP).joinToString("") { i -> """
+                if (${m}q$i.w < 0.5) { f = putAt(f, h, acc); acc = w$i; h = $i.0; } else { acc = joinOf(acc, w$i, ${m}q$i.w); }""" }}
+                return putAt(f, h, acc);
+            }
+        """
+
         const val VERTEX = """
             attribute vec4 aFramePosition;
             varying vec2 vTexSamplingCoord;
@@ -210,6 +318,11 @@ class GradeEffect(
             ${List(ColourMask.MAX_PER_CLIP) { "uniform vec3 uMp$it;" }.joinToString("\n")}
             ${List(ColourMask.MAX_PER_CLIP) { "uniform vec2 uMg$it;" }.joinToString("\n")}
             uniform float uMaskGlow;
+            uniform sampler2D uBrushFrom;
+            uniform vec2 uBrushFromSlot;
+            uniform float uBrushFromSlots;
+            uniform float uFromMaskCount;
+            ${List(ColourMask.MAX_PER_CLIP) { "uniform sampler2D uLutFM$it;\nuniform vec4 uFm${it}a;\nuniform vec4 uFm${it}b;\nuniform vec4 uFmq$it;\nuniform vec4 uFmc$it;" }.joinToString("\n")}
             ${List(ColourMask.MAX_PER_CLIP) { "uniform vec4 uMq$it;\nuniform vec4 uMc$it;" }.joinToString("\n")}
             const mat3 BT2020_TO_BT709 = mat3(
                 1.6605, -0.1246, -0.0182,
@@ -254,28 +367,6 @@ class GradeEffect(
                 return b.w > 0.5 ? 1.0 - w : w;
             }
 
-            // As the preview shader's brushWeight(): back to where the strokes were painted, then the atlas slot.
-            // The atlas at px: coverage (r) and where the edge was made gradual (g).
-            vec2 brushRG(vec4 a, vec4 b, vec2 px, float slot) {
-                float aspect = uSize.x / uSize.y;
-                vec2 d = vec2((px.x / uSize.x - a.y) * aspect, px.y / uSize.y - a.z);
-                float c = cos(a.w);
-                float s = sin(a.w);
-                vec2 u = vec2(d.x * c + d.y * s, -d.x * s + d.y * c) / max(b.xy, vec2(0.001));
-                vec2 q = vec2(0.5 + u.x / aspect, 0.5 + u.y);
-                if (q.x >= 0.0 && q.x <= 1.0 && q.y >= 0.0 && q.y <= 1.0) {
-                    vec2 t = vec2(
-                        (slot * uBrushSlot.x + clamp(q.x * uBrushSlot.x, 0.5, uBrushSlot.x - 0.5)) / (uBrushSlot.x * uBrushSlots),
-                        clamp(q.y * uBrushSlot.y, 0.5, uBrushSlot.y - 0.5) / uBrushSlot.y);
-                    return texture2D(uBrush, t).rg;
-                }
-                return vec2(0.0);
-            }
-
-            float brushWeight(vec4 a, vec4 b, vec2 px, float slot) {
-                float w = brushRG(a, b, px, slot).x;
-                return b.w > 0.5 ? 1.0 - w : w;
-            }
 
             // Inverse of Media3's HLG EOTF, back to the signal values.
             float hlgOetf(float x) {
@@ -337,32 +428,6 @@ class GradeEffect(
                 return shape * w;
             }
 
-            // As the preview shader's brushFine(): the small mask's soft edge laid onto the full picture.
-            float brushFine(vec4 a, vec4 b, vec2 px, float slot, vec3 c) {
-                float w = brushWeight(a, b, px, slot);
-                if (w <= 0.02 || w >= 0.98 || b.z > 0.001) return w;
-                float soft = brushRG(a, b, px, slot).y;
-                if (soft >= 0.98) return w;
-                vec2 st = uSize / uBrushSlot * max(b.xy, vec2(0.001));
-                float acc = 0.0;
-                float sum = 0.0;
-                for (int j = -1; j <= 1; j++) {
-                    for (int i = -1; i <= 1; i++) {
-                        vec2 q = px + vec2(float(i), float(j)) * st;
-                        vec3 d = source(vec2(q.x / uSize.x, 1.0 - q.y / uSize.y)) - c;
-                        float k = exp(-dot(d, d) * 60.0) * ((i == 0 && j == 0) ? 1.0 : 0.6);
-                        acc += brushWeight(a, b, q, slot) * k;
-                        sum += k;
-                    }
-                }
-                return mix(acc / max(sum, 0.0001), w, soft);
-            }
-
-            float shapeAt(vec4 a, vec4 b, vec2 px, float slot, vec3 c, bool fine) {
-                if (a.x > 2.5) return 1.0;
-                if (a.x > 1.5) return fine ? brushFine(a, b, px, slot, c) : brushWeight(a, b, px, slot);
-                return maskWeight(a, b, px);
-            }
 
             float joinOf(float a, float b, float j) {
                 if (j < 1.5) return max(a, b);
@@ -375,18 +440,10 @@ class GradeEffect(
                 return f;
             }
 
-            // As the preview shader's weightsAt() (MaskRange.joined).
-            vec4 weightsAt(vec2 px, vec3 c, bool fine) {
-                ${List(ColourMask.MAX_PER_CLIP) { i -> """
-                float w$i = 0.0;
-                if (uMaskCount > $i.5) w$i = cover(uM${i}a, uM${i}b, uMq$i, uMc$i, shapeAt(uM${i}a, uM${i}b, px, $i.0, c, fine), c);""" }.joinToString("")}
-                float acc = w0;
-                float h = 0.0;
-                vec4 f = vec4(0.0);
-                ${(1 until ColourMask.MAX_PER_CLIP).joinToString("") { i -> """
-                if (uMq$i.w < 0.5) { f = putAt(f, h, acc); acc = w$i; h = $i.0; } else { acc = joinOf(acc, w$i, uMq$i.w); }""" }}
-                return putAt(f, h, acc);
-            }
+            // The clip's masks, and those of the clip it blends in from (as at its end).
+            ${maskCode("", "uM", "uBrush", "uBrushSlot", "uMaskCount")}
+            ${maskCode("F", "uFm", "uBrushFrom", "uBrushFromSlot", "uFromMaskCount")}
+
 
             // As the preview shader's localMean(): an edge-aware mean brightness over a disc of r pixels.
             float localMean(vec2 uv, float r, float l) {
@@ -446,7 +503,16 @@ class GradeEffect(
                 vec3 c = grade(uLut, srcRgb);
                 ${List(ColourMask.MAX_PER_CLIP) { i -> """
                 if (w$i > 0.0) c = mix(c, grade(uLutM$i, srcRgb), w$i);""" }.joinToString("")}
-                if (uFromWeight > 0.0) c = mix(c, grade(uLutFrom, srcRgb), uFromWeight);
+                // Blending in: from how the clip before looked at its end, masks and all.
+                if (uFromWeight > 0.0) {
+                    vec3 cf = grade(uLutFrom, srcRgb);
+                    if (uFromMaskCount > 0.5) {
+                        vec4 fw = weightsAtF(px, srcRgb, false);
+                        ${List(ColourMask.MAX_PER_CLIP) { i -> """
+                        if (fw.${"xyzw"[i]} > 0.0) cf = mix(cf, grade(uLutFM$i, srcRgb), fw.${"xyzw"[i]});""" }.joinToString("")}
+                    }
+                    c = mix(c, cf, uFromWeight);
+                }
                 // As the preview: a mask's glow comes only from what is bright inside it and spreads past its edge.
                 if (uMaskGlow > 0.5) {
                     float r = min(uSize.x, uSize.y) * 0.012;

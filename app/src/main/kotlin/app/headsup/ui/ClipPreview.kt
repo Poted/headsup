@@ -142,6 +142,10 @@ fun ClipPreview(
     maskCubes: List<Array<Array<IntArray>>> = emptyList(),
     /** Previous clip's colour table and how long the clip blends in from it. */
     fromCube: Array<Array<IntArray>>? = null,
+    /** The masks of the clip blended in from (shown as at its end, [fromMaskMs]), and their tables. */
+    fromMasks: List<ColourMask> = emptyList(),
+    fromMaskCubes: List<Array<Array<IntArray>>> = emptyList(),
+    fromMaskMs: Long = 0L,
     transitionMs: Long = 0L,
     /** Mask being edited: its outline is drawn, and dragging on the picture moves it. */
     guideMask: ColourMask? = null,
@@ -554,8 +558,8 @@ fun ClipPreview(
     var histogram by remember { mutableStateOf<FloatArray?>(null) }
     val previewShader = remember { if (Build.VERSION.SDK_INT >= 33) GradePreviewShader() else null }
     var tableVersion by remember { mutableIntStateOf(0) }
-    LaunchedEffect(gradeCube, maskCubes, fromCube) {
-        previewShader?.setTables(GradeTables(gradeCube, maskCubes, fromCube))
+    LaunchedEffect(gradeCube, maskCubes, fromCube, fromMaskCubes) {
+        previewShader?.setTables(GradeTables(gradeCube, maskCubes, fromCube, fromMaskCubes))
         tableVersion++
     }
     // Each player's picture is coloured as its own clip: the selected one fully, a neighbour still on
@@ -570,8 +574,8 @@ fun ClipPreview(
         val own = id == clip.id && fresh
         val cube = if (own) gradeCube else neighbourCubes[id]
         val from = if (own) fromCube else neighbourFrom[id]
-        LaunchedEffect(playerShaders, own, cube, maskCubes, fromCube, from) {
-            playerShaders?.get(i)?.setTables(if (own) GradeTables(gradeCube, maskCubes, fromCube) else GradeTables(cube, emptyList(), from))
+        LaunchedEffect(playerShaders, own, cube, maskCubes, fromCube, from, fromMaskCubes) {
+            playerShaders?.get(i)?.setTables(if (own) GradeTables(gradeCube, maskCubes, fromCube, fromMaskCubes) else GradeTables(cube, emptyList(), from))
             tableVersion++
         }
     }
@@ -827,6 +831,13 @@ fun ClipPreview(
     LaunchedEffect(brushAtlas, guideIndex) {
         val atlas = brushAtlas
         brushOutline = if (atlas == null) null else withContext(Dispatchers.Default) { outlineOf(atlas, guideIndex) }
+    }
+    // The clip blended in from: its painted masks as at its end (drawn once per change).
+    LaunchedEffect(fromMasks, fromMaskMs) {
+        val atlas = if (fromMasks.isEmpty()) null else withContext(Dispatchers.Default) { BrushAtlas.build(context, fromMasks, metaAspect, fromMaskMs) }
+        previewShader?.setFromBrush(atlas)
+        playerShaders?.forEach { it.setFromBrush(atlas) }
+        tableVersion++
     }
     LaunchedEffect(brushAtlas) {
         previewShader?.setBrush(brushAtlas)
@@ -1085,7 +1096,10 @@ fun ClipPreview(
                                     val from = if (fresh) fromCube else neighbourFrom[clip.id]
                                     val fromWeight = if (from != null) ColourTransition.fromWeight(positionMs, transitionMs) else 0f
                                     renderEffect = if (pictureClip[i] == null || pictureClip[i] == clip.id) {
-                                        playerShaders?.get(i)?.effect(effects, zebra, frame, this.size.width, this.size.height, if (fresh) masks.map { it.at(fileMs) } else emptyList(), fromWeight, presence = presence, warp = r.warp)
+                                        playerShaders?.get(i)?.effect(
+                                            effects, zebra, frame, this.size.width, this.size.height, if (fresh) masks.map { it.at(fileMs) } else emptyList(), fromWeight,
+                                            presence = presence, warp = r.warp, fromMasks = if (fresh) fromMasks.map { it.at(fromMaskMs) } else emptyList(),
+                                        )
                                     } else {
                                         playerShaders?.get(i)?.effect(effects, zebra, frame, this.size.width, this.size.height, emptyList(), 0f, warp = r.warp)
                                     }
