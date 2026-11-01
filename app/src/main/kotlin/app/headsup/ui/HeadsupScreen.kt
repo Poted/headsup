@@ -1844,6 +1844,13 @@ private fun SpeedRamp(clip: ClipState, timelineFps: Float, onCurve: (List<Float>
     val span = (clip.trimEndMs - clip.trimStartMs).coerceAtLeast(1L)
     val flagsU = clip.flags.filter { it > clip.trimStartMs && it < clip.trimEndMs }.map { (it - clip.trimStartMs).toFloat() / span }
     val flagsNow by rememberUpdatedState(flagsU)
+    // Speeds a point is caught by: round ratios, and those at which the footage's frames come out
+    // exactly at the timeline's rate (every frame, every second frame…), so 24 fps stays 24, not 23.5.
+    val frameSpeeds = SC.smoothLimit(clip.meta.frameRate, timelineFps)?.let { l -> List(6) { k -> l / clip.speed * (1 shl k) } }.orEmpty()
+    val snaps = (listOf(0.1f, 0.2f, 0.25f, 0.5f, 0.75f, 1f, 1.5f, 2f, 3f, 4f, 6f, 8f, 12f, 16f, 24f, 32f) + frameSpeeds).filter { it in SC.MIN..SC.MAX }
+    val snapsNow by rememberUpdatedState(snaps)
+    // The point being dragged, to show its value above it.
+    var dragged by remember { mutableStateOf<Pair<Float, Float>?>(null) }
     // How slow the presets go: as slow as the footage stays smooth, or half that slow.
     val (slow, verySlow) = SC.slowSpeeds(sourceFps, timelineFps)
     var deep by rememberSaveable { mutableStateOf(true) }
@@ -1937,12 +1944,14 @@ private fun SpeedRamp(clip: ClipState, timelineFps: Float, onCurve: (List<Float>
                         var u = (change.position.x / w).coerceIn(lo2, hi2)
                         // A flag nearby catches the point: a ramp from one flagged moment to another.
                         flagsNow.minByOrNull { kotlin.math.abs(it - u) }?.takeIf { kotlin.math.abs(it - u) < 0.02f && it in lo2..hi2 }?.let { u = it }
-                        // A ratio near 1× snaps to it.
+                        // A ratio near a round one (or one showing every frame) is caught by it.
                         var f = fOf(change.position.y / h)
-                        if (kotlin.math.abs(kotlin.math.ln(f)) < 0.08f) f = 1f
+                        snapsNow.minByOrNull { kotlin.math.abs(kotlin.math.ln(it / f)) }?.takeIf { kotlin.math.abs(kotlin.math.ln(it / f)) < 0.07f }?.let { f = it }
                         work[i] = u to f
+                        dragged = u to f
                         store(work.flatMap { listOf(it.first, it.second) })
                     }
+                    dragged = null
                 }
             },
     ) {
@@ -1953,6 +1962,19 @@ private fun SpeedRamp(clip: ClipState, timelineFps: Float, onCurve: (List<Float>
         drawLine(axis, Offset(1.dp.toPx(), 0f), Offset(1.dp.toPx(), h), strokeWidth = 1.5.dp.toPx())
         drawLine(axis, Offset(0f, h - 1.dp.toPx()), Offset(w, h - 1.dp.toPx()), strokeWidth = 1.5.dp.toPx())
         drawLine(Color.White.copy(alpha = 0.3f), Offset(0f, yOf(1f) * h), Offset(w, yOf(1f) * h))
+        // The point being dragged: its speed (and whether it shows every frame of the footage).
+        dragged?.let { (u, f) ->
+            val text = String.format(Locale.US, if (f < 1f) "%.2f×" else "%.3g×", f) + if (frameSpeeds.isNotEmpty() && kotlin.math.abs(f - frameSpeeds[0]) < 1e-4f) " · every frame" else ""
+            drawIntoCanvas { c ->
+                val paint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply { color = android.graphics.Color.WHITE; textSize = 12.dp.toPx() }
+                val tw = paint.measureText(text)
+                val x = (u * w - tw / 2f).coerceIn(4.dp.toPx(), w - tw - 4.dp.toPx())
+                val y = (yOf(f) * h - 14.dp.toPx()).coerceAtLeast(16.dp.toPx())
+                val bg = android.graphics.Paint().apply { color = android.graphics.Color.argb(190, 0, 0, 0) }
+                c.nativeCanvas.drawRoundRect(x - 5.dp.toPx(), y - 13.dp.toPx(), x + tw + 5.dp.toPx(), y + 4.dp.toPx(), 6.dp.toPx(), 6.dp.toPx(), bg)
+                c.nativeCanvas.drawText(text, x, y, paint)
+            }
+        }
         // Below the speed where every frame of the footage is shown, frames repeat: stutter.
         val limit = SC.smoothLimit(sourceFps, timelineFps)?.let { it / clip.speed }
         if (limit != null && limit > SC.MIN) {
