@@ -777,8 +777,20 @@ fun ClipPreview(
             audioPlayers.values.forEach { it.second.pause() }
             return@LaunchedEffect
         }
+        // The music keeps its own steady clock while playing: the picture's position moves in
+        // small jumps where the speed changes (the player's speed is set in steps), and music
+        // chasing those jumps would stutter. Only when the picture is clearly elsewhere (a jump,
+        // a stall) does the clock take its place again.
+        var anchorT = timelineNow
+        var anchorAt = android.os.SystemClock.uptimeMillis()
         while (true) {
-            val at = timelineNow
+            val wall = android.os.SystemClock.uptimeMillis()
+            var at = anchorT + (wall - anchorAt)
+            if (kotlin.math.abs(timelineNow - at) > 600) {
+                anchorT = timelineNow
+                anchorAt = wall
+                at = anchorT
+            }
             for (c in audioNow) {
                 val player = audioPlayers[c.id]?.second ?: continue
                 val p = c.piece.let { if (it.sourceDurationMs > 0) it else it.copy(sourceDurationMs = player.duration.coerceAtLeast(0L)) }
@@ -786,7 +798,8 @@ fun ClipPreview(
                 if (source == null) {
                     if (player.isPlaying) player.pause()
                 } else {
-                    if (!player.isPlaying || kotlin.math.abs(player.currentPosition - source) > 300) {
+                    // Asked to play already (it may still be loading): not sought again each round.
+                    if (!player.playWhenReady || kotlin.math.abs(player.currentPosition - source) > 300) {
                         player.seekTo(source)
                         player.play()
                     }
