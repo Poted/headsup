@@ -83,7 +83,9 @@ object BrushAtlas {
         val stride = w * ColourMask.MAX_PER_CLIP
         masks.take(ColourMask.MAX_PER_CLIP).forEachIndexed { slot, m ->
             if (m.kind != MaskKind.BRUSH || (m.strokes.isEmpty() && m.sequence == null)) return@forEachIndexed
-            val map = tracked(context, m, w, h, timeMs) ?: if (m.strokes.isEmpty()) return@forEachIndexed else coverage(context, slot, m, w, h)
+            val drawnMap = tracked(context, m, w, h, timeMs) ?: if (m.strokes.isEmpty()) return@forEachIndexed else coverage(context, slot, m, w, h)
+            // A feathered edge: the coverage blurred (the cached drawings stay sharp).
+            val map = if (m.feather > 0f) app.headsup.core.color.MaskFeather.apply(drawnMap, w, h, m.feather * ColourMask.FEATHER_REACH * h) else drawnMap
             for (y in 0 until h) {
                 for (x in 0 until w) {
                     val v = (map[y * w + x] * 255f + 0.5f).toInt().coerceIn(0, 255)

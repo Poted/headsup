@@ -495,6 +495,7 @@ internal object Json {
         .put("edge", m.edge.toDouble())
         .put("anchors", JSONArray(m.anchors))
         .put("join", m.join.name)
+        .put("feather", m.feather.toDouble())
         .apply {
             m.luma?.let { put("luma", JSONObject().put("low", it.low.toDouble()).put("high", it.high.toDouble()).put("soft", it.soft.toDouble())) }
             m.colour?.let { put("colour", JSONObject().put("r", it.r.toDouble()).put("g", it.g.toDouble()).put("b", it.b.toDouble()).put("tol", it.tolerance.toDouble())) }
@@ -541,6 +542,7 @@ internal object Json {
             edge = o.optDouble("edge", 0.0).toFloat(),
             anchors = o.optJSONArray("anchors")?.let { a -> List(a.length()) { a.optLong(it) } } ?: emptyList(),
             join = app.headsup.core.color.MaskJoin.entries.firstOrNull { it.name == o.optString("join") } ?: app.headsup.core.color.MaskJoin.NEW,
+            feather = o.optDouble("feather", 0.0).toFloat(),
             luma = o.optJSONObject("luma")?.let {
                 app.headsup.core.color.LumaRange(it.optDouble("low", 0.6).toFloat(), it.optDouble("high", 1.0).toFloat(), it.optDouble("soft", 0.15).toFloat())
             },

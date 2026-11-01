@@ -101,6 +101,12 @@ data class ColourMask(
     val colour: ColourRange? = null,
     /** On its own, or joined to the mask before it ([MaskJoin]). */
     val join: MaskJoin = MaskJoin.NEW,
+    /**
+     * A painted or found mask's edge made gradual, 0..1 (up to [FEATHER_REACH] of the frame's
+     * height): for edges no selection can follow exactly (a ragged shore), a soft band instead
+     * of a cut ([MaskFeather]).
+     */
+    val feather: Float = 0f,
 ) {
     /** True when a colour or luminance range narrows the mask. */
     val ranged: Boolean get() = luma != null || colour != null
@@ -156,7 +162,7 @@ data class ColourMask(
      */
     fun shaderParams(): Pair<FloatArray, FloatArray> = floatArrayOf(
         kind.ordinal.toFloat(), centerX, centerY, Math.toRadians(angleDegrees.toDouble()).toFloat(),
-    ) to floatArrayOf(sizeX, sizeY, softness, if (inverted) 1f else 0f)
+    ) to floatArrayOf(sizeX, sizeY, if (kind == MaskKind.BRUSH) feather else softness, if (inverted) 1f else 0f)
 
     /**
      * The range and join packed for shaders: (luma low, high, soft, join) with low < -0.5 when
@@ -173,6 +179,9 @@ data class ColourMask(
 
     companion object {
         const val MAX_PER_CLIP = 4
+
+        /** How wide a full [feather] is: of the frame's height. */
+        const val FEATHER_REACH = 0.08f
 
         private fun smoothstep(e0: Float, e1: Float, x: Float): Float {
             val t = ((x - e0) / (e1 - e0).coerceAtLeast(0.0001f)).coerceIn(0f, 1f)

@@ -2549,6 +2549,11 @@ private fun ColourPage(
                 SmallAction("Clear", { vm.clearBrush() })
             }
             BrushControls(state, vm, pictureSource)
+            // However exact the selection, some edges should fade (a ragged shore): a soft band.
+            SectionCaption("Feather")
+            ValueHeader("Feather", if (mask.feather <= 0f) "Off" else String.format(Locale.US, "%.0f %%", mask.feather * 100f))
+            RulerSlider(mask.feather, 0f..1f, 0.02f, { v -> vm.updateMask { it.copy(feather = v) } }, onReset = { vm.updateMask { it.copy(feather = 0f) } })
+            Hint("Makes the mask's edge a gradual band instead of a sharp cut, for edges no selection follows exactly. Off: the edge follows the picture's.")
         } else if (editingShape != null) {
             LazyRow(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
                 items(shapes) { m -> CircleOption(m.symbol, m.label, selected = m == editingShape, modified = false) { shape = m } }

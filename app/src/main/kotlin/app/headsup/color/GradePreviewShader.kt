@@ -327,7 +327,8 @@ class GradePreviewShader {
             // looks like this pixel (a joint bilateral upsample), so the edge follows the picture's.
             float brushFine(float4 a, float4 b, float2 p, float slot, float3 c) {
                 float w = brushWeight(a, b, p, slot);
-                if (w <= 0.02 || w >= 0.98) return w;
+                // Feathered (b.z): its soft band is wanted, not laid onto the picture's edges.
+                if (w <= 0.02 || w >= 0.98 || b.z > 0.001) return w;
                 float2 st = size / brushSlot * max(b.xy, float2(0.001));
                 float acc = 0.0;
                 float sum = 0.0;

@@ -335,7 +335,7 @@ class GradeEffect(
             // As the preview shader's brushFine(): the small mask's soft edge laid onto the full picture.
             float brushFine(vec4 a, vec4 b, vec2 px, float slot, vec3 c) {
                 float w = brushWeight(a, b, px, slot);
-                if (w <= 0.02 || w >= 0.98) return w;
+                if (w <= 0.02 || w >= 0.98 || b.z > 0.001) return w;
                 vec2 st = uSize / uBrushSlot * max(b.xy, vec2(0.001));
                 float acc = 0.0;
                 float sum = 0.0;
