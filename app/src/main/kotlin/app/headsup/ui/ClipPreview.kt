@@ -1278,8 +1278,8 @@ fun ClipPreview(
                             ),
                             r, c,
                         )
-                        drawCircle(Color.Black.copy(alpha = 0.5f), r + 1.5f * density, c, style = Stroke(1f * density))
-                        drawCircle(Color.White, r, c, style = Stroke(1.5f * density))
+                        drawCircle(Color.Black.copy(alpha = 0.5f), r + 1.5.dp.toPx(), c, style = Stroke(1.dp.toPx()))
+                        drawCircle(Color.White, r, c, style = Stroke(1.5.dp.toPx()))
                     }
                     // Clean up: the stroke over what is to be removed, as it is painted (white, so the photo shows through).
                     if (guideMask == null && paintPath.size >= 2) {
