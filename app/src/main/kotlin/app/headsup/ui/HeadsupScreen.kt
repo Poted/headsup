@@ -2624,73 +2624,47 @@ private fun LookActions(state: UiState, vm: HeadsupViewModel) {
 }
 
 /**
- * What Adjust works on (this clip, its group, all clips) as one small button with a list, so it
- * shares a line with the layers or groups and the corrections come first.
+ * The top of Adjust: what it works on (this clip, its group, all clips), always in view; for this
+ * clip its layers (the base and its masks) and the selected layer's actions. Returns true when
+ * nothing else belongs under it (a new mask is being chosen).
  */
 @Composable
-private fun ScopeChip(state: UiState, vm: HeadsupViewModel) {
+private fun AdjustHeader(
+    state: UiState,
+    clip: ClipState,
+    index: Int,
+    vm: HeadsupViewModel,
+    pictureSource: ((Int) -> Bitmap?)?,
+    maskTools: Boolean,
+    onMaskTools: (Boolean) -> Unit,
+): Boolean {
     val album = state.photoProject
     val scope = when (state.target) {
         GradeTarget.GROUP -> 1
         GradeTarget.GLOBAL -> 2
         GradeTarget.CLIP, GradeTarget.MASK -> 0
     }
-    val names = listOf(if (album) "This photo" else "This clip", "Group", if (album) "All photos" else "All clips")
-    var open by remember { mutableStateOf(false) }
-    Box {
-        Row(
-            Modifier
-                .height(36.dp)
-                .clip(CircleShape)
-                .background(HeadsupColors.Highlight)
-                .clickable { open = true }
-                .padding(horizontal = 14.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text(names[scope], style = MaterialTheme.typography.labelLarge, color = HeadsupColors.OnHighlight, maxLines = 1)
-            Spacer(Modifier.width(4.dp))
-            Icon(HeadsupIcons.ChevronDown, null, Modifier.size(16.dp), tint = HeadsupColors.OnHighlight)
+    Segmented(listOf(if (album) "This photo" else "This clip", "Group", if (album) "All photos" else "All clips"), scope, { i ->
+        if (i != scope) {
+            vm.setTarget(listOf(GradeTarget.CLIP, GradeTarget.GROUP, GradeTarget.GLOBAL)[i])
+            // The looks (grain, glow…) follow the same choice: this clip's, or set on all.
+            vm.setEffectsOnAll(i == 2)
         }
-        DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
-            names.forEachIndexed { i, name ->
-                DropdownMenuItem(
-                    text = { Text((if (i == scope) "✓ " else "") + name) },
-                    onClick = {
-                        open = false
-                        if (i != scope) {
-                            vm.setTarget(listOf(GradeTarget.CLIP, GradeTarget.GROUP, GradeTarget.GLOBAL)[i])
-                            // The looks (grain, glow…) follow the same choice: this clip's, or set on all.
-                            vm.setEffectsOnAll(i == 2)
-                        }
-                    },
-                )
-            }
+    })
+    return when (scope) {
+        1 -> {
+            GroupControls(state, clip, index, state.groupOf(clip), vm)
+            false
         }
-    }
-}
-
-/**
- * The bottom of Adjust, under the corrections: the actions of what is worked on (the layer's,
- * the group's, all clips').
- */
-@Composable
-private fun ScopeActions(state: UiState, clip: ClipState, index: Int, vm: HeadsupViewModel) {
-    when (state.target) {
-        GradeTarget.GROUP -> GroupActions(state, clip, index, state.groupOf(clip), vm)
-        GradeTarget.GLOBAL -> {
-            SectionCaption(if (state.photoProject) "All photos actions" else "All clips actions")
+        2 -> {
+            // As everywhere on this page: what it does, then its actions in a row on the left.
+            Hint(if (album) "A change is set on every photo: each shows it under This photo." else "A change is set on every clip: each shows it under This clip.")
             Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 PillAction("↺", "Reset all", { vm.resetSyncedPhotos() })
             }
+            false
         }
-        GradeTarget.MASK -> {
-            SectionCaption("Mask actions")
-            LayerActions(state, clip, vm)
-        }
-        GradeTarget.CLIP -> {
-            SectionCaption("Base actions")
-            LayerActions(state, clip, vm)
-        }
+        else -> Layers(state, clip, vm, pictureSource, maskTools, onMaskTools)
     }
 }
 
@@ -2806,65 +2780,8 @@ internal enum class Adjustment(
 
 private val BLEND_LENGTHS = listOf(0L to "Cut", 500L to "0.5 s", 1000L to "1 s", 2000L to "2 s", 4000L to "4 s", 8000L to "8 s")
 
-/**
- * Adjust: what it works on at the top, the corrections under it, and the scope's own things and
- * actions (layers, copy, reset; the group; reset all) at the bottom.
- */
 @Composable
 private fun ColourPage(
-    state: UiState,
-    vm: HeadsupViewModel,
-    adjustment: Adjustment,
-    onAdjustment: (Adjustment) -> Unit,
-    onAddLut: () -> Unit,
-    frameSource: (() -> Bitmap?)?,
-    playhead: LongState,
-    onSeek: (clipMs: Long) -> Unit,
-    pictureSource: ((Int) -> Bitmap?)? = null,
-    maskTools: Boolean = true,
-    onMaskTools: (Boolean) -> Unit = {},
-) {
-    val index = state.selectedClip
-    val clip = state.selected
-    if (index == null || clip == null) {
-        Hint(if (state.photoProject) "Select a photo first." else "Select a clip first.")
-        return
-    }
-    // A new mask being chosen (from + among the layers).
-    var adding by rememberSaveable { mutableStateOf(false) }
-    val selectedMask = clip.masks.getOrNull(state.selectedMask)
-    // While something is removed from a photo only that shows.
-    val removing = state.target == GradeTarget.MASK && state.removing && selectedMask != null
-    // From the top: what is worked on (scope, then layer or group, then a mask's part), its
-    // settings, and at the bottom its actions.
-    if (!removing) {
-        when (state.target) {
-            GradeTarget.CLIP, GradeTarget.MASK -> {
-                // Choosing a new mask: only the layers and the kinds of mask.
-                if (Layers(state, clip, vm, pictureSource, adding, leading = { ScopeChip(state, vm) }) { adding = it }) return
-                // A mask: its shape (where it is: select, paint, shape, track) or what it changes
-                // in the picture; only while its shape is worked on does a finger on the picture change it.
-                if (state.target == GradeTarget.MASK && selectedMask != null) {
-                    Segmented(listOf("Mask", "Adjust"), if (maskTools) 0 else 1, { onMaskTools(it == 0) })
-                }
-            }
-            GradeTarget.GROUP -> GroupPicker(state, clip, index, state.groupOf(clip), vm) { ScopeChip(state, vm) }
-            GradeTarget.GLOBAL -> Row(verticalAlignment = Alignment.CenterVertically) {
-                ScopeChip(state, vm)
-                Spacer(Modifier.width(10.dp))
-                Hint(
-                    if (state.photoProject) "Set on every photo; each shows it under This photo." else "Set on every clip; each shows it under This clip.",
-                    Modifier.weight(1f),
-                )
-            }
-        }
-    }
-    ColourBody(state, vm, adjustment, onAdjustment, onAddLut, frameSource, playhead, onSeek, pictureSource, maskTools, onMaskTools)
-    if (!removing) ScopeActions(state, clip, index, vm)
-}
-
-@Composable
-private fun ColourBody(
     state: UiState,
     vm: HeadsupViewModel,
     adjustment: Adjustment,
@@ -2894,6 +2811,7 @@ private fun ColourBody(
     LaunchedEffect(target, selectedMask == null) { if (target == GradeTarget.MASK && selectedMask == null) vm.setTarget(GradeTarget.CLIP) }
     // While something is removed from a photo only that shows; otherwise the scope and layers stay
     // at the top in both of a mask's modes (Mask and Adjust).
+    if (!(target == GradeTarget.MASK && state.removing && selectedMask != null) && AdjustHeader(state, clip, index, vm, pictureSource, maskTools, onMaskTools)) return
     if (target != GradeTarget.GLOBAL && !clip.colorGrade) {
         // HDR files (already graded, e.g. Mimo exports) start with their own colours.
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -2962,6 +2880,10 @@ private fun ColourBody(
             ) { Text(if (mask.sequence != null) "Track again" else "Track") }
         }
         if (mask.kind == MaskKind.BRUSH) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                SmallAction(if (state.maskOverlay) "Overlay ✓" else "Overlay", { vm.toggleMaskOverlay() })
+                SmallAction("Clear", { vm.clearBrush() })
+            }
             BrushControls(state, vm, pictureSource)
             // However exact the selection, some edges should fade (a ragged shore): a soft band.
             SectionCaption("Feather")
@@ -3718,12 +3640,7 @@ private enum class BrushSetting(val symbol: String, val label: String, val range
 private fun BrushControls(state: UiState, vm: HeadsupViewModel, pictureSource: ((Int) -> Bitmap?)?) {
     val mask = state.selected?.masks?.getOrNull(state.selectedMask) ?: return
     val brush = state.brush
-    // What a finger on the picture does, as a palette; showing the mask and clearing it beside.
-    SectionCaption("Tool") {
-        Spacer(Modifier.width(8.dp))
-        SmallAction(if (state.maskOverlay) "Overlay ✓" else "Overlay", { vm.toggleMaskOverlay() })
-        SmallAction("Clear", { vm.clearBrush() })
-    }
+    // What a finger on the picture does, as a palette.
     LazyRow(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
         items(BrushMode.entries) { mode ->
             CircleOption(mode.symbol, mode.label, selected = brush.mode == mode, modified = false) { vm.updateBrush { it.copy(mode = mode) } }
@@ -3731,7 +3648,6 @@ private fun BrushControls(state: UiState, vm: HeadsupViewModel, pictureSource: (
     }
     when (brush.mode) {
         BrushMode.SELECT -> {
-            SectionCaption("Selection")
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 FilterChip(selected = !brush.subtract, onClick = { vm.updateBrush { it.copy(subtract = false) } }, label = { Text("Add") })
                 FilterChip(selected = brush.subtract, onClick = { vm.updateBrush { it.copy(subtract = true) } }, label = { Text("Subtract") })
@@ -3760,7 +3676,6 @@ private fun BrushControls(state: UiState, vm: HeadsupViewModel, pictureSource: (
             val settings = BrushSetting.entries
             var chosen by rememberSaveable { mutableStateOf(BrushSetting.SIZE) }
             val setting = chosen.takeIf { it in settings } ?: settings.first()
-            SectionCaption("Brush")
             LazyRow(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
                 items(settings) { b ->
                     CircleOption(b.symbol, b.label, selected = b == setting, modified = false) { chosen = b }
@@ -3827,30 +3742,30 @@ private fun Layers(
     clip: ClipState,
     vm: HeadsupViewModel,
     pictureSource: ((Int) -> Bitmap?)?,
-    adding: Boolean,
-    leading: @Composable () -> Unit = {},
-    onAdding: (Boolean) -> Unit,
+    maskTools: Boolean,
+    onMaskTools: (Boolean) -> Unit,
 ): Boolean {
+    var adding by rememberSaveable { mutableStateOf(false) }
     val full = clip.masks.size >= ColourMask.MAX_PER_CLIP
     val onMask = state.target == GradeTarget.MASK
-    // On one line: what Adjust works on, the layers there are, then one chip to add.
+    SectionCaption("Layers")
+    // What is there, then one chip to add: what exists and what can be made never mix.
     LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
-        item { leading() }
         item {
             LayerChip("▣", "Base", selected = !onMask && !adding, modified = clip.grade != ColorGrade()) {
-                onAdding(false)
+                adding = false
                 vm.setTarget(GradeTarget.CLIP)
             }
         }
         items(clip.masks.size) { i ->
             val m = clip.masks[i]
             LayerChip(maskSymbol(m), if (i > 0 && m.join != MaskJoin.NEW) "${m.join.symbol} ${maskName(m)}" else "${i + 1} ${maskName(m)}", selected = onMask && i == state.selectedMask && !adding, modified = m.grade != ColorGrade()) {
-                onAdding(false)
+                adding = false
                 vm.selectMask(i)
                 vm.setTarget(GradeTarget.MASK)
             }
         }
-        if (!full) item { LayerChip("+", if (clip.masks.isEmpty()) "Mask" else "", selected = adding, modified = false) { onAdding(!adding) } }
+        if (!full) item { LayerChip("+", if (clip.masks.isEmpty()) "Mask" else "", selected = adding, modified = false) { adding = !adding } }
     }
     // What was removed from the photo (Remove), taken back one by one or all at once.
     val removed = clip.retouch.map { it.hole }.distinct().size
@@ -3867,7 +3782,7 @@ private fun Layers(
             return true
         }
         fun add(action: () -> Unit) {
-            onAdding(false)
+            adding = false
             vm.setTarget(GradeTarget.MASK)
             action()
         }
@@ -3898,17 +3813,12 @@ private fun Layers(
         )
         return true
     }
-    return false
-}
-
-/** The selected layer's actions (the base's look, or the mask), at the bottom of Adjust. */
-@Composable
-private fun LayerActions(state: UiState, clip: ClipState, vm: HeadsupViewModel) {
-    if (state.target != GradeTarget.MASK) {
+    if (!onMask) {
         LookActions(state, vm)
-        return
+        return false
     }
-    val mask = clip.masks.getOrNull(state.selectedMask) ?: return
+    val mask = clip.masks.getOrNull(state.selectedMask) ?: return false
+    // The selected mask's own actions, always in the same place.
     Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
         PillAction("◑", "Invert", { vm.updateMask { it.copy(inverted = !it.inverted) } }, selected = mask.inverted)
         // A copy, or its opposite (the sky's mask as the land's), with its tracking.
@@ -3919,6 +3829,10 @@ private fun LayerActions(state: UiState, clip: ClipState, vm: HeadsupViewModel) 
         if (mask.grade != ColorGrade()) PillAction("↺", "Reset", { vm.updateGrade { ColorGrade() } })
         PillAction("✕", "Delete", { vm.removeMask(state.selectedMask) })
     }
+    // The mask itself (where it is: select, paint, shape, track) or what it changes in the picture.
+    // Only while the mask is worked on does a finger on the picture change it.
+    if (!state.removing) Segmented(listOf("Mask", "Adjust"), if (maskTools) 0 else 1, { onMaskTools(it == 0) })
+    return false
 }
 
 /**
@@ -4137,9 +4051,15 @@ private fun LutControls(
  * at most one group, so its colours always come from clip → group → all clips.
  */
 @Composable
-private fun GroupPicker(state: UiState, clip: ClipState, index: Int, group: ClipGroup?, vm: HeadsupViewModel, leading: @Composable () -> Unit = {}) {
-    Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-        leading()
+private fun GroupControls(state: UiState, clip: ClipState, index: Int, group: ClipGroup?, vm: HeadsupViewModel) {
+    var renaming by remember { mutableStateOf(false) }
+    if (group == null) {
+        Hint(
+            if (state.photoProject) "Photos shot the same way (e.g. drone) get the same LUT and corrections: a change here is set on each photo of the group."
+            else "Clips shot the same way (e.g. drone) get the same LUT and corrections: a change here is set on each clip of the group.",
+        )
+    }
+    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         for (g in state.groups) {
             val count = state.clips.count { it.groupId == g.id }
             FilterChip(
@@ -4150,25 +4070,13 @@ private fun GroupPicker(state: UiState, clip: ClipState, index: Int, group: Clip
         }
         FilterChip(selected = false, onClick = { vm.createGroup(index) }, label = { Text("+ New group") })
     }
-    if (group == null) {
-        Hint(
-            if (state.photoProject) "Photos shot the same way (e.g. drone) get the same LUT and corrections: a change here is set on each photo of the group."
-            else "Clips shot the same way (e.g. drone) get the same LUT and corrections: a change here is set on each clip of the group.",
-        )
-    }
-}
-
-/** The group's actions and making it alike, at the bottom of Adjust. */
-@Composable
-private fun GroupActions(state: UiState, clip: ClipState, index: Int, group: ClipGroup?, vm: HeadsupViewModel) {
-    var renaming by remember { mutableStateOf(false) }
     if (group != null) {
-        SectionCaption("Group actions")
-        Row(Modifier.horizontalScroll(rememberScrollState()), verticalAlignment = Alignment.CenterVertically) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
             SmallAction("Rename", { renaming = true })
             SmallAction("Leave", { vm.setClipGroup(index, null) })
-            SmallAction("Reset group", { vm.resetSyncedPhotos() })
             SmallAction("Delete group", { vm.deleteGroup(group.id) })
+            Spacer(Modifier.weight(1f))
+            SmallAction("Reset group", { vm.resetSyncedPhotos() })
         }
         if (renaming) RenameDialog(group.name, onDismiss = { renaming = false }) { vm.renameGroup(group.id, it); renaming = false }
         // One look across the group: no clip greener or warmer than the others.
