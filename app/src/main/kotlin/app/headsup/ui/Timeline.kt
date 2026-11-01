@@ -123,6 +123,22 @@ fun Timeline(
     val used = (audio.maxOfOrNull { it.lane } ?: -1) + 1
     // Only the tracks in use (at least one); a sound dragged below the last one opens a new track.
     val lanes = if (!showAudio) 0 else used.coerceIn(1, MAX_LANES)
+    // The sound tracks scroll up and down when there are more than fit (in px from the first).
+    var laneScroll by remember { mutableFloatStateOf(0f) }
+    val shownLanes = lanes.coerceAtMost(VISIBLE_LANES)
+    val lanePx = with(androidx.compose.ui.platform.LocalDensity.current) { LANE.toPx() }
+    // Within the tracks there are; the selected sound (a new one too) scrolled into view.
+    val selectedLane = audio.firstOrNull { it.id == state.selectedAudio }?.lane
+    LaunchedEffect(lanes, selectedLane) {
+        val room = (lanes - VISIBLE_LANES).coerceAtLeast(0) * lanePx
+        var v = laneScroll.coerceIn(0f, room)
+        if (selectedLane != null) {
+            val top = selectedLane * lanePx
+            if (top < v) v = top
+            if (top + lanePx > v + VISIBLE_LANES * lanePx) v = top + lanePx - VISIBLE_LANES * lanePx
+        }
+        laneScroll = v.coerceIn(0f, room)
+    }
 
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -184,7 +200,7 @@ fun Timeline(
             Canvas(
                 Modifier
                     .fillMaxWidth()
-                    .height(RULER + VIDEO + (if (lanes > 0) GAP + LANE * lanes else 0.dp) + 4.dp)
+                    .height(RULER + VIDEO + (if (lanes > 0) GAP + LANE * shownLanes else 0.dp) + 4.dp)
                     .onSizeChanged {
                         widthPx = it.width.toFloat()
                         if (zoom == 0f) zoom = fitZoom(videoEnd, 0.9f)
@@ -198,6 +214,7 @@ fun Timeline(
                             val g = Geometry(
                                 width = size.width.toFloat(), t = playhead(), zoom = zoom, starts = startsNow, clips = clipsNow,
                                 audio = audioNow, lanes = if (lanesNow > 0) (lanesNow + 1).coerceAtMost(MAX_LANES) else 0, d = this,
+                                laneScroll = laneScroll,
                                 texts = textsNow,
                             )
                             val hit = g.hit(down.position, selectedNow.takeIf { videoSelectedNow }, audioSelectedNow)
@@ -285,6 +302,16 @@ fun Timeline(
                                 is Hit.Text -> if (hit.id == selectedTextNow || held) Mode.MOVE_TEXT else Mode.SCROLL
                                 is Hit.Clip -> Mode.SCROLL
                                 else -> if (held) Mode.NONE else Mode.SCROLL
+                            }
+                            // Up or down over the sound tracks scrolls them, when there are more than fit.
+                            val laneRoom = ((lanesNow - VISIBLE_LANES).coerceAtLeast(0) * LANE.toPx())
+                            if (upright && lanesNow > VISIBLE_LANES && down.position.y >= g.lanesTop) {
+                                laneScroll = (laneScroll - (first.position.y - down.position.y)).coerceIn(0f, laneRoom)
+                                drag(first.id) { c ->
+                                    laneScroll = (laneScroll - c.positionChange().y).coerceIn(0f, laneRoom)
+                                    c.consume()
+                                }
+                                return@awaitEachGesture
                             }
                             if (mode == Mode.SCROLL && upright) return@awaitEachGesture
                             val zoomPx = g.zoom
@@ -438,7 +465,7 @@ fun Timeline(
             ) {
                 val tNow = playhead()
                 filmstrip.version.intValue
-                val g = Geometry(size.width, tNow, zoom.takeIf { it > 0f } ?: 0.05f, starts, clips, audio, lanes, this, texts)
+                val g = Geometry(size.width, tNow, zoom.takeIf { it > 0f } ?: 0.05f, starts, clips, audio, lanes, this, texts, laneScroll)
                 drawRuler(g, muted, text)
                 drawVideo(g, state, ghost, filmstrip, text, maskKeys, videoSelected)
                 // Texts as bars along the top of the video track.
@@ -454,7 +481,16 @@ fun Timeline(
                         drawLabel(text, "T  " + item.text.replace('\n', ' '), Offset(l + 4.dp.toPx(), top + 1.dp.toPx()), TextStyle(color = Color.Black, fontSize = 10.sp))
                     }
                 }
-                drawAudio(g, state, text, accent, laneColour)
+                // The sound tracks, scrolled, kept below the clips.
+                clipRect(0f, g.lanesTop, size.width, size.height) { drawAudio(g, state, text, accent, laneColour) }
+                if (lanes > VISIBLE_LANES) {
+                    // Where in the tracks the view is: a thin bar on the right.
+                    val area = size.height - g.lanesTop
+                    val total = lanes * g.laneH
+                    val barH = area * area / total
+                    val barTop = g.lanesTop + (area - barH) * (laneScroll / (total - area).coerceAtLeast(1f))
+                    drawRoundRect(Color.White.copy(alpha = 0.5f), Offset(size.width - 4.dp.toPx(), barTop), Size(3.dp.toPx(), barH), CornerRadius(2.dp.toPx()))
+                }
                 // Strong accents of the selected sound run up through the clips, for cutting on them.
                 state.audioClips.firstOrNull { it.id == state.selectedAudio }?.let { s ->
                     val p = s.piece
@@ -515,7 +551,10 @@ private val GAP = 6.dp
 private val LANE = 40.dp
 private val HANDLE = 14.dp
 private const val MIN_MS = 300L
-const val MAX_LANES = 4
+const val MAX_LANES = 16
+
+/** Sound tracks shown at once; more scroll up and down. */
+private const val VISIBLE_LANES = 4
 private const val MAX_ZOOM_DP = 0.4f
 
 /** Zoomed out at most to the whole content across half the width (the playhead can be at its end). */
@@ -550,6 +589,8 @@ private class Geometry(
     val lanes: Int,
     d: androidx.compose.ui.unit.Density,
     val texts: List<TextItem> = emptyList(),
+    /** How far the sound tracks are scrolled up, in px. */
+    val laneScroll: Float = 0f,
 ) {
     val textH = with(d) { TEXT_BAR.toPx() }
     val rulerH = with(d) { RULER.toPx() }
@@ -562,8 +603,8 @@ private class Geometry(
 
     fun x(ms: Long) = width / 2f + (ms - t) * zoom
     fun ms(x: Float) = t + ((x - width / 2f) / zoom).toLong()
-    fun laneAt(y: Float) = if (lanes <= 0) 0 else ((y - lanesTop) / laneH).toInt().coerceIn(0, lanes - 1)
-    fun laneTop(lane: Int) = lanesTop + lane * laneH
+    fun laneAt(y: Float) = if (lanes <= 0) 0 else ((y - lanesTop + laneScroll) / laneH).toInt().coerceIn(0, lanes - 1)
+    fun laneTop(lane: Int) = lanesTop + lane * laneH - laneScroll
 
     fun hit(p: Offset, selectedClip: Int?, selectedSound: Long?): Hit {
         // Handles of the selection first: they sit outside its ends, so short clips stay editable.
