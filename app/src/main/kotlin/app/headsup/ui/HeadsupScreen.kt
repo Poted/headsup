@@ -1916,7 +1916,7 @@ private fun SpeedRamp(clip: ClipState, timelineFps: Float, onPreset: (List<Float
     val (slow, verySlow) = SC.slowSpeeds(sourceFps, timelineFps)
     var deep by rememberSaveable { mutableStateOf(true) }
     val depth = if (deep) verySlow else slow
-    val presets = SC.Preset.entries
+    val presets = app.headsup.core.edit.SpeedCurve.Preset.entries
     // The preset the curve is, with which slow speed and which rush (how fast its fast parts go).
     val match = if (base != 1f) null else presets.firstNotNullOfOrNull { p ->
         listOf(slow, verySlow).firstNotNullOfOrNull { sl -> SC.RUSHES.firstOrNull { r -> clip.speedCurve == p.points(sl, r) }?.let { r -> Triple(p, sl, r) } }
