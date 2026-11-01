@@ -485,7 +485,7 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
                     )
                     // Undo/redo tucked into the picture's corner, only when there is something to undo.
                     if (!fullscreen) UndoRedo(state.canUndo, state.canRedo, vm::undo, vm::redo, vm::undoAll, vm::resetAllEdits, Modifier.align(Alignment.TopEnd).padding(top = 8.dp, end = 24.dp), canResetAll = state.clips.isNotEmpty(),
-                        hasSafePoint = state.hasSafePoint, onSetSafePoint = vm::setSafePoint, onBackToSafePoint = vm::backToSafePoint,
+                        milestones = state.milestones, onAddMilestone = vm::addMilestone, onBackToMilestone = vm::backToMilestone, onRemoveMilestone = vm::removeMilestone,
                     )
                     // Full screen: the picture alone, to see it as it will look.
                     Box(
@@ -810,7 +810,7 @@ private fun EmptyState(photoProject: Boolean) {
 private fun UndoRedo(
     canUndo: Boolean, canRedo: Boolean, onUndo: () -> Unit, onRedo: () -> Unit, onUndoAll: () -> Unit, onResetAll: () -> Unit,
     modifier: Modifier, canResetAll: Boolean = false,
-    hasSafePoint: Boolean = false, onSetSafePoint: () -> Unit = {}, onBackToSafePoint: () -> Unit = {},
+    milestones: List<Milestone> = emptyList(), onAddMilestone: () -> Unit = {}, onBackToMilestone: (Long) -> Unit = {}, onRemoveMilestone: (Long) -> Unit = {},
 ) {
     // Shown while there is something to undo, or edits to remove (holding undo works even when a tap would not).
     if (!canUndo && !canRedo && !canResetAll) return
@@ -837,32 +837,45 @@ private fun UndoRedo(
             dismissButton = { TextButton(onClick = { askAll = false }) { Text("Cancel") } },
         )
     }
-    var askSafe by remember { mutableStateOf(false) }
-    if (askSafe) {
+    var showMilestones by remember { mutableStateOf(false) }
+    if (showMilestones) {
         AlertDialog(
-            onDismissRequest = { askSafe = false },
-            title = { Text("Safe point") },
-            text = { Text("Go back to the safe point, or set it here instead? Going back is a step of its own: undo returns to where you are now.") },
-            confirmButton = {
-                Row {
-                    TextButton(onClick = { askSafe = false; onSetSafePoint() }) { Text("Set here") }
-                    TextButton(onClick = { askSafe = false; onBackToSafePoint() }) { Text("Go back") }
+            onDismissRequest = { showMilestones = false },
+            title = { Text("Milestones") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text(
+                        "Moments of the edit to come back to. Going back is a step of its own: undo returns to where you are now. Kept while the project is open.",
+                        style = MaterialTheme.typography.bodySmall, color = HeadsupColors.TextMuted,
+                    )
+                    for (m in milestones.asReversed()) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text("◆ Milestone ${m.number} · ${m.time}", Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
+                            TextButton(onClick = { showMilestones = false; onBackToMilestone(m.id) }) { Text("Go back") }
+                            Text(
+                                "✕",
+                                Modifier.clip(CircleShape).clickable { onRemoveMilestone(m.id) }.padding(horizontal = 8.dp, vertical = 4.dp),
+                                color = HeadsupColors.TextMuted,
+                            )
+                        }
+                    }
                 }
             },
-            dismissButton = { TextButton(onClick = { askSafe = false }) { Text("Cancel") } },
+            confirmButton = { TextButton(onClick = { onAddMilestone() }) { Text("Add milestone here") } },
+            dismissButton = { TextButton(onClick = { showMilestones = false }) { Text("Close") } },
         )
     }
     Row(modifier, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-        // The safe point: a moment of the edit to come back to.
+        // Milestones: moments of the edit to come back to (a list: add, go back, remove).
         Box(
             Modifier
                 .size(30.dp)
                 .clip(CircleShape)
                 .background(Color.Black.copy(alpha = 0.35f))
-                .clickable { if (hasSafePoint) askSafe = true else onSetSafePoint() },
+                .clickable { showMilestones = true },
             contentAlignment = Alignment.Center,
         ) {
-            Text("⚑", color = if (hasSafePoint) HeadsupColors.Accent else Color.White.copy(alpha = 0.85f), style = MaterialTheme.typography.labelLarge)
+            Text("◆", color = if (milestones.isNotEmpty()) HeadsupColors.Accent else Color.White.copy(alpha = 0.85f), style = MaterialTheme.typography.labelLarge)
         }
         for ((icon, enabled, action, label) in listOf(
             Quad(HeadsupIcons.Undo, canUndo, onUndo, "Undo"),
@@ -1827,6 +1840,10 @@ private fun SpeedControls(clip: ClipState, timelineFps: Float, onSpeed: (Float) 
 private fun SpeedRamp(clip: ClipState, timelineFps: Float, onCurve: (List<Float>) -> Unit) {
     val SC = app.headsup.core.edit.SpeedCurve
     val sourceFps = clip.meta.frameRate
+    // The clip's flags as fractions of its cut, where the curve's points are.
+    val span = (clip.trimEndMs - clip.trimStartMs).coerceAtLeast(1L)
+    val flagsU = clip.flags.filter { it > clip.trimStartMs && it < clip.trimEndMs }.map { (it - clip.trimStartMs).toFloat() / span }
+    val flagsNow by rememberUpdatedState(flagsU)
     // How slow the presets go: as slow as the footage stays smooth, or half that slow.
     val (slow, verySlow) = SC.slowSpeeds(sourceFps, timelineFps)
     var deep by rememberSaveable { mutableStateOf(true) }
@@ -1917,7 +1934,9 @@ private fun SpeedRamp(clip: ClipState, timelineFps: Float, onCurve: (List<Float>
                         change.consume()
                         val lo2 = if (i == 0) 0f else work[i - 1].first + 0.01f
                         val hi2 = if (i == work.lastIndex) 1f else work[i + 1].first - 0.01f
-                        val u = (change.position.x / w).coerceIn(lo2, hi2)
+                        var u = (change.position.x / w).coerceIn(lo2, hi2)
+                        // A flag nearby catches the point: a ramp from one flagged moment to another.
+                        flagsNow.minByOrNull { kotlin.math.abs(it - u) }?.takeIf { kotlin.math.abs(it - u) < 0.02f && it in lo2..hi2 }?.let { u = it }
                         // A ratio near 1× snaps to it.
                         var f = fOf(change.position.y / h)
                         if (kotlin.math.abs(kotlin.math.ln(f)) < 0.08f) f = 1f
@@ -1939,6 +1958,16 @@ private fun SpeedRamp(clip: ClipState, timelineFps: Float, onCurve: (List<Float>
         if (limit != null && limit > SC.MIN) {
             val y = yOf(limit) * h
             drawRect(Color(0x33FF3B30), Offset(0f, y), androidx.compose.ui.geometry.Size(w, h - y))
+        }
+        // The clip's flags: where a ramp should start or end (points dragged near one snap to it).
+        for (u in flagsU) {
+            val x = u * w
+            drawLine(
+                HeadsupColors.AccentSoft.copy(alpha = 0.8f), Offset(x, 0f), Offset(x, h), strokeWidth = 1.dp.toPx(),
+                pathEffect = androidx.compose.ui.graphics.PathEffect.dashPathEffect(floatArrayOf(4.dp.toPx(), 3.dp.toPx())),
+            )
+            val s = 5.dp.toPx()
+            drawPath(androidx.compose.ui.graphics.Path().apply { moveTo(x, 0f); lineTo(x + s * 1.3f, s * 0.5f); lineTo(x, s); close() }, HeadsupColors.AccentSoft)
         }
         drawIntoCanvas { c ->
             val paint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply { color = android.graphics.Color.argb(150, 255, 255, 255); textSize = 11.dp.toPx() }

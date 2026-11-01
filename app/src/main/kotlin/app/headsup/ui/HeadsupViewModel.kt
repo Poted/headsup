@@ -210,6 +210,9 @@ data class ClipGroup(val id: Long, val name: String, val grade: ColorGrade = Col
  * The cine assistant's state for one clip: what it measured, the clip's grade and effects before
  * the suggestion (so it can be scaled or undone), and the chosen style and strength.
  */
+/** A moment of the edit kept to come back to: its number and when it was set. */
+data class Milestone(val id: Long, val number: Int, val time: String)
+
 /** A long job running in the background: what it is, how far it is, or waiting for the one before. */
 data class BackgroundWork(
     val id: Long,
@@ -367,8 +370,8 @@ data class UiState(
     /** 0..1 while copying files in, null when the length is unknown or nothing is copied. */
     val loadingProgress: Float? = null,
     val canRedo: Boolean = false,
-    /** A safe point is set (a moment of the edit to come back to). */
-    val hasSafePoint: Boolean = false,
+    /** Moments of the edit kept to come back to (this session). */
+    val milestones: List<Milestone> = emptyList(),
     val exportSettings: ExportSettings = ExportSettings(),
     /** Frame rate of the timeline (exports and slow-motion maths); null = the first clip's. */
     val timelineFps: Float? = null,
@@ -732,21 +735,36 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
      * Back to the project as it was when opened, however many steps ago. It is a step of its own,
      * so undo brings the changes back.
      */
-    /** The edit as it was when the safe point was set (this session). */
-    private var safePoint: EditSnapshot? = null
+    /** The edit as it was at each milestone (this session, this project). */
+    private val milestoneEdits = HashMap<Long, EditSnapshot>()
+    private var nextMilestone = 1L
 
-    /** Keeps the edit as it is now, to come back to with [backToSafePoint]. */
-    fun setSafePoint() {
-        safePoint = _state.value.snapshot()
-        _state.update { it.copy(hasSafePoint = true, messages = it.messages + "Safe point set. Tap the flag again to come back here.") }
+    /** Keeps the edit as it is now as a milestone, to come back to with [backToMilestone]. */
+    fun addMilestone() {
+        val id = nextMilestone++
+        milestoneEdits[id] = _state.value.snapshot()
+        val time = java.time.LocalTime.now().format(java.time.format.DateTimeFormatter.ofPattern("HH:mm"))
+        val number = (_state.value.milestones.maxOfOrNull { it.number } ?: 0) + 1
+        _state.update { it.copy(milestones = it.milestones + Milestone(id, number, time)) }
     }
 
-    /** Back to the safe point, as a step of its own (undo returns to where you were). */
-    fun backToSafePoint() {
-        val point = safePoint ?: return
+    /** Back to milestone [id], as a step of its own (undo returns to where you were). */
+    fun backToMilestone(id: Long) {
+        val point = milestoneEdits[id] ?: return
         record(_state.value.snapshot())
         restore(point)
         record(point)
+    }
+
+    fun removeMilestone(id: Long) {
+        milestoneEdits.remove(id)
+        _state.update { s -> s.copy(milestones = s.milestones.filter { it.id != id }) }
+    }
+
+    /** Milestones belong to the project they were set in. */
+    private fun clearMilestones() {
+        milestoneEdits.clear()
+        _state.update { it.copy(milestones = emptyList()) }
     }
 
     fun undoAll() {
@@ -907,9 +925,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
     fun openProject(name: String) {
         val project = projectStore.load(name) ?: return
         historyStartsAgain = true
-        // A safe point belongs to the project it was set in.
-        safePoint = null
-        _state.update { it.copy(hasSafePoint = false) }
+        clearMilestones()
         _state.update { it.copy(busy = true, loadingMessage = "Opening ${project.name}…") }
         viewModelScope.launch {
             val context = getApplication<Application>()
@@ -1013,9 +1029,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
     /** Starts an empty project; the current one stays saved. */
     fun newProject(kind: ProjectKind = ProjectKind.VIDEO) {
         historyStartsAgain = true
-        // A safe point belongs to the project it was set in.
-        safePoint = null
-        _state.update { it.copy(hasSafePoint = false) }
+        clearMilestones()
         scopeFrame = null
         _state.update {
             it.copy(
