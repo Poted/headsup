@@ -185,6 +185,8 @@ fun ClipPreview(
     onHoldOriginal: ((Boolean) -> Unit)? = null,
     /** The original is shown (the corrections left out): a label says so. */
     showingOriginal: Boolean = false,
+    /** What the label says while [showingOriginal]. */
+    originalLabel: String = "Original",
     onMoveWidget: (Widget, Placement) -> Unit,
     onMoveFinished: () -> Unit,
     /** When set, tapping the picture (away from widgets) grabs the frame for the vectorscope. */
@@ -1367,7 +1369,7 @@ fun ClipPreview(
                 if (showGrid) Canvas(Modifier.matchParentSize()) { drawThirds() }
                 if (showingOriginal) {
                     Text(
-                        "Original",
+                        originalLabel,
                         Modifier.align(Alignment.TopCenter).padding(top = 10.dp).clip(RoundedCornerShape(50))
                             .background(Color.Black.copy(alpha = 0.6f)).padding(horizontal = 12.dp, vertical = 4.dp),
                         color = Color.White,

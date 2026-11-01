@@ -297,6 +297,8 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
     // The album's thumbnails while editing a photo: folded by default.
     var albumOpen by rememberSaveable { mutableStateOf(false) }
     var showOriginal by remember { mutableStateOf(false) }
+    // A finger held on the picture while a mask's corrections are edited: the picture without that mask only.
+    var hideMask by remember { mutableStateOf(false) }
     var fullscreen by rememberSaveable { mutableStateOf(false) }
     val density = LocalDensity.current
     androidx.activity.compose.BackHandler(enabled = fullscreen) { fullscreen = false }
@@ -375,7 +377,7 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
                         style = state.style,
                         // A finger held on the picture shows it without the corrections.
                         gradeCube = if (showOriginal) null else state.previewCube,
-                        masks = if (selected.colorGrade && !showOriginal) selected.masks else emptyList(),
+                        masks = if (selected.colorGrade && !showOriginal) (if (hideMask) withoutLayer(selected.masks, state.selectedMask) else selected.masks) else emptyList(),
                         maskCubes = state.previewMaskCubes,
                         fromCube = if (showOriginal) null else state.previewFromCube,
                         transitionMs = selected.transitionMs,
@@ -400,8 +402,13 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
                         vignette = if (selected.colorGrade && !showOriginal) state.appliedGrade(selected).vignette else 0f,
                         presence = if (selected.colorGrade && !showOriginal) state.appliedGrade(selected).presence else app.headsup.core.color.Presence.NONE,
                         effects = if (showOriginal) app.headsup.render.EffectSettings(dashboard = false) else state.compareEffects ?: state.effects,
-                        onHoldOriginal = if (tool == Tool.COLOUR && !editingMasks && !measuring) { held -> showOriginal = held } else null,
-                        showingOriginal = showOriginal,
+                        // Held on the picture: without this mask while a mask is adjusted, else the original.
+                        // (Not while the finger shapes a mask or measures a colour.)
+                        onHoldOriginal = if (tool == Tool.COLOUR && !measuring && !shaping && !pickingColour) { held ->
+                            if (editingMasks) hideMask = held else showOriginal = held
+                        } else null,
+                        showingOriginal = showOriginal || hideMask,
+                        originalLabel = if (hideMask) "Without mask ${state.selectedMask + 1}" else "Original",
                         onSample = when {
                             fullscreen -> null
                             measuring -> vm::sampleFrame
@@ -3468,6 +3475,19 @@ private fun MaskJoinControls(clip: ClipState, index: Int, mask: ColourMask, vm: 
         if (mask.join == MaskJoin.NEW) "Its own corrections. Add, Subtract or Intersect make it change where mask ${layer + 1} applies instead."
         else "${mask.join.label} with mask ${layer + 1} (${maskName(clip.masks[layer])}), which keeps the corrections.",
     )
+}
+
+/**
+ * [masks] with the layer of mask [index] (it and the masks joined to it) taking no part: the
+ * picture as it is without that mask's corrections.
+ */
+private fun withoutLayer(masks: List<ColourMask>, index: Int): List<ColourMask> {
+    if (index !in masks.indices) return masks
+    val head = MaskRange.layerOf(masks, index)
+    var end = head
+    while (end + 1 < masks.size && masks[end + 1].join != MaskJoin.NEW) end++
+    // A range mask with no range, inverted: covers nothing.
+    return masks.mapIndexed { k, m -> if (k in head..end) ColourMask(MaskKind.RANGE, inverted = true) else m }
 }
 
 /** A painted mask on video that is not tracked, or changed since it was. */
