@@ -1317,6 +1317,7 @@ private fun CutTool(state: UiState, vm: HeadsupViewModel, playhead: LongState, o
             onDelete = { vm.removeClip(index) },
             onScrub = onCutScrub,
         )
+        ShotCut(state, vm, index, clip, playhead)
         // Backwards: a reversed copy of the cut is made once (it takes a while on long clips).
         SectionCaption("Direction")
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -1329,6 +1330,50 @@ private fun CutTool(state: UiState, vm: HeadsupViewModel, playhead: LongState, o
             )
         }
         FlagList(state, vm, onFlag)
+    }
+}
+
+/**
+ * A cut inside one shot (the clip and its neighbour are pieces of the same file): moved to the
+ * playhead with each piece keeping its edits, or the pieces joined into one clip again.
+ */
+@Composable
+private fun ShotCut(state: UiState, vm: HeadsupViewModel, index: Int, clip: ClipState, playhead: LongState) {
+    val before = index > 0 && vm.piecesOfOneShot(state.clips[index - 1], clip)
+    val after = vm.piecesOfOneShot(clip, state.clips.getOrNull(index + 1))
+    if (!before && !after) return
+    // With pieces on both sides: the cut nearer the playhead.
+    val playheadMs = clip.trimStartMs + playhead.longValue
+    val left = when {
+        before && after -> if (playheadMs - clip.trimStartMs < clip.trimEndMs - playheadMs) index - 1 else index
+        before -> index - 1
+        else -> index
+    }
+    var ask by remember { mutableStateOf(false) }
+    SectionCaption("Cut inside the shot")
+    Hint(
+        if (left == index) "This clip and the next are pieces of one shot. Move the cut to the playhead (each piece keeps its edits), or join them."
+        else "This clip and the one before are pieces of one shot. Move the cut to the playhead (each piece keeps its edits), or join them.",
+    )
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        PillAction("⇹", "Move cut here", { vm.moveCut(left, playheadMs) })
+        PillAction("⊕", "Join", {
+            if (vm.editedAlike(state.clips[left], state.clips[left + 1])) vm.joinWithNext(left, keepRight = false) else ask = true
+        })
+    }
+    if (ask) {
+        AlertDialog(
+            onDismissRequest = { ask = false },
+            title = { Text("Join the pieces") },
+            text = { Text("The two pieces are edited differently (colour, effects, masks, framing or speed). The joined clip keeps one piece's edits; flags and fades of both stay. Undo brings both pieces back.") },
+            confirmButton = {
+                Row {
+                    TextButton(onClick = { ask = false; vm.joinWithNext(left, keepRight = false) }) { Text("Keep first") }
+                    TextButton(onClick = { ask = false; vm.joinWithNext(left, keepRight = true) }) { Text("Keep second") }
+                }
+            },
+            dismissButton = { TextButton(onClick = { ask = false }) { Text("Cancel") } },
+        )
     }
 }
 

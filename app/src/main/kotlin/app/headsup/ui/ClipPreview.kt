@@ -1266,10 +1266,12 @@ fun ClipPreview(
                             }
                         }
                     }
-                    // The brush as it paints, in the middle of the picture, while its size is set.
+                    // The brush as it paints, while its size is set: in the middle of what is in view
+                    // (zoomed in with View, the part being worked on), as big as it paints there.
                     if (ringOn && paintRadius > 0f) {
                         val r = paintRadius * geometry.pictureH * reframeTransform(reframe, geometry).zoom
-                        val c = center
+                        val z = if (viewZoomed) viewZoom else 1f
+                        val c = if (viewZoomed) center - viewPan / z else center
                         val hard = (1f - brushSoftness).coerceIn(0f, 0.99f)
                         drawCircle(
                             androidx.compose.ui.graphics.Brush.radialGradient(

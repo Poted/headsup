@@ -1455,6 +1455,66 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    /** Whether [a] and [b] (in that order) are pieces of one shot cut apart: the same file, [b] starting where [a] ends. */
+    fun piecesOfOneShot(a: ClipState?, b: ClipState?): Boolean =
+        a != null && b != null && a.meta.uri == b.meta.uri && !a.meta.isPhoto && a.reversed == null && b.reversed == null && a.trimEndMs == b.trimStartMs
+
+    /** Whether two pieces are edited alike (joining them then loses nothing). */
+    fun editedAlike(a: ClipState, b: ClipState): Boolean =
+        a.grade == b.grade && a.lutName == b.lutName && a.colorGrade == b.colorGrade && a.effects == b.effects && a.masks == b.masks &&
+            a.reframe == b.reframe && a.groupId == b.groupId && a.speed == b.speed && a.speedCurve == b.speedCurve &&
+            a.muteChangedSpeed == b.muteChangedSpeed && a.soundLevel == b.soundLevel && a.rawDevelop == b.rawDevelop
+
+    /**
+     * Moves the cut between clip [left] and the next one (pieces of one shot) to [fileMs] of the
+     * file: one piece gets longer, the other shorter, each keeping its own edits.
+     */
+    fun moveCut(left: Int, fileMs: Long) {
+        _state.update { s ->
+            val a = s.clips.getOrNull(left)
+            val b = s.clips.getOrNull(left + 1)
+            if (!piecesOfOneShot(a, b) || a == null || b == null) return@update s
+            val at = fileMs.coerceIn(a.trimStartMs + MIN_CLIP_MS, b.trimEndMs - MIN_CLIP_MS)
+            if (at == a.trimEndMs) return@update s
+            val clips = s.clips.toMutableList()
+            clips[left] = a.copy(trimEndMs = at)
+            clips[left + 1] = b.copy(trimStartMs = at)
+            s.copy(clips = clips, selectedClip = left + 1)
+        }
+        refreshPreview()
+    }
+
+    /**
+     * Joins clip [left] and the next one (pieces of one shot) into one clip, with the edits of the
+     * left piece or ([keepRight]) the right one; the start's fade in, the end's fade out and every
+     * flag stay. A mask tracked on only one piece holds still on the other until tracked again.
+     */
+    fun joinWithNext(left: Int, keepRight: Boolean) {
+        val s0 = _state.value
+        val a = s0.clips.getOrNull(left)
+        val b = s0.clips.getOrNull(left + 1)
+        if (!piecesOfOneShot(a, b) || a == null || b == null) return
+        val base = if (keepRight) b else a
+        val joined = base.copy(
+            trimStartMs = a.trimStartMs, trimEndMs = b.trimEndMs,
+            fadeInMs = a.fadeInMs, fadeOutMs = b.fadeOutMs, transitionMs = a.transitionMs,
+            flags = (a.flags + b.flags).distinct().sorted(),
+        )
+        val tracked = base.masks.withIndex().filter { it.value.sequence != null }.map { it.index + 1 }
+        _state.update { s ->
+            val clips = s.clips.toMutableList()
+            clips[left] = joined
+            clips.removeAt(left + 1)
+            s.copy(
+                clips = clips, selectedClip = left,
+                messages = s.messages + listOfNotNull(
+                    tracked.takeIf { it.isNotEmpty() && !editedAlike(a, b) }?.let { "Mask ${it.joinToString()} was tracked on one piece only: Track it again for the whole clip." },
+                ),
+            )
+        }
+        refreshPreview()
+    }
+
     /** Moves a clip one place left (−1) or right (+1) on the timeline. */
     fun moveClip(index: Int, delta: Int) = _state.update { s ->
         val target = index + delta
