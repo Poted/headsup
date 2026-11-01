@@ -3104,14 +3104,13 @@ private sealed interface LookChoice {
  * (sunset) cast; the best first.
  */
 private fun suggestedLooks(s: app.headsup.core.color.FrameStats): List<LookChoice> {
-    val F = app.headsup.color.FastLook
     val out = mutableListOf<LookChoice>()
-    if (s.median < 0.22f) out += LookChoice.Complete(F.NIGHT)
-    if (s.skin > 0.03f) { out += LookChoice.Complete(F.CLEAN); out += LookChoice.Adaptive(CineStyle.WARM_FILM) }
+    if (s.median < 0.22f) out += LookChoice.Complete(app.headsup.color.FastLook.NIGHT)
+    if (s.skin > 0.03f) { out += LookChoice.Complete(app.headsup.color.FastLook.CLEAN); out += LookChoice.Adaptive(CineStyle.WARM_FILM) }
     if (s.foliage > 0.15f) { out += LookChoice.Adaptive(CineStyle.TEAL_ORANGE); out += LookChoice.Adaptive(CineStyle.MUTED) }
-    if (s.warmth > 0.03f) { out += LookChoice.Complete(F.FILM_35); out += LookChoice.Complete(F.VINTAGE) }
+    if (s.warmth > 0.03f) { out += LookChoice.Complete(app.headsup.color.FastLook.FILM_35); out += LookChoice.Complete(app.headsup.color.FastLook.VINTAGE) }
     if (s.colourfulness > 0.12f) out += LookChoice.Adaptive(CineStyle.MUTED)
-    out += listOf(LookChoice.Complete(F.CLEAN), LookChoice.Complete(F.FILM_35), LookChoice.Adaptive(CineStyle.TEAL_ORANGE))
+    out += listOf(LookChoice.Complete(app.headsup.color.FastLook.CLEAN), LookChoice.Complete(app.headsup.color.FastLook.FILM_35), LookChoice.Adaptive(CineStyle.TEAL_ORANGE))
     return out.distinct().take(3)
 }
 
@@ -3823,6 +3822,26 @@ private fun GroupControls(state: UiState, clip: ClipState, index: Int, group: Cl
             SmallAction("Reset group", { vm.resetSyncedPhotos() })
         }
         if (renaming) RenameDialog(group.name, onDismiss = { renaming = false }) { vm.renameGroup(group.id, it); renaming = false }
+        // One look across the group: no clip greener or warmer than the others.
+        SectionCaption("Make the group alike")
+        val session = state.matchSession?.takeIf { it.groupId == group.id && it.memberDeltas.isNotEmpty() }
+        val running = state.work.any { it.clipId == clip.id && it.maskIndex == null }
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Hint(
+                "Matches every clip of the group in colour to this one (white balance, tint, saturation, skin), measured across each clip. Each keeps its own brightness.",
+                Modifier.weight(1f),
+            )
+            Spacer(Modifier.width(8.dp))
+            PillAction("≈", "Match to this", { vm.matchGroupTo() }, enabled = !running)
+        }
+        if (session != null) {
+            ValueHeader("Match strength", String.format(Locale.US, "%.0f %%", session.strength * 100))
+            RulerSlider(session.strength, 0f..1f, 0.02f, vm::setMatchStrength, onReset = { vm.setMatchStrength(1f) })
+            Row {
+                Spacer(Modifier.weight(1f))
+                SmallAction("Undo match", vm::undoMatch)
+            }
+        }
     }
 }
 

@@ -257,7 +257,12 @@ data class MatchSession(
     val strength: Float,
     /** For a group: each clip's corrections before the match. */
     val memberBases: Map<Long, ColorGrade> = emptyMap(),
+    /** For a group made alike: each clip's own change (else every clip takes [delta]). */
+    val memberDeltas: Map<Long, ColorGrade> = emptyMap(),
 )
+
+/** Clips of one group are alike in colour once matched: most of the change applies. */
+private const val GROUP_MATCH_STRENGTH = 0.9f
 
 /** A full match often overshoots between different scenes, so it starts at this share. */
 const val MATCH_STRENGTH = 0.6f
@@ -1837,8 +1842,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
 
     private fun applyMatch(m: MatchSession) {
         val k = m.strength
-        val d = m.delta
-        fun matched(b: ColorGrade) = b.copy(
+        fun matched(b: ColorGrade, d: ColorGrade = m.delta) = b.copy(
             exposure = (b.exposure + d.exposure * k).coerceIn(-3f, 3f),
             contrast = (b.contrast + d.contrast * k).coerceIn(-1f, 1f),
             temperature = (b.temperature + d.temperature * k).coerceIn(-1f, 1f),
@@ -1849,13 +1853,112 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
         val grade = matched(m.base)
         if (m.groupId != null) {
             // The camera's character goes onto each clip of the group.
-            _state.update { s -> s.copy(clips = s.clips.map { c -> m.memberBases[c.id]?.let { c.copy(grade = matched(it)) } ?: c }) }
+            _state.update { s -> s.copy(clips = s.clips.map { c -> m.memberBases[c.id]?.let { c.copy(grade = matched(it, m.memberDeltas[c.id] ?: m.delta)) } ?: c }) }
             refreshPreview()
         } else {
             val index = _state.value.clips.indexOfFirst { it.id == m.clipId }
             if (index >= 0) updateClip(index) { it.copy(grade = grade) }
         }
     }
+
+    /**
+     * Makes the clips of the selected clip's group alike in colour: each is matched to this clip
+     * (frames across both clips, through their whole colour paths), its own change being only the
+     * colour character: white balance, tint, saturation and skin. Brightness and contrast stay each
+     * clip's. In the background; the strength can be scaled after, or undone.
+     */
+    fun matchGroupTo() {
+        val s = _state.value
+        val ref = s.selected ?: return
+        val group = s.groupOf(ref) ?: return
+        val members = s.clips.filter { it.groupId == group.id && it.id != ref.id }
+        if (members.isEmpty()) {
+            _state.update { it.copy(messages = it.messages + "The group has no other clip to match.") }
+            return
+        }
+        val context: Application = getApplication()
+        runInBackground("Matching ${group.name}", ref.id, null) { report, stopped ->
+            val refPixels = withContext(Dispatchers.IO) { framesOf(context, s, ref) }
+            if (refPixels == null) {
+                _state.update { it.copy(messages = it.messages + "Could not read frames of the reference clip.") }
+                return@runInBackground
+            }
+            val refLut = loadLut(s.lutFor(ref))
+            val refApplied = s.appliedGrade(ref)
+            val reference = withContext(Dispatchers.Default) {
+                val rgb = FloatArray(refPixels.size * 3)
+                val c = FloatArray(3)
+                for (i in refPixels.indices) {
+                    val p = refPixels[i]
+                    c[0] = ((p shr 16) and 0xFF) / 255f; c[1] = ((p shr 8) and 0xFF) / 255f; c[2] = (p and 0xFF) / 255f
+                    LutBaker.apply(refLut, refApplied, c)
+                    rgb[3 * i] = c[0]; rgb[3 * i + 1] = c[1]; rgb[3 * i + 2] = c[2]
+                }
+                MatchStats.of(rgb)
+            }
+            val deltas = HashMap<Long, ColorGrade>()
+            var skipped = 0
+            for ((k, c) in members.withIndex()) {
+                if (stopped()) break
+                val pixels = withContext(Dispatchers.IO) { framesOf(context, s, c) }
+                if (pixels == null) { skipped++; continue }
+                val lut = loadLut(s.lutFor(c))
+                val applied = s.appliedGrade(c)
+                val matched = withContext(Dispatchers.Default) { ShotMatch.match(pixels, lut, applied, reference) }
+                // Colour only: each clip keeps its brightness and contrast.
+                deltas[c.id] = ColorGrade(
+                    temperature = matched.temperature - applied.temperature,
+                    tint = matched.tint - applied.tint,
+                    saturation = matched.saturation - applied.saturation,
+                    skinHue = matched.skinHue - applied.skinHue,
+                )
+                report((k + 1f) / members.size)
+            }
+            if (deltas.isEmpty()) return@runInBackground
+            val now = _state.value
+            val bases = now.clips.filter { it.id in deltas }.associate { it.id to it.grade }
+            val session = MatchSession(ref.id, group.id, ref.grade, ColorGrade(), GROUP_MATCH_STRENGTH, bases, deltas)
+            _state.update {
+                it.copy(
+                    matchSession = session,
+                    messages = it.messages + listOfNotNull(
+                        "${deltas.size} clip${if (deltas.size == 1) "" else "s"} of ${group.name} matched in colour to ${ref.meta.name}.",
+                        if (skipped > 0) "$skipped could not be read." else null,
+                    ),
+                )
+            }
+            applyMatch(session)
+        }
+    }
+
+    /**
+     * Source pixels of [clip], small: five frames across its cut (a photo: the picture), before
+     * any colour work. Null when they cannot be read (a raw photo is developed elsewhere).
+     */
+    private fun framesOf(context: android.content.Context, s: UiState, clip: ClipState, width: Int = 160): IntArray? = runCatching {
+        val bitmaps = if (clip.meta.isPhoto) {
+            if (clip.meta.isRaw) return null
+            val opts = android.graphics.BitmapFactory.Options().apply { inSampleSize = (clip.meta.width / (width * 2)).coerceAtLeast(1) }
+            listOfNotNull(context.contentResolver.openInputStream(clip.meta.uri)?.use { android.graphics.BitmapFactory.decodeStream(it, null, opts) })
+        } else {
+            val r = android.media.MediaMetadataRetriever()
+            try {
+                r.setDataSource(context, s.previewSource(clip))
+                val span = (clip.trimEndMs - clip.trimStartMs).coerceAtLeast(1L)
+                val h = if (clip.meta.width > 0) (width * clip.meta.height / clip.meta.width).coerceAtLeast(1) else width * 9 / 16
+                (0 until 5).mapNotNull { k ->
+                    runCatching { r.getScaledFrameAtTime((clip.trimStartMs + span * (2 * k + 1) / 10) * 1000, android.media.MediaMetadataRetriever.OPTION_CLOSEST_SYNC, width, h) }.getOrNull()
+                }
+            } finally {
+                r.release()
+            }
+        }
+        if (bitmaps.isEmpty()) return null
+        bitmaps.flatMap { b ->
+            val small = if (b.width > width * 2) Bitmap.createScaledBitmap(b, width, (width * b.height / b.width).coerceAtLeast(1), true) else b
+            IntArray(small.width * small.height).also { small.getPixels(it, 0, small.width, 0, 0, small.width, small.height) }.asList()
+        }.toIntArray()
+    }.getOrNull()
 
     fun undoMatch() {
         val m = _state.value.matchSession ?: return

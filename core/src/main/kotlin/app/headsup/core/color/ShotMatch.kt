@@ -20,15 +20,19 @@ data class MatchStats(
         /** Below this share of skin-like pixels, skin is not matched. */
         const val MIN_SKIN_SHARE = 0.02
 
-        /** Statistics of display colours given as 0..1 RGB triples. */
+        /**
+         * Statistics of display colours given as 0..1 RGB triples. The colour cast is read from
+         * what should be neutral (the least colourful mid-tones: walls, roads, clouds, grey), not
+         * from the whole frame, so a green field or a red car is not taken for a cast; the
+         * colourfulness is the median, so a few loud colours do not decide it.
+         */
         fun of(rgb: FloatArray): MatchStats {
             val n = rgb.size / 3
             if (n == 0) return MatchStats(0f, 0f, 0f, 0f, 0f, 0f)
             val luma = FloatArray(n)
-            var cbSum = 0.0
-            var crSum = 0.0
-            var chromaSum = 0.0
-            var weightSum = 0.0
+            val cbs = FloatArray(n)
+            val crs = FloatArray(n)
+            val chromas = FloatArray(n)
             // Skin hue as a mean direction (vector sum), so angles average correctly.
             var skinCb = 0.0
             var skinCr = 0.0
@@ -41,13 +45,10 @@ data class MatchStats(
                 luma[i] = y
                 val cb = (b - y) / 1.8556f
                 val cr = (r - y) / 1.5748f
-                // The cast is read mostly from mid-tones; clipped and black pixels say little.
-                val w = (1f - kotlin.math.abs(y - 0.5f) * 1.6f).coerceAtLeast(0.05f).toDouble()
-                cbSum += cb * w
-                crSum += cr * w
-                weightSum += w
+                cbs[i] = cb
+                crs[i] = cr
                 val chroma = sqrt(cb * cb + cr * cr)
-                chromaSum += chroma
+                chromas[i] = chroma
                 val skin = FilmLook.skinness(cb, cr, chroma)
                 if (skin > 0.5f) {
                     skinCb += cb / chroma * skin
@@ -55,14 +56,30 @@ data class MatchStats(
                     skinWeight += skin
                 }
             }
+            // The neutral candidates: mid-tones (not clipped, not black) among the least colourful third.
+            val mid = (0 until n).filter { luma[it] in 0.12f..0.92f }
+            val limit = mid.map { chromas[it] }.sorted().let { if (it.isEmpty()) 0f else it[(it.size * 0.33f).toInt().coerceAtMost(it.size - 1)] }
+            val neutral = mid.filter { chromas[it] <= limit }
+            var cbSum = 0.0
+            var crSum = 0.0
+            var weightSum = 0.0
+            val pick = if (neutral.size >= n / 20 && neutral.isNotEmpty()) neutral else (0 until n).toList()
+            for (i in pick) {
+                // Mid-tones say most; near black and near white little.
+                val w = (1f - kotlin.math.abs(luma[i] - 0.5f) * 1.6f).coerceAtLeast(0.05f).toDouble()
+                cbSum += cbs[i] * w
+                crSum += crs[i] * w
+                weightSum += w
+            }
+            val sortedChroma = chromas.copyOf().also { it.sort() }
             luma.sort()
             return MatchStats(
                 low = luma[(n * 0.1f).toInt().coerceAtMost(n - 1)],
                 median = luma[n / 2],
                 high = luma[(n * 0.9f).toInt().coerceAtMost(n - 1)],
-                cb = (cbSum / weightSum).toFloat(),
-                cr = (crSum / weightSum).toFloat(),
-                chroma = (chromaSum / n).toFloat(),
+                cb = (cbSum / weightSum.coerceAtLeast(1e-9)).toFloat(),
+                cr = (crSum / weightSum.coerceAtLeast(1e-9)).toFloat(),
+                chroma = sortedChroma[n / 2],
                 skinAngle = if (skinWeight / n >= MIN_SKIN_SHARE) FilmLook.angleOf(skinCb.toFloat(), skinCr.toFloat()) else null,
             )
         }

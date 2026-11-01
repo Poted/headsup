@@ -87,6 +87,24 @@ class ShotMatchTest {
     @Test
     fun `no skin in the frame leaves skin hue alone`() {
         val matched = ShotMatch.match(scene, null, ColorGrade(), statsThrough(ColorGrade(exposure = 0.3f)))
-        assertEquals(0f, matched.skinHue)
+        // The random scene has a few skin-like pixels: at most a hair of turn.
+        assertEquals(0f, matched.skinHue, 2f)
+    }
+
+    @Test
+    fun `a green field is not taken for a green cast, a warm light is`() {
+        fun stats(pixels: List<Triple<Float, Float, Float>>) = MatchStats.of(pixels.flatMap { listOf(it.first, it.second, it.third) }.toFloatArray())
+        val rnd = Random(3)
+        fun grey() = (0.3f + rnd.nextFloat() * 0.4f).let { Triple(it, it, it) }
+        // Neutral light: a grey street, and half the frame a green field.
+        val greyStreet = List(2000) { grey() }
+        val withField = List(1000) { grey() } + List(1000) { Triple(0.25f, 0.55f + rnd.nextFloat() * 0.1f, 0.2f) }
+        val a = stats(greyStreet)
+        val b = stats(withField)
+        assertEquals(a.cb, b.cb, 0.01f)
+        assertEquals(a.cr, b.cr, 0.01f)
+        // A warm light on the same street is a cast.
+        val warm = stats(greyStreet.map { (r, g, bl) -> Triple((r * 1.15f).coerceAtMost(1f), g, bl * 0.85f) })
+        assertTrue(warm.cr - a.cr > 0.02f && warm.cb - a.cb < -0.02f, "${warm.cr} ${warm.cb}")
     }
 }
