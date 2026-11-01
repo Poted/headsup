@@ -2642,144 +2642,29 @@ private fun ScopeSwitch(state: UiState, vm: HeadsupViewModel) {
 }
 
 /**
- * The bottom of Adjust, under the corrections: the scope's own things and actions (for this clip
- * its layers and their actions, for a group the group, for all clips Reset all).
+ * The bottom of Adjust, under the corrections: the actions of what is worked on (the layer's,
+ * the group's, all clips').
  */
 @Composable
-private fun ScopeDetails(
-    state: UiState,
-    clip: ClipState,
-    index: Int,
-    vm: HeadsupViewModel,
-    pictureSource: ((Int) -> Bitmap?)?,
-    adding: Boolean,
-    onAdding: (Boolean) -> Unit,
-) {
-    val album = state.photoProject
+private fun ScopeActions(state: UiState, clip: ClipState, index: Int, vm: HeadsupViewModel) {
     when (state.target) {
-        GradeTarget.GROUP -> GroupControls(state, clip, index, state.groupOf(clip), vm)
+        GradeTarget.GROUP -> GroupActions(state, clip, index, state.groupOf(clip), vm)
         GradeTarget.GLOBAL -> {
-            SectionCaption(if (album) "All photos" else "All clips")
-            Hint(if (album) "A change is set on every photo: each shows it under This photo." else "A change is set on every clip: each shows it under This clip.")
+            SectionCaption(if (state.photoProject) "All photos actions" else "All clips actions")
             Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 PillAction("↺", "Reset all", { vm.resetSyncedPhotos() })
             }
         }
-        else -> Layers(state, clip, vm, pictureSource, adding, onAdding)
-    }
-}
-
-/** Sections of the colour corrections, so the picker row stays short. */
-private enum class ColourSection(val label: String) { LIGHT("Light"), PRESENCE("Presence"), COLOUR("Colour"), MIXER("Mixer"), FILM("Film"), EFFECTS("Effects"), LOOKS("Looks"), TOOLS("Tools") }
-
-private val Adjustment.section: ColourSection
-    get() = when (this) {
-        Adjustment.EXPOSURE, Adjustment.BRIGHTNESS, Adjustment.CONTRAST, Adjustment.HIGHLIGHTS, Adjustment.SHADOWS,
-        Adjustment.WHITES, Adjustment.BLACKS, Adjustment.ROLLOFF, Adjustment.CURVE -> ColourSection.LIGHT
-        Adjustment.TEMPERATURE, Adjustment.TINT, Adjustment.SATURATION, Adjustment.VIBRANCE, Adjustment.DENSITY, Adjustment.SKIN -> ColourSection.COLOUR
-        Adjustment.SPLIT, Adjustment.SHADOW_HUE, Adjustment.HIGHLIGHT_HUE, Adjustment.TAME, Adjustment.VIGNETTE, Adjustment.WHEELS -> ColourSection.FILM
-        Adjustment.TEXTURE, Adjustment.CLARITY, Adjustment.DEHAZE -> ColourSection.PRESENCE
-        Adjustment.CINE, Adjustment.LUT, Adjustment.MATCH, Adjustment.BLEND -> ColourSection.TOOLS
-        Adjustment.MIXER, Adjustment.CHANNELS, Adjustment.BW, Adjustment.CALIBRATION -> ColourSection.MIXER
-        // Looks sit with the other tools that set a whole look (LUT, shot match).
-        Adjustment.LOOK -> ColourSection.TOOLS
-        Adjustment.GLOW, Adjustment.HALATION -> ColourSection.EFFECTS
-    }
-
-/** A row of text tabs: the selected one white and underlined, the others muted. */
-@Composable
-private fun SectionTabs(labels: List<String>, selected: Int, onSelect: (Int) -> Unit) {
-    // Scrolls sideways when the column is too narrow for all of them (each stays on one line).
-    Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-        labels.forEachIndexed { i, label ->
-            val on = i == selected
-            Column(
-                Modifier.clip(RoundedCornerShape(8.dp)).clickable { onSelect(i) }.padding(horizontal = 10.dp, vertical = 4.dp),
-                horizontalAlignment = Alignment.CenterHorizontally,
-            ) {
-                Text(label, style = MaterialTheme.typography.labelLarge, color = if (on) HeadsupColors.Highlight else HeadsupColors.TextMuted, maxLines = 1, softWrap = false)
-                Box(Modifier.padding(top = 3.dp).width(18.dp).height(2.dp).background(if (on) HeadsupColors.Highlight else Color.Transparent))
-            }
+        GradeTarget.MASK -> {
+            SectionCaption("Mask actions")
+            LayerActions(state, clip, vm)
+        }
+        GradeTarget.CLIP -> {
+            SectionCaption("Base actions")
+            LayerActions(state, clip, vm)
         }
     }
 }
-
-internal enum class Adjustment(
-    val symbol: String,
-    val label: String,
-    val range: ClosedFloatingPointRange<Float>,
-    val step: Float,
-    val format: String,
-    val get: (ColorGrade) -> Float,
-    val set: (ColorGrade, Float) -> ColorGrade,
-    /** Value meaning "no correction" (0 except for the toning hues). */
-    val neutral: Float = 0f,
-) {
-    /** Not a ruler value: the cine assistant, which analyses the frame and suggests a film grade. */
-    CINE("Cine", "Cine look", 0f..1f, 1f, "", { 0f }, { g, _ -> g }),
-    EXPOSURE("EV", "Exposure", -2f..2f, 0.1f, "%+.1f EV", { it.exposure }, { g, v -> g.copy(exposure = v) }),
-    BRIGHTNESS("Br", "Brightness", -1f..1f, 0.02f, "%+.2f", { it.brightness }, { g, v -> g.copy(brightness = v) }),
-    CONTRAST("Ct", "Contrast", -1f..1f, 0.02f, "%+.2f", { it.contrast }, { g, v -> g.copy(contrast = v) }),
-    HIGHLIGHTS("Hl", "Highlights", -1f..1f, 0.02f, "%+.2f", { it.highlights }, { g, v -> g.copy(highlights = v) }),
-    SHADOWS("Sh", "Shadows", -1f..1f, 0.02f, "%+.2f", { it.shadows }, { g, v -> g.copy(shadows = v) }),
-    WHITES("Wh", "Whites", -1f..1f, 0.02f, "%+.2f", { it.whites }, { g, v -> g.copy(whites = v) }),
-    BLACKS("Bk", "Blacks", -1f..1f, 0.02f, "%+.2f", { it.blacks }, { g, v -> g.copy(blacks = v) }),
-    SATURATION("Sat", "Saturation", -1f..1f, 0.02f, "%+.2f", { it.saturation }, { g, v -> g.copy(saturation = v) }),
-    VIBRANCE("Vib", "Vibrance", -1f..1f, 0.02f, "%+.2f", { it.vibrance }, { g, v -> g.copy(vibrance = v) }),
-    // Subtractive saturation: saturated colours deeper (+) or paler (−).
-    DENSITY("Dn", "Density", -1f..1f, 0.02f, "%+.2f", { it.density }, { g, v -> g.copy(density = v) }),
-    TEMPERATURE("K", "Temperature", -1f..1f, 0.02f, "%+.2f", { it.temperature }, { g, v -> g.copy(temperature = v) }),
-    TINT("Tn", "Tint", -1f..1f, 0.02f, "%+.2f", { it.tint }, { g, v -> g.copy(tint = v) }),
-    SKIN("Sk", "Skin tone", -30f..30f, 0.5f, "%+.1f°", { it.skinHue }, { g, v -> g.copy(skinHue = v) }),
-    VIGNETTE("Vig", "Vignette", 0f..1f, 0.02f, "%.2f", { it.vignette }, { g, v -> g.copy(vignette = v) }),
-    ROLLOFF("Rl", "Roll-off", 0f..1f, 0.02f, "%.2f", { it.rolloff }, { g, v -> g.copy(rolloff = v) }),
-    SPLIT("Sp", "Split tone", 0f..1f, 0.02f, "%.2f", { it.toneAmount }, { g, v -> g.copy(toneAmount = v) }),
-    SHADOW_HUE(
-        "S°", "Shadow hue", 0f..360f, 1f, "%.0f°", { it.shadowHue }, { g, v -> g.copy(shadowHue = v) }, ColorGrade.DEFAULT_SHADOW_HUE,
-    ),
-    HIGHLIGHT_HUE(
-        "H°", "Light hue", 0f..360f, 1f, "%.0f°", { it.highlightHue }, { g, v -> g.copy(highlightHue = v) }, ColorGrade.DEFAULT_HIGHLIGHT_HUE,
-    ),
-    TAME("Tm", "Tame colours", 0f..1f, 0.02f, "%.2f", { it.tame }, { g, v -> g.copy(tame = v) }),
-    TEXTURE("Tx", "Texture", -1f..1f, 0.02f, "%+.2f", { it.texture }, { g, v -> g.copy(texture = v) }),
-    CLARITY("Cl", "Clarity", -1f..1f, 0.02f, "%+.2f", { it.clarity }, { g, v -> g.copy(clarity = v) }),
-    DEHAZE("Dh", "Dehaze", -1f..1f, 0.02f, "%+.2f", { it.dehaze }, { g, v -> g.copy(dehaze = v) }),
-    // Masks only (a clip's glow and halation are in Effects): light from what is bright inside the mask.
-    GLOW("✧", "Glow", 0f..1f, 0.02f, "%.2f", { it.glow }, { g, v -> g.copy(glow = v) }),
-    HALATION("◌", "Halation", 0f..1f, 0.02f, "%.2f", { it.halation }, { g, v -> g.copy(halation = v) }),
-
-    /** Not a ruler value: opens the LUT library (the LUT is applied last, after all corrections). */
-    LUT("LUT", "LUT", 0f..1f, 1f, "", { 0f }, { g, _ -> g }),
-
-    /** Not a ruler value: matches the clip's colour to a reference frame from another clip. */
-    MATCH("≈", "Shot match", 0f..1f, 1f, "", { 0f }, { g, _ -> g }),
-
-    /** Not a ruler value: how the clip blends in from the previous clip's look. */
-    BLEND("⇢", "Blend in", 0f..1f, 1f, "", { 0f }, { g, _ -> g }),
-
-    /** Not a single ruler: colour wheels for shadows, midtones and highlights. */
-    WHEELS("◎", "Grading", 0f..1f, 1f, "", { 0f }, { g, _ -> g }),
-
-    /** Not a single ruler: point tone curves (RGB and per channel). */
-    CURVE("∿", "Curve", 0f..1f, 1f, "", { 0f }, { g, _ -> g }),
-
-    /** Not a single ruler: hue, saturation and luminance per hue band. */
-    MIXER("HSL", "Colour mixer", 0f..1f, 1f, "", { 0f }, { g, _ -> g }),
-
-    /** Not a single ruler: a look (profile) under the corrections, with its amount. */
-    LOOK("Look", "Looks", 0f..1f, 1f, "", { 0f }, { g, _ -> g }),
-
-    /** Not a single ruler: each output channel made from red, green and blue. */
-    CHANNELS("RGB", "Channel mixer", 0f..1f, 1f, "", { 0f }, { g, _ -> g }),
-
-    /** Not a single ruler: black and white, with a brightness per hue band. */
-    BW("B&W", "Black & white", 0f..1f, 1f, "", { 0f }, { g, _ -> g }),
-
-    /** Not a single ruler: hue and saturation of the red, green and blue primaries. */
-    CALIBRATION("Cal", "Calibration", 0f..1f, 1f, "", { 0f }, { g, _ -> g }),
-}
-
-private val BLEND_LENGTHS = listOf(0L to "Cut", 500L to "0.5 s", 1000L to "1 s", 2000L to "2 s", 4000L to "4 s", 8000L to "8 s")
 
 /**
  * Adjust: what it works on at the top, the corrections under it, and the scope's own things and
@@ -2810,19 +2695,29 @@ private fun ColourPage(
     val selectedMask = clip.masks.getOrNull(state.selectedMask)
     // While something is removed from a photo only that shows.
     val removing = state.target == GradeTarget.MASK && state.removing && selectedMask != null
-    if (!removing) ScopeSwitch(state, vm)
-    if (!removing && adding && (state.target == GradeTarget.CLIP || state.target == GradeTarget.MASK)) {
-        // Choosing a new mask: only the layers and the kinds of mask.
-        Layers(state, clip, vm, pictureSource, adding) { adding = it }
-        return
-    }
-    // A mask: its shape (where it is: select, paint, shape, track) or what it changes in the
-    // picture; only while its shape is worked on does a finger on the picture change it.
-    if (!removing && state.target == GradeTarget.MASK && selectedMask != null) {
-        Segmented(listOf("Mask", "Adjust"), if (maskTools) 0 else 1, { onMaskTools(it == 0) })
+    // From the top: what is worked on (scope, then layer or group, then a mask's part), its
+    // settings, and at the bottom its actions.
+    if (!removing) {
+        ScopeSwitch(state, vm)
+        when (state.target) {
+            GradeTarget.CLIP, GradeTarget.MASK -> {
+                // Choosing a new mask: only the layers and the kinds of mask.
+                if (Layers(state, clip, vm, pictureSource, adding) { adding = it }) return
+                // A mask: its shape (where it is: select, paint, shape, track) or what it changes
+                // in the picture; only while its shape is worked on does a finger on the picture change it.
+                if (state.target == GradeTarget.MASK && selectedMask != null) {
+                    Segmented(listOf("Mask", "Adjust"), if (maskTools) 0 else 1, { onMaskTools(it == 0) })
+                }
+            }
+            GradeTarget.GROUP -> GroupPicker(state, clip, index, state.groupOf(clip), vm)
+            GradeTarget.GLOBAL -> Hint(
+                if (state.photoProject) "A change is set on every photo: each shows it under This photo."
+                else "A change is set on every clip: each shows it under This clip.",
+            )
+        }
     }
     ColourBody(state, vm, adjustment, onAdjustment, onAddLut, frameSource, playhead, onSeek, pictureSource, maskTools, onMaskTools)
-    if (!removing) ScopeDetails(state, clip, index, vm, pictureSource, adding) { adding = it }
+    if (!removing) ScopeActions(state, clip, index, vm)
 }
 
 @Composable
@@ -2924,10 +2819,6 @@ private fun ColourBody(
             ) { Text(if (mask.sequence != null) "Track again" else "Track") }
         }
         if (mask.kind == MaskKind.BRUSH) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                SmallAction(if (state.maskOverlay) "Overlay ✓" else "Overlay", { vm.toggleMaskOverlay() })
-                SmallAction("Clear", { vm.clearBrush() })
-            }
             BrushControls(state, vm, pictureSource)
             // However exact the selection, some edges should fade (a ragged shore): a soft band.
             SectionCaption("Feather")
@@ -3684,7 +3575,12 @@ private enum class BrushSetting(val symbol: String, val label: String, val range
 private fun BrushControls(state: UiState, vm: HeadsupViewModel, pictureSource: ((Int) -> Bitmap?)?) {
     val mask = state.selected?.masks?.getOrNull(state.selectedMask) ?: return
     val brush = state.brush
-    // What a finger on the picture does, as a palette.
+    // What a finger on the picture does, as a palette; showing the mask and clearing it beside.
+    SectionCaption("Tool") {
+        Spacer(Modifier.width(8.dp))
+        SmallAction(if (state.maskOverlay) "Overlay ✓" else "Overlay", { vm.toggleMaskOverlay() })
+        SmallAction("Clear", { vm.clearBrush() })
+    }
     LazyRow(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
         items(BrushMode.entries) { mode ->
             CircleOption(mode.symbol, mode.label, selected = brush.mode == mode, modified = false) { vm.updateBrush { it.copy(mode = mode) } }
@@ -3692,6 +3588,7 @@ private fun BrushControls(state: UiState, vm: HeadsupViewModel, pictureSource: (
     }
     when (brush.mode) {
         BrushMode.SELECT -> {
+            SectionCaption("Selection")
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 FilterChip(selected = !brush.subtract, onClick = { vm.updateBrush { it.copy(subtract = false) } }, label = { Text("Add") })
                 FilterChip(selected = brush.subtract, onClick = { vm.updateBrush { it.copy(subtract = true) } }, label = { Text("Subtract") })
@@ -3720,6 +3617,7 @@ private fun BrushControls(state: UiState, vm: HeadsupViewModel, pictureSource: (
             val settings = BrushSetting.entries
             var chosen by rememberSaveable { mutableStateOf(BrushSetting.SIZE) }
             val setting = chosen.takeIf { it in settings } ?: settings.first()
+            SectionCaption("Brush")
             LazyRow(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
                 items(settings) { b ->
                     CircleOption(b.symbol, b.label, selected = b == setting, modified = false) { chosen = b }
@@ -3856,12 +3754,17 @@ private fun Layers(
         )
         return true
     }
-    if (!onMask) {
+    return false
+}
+
+/** The selected layer's actions (the base's look, or the mask), at the bottom of Adjust. */
+@Composable
+private fun LayerActions(state: UiState, clip: ClipState, vm: HeadsupViewModel) {
+    if (state.target != GradeTarget.MASK) {
         LookActions(state, vm)
-        return false
+        return
     }
-    val mask = clip.masks.getOrNull(state.selectedMask) ?: return false
-    // The selected mask's own actions, always in the same place.
+    val mask = clip.masks.getOrNull(state.selectedMask) ?: return
     Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
         PillAction("◑", "Invert", { vm.updateMask { it.copy(inverted = !it.inverted) } }, selected = mask.inverted)
         // A copy, or its opposite (the sky's mask as the land's), with its tracking.
@@ -3872,7 +3775,6 @@ private fun Layers(
         if (mask.grade != ColorGrade()) PillAction("↺", "Reset", { vm.updateGrade { ColorGrade() } })
         PillAction("✕", "Delete", { vm.removeMask(state.selectedMask) })
     }
-    return false
 }
 
 /**
@@ -4091,8 +3993,7 @@ private fun LutControls(
  * at most one group, so its colours always come from clip → group → all clips.
  */
 @Composable
-private fun GroupControls(state: UiState, clip: ClipState, index: Int, group: ClipGroup?, vm: HeadsupViewModel) {
-    var renaming by remember { mutableStateOf(false) }
+private fun GroupPicker(state: UiState, clip: ClipState, index: Int, group: ClipGroup?, vm: HeadsupViewModel) {
     if (group == null) {
         Hint(
             if (state.photoProject) "Photos shot the same way (e.g. drone) get the same LUT and corrections: a change here is set on each photo of the group."
@@ -4110,13 +4011,19 @@ private fun GroupControls(state: UiState, clip: ClipState, index: Int, group: Cl
         }
         FilterChip(selected = false, onClick = { vm.createGroup(index) }, label = { Text("+ New group") })
     }
+}
+
+/** The group's actions and making it alike, at the bottom of Adjust. */
+@Composable
+private fun GroupActions(state: UiState, clip: ClipState, index: Int, group: ClipGroup?, vm: HeadsupViewModel) {
+    var renaming by remember { mutableStateOf(false) }
     if (group != null) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
+        SectionCaption("Group actions")
+        Row(Modifier.horizontalScroll(rememberScrollState()), verticalAlignment = Alignment.CenterVertically) {
             SmallAction("Rename", { renaming = true })
             SmallAction("Leave", { vm.setClipGroup(index, null) })
-            SmallAction("Delete group", { vm.deleteGroup(group.id) })
-            Spacer(Modifier.weight(1f))
             SmallAction("Reset group", { vm.resetSyncedPhotos() })
+            SmallAction("Delete group", { vm.deleteGroup(group.id) })
         }
         if (renaming) RenameDialog(group.name, onDismiss = { renaming = false }) { vm.renameGroup(group.id, it); renaming = false }
         // One look across the group: no clip greener or warmer than the others.
