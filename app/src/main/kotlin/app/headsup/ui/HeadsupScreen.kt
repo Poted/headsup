@@ -88,7 +88,6 @@ import androidx.compose.foundation.gestures.Orientation
 import androidx.compose.foundation.gestures.draggable
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.compose.foundation.Canvas
@@ -784,44 +783,32 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
 @Composable
 private fun BottomToolbar(selected: Tool, tools: List<Tool>, labelOf: (Tool) -> String, badgeOf: (Tool) -> Boolean, onSelect: (Tool) -> Unit) {
     val shape = RoundedCornerShape(32.dp)
-    androidx.compose.foundation.layout.BoxWithConstraints(Modifier.fillMaxWidth()) {
-        // Narrow (the tools beside the picture): smaller icons and labels, so the names fit.
-        val each = (maxWidth - 44.dp) / tools.size.coerceAtLeast(1)
-        val narrow = each < 48.dp
-        Row(
-            Modifier
-                .padding(horizontal = if (narrow) 8.dp else 16.dp, vertical = 10.dp)
-                .fillMaxWidth()
-                .clip(shape)
-                .background(HeadsupColors.Surface)
-                .border(1.dp, HeadsupColors.Outline, shape)
-                .padding(if (narrow) 4.dp else 6.dp),
-            horizontalArrangement = Arrangement.spacedBy(2.dp),
-        ) {
-            for (t in tools) {
-                val on = t == selected
-                Column(
-                    Modifier
-                        .weight(1f)
-                        .clip(RoundedCornerShape(26.dp))
-                        .background(if (on) HeadsupColors.Highlight else Color.Transparent)
-                        .clickable { onSelect(t) }
-                        .padding(vertical = if (narrow) 7.dp else 8.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                ) {
-                    Box {
-                        Icon(t.icon, contentDescription = labelOf(t), Modifier.size(if (narrow) 18.dp else 22.dp), tint = if (on) HeadsupColors.OnHighlight else HeadsupColors.TextMuted)
-                        if (badgeOf(t)) Box(Modifier.align(Alignment.TopEnd).offset(x = 4.dp, y = (-2).dp).size(7.dp).clip(CircleShape).background(HeadsupColors.Accent))
-                    }
-                    Spacer(Modifier.height(if (narrow) 2.dp else 0.dp))
-                    Text(
-                        labelOf(t),
-                        style = MaterialTheme.typography.labelSmall.let { if (narrow) it.copy(fontSize = 10.sp, letterSpacing = 0.sp) else it },
-                        color = if (on) HeadsupColors.OnHighlight else HeadsupColors.TextMuted,
-                        maxLines = 1,
-                        softWrap = false,
-                    )
+    Row(
+        Modifier
+            .padding(horizontal = 16.dp, vertical = 10.dp)
+            .fillMaxWidth()
+            .clip(shape)
+            .background(HeadsupColors.Surface)
+            .border(1.dp, HeadsupColors.Outline, shape)
+            .padding(6.dp),
+        horizontalArrangement = Arrangement.spacedBy(2.dp),
+    ) {
+        for (t in tools) {
+            val on = t == selected
+            Column(
+                Modifier
+                    .weight(1f)
+                    .clip(RoundedCornerShape(26.dp))
+                    .background(if (on) HeadsupColors.Highlight else Color.Transparent)
+                    .clickable { onSelect(t) }
+                    .padding(vertical = 8.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+                Box {
+                    Icon(t.icon, contentDescription = labelOf(t), Modifier.size(22.dp), tint = if (on) HeadsupColors.OnHighlight else HeadsupColors.TextMuted)
+                    if (badgeOf(t)) Box(Modifier.align(Alignment.TopEnd).offset(x = 4.dp, y = (-2).dp).size(7.dp).clip(CircleShape).background(HeadsupColors.Accent))
                 }
+                Text(labelOf(t), style = MaterialTheme.typography.labelSmall, color = if (on) HeadsupColors.OnHighlight else HeadsupColors.TextMuted, maxLines = 1, softWrap = false)
             }
         }
     }
