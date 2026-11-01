@@ -259,7 +259,14 @@ data class MatchSession(
     val memberBases: Map<Long, ColorGrade> = emptyMap(),
     /** For a group made alike: each clip's own change (else every clip takes [delta]). */
     val memberDeltas: Map<Long, ColorGrade> = emptyMap(),
+    /** For a group made alike: how much of its change each clip takes (0 = left out), on top of [strength]. */
+    val memberStrength: Map<Long, Float> = emptyMap(),
+    /** What is matched: white balance, saturation, skin. */
+    val parts: Set<MatchPart> = MatchPart.entries.toSet(),
 )
+
+/** What a shot match changes. */
+enum class MatchPart(val label: String) { WHITE_BALANCE("White balance"), SATURATION("Saturation"), SKIN("Skin") }
 
 /** Clips of one group are alike in colour once matched: most of the change applies. */
 private const val GROUP_MATCH_STRENGTH = 0.9f
@@ -1841,8 +1848,15 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     private fun applyMatch(m: MatchSession) {
-        val k = m.strength
-        fun matched(b: ColorGrade, d: ColorGrade = m.delta) = b.copy(
+        fun matched(b: ColorGrade, change: ColorGrade = m.delta, k: Float = m.strength): ColorGrade {
+            // Only the parts chosen.
+            val d = change.copy(
+                temperature = if (MatchPart.WHITE_BALANCE in m.parts) change.temperature else 0f,
+                tint = if (MatchPart.WHITE_BALANCE in m.parts) change.tint else 0f,
+                saturation = if (MatchPart.SATURATION in m.parts) change.saturation else 0f,
+                skinHue = if (MatchPart.SKIN in m.parts) change.skinHue else 0f,
+            )
+            return b.copy(
             exposure = (b.exposure + d.exposure * k).coerceIn(-3f, 3f),
             contrast = (b.contrast + d.contrast * k).coerceIn(-1f, 1f),
             temperature = (b.temperature + d.temperature * k).coerceIn(-1f, 1f),
@@ -1850,10 +1864,13 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
             saturation = (b.saturation + d.saturation * k).coerceIn(-1f, 1f),
             skinHue = (b.skinHue + d.skinHue * k).coerceIn(-30f, 30f),
         )
+        }
         val grade = matched(m.base)
         if (m.groupId != null) {
             // The camera's character goes onto each clip of the group.
-            _state.update { s -> s.copy(clips = s.clips.map { c -> m.memberBases[c.id]?.let { c.copy(grade = matched(it, m.memberDeltas[c.id] ?: m.delta)) } ?: c }) }
+            _state.update { s ->
+                s.copy(clips = s.clips.map { c -> m.memberBases[c.id]?.let { c.copy(grade = matched(it, m.memberDeltas[c.id] ?: m.delta, m.strength * (m.memberStrength[c.id] ?: 1f))) } ?: c })
+            }
             refreshPreview()
         } else {
             val index = _state.value.clips.indexOfFirst { it.id == m.clipId }
@@ -1959,6 +1976,30 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
             IntArray(small.width * small.height).also { small.getPixels(it, 0, small.width, 0, 0, small.width, small.height) }.asList()
         }.toIntArray()
     }.getOrNull()
+
+    /** How much of its change clip [clipId] takes in the group made alike (0 leaves it out). */
+    fun setMemberMatch(clipId: Long, strength: Float) {
+        val session = _state.value.matchSession ?: return
+        val next = session.copy(memberStrength = session.memberStrength + (clipId to strength.coerceIn(0f, 1f)))
+        _state.update { it.copy(matchSession = next) }
+        applyMatch(next)
+    }
+
+    /** What the match changes (at least one part). */
+    fun setMatchParts(parts: Set<MatchPart>) {
+        if (parts.isEmpty()) return
+        val session = _state.value.matchSession ?: return
+        val next = session.copy(parts = parts)
+        _state.update { it.copy(matchSession = next) }
+        applyMatch(next)
+    }
+
+    /** Held: the selected clip as it was before the match. */
+    fun compareMatchMember(held: Boolean) {
+        val s = _state.value
+        val clip = s.selected ?: return
+        setCompareGrade(if (held) s.matchSession?.memberBases?.get(clip.id) else null)
+    }
 
     fun undoMatch() {
         val m = _state.value.matchSession ?: return

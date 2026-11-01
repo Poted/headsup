@@ -3835,8 +3835,40 @@ private fun GroupControls(state: UiState, clip: ClipState, index: Int, group: Cl
             PillAction("≈", "Match to this", { vm.matchGroupTo() }, enabled = !running)
         }
         if (session != null) {
+            // What is matched.
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                for (part in MatchPart.entries) {
+                    val on = part in session.parts
+                    FilterChip(selected = on, onClick = { vm.setMatchParts(if (on) session.parts - part else session.parts + part) }, label = { Text(part.label) })
+                }
+            }
             ValueHeader("Match strength", String.format(Locale.US, "%.0f %%", session.strength * 100))
             RulerSlider(session.strength, 0f..1f, 0.02f, vm::setMatchStrength, onReset = { vm.setMatchStrength(1f) })
+            // Each clip: in or out, how much of its change, and (selected) its own ruler.
+            SectionCaption("Clips matched")
+            for ((id, delta) in session.memberDeltas) {
+                val i = state.clips.indexOfFirst { it.id == id }
+                val c = state.clips.getOrNull(i) ?: continue
+                val share = session.memberStrength[id] ?: 1f
+                Row(
+                    Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).clickable { vm.selectClip(i) }
+                        .background(if (c.id == clip.id) HeadsupColors.SurfaceHigh else Color.Transparent).padding(horizontal = 6.dp, vertical = 2.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    androidx.compose.material3.Checkbox(checked = share > 0f, onCheckedChange = { vm.setMemberMatch(id, if (it) 1f else 0f) })
+                    Column(Modifier.weight(1f)) {
+                        Text("${i + 1}. ${c.meta.name}", style = MaterialTheme.typography.bodyMedium, maxLines = 1)
+                        Hint(String.format(Locale.US, "warmth %+.2f · tint %+.2f · saturation %+.2f%s", delta.temperature, delta.tint, delta.saturation, if (delta.skinHue != 0f) String.format(Locale.US, " · skin %+.0f°", delta.skinHue) else ""))
+                    }
+                    Text(String.format(Locale.US, "%.0f %%", share * 100), style = MaterialTheme.typography.labelLarge, color = if (share > 0f) Color.White else HeadsupColors.TextMuted)
+                }
+            }
+            session.memberDeltas[clip.id]?.let {
+                val share = session.memberStrength[clip.id] ?: 1f
+                ValueHeader("This clip", String.format(Locale.US, "%.0f %%", share * 100))
+                RulerSlider(share, 0f..1f, 0.02f, { v -> vm.setMemberMatch(clip.id, v) }, onReset = { vm.setMemberMatch(clip.id, 1f) }, onHold = vm::compareMatchMember)
+                Hint("Hold the ruler to see this clip before the match. Tap a clip in the list to show it.")
+            } ?: Hint("Tap a clip in the list to show it and set how much of the match it takes.")
             Row {
                 Spacer(Modifier.weight(1f))
                 SmallAction("Undo match", vm::undoMatch)
