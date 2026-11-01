@@ -119,6 +119,9 @@ object HeadsupIcons {
     /** Chevron up: unfold. */
     val ChevronUp = icon("chevron-up") { stroke { moveTo(6f, 15f); lineTo(12f, 9f); lineTo(18f, 15f) } }
 
+    /** Chevron down: fold. */
+    val ChevronDown = icon("chevron-down") { stroke { moveTo(6f, 9f); lineTo(12f, 15f); lineTo(18f, 9f) } }
+
     /** A tick: milestones (moments of the edit marked as done). */
     val Check = icon("check") { stroke { moveTo(5f, 12.5f); lineTo(10f, 17.5f); lineTo(19f, 7f) } }
 

@@ -1570,7 +1570,10 @@ fun ClipPreview(
             // Sideways: fold the transport and the timeline away for a bigger picture.
             onCompact?.let { fold ->
                 Spacer(Modifier.width(4.dp))
-                ToggleDot("⌄", false) { fold(true) }
+                Box(
+                    Modifier.size(32.dp).clip(CircleShape).border(1.dp, HeadsupColors.Outline, CircleShape).clickable { fold(true) },
+                    contentAlignment = Alignment.Center,
+                ) { Icon(HeadsupIcons.ChevronDown, "Fold the controls", Modifier.size(18.dp), tint = HeadsupColors.TextMuted) }
             }
         }
     }

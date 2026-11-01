@@ -88,6 +88,7 @@ import androidx.compose.foundation.gestures.Orientation
 import androidx.compose.foundation.gestures.draggable
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.compose.foundation.Canvas
@@ -783,32 +784,44 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
 @Composable
 private fun BottomToolbar(selected: Tool, tools: List<Tool>, labelOf: (Tool) -> String, badgeOf: (Tool) -> Boolean, onSelect: (Tool) -> Unit) {
     val shape = RoundedCornerShape(32.dp)
-    Row(
-        Modifier
-            .padding(horizontal = 16.dp, vertical = 10.dp)
-            .fillMaxWidth()
-            .clip(shape)
-            .background(HeadsupColors.Surface)
-            .border(1.dp, HeadsupColors.Outline, shape)
-            .padding(6.dp),
-        horizontalArrangement = Arrangement.spacedBy(2.dp),
-    ) {
-        for (t in tools) {
-            val on = t == selected
-            Column(
-                Modifier
-                    .weight(1f)
-                    .clip(RoundedCornerShape(26.dp))
-                    .background(if (on) HeadsupColors.Highlight else Color.Transparent)
-                    .clickable { onSelect(t) }
-                    .padding(vertical = 8.dp),
-                horizontalAlignment = Alignment.CenterHorizontally,
-            ) {
-                Box {
-                    Icon(t.icon, contentDescription = labelOf(t), Modifier.size(22.dp), tint = if (on) HeadsupColors.OnHighlight else HeadsupColors.TextMuted)
-                    if (badgeOf(t)) Box(Modifier.align(Alignment.TopEnd).offset(x = 4.dp, y = (-2).dp).size(7.dp).clip(CircleShape).background(HeadsupColors.Accent))
+    androidx.compose.foundation.layout.BoxWithConstraints(Modifier.fillMaxWidth()) {
+        // Narrow (the tools beside the picture): smaller icons and labels, so the names fit.
+        val each = (maxWidth - 44.dp) / tools.size.coerceAtLeast(1)
+        val narrow = each < 68.dp
+        Row(
+            Modifier
+                .padding(horizontal = if (narrow) 8.dp else 16.dp, vertical = 10.dp)
+                .fillMaxWidth()
+                .clip(shape)
+                .background(HeadsupColors.Surface)
+                .border(1.dp, HeadsupColors.Outline, shape)
+                .padding(if (narrow) 4.dp else 6.dp),
+            horizontalArrangement = Arrangement.spacedBy(2.dp),
+        ) {
+            for (t in tools) {
+                val on = t == selected
+                Column(
+                    Modifier
+                        .weight(1f)
+                        .clip(RoundedCornerShape(26.dp))
+                        .background(if (on) HeadsupColors.Highlight else Color.Transparent)
+                        .clickable { onSelect(t) }
+                        .padding(vertical = if (narrow) 7.dp else 8.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                ) {
+                    Box {
+                        Icon(t.icon, contentDescription = labelOf(t), Modifier.size(if (narrow) 18.dp else 22.dp), tint = if (on) HeadsupColors.OnHighlight else HeadsupColors.TextMuted)
+                        if (badgeOf(t)) Box(Modifier.align(Alignment.TopEnd).offset(x = 4.dp, y = (-2).dp).size(7.dp).clip(CircleShape).background(HeadsupColors.Accent))
+                    }
+                    Spacer(Modifier.height(if (narrow) 2.dp else 0.dp))
+                    Text(
+                        labelOf(t),
+                        style = MaterialTheme.typography.labelSmall.let { if (narrow) it.copy(fontSize = 10.sp, letterSpacing = 0.sp) else it },
+                        color = if (on) HeadsupColors.OnHighlight else HeadsupColors.TextMuted,
+                        maxLines = 1,
+                        softWrap = false,
+                    )
                 }
-                Text(labelOf(t), style = MaterialTheme.typography.labelSmall, color = if (on) HeadsupColors.OnHighlight else HeadsupColors.TextMuted, maxLines = 1, softWrap = false)
             }
         }
     }
@@ -2610,21 +2623,9 @@ private fun LookActions(state: UiState, vm: HeadsupViewModel) {
     }
 }
 
-/**
- * The top of Adjust: what it works on (this clip, its group, all clips), always in view; for this
- * clip its layers (the base and its masks) and the selected layer's actions. Returns true when
- * nothing else belongs under it (a new mask is being chosen).
- */
+/** The top of Adjust: what it works on (this clip, its group, all clips), always in view. */
 @Composable
-private fun AdjustHeader(
-    state: UiState,
-    clip: ClipState,
-    index: Int,
-    vm: HeadsupViewModel,
-    pictureSource: ((Int) -> Bitmap?)?,
-    maskTools: Boolean,
-    onMaskTools: (Boolean) -> Unit,
-): Boolean {
+private fun ScopeSwitch(state: UiState, vm: HeadsupViewModel) {
     val album = state.photoProject
     val scope = when (state.target) {
         GradeTarget.GROUP -> 1
@@ -2638,20 +2639,33 @@ private fun AdjustHeader(
             vm.setEffectsOnAll(i == 2)
         }
     })
-    return when (scope) {
-        1 -> {
-            GroupControls(state, clip, index, state.groupOf(clip), vm)
-            false
-        }
-        2 -> {
-            // As everywhere on this page: what it does, then its actions in a row on the left.
+}
+
+/**
+ * The bottom of Adjust, under the corrections: the scope's own things and actions (for this clip
+ * its layers and their actions, for a group the group, for all clips Reset all).
+ */
+@Composable
+private fun ScopeDetails(
+    state: UiState,
+    clip: ClipState,
+    index: Int,
+    vm: HeadsupViewModel,
+    pictureSource: ((Int) -> Bitmap?)?,
+    adding: Boolean,
+    onAdding: (Boolean) -> Unit,
+) {
+    val album = state.photoProject
+    when (state.target) {
+        GradeTarget.GROUP -> GroupControls(state, clip, index, state.groupOf(clip), vm)
+        GradeTarget.GLOBAL -> {
+            SectionCaption(if (album) "All photos" else "All clips")
             Hint(if (album) "A change is set on every photo: each shows it under This photo." else "A change is set on every clip: each shows it under This clip.")
             Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 PillAction("↺", "Reset all", { vm.resetSyncedPhotos() })
             }
-            false
         }
-        else -> Layers(state, clip, vm, pictureSource, maskTools, onMaskTools)
+        else -> Layers(state, clip, vm, pictureSource, adding, onAdding)
     }
 }
 
@@ -2767,8 +2781,52 @@ internal enum class Adjustment(
 
 private val BLEND_LENGTHS = listOf(0L to "Cut", 500L to "0.5 s", 1000L to "1 s", 2000L to "2 s", 4000L to "4 s", 8000L to "8 s")
 
+/**
+ * Adjust: what it works on at the top, the corrections under it, and the scope's own things and
+ * actions (layers, copy, reset; the group; reset all) at the bottom.
+ */
 @Composable
 private fun ColourPage(
+    state: UiState,
+    vm: HeadsupViewModel,
+    adjustment: Adjustment,
+    onAdjustment: (Adjustment) -> Unit,
+    onAddLut: () -> Unit,
+    frameSource: (() -> Bitmap?)?,
+    playhead: LongState,
+    onSeek: (clipMs: Long) -> Unit,
+    pictureSource: ((Int) -> Bitmap?)? = null,
+    maskTools: Boolean = true,
+    onMaskTools: (Boolean) -> Unit = {},
+) {
+    val index = state.selectedClip
+    val clip = state.selected
+    if (index == null || clip == null) {
+        Hint(if (state.photoProject) "Select a photo first." else "Select a clip first.")
+        return
+    }
+    // A new mask being chosen (from + among the layers).
+    var adding by rememberSaveable { mutableStateOf(false) }
+    val selectedMask = clip.masks.getOrNull(state.selectedMask)
+    // While something is removed from a photo only that shows.
+    val removing = state.target == GradeTarget.MASK && state.removing && selectedMask != null
+    if (!removing) ScopeSwitch(state, vm)
+    if (!removing && adding && (state.target == GradeTarget.CLIP || state.target == GradeTarget.MASK)) {
+        // Choosing a new mask: only the layers and the kinds of mask.
+        Layers(state, clip, vm, pictureSource, adding) { adding = it }
+        return
+    }
+    // A mask: its shape (where it is: select, paint, shape, track) or what it changes in the
+    // picture; only while its shape is worked on does a finger on the picture change it.
+    if (!removing && state.target == GradeTarget.MASK && selectedMask != null) {
+        Segmented(listOf("Mask", "Adjust"), if (maskTools) 0 else 1, { onMaskTools(it == 0) })
+    }
+    ColourBody(state, vm, adjustment, onAdjustment, onAddLut, frameSource, playhead, onSeek, pictureSource, maskTools, onMaskTools)
+    if (!removing) ScopeDetails(state, clip, index, vm, pictureSource, adding) { adding = it }
+}
+
+@Composable
+private fun ColourBody(
     state: UiState,
     vm: HeadsupViewModel,
     adjustment: Adjustment,
@@ -2798,7 +2856,6 @@ private fun ColourPage(
     LaunchedEffect(target, selectedMask == null) { if (target == GradeTarget.MASK && selectedMask == null) vm.setTarget(GradeTarget.CLIP) }
     // While something is removed from a photo only that shows; otherwise the scope and layers stay
     // at the top in both of a mask's modes (Mask and Adjust).
-    if (!(target == GradeTarget.MASK && state.removing && selectedMask != null) && AdjustHeader(state, clip, index, vm, pictureSource, maskTools, onMaskTools)) return
     if (target != GradeTarget.GLOBAL && !clip.colorGrade) {
         // HDR files (already graded, e.g. Mimo exports) start with their own colours.
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -3729,10 +3786,9 @@ private fun Layers(
     clip: ClipState,
     vm: HeadsupViewModel,
     pictureSource: ((Int) -> Bitmap?)?,
-    maskTools: Boolean,
-    onMaskTools: (Boolean) -> Unit,
+    adding: Boolean,
+    onAdding: (Boolean) -> Unit,
 ): Boolean {
-    var adding by rememberSaveable { mutableStateOf(false) }
     val full = clip.masks.size >= ColourMask.MAX_PER_CLIP
     val onMask = state.target == GradeTarget.MASK
     SectionCaption("Layers")
@@ -3740,19 +3796,19 @@ private fun Layers(
     LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
         item {
             LayerChip("▣", "Base", selected = !onMask && !adding, modified = clip.grade != ColorGrade()) {
-                adding = false
+                onAdding(false)
                 vm.setTarget(GradeTarget.CLIP)
             }
         }
         items(clip.masks.size) { i ->
             val m = clip.masks[i]
             LayerChip(maskSymbol(m), if (i > 0 && m.join != MaskJoin.NEW) "${m.join.symbol} ${maskName(m)}" else "${i + 1} ${maskName(m)}", selected = onMask && i == state.selectedMask && !adding, modified = m.grade != ColorGrade()) {
-                adding = false
+                onAdding(false)
                 vm.selectMask(i)
                 vm.setTarget(GradeTarget.MASK)
             }
         }
-        if (!full) item { LayerChip("+", if (clip.masks.isEmpty()) "Mask" else "", selected = adding, modified = false) { adding = !adding } }
+        if (!full) item { LayerChip("+", if (clip.masks.isEmpty()) "Mask" else "", selected = adding, modified = false) { onAdding(!adding) } }
     }
     // What was removed from the photo (Remove), taken back one by one or all at once.
     val removed = clip.retouch.map { it.hole }.distinct().size
@@ -3769,7 +3825,7 @@ private fun Layers(
             return true
         }
         fun add(action: () -> Unit) {
-            adding = false
+            onAdding(false)
             vm.setTarget(GradeTarget.MASK)
             action()
         }
@@ -3816,9 +3872,6 @@ private fun Layers(
         if (mask.grade != ColorGrade()) PillAction("↺", "Reset", { vm.updateGrade { ColorGrade() } })
         PillAction("✕", "Delete", { vm.removeMask(state.selectedMask) })
     }
-    // The mask itself (where it is: select, paint, shape, track) or what it changes in the picture.
-    // Only while the mask is worked on does a finger on the picture change it.
-    if (!state.removing) Segmented(listOf("Mask", "Adjust"), if (maskTools) 0 else 1, { onMaskTools(it == 0) })
     return false
 }
 
