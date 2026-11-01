@@ -771,6 +771,8 @@ fun ClipPreview(
     // Audio clips follow the timeline: each plays where it is placed, faded as in the export.
     val audioNow by rememberUpdatedState(audio)
     val timelineNow by rememberUpdatedState(timelineOffsetMs + clipTimelineMs)
+    val offsetNow by rememberUpdatedState(timelineOffsetMs)
+    val sourceNow by rememberUpdatedState(positionMs)
     val totalNow by rememberUpdatedState(timelineTotalMs)
     // Keyed to wanting to play, not to the picture actually moving: very slow parts can make the
     // picture's player wait a moment (buffering), and the music must not stop each time.
@@ -788,7 +790,17 @@ fun ClipPreview(
         while (true) {
             val wall = android.os.SystemClock.uptimeMillis()
             var at = anchorT + (wall - anchorAt)
-            if (kotlin.math.abs(timelineNow - at) > 600) {
+            // How far apart the picture and the clock are, in the recording: in slow parts a small
+            // lag of the picture's player (its speed changes only once its sound buffer has played)
+            // is several times longer on the timeline, and must not move the music.
+            val c0 = clipNow
+            val local = at - offsetNow
+            val apart = if (!photoNow && local in 0L..c0.timelineDurationMs) {
+                kotlin.math.abs(sourceNow - c0.sourceOfTimeline(local))
+            } else {
+                kotlin.math.abs(timelineNow - at)
+            }
+            if (apart > 500 || kotlin.math.abs(timelineNow - at) > 4_000) {
                 anchorT = timelineNow
                 anchorAt = wall
                 at = anchorT
