@@ -721,6 +721,8 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
     fun onScreenSwipe(swipe: Swipe, upper: Boolean) {
         when {
             upper && swipe == Swipe.UP && !(folded || photoFolded) -> fullscreen = true
+            // Sideways, to the right over the picture also goes full screen.
+            wide && swipe == Swipe.RIGHT -> fullscreen = true
             swipe == Swipe.UP && (folded || photoFolded) -> compact = false
             !upper && swipe == Swipe.DOWN && (!state.photoProject || tool != Tool.FILES) -> compact = true
             else -> Unit
@@ -735,7 +737,7 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
                     .fillMaxSize()
                     .background(Color.Black)
                     .graphicsLayer { scaleX = settle.value; scaleY = settle.value; alpha = 0.4f + 0.6f * ((settle.value - 0.96f) / 0.04f) }
-                    .freeSwipe(pictureFree) { if (it == Swipe.DOWN) fullscreen = false },
+                    .freeSwipe(pictureFree) { if (it == Swipe.DOWN || (wide && it == Swipe.LEFT)) fullscreen = false },
                 verticalArrangement = Arrangement.Center,
                 content = pictureAndTimeline,
             )
