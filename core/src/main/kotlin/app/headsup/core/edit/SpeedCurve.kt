@@ -75,6 +75,34 @@ object SpeedCurve {
     fun points(curve: List<Float>): List<Pair<Float, Float>> =
         curve.chunked(2).filter { it.size == 2 }.map { it[0].coerceIn(0f, 1f) to it[1].coerceIn(MIN, MAX) }.sortedBy { it.first }
 
+    /**
+     * The curve of a cut split at [f] (0..1 of it): the part before and the part after, each over
+     * its own 0..1, so both pieces play exactly as the whole did. Around the split the curve is
+     * sampled finely, so its easing keeps its shape.
+     */
+    fun split(curve: List<Float>, f: Float): Pair<List<Float>, List<Float>> {
+        if (curve.isEmpty() || f <= 0f || f >= 1f) return curve to curve
+        val p = points(curve)
+        // The points, plus samples across the stretch the split falls in.
+        val before = p.lastOrNull { it.first <= f }?.first ?: 0f
+        val after = p.firstOrNull { it.first >= f }?.first ?: 1f
+        val samples = (1 until 12).map { k -> before + (after - before) * k / 12f }
+        val all = (p.map { it.first } + samples + listOf(0f, f, 1f)).distinct().sorted()
+        val left = all.filter { it <= f }.flatMap { u -> listOf(u / f, factor(curve, u)) }
+        val right = all.filter { it >= f }.flatMap { u -> listOf((u - f) / (1f - f), factor(curve, u)) }
+        return left to right
+    }
+
+    /** The curves of two pieces joined into one cut: [a] over its share [fa] of it, then [b]. */
+    fun join(a: List<Float>, fa: Float, b: List<Float>): List<Float> {
+        if (a.isEmpty() && b.isEmpty()) return emptyList()
+        val f = fa.coerceIn(0.001f, 0.999f)
+        val pa = points(a).ifEmpty { listOf(0f to 1f, 1f to 1f) }
+        val pb = points(b).ifEmpty { listOf(0f to 1f, 1f to 1f) }
+        return (pa.map { (u, v) -> u * f to v } + pb.map { (u, v) -> f + u * (1f - f) to v })
+            .distinctBy { it.first }.flatMap { listOf(it.first, it.second) }
+    }
+
     /** The factor at [u] (0..1 of the cut). */
     fun factor(curve: List<Float>, u: Float): Float {
         val p = points(curve)

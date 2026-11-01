@@ -71,4 +71,19 @@ class SpeedCurveTest {
         assertTrue(braking.size >= 3, "$pieces")
         assertTrue(SpeedCurve.Preset.RUSH_IN.rushes && !SpeedCurve.Preset.SLOW_IN.rushes)
     }
+
+    @Test
+    fun `a split cut plays as the whole did`() {
+        val curve = SpeedCurve.Preset.RUSH_IN.points(0.4f, rush = 16f)
+        val span = 10_000L
+        for (cut in listOf(2_000L, 3_900L, 7_000L)) {
+            val (a, b) = SpeedCurve.split(curve, cut / span.toFloat())
+            val whole = SpeedCurve.timelineOf(span, span, 1f, curve)
+            val parts = SpeedCurve.timelineOf(cut, cut, 1f, a) + SpeedCurve.timelineOf(span - cut, span - cut, 1f, b)
+            assertTrue(abs(whole - parts) < whole / 50 + 20, "cut $cut: $whole vs $parts")
+            // The speed on both sides of the cut is the speed there.
+            assertEquals(SpeedCurve.factor(curve, cut / span.toFloat()), SpeedCurve.factor(a, 1f), 1e-3f)
+            assertEquals(SpeedCurve.factor(curve, cut / span.toFloat()), SpeedCurve.factor(b, 0f), 1e-3f)
+        }
+    }
 }

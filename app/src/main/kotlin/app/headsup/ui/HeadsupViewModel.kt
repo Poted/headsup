@@ -1615,8 +1615,11 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
             val clip = s.clips.getOrNull(index) ?: return@update s
             val cut = clip.trimStartMs + positionMs
             if (cut - clip.trimStartMs < MIN_CLIP_MS || clip.trimEndMs - cut < MIN_CLIP_MS) return@update s
-            val first = clip.copy(trimEndMs = cut)
-            val second = clip.copy(id = nextClipId(), trimStartMs = cut)
+            // The ramp is split where the cut is (each piece plays as the whole did there); fades
+            // and the blend in stay at the outer ends.
+            val (left, right) = SpeedCurve.split(clip.speedCurve, (cut - clip.trimStartMs).toFloat() / (clip.trimEndMs - clip.trimStartMs).coerceAtLeast(1L))
+            val first = clip.copy(trimEndMs = cut, fadeOutMs = 0L, speedCurve = left)
+            val second = clip.copy(id = nextClipId(), trimStartMs = cut, fadeInMs = 0L, transitionMs = 0L, speedCurve = right)
             // The second part is shown from its start: the playhead stays at the cut.
             s.copy(clips = s.clips.toMutableList().apply { set(index, first); add(index + 1, second) }, selectedClip = index + 1)
         }
@@ -1662,8 +1665,11 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
         val b = s0.clips.getOrNull(left + 1)
         if (!piecesOfOneShot(a, b) || a == null || b == null) return
         val base = if (keepRight) b else a
+        val share = (a.trimEndMs - a.trimStartMs).toFloat() / (b.trimEndMs - a.trimStartMs).coerceAtLeast(1L)
         val joined = base.copy(
             trimStartMs = a.trimStartMs, trimEndMs = b.trimEndMs,
+            // Ramps put back together (at one steady speed for both, else the kept piece's).
+            speedCurve = if (a.speed == b.speed) SpeedCurve.join(a.speedCurve, share, b.speedCurve) else base.speedCurve,
             fadeInMs = a.fadeInMs, fadeOutMs = b.fadeOutMs, transitionMs = a.transitionMs,
             flags = (a.flags + b.flags).distinct().sorted(),
         )
