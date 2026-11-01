@@ -35,6 +35,9 @@ object SpeedCurve {
         FAST_IN("Fast in", listOf(0f, -1f, 0.2f, -1f, 0.48f, 0f, 1f, 0f)),
         FAST_OUT("Fast out", listOf(0f, 0f, 0.52f, 0f, 0.8f, -1f, 1f, -1f)),
         DOUBLE("Double ramp", listOf(0f, -1f, 0.1f, -1f, 0.24f, 0f, 0.38f, 0f, 0.5f, -1f, 0.62f, 0f, 0.76f, 0f, 0.9f, -1f, 1f, -1f)),
+        // Only faster: from normal speed up to the rush, or a burst in the middle.
+        SPEED_UP("Speed up", listOf(0f, 1f, 0.45f, 1f, 0.75f, -1f, 1f, -1f)),
+        BURST("Burst", listOf(0f, 1f, 0.3f, 1f, 0.42f, -1f, 0.58f, -1f, 0.7f, 1f, 1f, 1f)),
         SLOW_IN("Slow in", listOf(0f, 0f, 0.45f, 1f, 1f, 1f)),
         SLOW_OUT("Slow out", listOf(0f, 1f, 0.55f, 1f, 1f, 0f)),
         ;
@@ -48,6 +51,9 @@ object SpeedCurve {
                 else -> v
             }
         }
+
+        /** Whether the ramp has slow parts (the slow speed matters). */
+        val slows: Boolean get() = template.withIndex().any { it.index % 2 == 1 && it.value == 0f }
 
         /** Whether the ramp has fast parts (the rush speed matters). */
         val rushes: Boolean get() = template.withIndex().any { it.index % 2 == 1 && it.value < 0f }
@@ -90,7 +96,82 @@ object SpeedCurve {
         val all = (p.map { it.first } + samples + listOf(0f, f, 1f)).distinct().sorted()
         val left = all.filter { it <= f }.flatMap { u -> listOf(u / f, factor(curve, u)) }
         val right = all.filter { it >= f }.flatMap { u -> listOf((u - f) / (1f - f), factor(curve, u)) }
-        return left to right
+        return simplify(left) to simplify(right)
+    }
+
+    /**
+     * The curve without points that change nothing (one at the same speed as the points on both
+     * sides of it); a curve at one speed all through becomes its two ends.
+     */
+    fun simplify(curve: List<Float>): List<Float> {
+        val p = points(curve).distinctBy { it.first }.toMutableList()
+        if (p.size <= 2) return p.flatMap { listOf(it.first, it.second) }
+        fun same(a: Float, b: Float) = kotlin.math.abs(ln(a / b)) < 1e-3f
+        var i = 1
+        while (i < p.lastIndex) {
+            if (same(p[i - 1].second, p[i].second) && same(p[i].second, p[i + 1].second)) p.removeAt(i) else i++
+        }
+        return p.flatMap { listOf(it.first, it.second) }
+    }
+
+    /** The one factor of a curve that keeps a single speed all through (null: it changes, or no curve). */
+    fun steadyFactor(curve: List<Float>): Float? {
+        val p = points(curve)
+        if (p.isEmpty()) return null
+        val f = p.first().second
+        return f.takeIf { p.all { kotlin.math.abs(ln(it.second / f)) < 1e-3f } }
+    }
+
+    /**
+     * Where each of [n] + 1 even steps through the cut (in file time) falls in the clip's time on
+     * the timeline, as 0..1: the graph of a ramp drawn the way the timeline shows the clip.
+     */
+    fun timeShares(curve: List<Float>, base: Float, n: Int = 200): FloatArray {
+        val p = points(curve)
+        val out = FloatArray(n + 1)
+        var t = 0.0
+        for (k in 0 until n) {
+            val u = (k + 0.5f) / n
+            t += 1.0 / (base * factorOf(p, u)).coerceIn(MIN, MAX)
+            out[k + 1] = t.toFloat()
+        }
+        if (t > 0.0) for (k in out.indices) out[k] = (out[k] / t).toFloat()
+        return out
+    }
+
+    /** Timeline share (0..1) at file share [u] of the cut, by a [timeShares] table. */
+    fun shareAt(shares: FloatArray, u: Float): Float {
+        val n = shares.size - 1
+        val x = u.coerceIn(0f, 1f) * n
+        val k = x.toInt().coerceAtMost(n - 1)
+        return shares[k] + (shares[k + 1] - shares[k]) * (x - k)
+    }
+
+    /** File share (0..1) of the cut at timeline share [t] (the reverse of [shareAt]). */
+    fun sourceAt(shares: FloatArray, t: Float): Float {
+        val n = shares.size - 1
+        val v = t.coerceIn(0f, 1f)
+        var lo = 0
+        var hi = n
+        while (hi - lo > 1) {
+            val mid = (lo + hi) / 2
+            if (shares[mid] <= v) lo = mid else hi = mid
+        }
+        val d = shares[hi] - shares[lo]
+        val f = if (d > 1e-9f) (v - shares[lo]) / d else 0f
+        return ((lo + f) / n).coerceIn(0f, 1f)
+    }
+
+    private fun factorOf(p: List<Pair<Float, Float>>, u: Float): Float {
+        if (p.isEmpty()) return 1f
+        if (u <= p.first().first) return p.first().second
+        if (u >= p.last().first) return p.last().second
+        val i = p.indexOfFirst { it.first > u }
+        val (u0, f0) = p[i - 1]
+        val (u1, f1) = p[i]
+        val t = ((u - u0) / (u1 - u0).coerceAtLeast(1e-6f)).coerceIn(0f, 1f)
+        val s = t * t * (3f - 2f * t)
+        return exp(ln(f0) + (ln(f1) - ln(f0)) * s)
     }
 
     /** The curves of two pieces joined into one cut: [a] over its share [fa] of it, then [b]. */
@@ -104,18 +185,7 @@ object SpeedCurve {
     }
 
     /** The factor at [u] (0..1 of the cut). */
-    fun factor(curve: List<Float>, u: Float): Float {
-        val p = points(curve)
-        if (p.isEmpty()) return 1f
-        if (u <= p.first().first) return p.first().second
-        if (u >= p.last().first) return p.last().second
-        val i = p.indexOfFirst { it.first > u }
-        val (u0, f0) = p[i - 1]
-        val (u1, f1) = p[i]
-        val t = ((u - u0) / (u1 - u0).coerceAtLeast(1e-6f)).coerceIn(0f, 1f)
-        val s = t * t * (3f - 2f * t)
-        return exp(ln(f0) + (ln(f1) - ln(f0)) * s)
-    }
+    fun factor(curve: List<Float>, u: Float): Float = factorOf(points(curve), u)
 
     /** The speed at [u] of the cut, for a clip at [base] speed. */
     fun speedAt(base: Float, curve: List<Float>, u: Float): Float = (base * factor(curve, u)).coerceIn(MIN, MAX)

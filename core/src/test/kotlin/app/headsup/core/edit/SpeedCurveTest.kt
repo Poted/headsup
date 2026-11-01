@@ -86,4 +86,30 @@ class SpeedCurveTest {
             assertEquals(SpeedCurve.factor(curve, cut / span.toFloat()), SpeedCurve.factor(b, 0f), 1e-3f)
         }
     }
+
+    @Test
+    fun `a split in a steady stretch leaves no needless points`() {
+        val curve = SpeedCurve.Preset.RUSH_IN.points(0.4f, rush = 2f)
+        val (_, b) = SpeedCurve.split(curve, 0.7f)
+        assertEquals(0.4f, SpeedCurve.steadyFactor(b)!!, 1e-4f)
+        assertEquals(4, b.size)
+        val (a, _) = SpeedCurve.split(curve, 0.2f)
+        assertEquals(2f, SpeedCurve.steadyFactor(a)!!, 1e-4f)
+        assertEquals(null, SpeedCurve.steadyFactor(curve))
+    }
+
+    @Test
+    fun `timeline shares follow the speed`() {
+        // Fast for the first half of the file, slow after: the first half is a small part of the time.
+        val curve = listOf(0f, 4f, 0.45f, 4f, 0.55f, 0.5f, 1f, 0.5f)
+        val shares = SpeedCurve.timeShares(curve, 1f)
+        val t = SpeedCurve.shareAt(shares, 0.5f)
+        assertTrue(t < 0.2f, "$t")
+        assertEquals(0.5f, SpeedCurve.sourceAt(shares, t), 1e-3f)
+        assertEquals(0f, SpeedCurve.shareAt(shares, 0f), 1e-6f)
+        assertEquals(1f, SpeedCurve.shareAt(shares, 1f), 1e-6f)
+        // Agrees with timelineOf.
+        val span = 10_000L
+        assertEquals(SpeedCurve.timelineOf(5_000L, span, 1f, curve).toFloat() / SpeedCurve.timelineOf(span, span, 1f, curve), t, 0.01f)
+    }
 }

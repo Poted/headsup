@@ -1618,8 +1618,11 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
             // The ramp is split where the cut is (each piece plays as the whole did there); fades
             // and the blend in stay at the outer ends.
             val (left, right) = SpeedCurve.split(clip.speedCurve, (cut - clip.trimStartMs).toFloat() / (clip.trimEndMs - clip.trimStartMs).coerceAtLeast(1L))
-            val first = clip.copy(trimEndMs = cut, fadeOutMs = 0L, speedCurve = left)
-            val second = clip.copy(id = nextClipId(), trimStartMs = cut, fadeInMs = 0L, transitionMs = 0L, speedCurve = right)
+            // A piece that keeps one speed all through becomes a clip at that steady speed.
+            fun steady(c: ClipState): ClipState = SpeedCurve.steadyFactor(c.speedCurve)
+                ?.let { f -> c.copy(speed = (c.speed * f).coerceIn(SpeedCurve.MIN, SpeedCurve.MAX), speedCurve = emptyList()) } ?: c
+            val first = steady(clip.copy(trimEndMs = cut, fadeOutMs = 0L, speedCurve = left))
+            val second = steady(clip.copy(id = nextClipId(), trimStartMs = cut, fadeInMs = 0L, transitionMs = 0L, speedCurve = right))
             // The second part is shown from its start: the playhead stays at the cut.
             s.copy(clips = s.clips.toMutableList().apply { set(index, first); add(index + 1, second) }, selectedClip = index + 1)
         }
@@ -3530,6 +3533,20 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
         if (c.meta.isPhoto) c else c.copy(
             speedCurve = curve,
             muteChangedSpeed = if (curve.isEmpty()) c.speed < 0.5f else SpeedCurve.points(curve).any { it.second * c.speed < 0.5f },
+        )
+    }
+
+    /** One steady speed for the whole clip: any speed ramp goes. */
+    fun setSteadySpeed(index: Int, speed: Float) = updateClip(index) {
+        if (it.meta.isPhoto) it else it.copy(speed = speed, speedCurve = emptyList(), muteChangedSpeed = speed < 0.5f)
+    }
+
+    /** A ready-made ramp: its speeds are the clip's speeds, so the clip's own speed goes back to 1×. */
+    fun applySpeedRamp(index: Int, curve: List<Float>) = updateClip(index) { c ->
+        if (c.meta.isPhoto) c else c.copy(
+            speed = 1f,
+            speedCurve = curve,
+            muteChangedSpeed = SpeedCurve.points(curve).any { it.second < 0.5f },
         )
     }
 

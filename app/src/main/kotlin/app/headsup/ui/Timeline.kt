@@ -596,32 +596,37 @@ private class Geometry(
 
 /** Time along the top, with labels at a step that suits the zoom. */
 private fun DrawScope.drawRuler(g: Geometry, colour: Color, text: androidx.compose.ui.text.TextMeasurer) {
-    val visible = (size.width / g.zoom).toLong()
-    val step = listOf(100L, 250L, 500L, 1_000L, 2_000L, 5_000L, 10_000L, 30_000L, 60_000L, 120_000L).firstOrNull { visible / it <= 10 } ?: 300_000L
-    // Fine ticks between the labelled ones (each second, or as fine as stays readable), for cutting precisely.
-    val minor = listOf(100L, 250L, 500L, 1_000L, 2_000L, 5_000L, 10_000L)
+    // Labels as close as stays readable (about every 44 dp), each one labelled, so zoomed in a
+    // little the ruler counts single seconds; ticks between them down to 6 dp apart.
+    val steps = listOf(100L, 250L, 500L, 1_000L, 2_000L, 5_000L, 10_000L, 15_000L, 30_000L, 60_000L, 120_000L, 300_000L, 600_000L)
+    val step = steps.firstOrNull { it * g.zoom >= 44.dp.toPx() } ?: 1_200_000L
+    val minor = listOf(100L, 250L, 500L, 1_000L, 2_000L, 5_000L, 10_000L, 30_000L, 60_000L)
         .firstOrNull { it < step && step % it == 0L && it * g.zoom >= 6.dp.toPx() }
     if (minor != null) {
         var m = (g.ms(0f) / minor - 1).coerceAtLeast(0) * minor
         while (g.x(m) < size.width) {
             if (m % step != 0L) {
                 val x = g.x(m)
-                val second = m % 1_000L == 0L
-                drawLine(colour.copy(alpha = if (second) 0.45f else 0.25f), Offset(x, g.rulerH * if (second) 0.72f else 0.82f), Offset(x, g.rulerH), strokeWidth = 1f)
+                val second = m % 1_000L == 0L && minor < 1_000L
+                val half = (m * 2) % step == 0L
+                drawLine(
+                    colour.copy(alpha = if (second || half) 0.5f else 0.28f),
+                    Offset(x, g.rulerH * if (second || half) 0.62f else 0.8f), Offset(x, g.rulerH), strokeWidth = 1f,
+                )
             }
             m += minor
         }
     }
-    val from = (g.ms(0f) / step - 1).coerceAtLeast(0) * step
-    var t = from
+    var t = (g.ms(0f) / step - 1).coerceAtLeast(0) * step
     while (g.x(t) < size.width) {
         val x = g.x(t)
-        val major = (t / step) % 2 == 0L
-        drawLine(colour.copy(alpha = 0.6f), Offset(x, g.rulerH * if (major) 0.35f else 0.65f), Offset(x, g.rulerH), strokeWidth = 1f)
-        if (major) {
-            val label = if (step < 1000) String.format(java.util.Locale.US, "%.1f", t / 1000f) else Formats.duration(t)
-            drawLabel(text, label, Offset(x + 3.dp.toPx(), 0f), TextStyle(color = colour, fontSize = 9.sp))
+        drawLine(colour.copy(alpha = 0.7f), Offset(x, g.rulerH * 0.4f), Offset(x, g.rulerH), strokeWidth = 1f)
+        val label = when {
+            step < 1_000L -> String.format(java.util.Locale.US, "%.1f", t / 1000f)
+            t < 60_000L -> "${t / 1000}s"
+            else -> Formats.duration(t)
         }
+        drawLabel(text, label, Offset(x + 3.dp.toPx(), 0f), TextStyle(color = colour, fontSize = 9.sp))
         t += step
     }
 }

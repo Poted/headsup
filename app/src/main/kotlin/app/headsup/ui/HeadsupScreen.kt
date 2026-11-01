@@ -1293,8 +1293,7 @@ private fun EditPanel(
             state.clips.getOrNull(i)?.let { c -> onJump(c.id, fileMs - c.trimStartMs) }
         }
         EditTab.SPEED -> if (clip != null && index != null && !clip.meta.isPhoto) {
-            SpeedControls(clip, state.effectiveTimelineFps, onSpeed = { vm.setSpeed(index, it) }, onMute = { vm.setMuteChangedSpeed(index, it) })
-            if (!clip.meta.isPhoto) SpeedRamp(clip, state.effectiveTimelineFps) { vm.setSpeedCurve(index, it) }
+            SpeedPanel(clip, index, state.effectiveTimelineFps, vm)
         }
         EditTab.FADE -> if (clip != null && index != null) FadeTool(clip, index, vm)
         EditTab.FRAME -> FramePanel(state, vm)
@@ -1812,34 +1811,63 @@ private fun ProjectRow(state: UiState, vm: HeadsupViewModel, onOpen: () -> Unit,
     }
 }
 
-private val SPEEDS = listOf(0.25f, 0.5f, 0.75f, 1f, 1.5f, 2f)
-
 /**
- * Speed of a clip. Real slow motion needs footage shot at a high frame rate: the clip's frames,
- * spread out by the speed, should still cover the timeline's frame rate.
+ * A clip's speed, in one of two ways kept apart: one steady speed for the whole clip, or a speed
+ * ramp (the speed changing over the clip). Sound applies to both.
  */
 @Composable
-private fun SpeedControls(clip: ClipState, timelineFps: Float, onSpeed: (Float) -> Unit, onMute: (Boolean) -> Unit) {
+private fun SpeedPanel(clip: ClipState, index: Int, timelineFps: Float, vm: HeadsupViewModel) {
+    var ramp by rememberSaveable(clip.id) { mutableStateOf(clip.speedCurve.isNotEmpty()) }
     Row(verticalAlignment = Alignment.CenterVertically) {
-        Text("Speed", Modifier.weight(1f), style = MaterialTheme.typography.labelLarge)
-        Hint("${Formats.duration(clip.timelineDurationMs)} on the timeline")
+        FilterChip(selected = !ramp, onClick = { ramp = false }, label = { Text("Steady speed") })
+        Spacer(Modifier.width(8.dp))
+        FilterChip(selected = ramp, onClick = { ramp = true }, label = { Text("Speed ramp") })
+        Spacer(Modifier.weight(1f))
+        Hint(Formats.duration(clip.timelineDurationMs) + " on the timeline")
     }
+    if (ramp) {
+        SpeedRamp(clip, timelineFps, onPreset = { vm.applySpeedRamp(index, it) }, onCurve = { vm.setSpeedCurve(index, it) })
+    } else {
+        SpeedControls(clip, timelineFps) { vm.setSteadySpeed(index, it) }
+    }
+    if (clip.speedChanged) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("Sound", Modifier.weight(1f), style = MaterialTheme.typography.labelMedium, color = HeadsupColors.TextMuted)
+            FilterChip(selected = !clip.muteChangedSpeed, onClick = { vm.setMuteChangedSpeed(index, false) }, label = { Text("Stretched") })
+            Spacer(Modifier.width(8.dp))
+            FilterChip(selected = clip.muteChangedSpeed, onClick = { vm.setMuteChangedSpeed(index, true) }, label = { Text("Mute") })
+        }
+    }
+}
+
+private val SPEEDS = listOf(0.25f, 0.5f, 0.75f, 1f, 1.5f, 2f, 3f, 4f)
+
+/**
+ * One speed for the whole clip. Real slow motion needs footage shot at a high frame rate: the
+ * clip's frames, spread out by the speed, should still cover the timeline's frame rate.
+ */
+@Composable
+private fun SpeedControls(clip: ClipState, timelineFps: Float, onSpeed: (Float) -> Unit) {
+    val steady = clip.speedCurve.isEmpty()
     Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         // Every frame of high-frame-rate footage at the timeline's rate (e.g. 120 fps on a 24 fps timeline: 0.2×).
         val conform = clip.meta.frameRate?.takeIf { !clip.meta.isPhoto && it > timelineFps + 0.5f }?.let { timelineFps / it }
         if (conform != null) {
             FilterChip(
-                selected = kotlin.math.abs(clip.speed - conform) < 0.0005f,
+                selected = steady && kotlin.math.abs(clip.speed - conform) < 0.0005f,
                 onClick = { onSpeed(conform) },
                 label = { Text("All frames · ${String.format(Locale.US, "%.3g", conform)}×") },
             )
         }
         for (speed in SPEEDS) {
             val label = if (speed % 1f == 0f) "${speed.toInt()}×" else "$speed×".replace("0.", ".")
-            FilterChip(selected = clip.speed == speed, onClick = { onSpeed(speed) }, label = { Text(label) })
+            FilterChip(selected = steady && clip.speed == speed, onClick = { onSpeed(speed) }, label = { Text(label) })
         }
     }
-    if (!clip.speedChanged) return
+    if (!steady) {
+        Hint("This clip has a speed ramp. Picking a speed here replaces it with one steady speed.")
+        return
+    }
     val sourceFps = clip.meta.frameRate
     if (sourceFps != null && clip.speed < 1f) {
         val effective = sourceFps * clip.speed
@@ -1853,88 +1881,123 @@ private fun SpeedControls(clip: ClipState, timelineFps: Float, onSpeed: (Float) 
             },
         )
     }
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        Text("Sound", Modifier.weight(1f), style = MaterialTheme.typography.labelMedium, color = HeadsupColors.TextMuted)
-        FilterChip(selected = !clip.muteChangedSpeed, onClick = { onMute(false) }, label = { Text("Stretched") })
-        Spacer(Modifier.width(8.dp))
-        FilterChip(selected = clip.muteChangedSpeed, onClick = { onMute(true) }, label = { Text("Mute") })
-    }
+}
+
+/** A speed as text: 0.25×, 2×, 23.9×. */
+private fun speedText(f: Float): String = when {
+    f < 1f -> String.format(Locale.US, "%.2f×", f)
+    kotlin.math.abs(f - kotlin.math.round(f)) < 0.005f -> String.format(Locale.US, "%.0f×", f)
+    else -> String.format(Locale.US, "%.3g×", f)
 }
 
 /**
- * A speed ramp over the clip: a ready-made one, or points dragged on a graph (across: the cut,
- * up: faster, down: slower, on a scale of ratios from 0.1× to 8×); double-tap a point to remove it.
+ * A speed ramp over the clip: a ready-made one, or points dragged on a graph. Across is the clip's
+ * time as the timeline shows it (so its flags are where they are on the timeline), up is faster,
+ * on a scale of ratios from 0.1× to 64×. Tap to add a point, drag to move it, double-tap to remove it.
+ * The point being dragged shows its time and speed above the graph, clear of the finger.
  */
 @Composable
-private fun SpeedRamp(clip: ClipState, timelineFps: Float, onCurve: (List<Float>) -> Unit) {
+private fun SpeedRamp(clip: ClipState, timelineFps: Float, onPreset: (List<Float>) -> Unit, onCurve: (List<Float>) -> Unit) {
     val SC = app.headsup.core.edit.SpeedCurve
     val sourceFps = clip.meta.frameRate
-    // The clip's flags as fractions of its cut, where the curve's points are.
+    val base = clip.speed
+    // The clip's flags as fractions of its cut in file time (where the curve's points are).
     val span = (clip.trimEndMs - clip.trimStartMs).coerceAtLeast(1L)
     val flagsU = clip.flags.filter { it > clip.trimStartMs && it < clip.trimEndMs }.map { (it - clip.trimStartMs).toFloat() / span }
     val flagsNow by rememberUpdatedState(flagsU)
     // Speeds a point is caught by: round ratios, and those at which the footage's frames come out
     // exactly at the timeline's rate (every frame, every second frame…), so 24 fps stays 24, not 23.5.
-    val frameSpeeds = SC.smoothLimit(clip.meta.frameRate, timelineFps)?.let { l -> List(6) { k -> l / clip.speed * (1 shl k) } }.orEmpty()
+    val frameSpeeds = SC.smoothLimit(clip.meta.frameRate, timelineFps)?.let { l -> List(6) { k -> l * (1 shl k) } }.orEmpty()
     val snaps = (listOf(0.1f, 0.2f, 0.25f, 0.5f, 0.75f, 1f, 1.5f, 2f, 3f, 4f, 6f, 8f, 12f, 16f, 24f, 32f, 48f, 64f) + frameSpeeds).filter { it in SC.MIN..SC.MAX }
     val snapsNow by rememberUpdatedState(snaps)
-    // The point being dragged, to show its value above it.
-    var dragged by remember { mutableStateOf<Pair<Float, Float>?>(null) }
-    // How slow the presets go: as slow as the footage stays smooth, or half that slow.
+    // The point being dragged: (timeline ms from the clip's start, speed).
+    var dragged by remember { mutableStateOf<Pair<Long, Float>?>(null) }
+    // How slow the presets' slow parts go: as slow as the footage stays smooth, or half that slow.
     val (slow, verySlow) = SC.slowSpeeds(sourceFps, timelineFps)
     var deep by rememberSaveable { mutableStateOf(true) }
     val depth = if (deep) verySlow else slow
-    val presets = app.headsup.core.edit.SpeedCurve.Preset.entries
+    val presets = SC.Preset.entries
     // The preset the curve is, with which slow speed and which rush (how fast its fast parts go).
-    val match = presets.firstNotNullOfOrNull { p ->
+    val match = if (base != 1f) null else presets.firstNotNullOfOrNull { p ->
         listOf(slow, verySlow).firstNotNullOfOrNull { sl -> SC.RUSHES.firstOrNull { r -> clip.speedCurve == p.points(sl, r) }?.let { r -> Triple(p, sl, r) } }
     }
     val chosen = match?.first
+    LaunchedEffect(match?.second) { match?.second?.let { deep = it == verySlow } }
     var rush by rememberSaveable { mutableStateOf(SC.DEFAULT_RUSH) }
     LaunchedEffect(match?.third) { match?.third?.let { rush = it } }
+
     Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        FilterChip(selected = clip.speedCurve.isEmpty(), onClick = { onCurve(emptyList()) }, label = { Text("Steady") })
         for (p in presets) {
-            FilterChip(selected = p == chosen, onClick = { onCurve(p.points(depth, rush)) }, label = { Text(p.label) })
+            FilterChip(selected = p == chosen, onClick = { onPreset(p.points(depth, rush)) }, label = { Text(p.label) })
         }
     }
-    Row(Modifier.horizontalScroll(rememberScrollState()), verticalAlignment = Alignment.CenterVertically) {
-        for ((isDeep, label, speed) in listOf(Triple(false, "Slow", slow), Triple(true, "Very slow", verySlow))) {
-            FilterChip(
-                selected = deep == isDeep,
-                onClick = { deep = isDeep; chosen?.let { onCurve(it.points(if (isDeep) verySlow else slow, rush)) } },
-                label = { Text(label + " · " + String.format(Locale.US, "%.2g×", speed)) },
-            )
-            Spacer(Modifier.width(8.dp))
-        }
-    }
-    // How fast the fast parts rush: up to a move into the frame in a blink.
-    if (chosen == null || chosen.rushes) {
+    // The ready-made ramp's slow parts and fast parts, each offered only when it has them.
+    if (chosen != null && chosen.slows) {
         Row(Modifier.horizontalScroll(rememberScrollState()), verticalAlignment = Alignment.CenterVertically) {
-            Text("Rush", style = MaterialTheme.typography.labelLarge, color = HeadsupColors.TextMuted)
+            Text("Slow parts", style = MaterialTheme.typography.labelLarge, color = HeadsupColors.TextMuted)
             Spacer(Modifier.width(8.dp))
-            for (r in SC.RUSHES) {
+            for ((isDeep, label, speed) in listOf(Triple(false, "Slow", slow), Triple(true, "Very slow", verySlow))) {
                 FilterChip(
-                    selected = rush == r,
-                    onClick = { rush = r; chosen?.let { onCurve(it.points(depth, r)) } },
-                    label = { Text(String.format(Locale.US, "%.0f×", r)) },
+                    selected = deep == isDeep,
+                    onClick = { deep = isDeep; onPreset(chosen.points(if (isDeep) verySlow else slow, rush)) },
+                    label = { Text(label + " · " + speedText(speed)) },
                 )
                 Spacer(Modifier.width(8.dp))
             }
         }
     }
-    // Ratios on a log scale: 0.1× at the bottom, 1× below the middle, 32× at the top.
+    if (chosen != null && chosen.rushes) {
+        Row(Modifier.horizontalScroll(rememberScrollState()), verticalAlignment = Alignment.CenterVertically) {
+            Text("Fast parts", style = MaterialTheme.typography.labelLarge, color = HeadsupColors.TextMuted)
+            Spacer(Modifier.width(8.dp))
+            for (r in SC.RUSHES) {
+                FilterChip(
+                    selected = rush == r,
+                    onClick = { rush = r; onPreset(chosen.points(depth, r)) },
+                    label = { Text(speedText(r)) },
+                )
+                Spacer(Modifier.width(8.dp))
+            }
+        }
+    }
+
+    // The readout: the dragged point's time and speed, above the graph where the finger is not.
+    val timelineMs = clip.timelineDurationMs
+    Row(Modifier.fillMaxWidth().height(22.dp), verticalAlignment = Alignment.CenterVertically) {
+        val d = dragged
+        if (d != null) {
+            Text(
+                String.format(Locale.US, "%.1f s", d.first / 1000f) + "   " + speedText(d.second) +
+                    if (frameSpeeds.isNotEmpty() && kotlin.math.abs(d.second - frameSpeeds[0]) < 1e-4f) "   every frame" else "",
+                style = MaterialTheme.typography.titleSmall,
+                color = HeadsupColors.Accent,
+            )
+        } else {
+            Hint(if (clip.speedCurve.isEmpty()) "Tap the graph to add a point, or pick a ramp above." else "Tap: add a point · drag: move · double-tap: remove")
+            Spacer(Modifier.weight(1f))
+            if (clip.speedCurve.isNotEmpty()) {
+                TextButton(onClick = { onCurve(emptyList()) }, contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 8.dp)) { Text("Clear") }
+            }
+        }
+    }
+
+    // Ratios on a log scale: 0.1× at the bottom, 64× at the top.
     val lo = kotlin.math.ln(SC.MIN)
     val hi = kotlin.math.ln(SC.MAX)
     fun yOf(f: Float) = 1f - (kotlin.math.ln(f.coerceIn(SC.MIN, SC.MAX)) - lo) / (hi - lo)
     fun fOf(y: Float) = kotlin.math.exp(lo + (1f - y.coerceIn(0f, 1f)) * (hi - lo))
+    // Points as (file share u, factor); shown at their speed (clip speed × factor).
     val points = SC.points(clip.speedCurve).ifEmpty { listOf(0f to 1f, 1f to 1f) }
+    val shares = remember(clip.speedCurve, base) { SC.timeShares(clip.speedCurve, base) }
     val current by rememberUpdatedState(points)
+    val baseNow by rememberUpdatedState(base)
+    val timelineNow by rememberUpdatedState(timelineMs)
     val store by rememberUpdatedState(onCurve)
+    val axisH = 16.dp
     androidx.compose.foundation.Canvas(
         Modifier
             .fillMaxWidth()
-            .height(120.dp)
+            .height(176.dp)
             .clip(RoundedCornerShape(12.dp))
             .background(Color.Black.copy(alpha = 0.35f))
             .pointerInput(Unit) {
@@ -1943,132 +2006,180 @@ private fun SpeedRamp(clip: ClipState, timelineFps: Float, onCurve: (List<Float>
                     val down = awaitFirstDown()
                     down.consume()
                     val w = size.width.toFloat()
-                    val h = size.height.toFloat()
-                    fun at(p: Pair<Float, Float>) = Offset(p.first * w, yOf(p.second) * h)
+                    val h = size.height.toFloat() - axisH.toPx()
+                    val b = baseNow
+                    fun flat(l: List<Pair<Float, Float>>) = l.flatMap { listOf(it.first, it.second) }
                     val work = current.toMutableList()
+                    var table = SC.timeShares(flat(work), b, 120)
+                    fun at(p: Pair<Float, Float>) = Offset(SC.shareAt(table, p.first) * w, yOf(b * p.second) * h)
                     var i = work.indices.minByOrNull { (at(work[it]) - down.position).getDistance() } ?: return@awaitEachGesture
                     val near = (at(work[i]) - down.position).getDistance() < 28.dp.toPx()
                     if (near && down.uptimeMillis - lastTap < 300 && work.size > 2) {
                         // A double tap on a point removes it.
                         work.removeAt(i)
-                        store(work.flatMap { listOf(it.first, it.second) })
+                        store(flat(work))
                         lastTap = 0L
                         return@awaitEachGesture
                     }
                     lastTap = down.uptimeMillis
                     if (!near) {
-                        val u = (down.position.x / w).coerceIn(0f, 1f)
-                        work += u to fOf(down.position.y / h)
+                        val u = SC.sourceAt(table, (down.position.x / w).coerceIn(0f, 1f))
+                        work += u to (fOf(down.position.y / h) / b)
                         work.sortBy { it.first }
                         i = work.indexOfFirst { it.first == u }
-                        store(work.flatMap { listOf(it.first, it.second) })
                     }
+                    fun show() {
+                        table = SC.timeShares(flat(work), b, 120)
+                        val (u, f) = work[i]
+                        dragged = (SC.shareAt(table, u) * timelineNow).toLong() to b * f
+                    }
+                    show()
+                    if (!near) store(flat(work))
                     while (true) {
                         val event = awaitPointerEvent()
                         val change = event.changes.firstOrNull { it.id == down.id } ?: break
                         if (!change.pressed) break
                         change.consume()
+                        // The speed under the finger: near a round one (or one showing every frame), that one.
+                        var speed = fOf(change.position.y / h)
+                        snapsNow.minByOrNull { kotlin.math.abs(kotlin.math.ln(it / speed)) }?.takeIf { kotlin.math.abs(kotlin.math.ln(it / speed)) < 0.07f }?.let { speed = it }
+                        val f = speed / b
                         val lo2 = if (i == 0) 0f else work[i - 1].first + 0.01f
                         val hi2 = if (i == work.lastIndex) 1f else work[i + 1].first - 0.01f
-                        var u = (change.position.x / w).coerceIn(lo2, hi2)
-                        // A flag nearby catches the point: a ramp from one flagged moment to another.
-                        flagsNow.minByOrNull { kotlin.math.abs(it - u) }?.takeIf { kotlin.math.abs(it - u) < 0.02f && it in lo2..hi2 }?.let { u = it }
-                        // A ratio near a round one (or one showing every frame) is caught by it.
-                        var f = fOf(change.position.y / h)
-                        snapsNow.minByOrNull { kotlin.math.abs(kotlin.math.ln(it / f)) }?.takeIf { kotlin.math.abs(kotlin.math.ln(it / f)) < 0.07f }?.let { f = it }
+                        val t = (change.position.x / w).coerceIn(0f, 1f)
+                        // Where in the file the point must be to sit under the finger on the timeline
+                        // (moving it changes the timing, so it is found by halving).
+                        var a = lo2
+                        var z = hi2
+                        repeat(14) {
+                            val m = (a + z) / 2f
+                            work[i] = m to f
+                            if (SC.shareAt(SC.timeShares(flat(work), b, 120), m) < t) a = m else z = m
+                        }
+                        var u = ((a + z) / 2f).coerceIn(lo2, hi2)
+                        // A flag nearby (on screen) catches the point: a ramp from one flagged moment to another.
                         work[i] = u to f
-                        dragged = u to f
-                        store(work.flatMap { listOf(it.first, it.second) })
+                        val tableNow = SC.timeShares(flat(work), b, 120)
+                        flagsNow.filter { it in lo2..hi2 }
+                            .minByOrNull { kotlin.math.abs(SC.shareAt(tableNow, it) - t) }
+                            ?.takeIf { kotlin.math.abs(SC.shareAt(tableNow, it) - t) * w < 12.dp.toPx() }
+                            ?.let { u = it }
+                        work[i] = u to f
+                        show()
+                        store(flat(work))
                     }
                     dragged = null
                 }
             },
     ) {
         val w = size.width
-        val h = size.height
-        // Axes from the bottom left (time across, speed up), the doubling lines and 1×.
-        val axis = Color.White.copy(alpha = 0.45f)
-        drawLine(axis, Offset(1.dp.toPx(), 0f), Offset(1.dp.toPx(), h), strokeWidth = 1.5.dp.toPx())
-        drawLine(axis, Offset(0f, h - 1.dp.toPx()), Offset(w, h - 1.dp.toPx()), strokeWidth = 1.5.dp.toPx())
-        drawLine(Color.White.copy(alpha = 0.3f), Offset(0f, yOf(1f) * h), Offset(w, yOf(1f) * h))
-        // The point being dragged: its speed (and whether it shows every frame of the footage).
-        dragged?.let { (u, f) ->
-            val text = String.format(Locale.US, if (f < 1f) "%.2f×" else "%.3g×", f) + if (frameSpeeds.isNotEmpty() && kotlin.math.abs(f - frameSpeeds[0]) < 1e-4f) " · every frame" else ""
-            drawIntoCanvas { c ->
-                val paint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply { color = android.graphics.Color.WHITE; textSize = 12.dp.toPx() }
-                val tw = paint.measureText(text)
-                val x = (u * w - tw / 2f).coerceIn(4.dp.toPx(), w - tw - 4.dp.toPx())
-                val y = (yOf(f) * h - 14.dp.toPx()).coerceAtLeast(16.dp.toPx())
-                val bg = android.graphics.Paint().apply { color = android.graphics.Color.argb(190, 0, 0, 0) }
-                c.nativeCanvas.drawRoundRect(x - 5.dp.toPx(), y - 13.dp.toPx(), x + tw + 5.dp.toPx(), y + 4.dp.toPx(), 6.dp.toPx(), 6.dp.toPx(), bg)
-                c.nativeCanvas.drawText(text, x, y, paint)
-            }
-        }
+        val axisPx = axisH.toPx()
+        val h = size.height - axisPx
+        fun xOf(u: Float) = SC.shareAt(shares, u) * w
+        val paint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply { color = android.graphics.Color.argb(150, 255, 255, 255); textSize = 10.dp.toPx() }
         // Below the speed where every frame of the footage is shown, frames repeat: stutter.
-        val limit = SC.smoothLimit(sourceFps, timelineFps)?.let { it / clip.speed }
+        val limit = SC.smoothLimit(sourceFps, timelineFps)
         if (limit != null && limit > SC.MIN) {
             val y = yOf(limit) * h
-            drawRect(Color(0x33FF3B30), Offset(0f, y), androidx.compose.ui.geometry.Size(w, h - y))
+            drawRect(Color(0x26FF3B30), Offset(0f, y), androidx.compose.ui.geometry.Size(w, h - y))
         }
-        // The clip's flags: where a ramp should start or end (points dragged near one snap to it).
+        drawIntoCanvas { c ->
+            // Speed lines with their ratios on the left; 1× stronger.
+            for (f in listOf(0.25f, 1f, 4f, 16f, 64f)) {
+                val y = yOf(f) * h
+                drawLine(Color.White.copy(alpha = if (f == 1f) 0.35f else 0.1f), Offset(0f, y), Offset(w, y))
+                c.nativeCanvas.drawText(speedText(f), 6.dp.toPx(), (y - 3.dp.toPx()).coerceAtLeast(11.dp.toPx()), paint)
+            }
+            // The footage's frame rates shown each second, on the right: its own, half, quarter… down to the timeline's.
+            if (sourceFps != null) {
+                var fps = sourceFps
+                var k = 0
+                while (fps >= timelineFps * 0.99f && k < 6) {
+                    val y = yOf(fps / sourceFps) * h
+                    val every = kotlin.math.abs(fps - timelineFps) < timelineFps * 0.05f
+                    val label = "${OutputSpec.formatFps(fps)} fps" + if (every) " · every frame" else ""
+                    if (kotlin.math.abs(fps / sourceFps - 1f) > 0.01f) drawLine(Color.White.copy(alpha = 0.08f), Offset(w * 0.55f, y), Offset(w, y))
+                    c.nativeCanvas.drawText(label, w - paint.measureText(label) - 6.dp.toPx(), y + 11.dp.toPx(), paint)
+                    fps /= 2f
+                    k++
+                }
+            }
+            if (limit != null && limit > SC.MIN) {
+                val p2 = android.graphics.Paint(paint).apply { color = android.graphics.Color.argb(170, 255, 120, 110) }
+                c.nativeCanvas.drawText("stutters", w / 2f - p2.measureText("stutters") / 2f, h - 5.dp.toPx(), p2)
+            }
+            // Time across, in the clip's seconds on the timeline, as on the timeline below the picture.
+            drawRect(Color.Black.copy(alpha = 0.3f), Offset(0f, h), androidx.compose.ui.geometry.Size(w, axisPx))
+            val seconds = timelineMs / 1000f
+            val step = listOf(0.1f, 0.25f, 0.5f, 1f, 2f, 5f, 10f, 15f, 30f, 60f, 120f).firstOrNull { seconds / it <= 6f } ?: 300f
+            val fine = listOf(0.1f, 0.25f, 0.5f, 1f, 2f, 5f, 10f).lastOrNull { it < step && (step / it) % 1f < 1e-3f && it / seconds * w >= 5.dp.toPx() }
+            if (fine != null) {
+                var s = fine
+                while (s < seconds) {
+                    val x = s / seconds * w
+                    drawLine(Color.White.copy(alpha = 0.25f), Offset(x, h), Offset(x, h + axisPx * 0.3f))
+                    s += fine
+                }
+            }
+            var s = 0f
+            while (s <= seconds + 1e-3f) {
+                val x = s / seconds * w
+                drawLine(Color.White.copy(alpha = 0.55f), Offset(x, h), Offset(x, h + axisPx * 0.45f))
+                drawLine(Color.White.copy(alpha = 0.05f), Offset(x, 0f), Offset(x, h))
+                val label = if (step < 1f) String.format(Locale.US, "%.1f", s) else String.format(Locale.US, "%.0f s", s)
+                val lw = paint.measureText(label)
+                c.nativeCanvas.drawText(label, (x - lw / 2f).coerceIn(2.dp.toPx(), w - lw - 2.dp.toPx()), h + axisPx - 3.dp.toPx(), paint)
+                s += step
+            }
+        }
+        drawLine(Color.White.copy(alpha = 0.45f), Offset(0f, h), Offset(w, h), strokeWidth = 1.dp.toPx())
+        // The clip's flags, where the timeline shows them: where a ramp should start or end (points snap to them).
         for (u in flagsU) {
-            val x = u * w
+            val x = xOf(u)
             drawLine(
                 HeadsupColors.AccentSoft.copy(alpha = 0.8f), Offset(x, 0f), Offset(x, h), strokeWidth = 1.dp.toPx(),
                 pathEffect = androidx.compose.ui.graphics.PathEffect.dashPathEffect(floatArrayOf(4.dp.toPx(), 3.dp.toPx())),
             )
-            val s = 5.dp.toPx()
+            val s = 6.dp.toPx()
             drawPath(androidx.compose.ui.graphics.Path().apply { moveTo(x, 0f); lineTo(x + s * 1.3f, s * 0.5f); lineTo(x, s); close() }, HeadsupColors.AccentSoft)
         }
-        drawIntoCanvas { c ->
-            val paint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply { color = android.graphics.Color.argb(150, 255, 255, 255); textSize = 11.dp.toPx() }
-            c.nativeCanvas.drawText("speed", 6.dp.toPx(), 13.dp.toPx(), paint)
-            if (sourceFps == null) {
-                for (f in listOf(0.25f, 0.5f, 2f, 4f)) drawLine(Color.White.copy(alpha = 0.1f), Offset(0f, yOf(f) * h), Offset(w, yOf(f) * h))
-                c.nativeCanvas.drawText("1×", w - 18.dp.toPx(), yOf(1f) * h - 3.dp.toPx(), paint)
-            } else {
-                // Lines at the footage's frames shown each second: its own rate, half, quarter… down to the timeline's.
-                var fps = sourceFps * clip.speed
-                var k = 0
-                while (fps >= timelineFps * 0.99f && k < 6) {
-                    val f = fps / (sourceFps * clip.speed)
-                    val y = yOf(f) * h
-                    drawLine(Color.White.copy(alpha = if (k == 0) 0.3f else 0.12f), Offset(0f, y), Offset(w, y))
-                    val every = kotlin.math.abs(fps - timelineFps) < timelineFps * 0.05f
-                    c.nativeCanvas.drawText(
-                        "${OutputSpec.formatFps(fps)} fps" + if (every) " · every frame" else "",
-                        w - paint.measureText("${OutputSpec.formatFps(fps)} fps" + if (every) " · every frame" else "") - 6.dp.toPx(), y - 3.dp.toPx(), paint,
-                    )
-                    fps /= 2f
-                    k++
-                }
-                if (limit != null && limit > SC.MIN) {
-                    paint.color = android.graphics.Color.argb(170, 255, 120, 110)
-                    c.nativeCanvas.drawText("stutters", 6.dp.toPx(), h - 6.dp.toPx(), paint)
-                }
-            }
-        }
+        // The curve, sampled evenly through the file and drawn at its timeline place.
         val flat = points.flatMap { listOf(it.first, it.second) }
         val path = androidx.compose.ui.graphics.Path()
-        for (k in 0..100) {
-            val u = k / 100f
-            val y = yOf(SC.factor(flat, u)) * h
-            if (k == 0) path.moveTo(0f, y) else path.lineTo(u * w, y)
+        for (k in 0..160) {
+            val u = k / 160f
+            val x = xOf(u)
+            val y = yOf(SC.speedAt(base, flat, u)) * h
+            if (k == 0) path.moveTo(x, y) else path.lineTo(x, y)
         }
         drawPath(path, HeadsupColors.Accent, style = androidx.compose.ui.graphics.drawscope.Stroke(2.dp.toPx()))
-        for ((u, f) in points) drawCircle(Color.White, 5.dp.toPx(), Offset(u * w, yOf(f) * h))
+        // Points: only where a curve was made (a steady clip has a flat line, no points).
+        if (clip.speedCurve.isNotEmpty()) {
+            for ((u, f) in points) {
+                val o = Offset(xOf(u), yOf(base * f) * h)
+                drawCircle(Color.White, 5.dp.toPx(), o)
+                drawCircle(HeadsupColors.Accent, 2.5.dp.toPx(), o)
+            }
+        }
+        // The dragged point: a ring and a line down to the time axis.
+        dragged?.let { (ms, f) ->
+            val x = ms.toFloat() / timelineMs.coerceAtLeast(1L) * w
+            val y = yOf(f) * h
+            drawLine(HeadsupColors.Accent.copy(alpha = 0.6f), Offset(x, y), Offset(x, h), strokeWidth = 1.dp.toPx())
+            drawCircle(HeadsupColors.Accent, 11.dp.toPx(), Offset(x, y), style = androidx.compose.ui.graphics.drawscope.Stroke(2.dp.toPx()))
+        }
     }
     // The slowest point of the ramp and how many frames of footage that leaves each second.
-    if (clip.speedCurve.isNotEmpty() && sourceFps != null) {
-        val slowest = clip.speed * points.minOf { it.second }
+    val slowest = base * points.minOf { it.second }
+    if (clip.speedCurve.isNotEmpty() && sourceFps != null && slowest < 1f) {
         val shown = sourceFps * slowest
         Hint(
             if (shown + 0.5f >= timelineFps) {
-                String.format(Locale.US, "Slowest %.2g×: %s fps footage gives %s fps, enough for the %s fps timeline: smooth.",
-                    slowest, OutputSpec.formatFps(sourceFps), OutputSpec.formatFps(shown), OutputSpec.formatFps(timelineFps))
+                String.format(Locale.US, "Slowest %s: %s fps footage gives %s fps, enough for the %s fps timeline: smooth.",
+                    speedText(slowest), OutputSpec.formatFps(sourceFps), OutputSpec.formatFps(shown), OutputSpec.formatFps(timelineFps))
             } else {
-                String.format(Locale.US, "Slowest %.2g×: %s fps footage gives only %s fps on a %s fps timeline: it will stutter. For smooth slow motion record at %s fps or more.",
-                    slowest, OutputSpec.formatFps(sourceFps), OutputSpec.formatFps(shown), OutputSpec.formatFps(timelineFps), OutputSpec.formatFps(timelineFps / slowest))
+                String.format(Locale.US, "Slowest %s: %s fps footage gives only %s fps on a %s fps timeline: it will stutter. For smooth slow motion record at %s fps or more.",
+                    speedText(slowest), OutputSpec.formatFps(sourceFps), OutputSpec.formatFps(shown), OutputSpec.formatFps(timelineFps), OutputSpec.formatFps(timelineFps / slowest))
             },
         )
     }
