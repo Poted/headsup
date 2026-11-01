@@ -598,6 +598,20 @@ private class Geometry(
 private fun DrawScope.drawRuler(g: Geometry, colour: Color, text: androidx.compose.ui.text.TextMeasurer) {
     val visible = (size.width / g.zoom).toLong()
     val step = listOf(100L, 250L, 500L, 1_000L, 2_000L, 5_000L, 10_000L, 30_000L, 60_000L, 120_000L).firstOrNull { visible / it <= 10 } ?: 300_000L
+    // Fine ticks between the labelled ones (each second, or as fine as stays readable), for cutting precisely.
+    val minor = listOf(100L, 250L, 500L, 1_000L, 2_000L, 5_000L, 10_000L)
+        .firstOrNull { it < step && step % it == 0L && it * g.zoom >= 6.dp.toPx() }
+    if (minor != null) {
+        var m = (g.ms(0f) / minor - 1).coerceAtLeast(0) * minor
+        while (g.x(m) < size.width) {
+            if (m % step != 0L) {
+                val x = g.x(m)
+                val second = m % 1_000L == 0L
+                drawLine(colour.copy(alpha = if (second) 0.45f else 0.25f), Offset(x, g.rulerH * if (second) 0.72f else 0.82f), Offset(x, g.rulerH), strokeWidth = 1f)
+            }
+            m += minor
+        }
+    }
     val from = (g.ms(0f) / step - 1).coerceAtLeast(0) * step
     var t = from
     while (g.x(t) < size.width) {
