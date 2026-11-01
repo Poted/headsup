@@ -468,6 +468,21 @@ fun Timeline(
                 val mid = size.width / 2f
                 drawLine(Color.White, Offset(mid, 0f), Offset(mid, size.height), strokeWidth = 2.dp.toPx())
                 drawPath(Path().apply { moveTo(mid - 6.dp.toPx(), 0f); lineTo(mid + 6.dp.toPx(), 0f); lineTo(mid, 7.dp.toPx()); close() }, Color.White)
+                // In a clip at another speed the timeline's time is not the recording's: the moment of
+                // the recording under the playhead, beside it.
+                val at = starts.indexOfLast { it <= tNow }.takeIf { it in clips.indices }
+                val under = at?.let { clips[it] }
+                if (under != null && under.speedChanged && !under.meta.isPhoto && tNow < starts.last()) {
+                    val fileMs = under.trimStartMs + under.sourceOfTimeline(tNow - starts[at])
+                    val label = "rec " + String.format(java.util.Locale.US, "%d:%04.1f", fileMs / 60_000L, (fileMs % 60_000L) / 1000f)
+                    val style = TextStyle(color = Color.Black, fontSize = 10.sp)
+                    val m = text.measure(label, style)
+                    val pad = 4.dp.toPx()
+                    val left = (mid + 4.dp.toPx()).coerceAtMost(size.width - m.size.width - 2 * pad)
+                    val top = g.videoTop + 3.dp.toPx()
+                    drawRoundRect(Color.White, Offset(left, top), Size(m.size.width + 2 * pad, m.size.height.toFloat()), CornerRadius(4.dp.toPx()))
+                    drawText(m, topLeft = Offset(left + pad, top))
+                }
             }
             // A clip's menu (double tap).
             menu?.let { (index, x) ->

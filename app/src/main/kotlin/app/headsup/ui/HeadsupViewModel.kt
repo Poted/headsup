@@ -1065,6 +1065,12 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
         )
     }
 
+    /** A star on a project (or taken off), to find it first in the list. */
+    fun setProjectStarred(name: String, on: Boolean) {
+        projectStore.setStarred(name, on)
+        _state.update { s -> s.copy(projects = s.projects.map { if (it.name == name) it.copy(starred = on) else it }) }
+    }
+
     /** Opens a saved project; its files are read again, missing ones are reported. */
     fun openProject(name: String) {
         val project = projectStore.load(name) ?: return
@@ -1228,7 +1234,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
             return
         }
         _state.update { s ->
-            s.copy(projectName = if (s.projectName == old) newName else s.projectName, projects = projectStore.list())
+            s.copy(projectName = if (s.projectName == old) newName else s.projectName, projects = s.projects.map { if (it.name == old) it.copy(name = newName) else it })
         }
     }
 

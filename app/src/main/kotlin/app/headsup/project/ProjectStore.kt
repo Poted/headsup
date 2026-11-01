@@ -93,7 +93,7 @@ data class ProjectData(
 }
 
 /** A saved project as listed; [bytes] is the space its copied media take (shared copies counted in each). */
-data class ProjectInfo(val name: String, val modifiedMs: Long, val bytes: Long = 0L, val kind: ProjectKind = ProjectKind.VIDEO)
+data class ProjectInfo(val name: String, val modifiedMs: Long, val bytes: Long = 0L, val kind: ProjectKind = ProjectKind.VIDEO, val starred: Boolean = false)
 
 /** Projects as JSON files in the app's private storage; the last one used reopens on start. */
 class ProjectStore(context: Context) {
@@ -104,9 +104,19 @@ class ProjectStore(context: Context) {
         get() = prefs.getString(KEY_LAST, null)
         set(value) = prefs.edit().putString(KEY_LAST, value).apply()
 
-    fun list(): List<ProjectInfo> = dir.listFiles { f -> f.extension == "json" }.orEmpty()
-        .map { ProjectInfo(it.nameWithoutExtension, it.lastModified()) }
-        .sortedByDescending { it.modifiedMs }
+    fun list(): List<ProjectInfo> {
+        val stars = starred
+        return dir.listFiles { f -> f.extension == "json" }.orEmpty()
+            .map { ProjectInfo(it.nameWithoutExtension, it.lastModified(), starred = it.nameWithoutExtension in stars) }
+            .sortedByDescending { it.modifiedMs }
+    }
+
+    /** Projects marked with a star, to find them first. */
+    private val starred: Set<String> get() = prefs.getStringSet(KEY_STARRED, emptySet()).orEmpty()
+
+    fun setStarred(name: String, on: Boolean) {
+        prefs.edit().putStringSet(KEY_STARRED, if (on) starred + name else starred - name).apply()
+    }
 
     fun exists(name: String) = fileFor(name).exists()
 
@@ -152,6 +162,7 @@ class ProjectStore(context: Context) {
         historyFor(name).delete()
         fileFor(name).delete()
         if (lastProject == name) lastProject = null
+        setStarred(name, false)
     }
 
     fun rename(from: String, to: String): Boolean {
@@ -159,6 +170,7 @@ class ProjectStore(context: Context) {
         val ok = !exists(from) || fileFor(from).renameTo(fileFor(to))
         if (ok) historyFor(from).takeIf { it.exists() }?.renameTo(historyFor(to))
         if (ok && lastProject == from) lastProject = to
+        if (ok && from in starred) { setStarred(from, false); setStarred(to, true) }
         return ok
     }
 
@@ -168,6 +180,7 @@ class ProjectStore(context: Context) {
 
     private companion object {
         const val KEY_LAST = "last"
+        const val KEY_STARRED = "starred"
     }
 }
 
