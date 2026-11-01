@@ -506,6 +506,11 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
     private var previewDirty = false
     private val proxies = Proxies(app, viewModelScope)
 
+    // Declared before init: opening the last project at start clears them.
+    /** The edit as it was at each milestone (this session, this project). */
+    private val milestoneEdits = HashMap<Long, EditSnapshot>()
+    private var nextMilestone = 1L
+
     init {
         projectStore.lastProject?.takeIf(projectStore::exists)?.let(::openProject)
             ?: _state.update { it.copy(projectName = newProjectName()) }
@@ -735,10 +740,6 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
      * Back to the project as it was when opened, however many steps ago. It is a step of its own,
      * so undo brings the changes back.
      */
-    /** The edit as it was at each milestone (this session, this project). */
-    private val milestoneEdits = HashMap<Long, EditSnapshot>()
-    private var nextMilestone = 1L
-
     /** Keeps the edit as it is now as a milestone, to come back to with [backToMilestone]. */
     fun addMilestone() {
         val id = nextMilestone++
