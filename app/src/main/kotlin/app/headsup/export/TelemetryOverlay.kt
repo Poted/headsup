@@ -39,6 +39,8 @@ class TelemetryOverlay(
     private val drawMap: ((Canvas, Float, Float, DashboardData?) -> Unit)? = null,
     private val mapKey: (DashboardData?) -> String = { "" },
     private val dataAt: (positionMs: Long) -> DashboardData?,
+    /** How far in the bars are at a moment of the timeline (sliding in), 0..1. */
+    private val barsAt: (timelineMs: Long) -> Float = { 1f },
 ) : BitmapOverlay() {
     private var width = fallbackWidth
     private var height = fallbackHeight
@@ -69,9 +71,10 @@ class TelemetryOverlay(
         val positionMs = (presentationTimeUs - firstUs).coerceAtLeast(0L) / 1000
         val data = dataAt(positionMs)
         val timelineMs = timelineMsOf(positionMs)
+        val effects = if (this.effects.barsRatio != null) this.effects.copy(barsAmount = barsAt(timelineMs)) else this.effects
         val values = if (texts.isEmpty()) emptyMap() else textValues(data)
         val textKey = if (texts.isEmpty()) "" else TextRenderer.key(texts, timelineMs, values)
-        val key = "${width}x$height " + (data?.let { renderer.contentKey(style, it, w, h, effects) } ?: "-") + textKey + mapKey(data)
+        val key = "${width}x$height ${(effects.barsAmount * 200).toInt()} " + (data?.let { renderer.contentKey(style, it, w, h, effects) } ?: "-") + textKey + mapKey(data)
         buffers[current]?.let { if (key == lastKey) return it }
 
         current = 1 - current

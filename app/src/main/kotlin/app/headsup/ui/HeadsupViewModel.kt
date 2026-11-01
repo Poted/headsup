@@ -343,6 +343,10 @@ data class UiState(
     val previewFromCube: Array<Array<IntArray>>? = null,
     /** Looks of the clips before and after the selected one (null: untouched), for the preview at a cut. */
     val previewNeighbourCubes: Map<Long, Array<Array<IntArray>>?> = emptyMap(),
+    /** The neighbours' blends in: the look of the clip before each (null when it has none). */
+    val previewNeighbourFrom: Map<Long, Array<Array<IntArray>>?> = emptyMap(),
+    /** The clip the preview's tables (cube, masks, blend in) were made for. */
+    val previewCubesFor: Long? = null,
     /** Mask of the selected clip that the Masks tab edits. */
     val selectedMask: Int = 0,
     /** The brush for painted masks. */
@@ -384,6 +388,9 @@ data class UiState(
     /** 0..1 while copying files in, null when the length is unknown or nothing is copied. */
     val loadingProgress: Float? = null,
     val canRedo: Boolean = false,
+    /** What the last undo or redo changed, shown for a moment over the picture, and when. */
+    val notice: String? = null,
+    val noticeAt: Long = 0L,
     /** Moments of the edit kept to come back to (this session). */
     val milestones: List<Milestone> = emptyList(),
     val exportSettings: ExportSettings = ExportSettings(),
@@ -806,9 +813,63 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
         // An edit made just now may not be recorded yet; keep it, so redo can bring it back.
         record(_state.value.snapshot())
         if (historyIndex <= 0) return
+        val from = history[historyIndex]
         historyIndex--
         restore(history[historyIndex])
+        note("Undone", from, history[historyIndex])
         saveHistorySoon()
+    }
+
+    /** Says for a moment what an undo or redo changed. */
+    private fun note(verb: String, from: EditSnapshot, to: EditSnapshot) {
+        val what = changeBetween(from, to) ?: return
+        _state.update { it.copy(notice = "$verb: $what", noticeAt = android.os.SystemClock.uptimeMillis()) }
+    }
+
+    /** What differs between two steps of the edit, in a few words (the clip by its place). */
+    private fun changeBetween(a: EditSnapshot, b: EditSnapshot): String? {
+        if (a.clips.size != b.clips.size) {
+            val sameFiles = a.clips.map { it.meta.uri }.toSet() == b.clips.map { it.meta.uri }.toSet()
+            return when {
+                sameFiles && b.clips.size > a.clips.size -> "split"
+                sameFiles -> "join"
+                b.clips.size > a.clips.size -> "clip added"
+                else -> "clip removed"
+            }
+        }
+        val parts = LinkedHashSet<String>()
+        var where: Int? = null
+        for (i in a.clips.indices) {
+            val x = a.clips[i]
+            val y = b.clips[i]
+            val before = parts.size
+            if (x.meta.uri != y.meta.uri) parts += "order"
+            if (x.trimStartMs != y.trimStartMs || x.trimEndMs != y.trimEndMs) parts += "cut"
+            if (x.grade != y.grade || x.lutName != y.lutName || x.colorGrade != y.colorGrade || x.rawDevelop != y.rawDevelop) parts += "colour"
+            if (x.masks != y.masks) parts += "masks"
+            if (x.effects != y.effects) parts += "effects"
+            if (x.speed != y.speed || x.speedCurve != y.speedCurve || x.muteChangedSpeed != y.muteChangedSpeed) parts += "speed"
+            if (x.reframe != y.reframe) parts += "framing"
+            if (x.fadeInMs != y.fadeInMs || x.fadeOutMs != y.fadeOutMs || x.transitionMs != y.transitionMs) parts += "fades"
+            if (x.flags != y.flags) parts += "flags"
+            if (x.reversed != y.reversed) parts += "reverse"
+            if (x.retouch != y.retouch) parts += "removal"
+            if (x.groupId != y.groupId) parts += "group"
+            if (x.soundLevel != y.soundLevel) parts += "sound"
+            if (parts.size > before) where = if (where == null) i else -1
+        }
+        if (a.groups != b.groups) parts += "groups"
+        if (a.texts != b.texts) parts += "texts"
+        if (a.audioClips != b.audioClips || a.audioFiles != b.audioFiles || a.clipSound != b.clipSound) parts += "sound"
+        if (a.style != b.style) parts += "dashboard"
+        if (a.routeMap != b.routeMap) parts += "map"
+        if (a.timelineFps != b.timelineFps || a.frameAspect != b.frameAspect) parts += "timeline"
+        if (parts.isEmpty()) return null
+        val list = parts.take(2).joinToString(", ") + if (parts.size > 2) "…" else ""
+        return when (val w = where) {
+            null, -1 -> list
+            else -> "$list · clip ${w + 1}"
+        }
     }
 
     /**
@@ -890,8 +951,10 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
 
     fun redo() {
         if (historyIndex >= history.lastIndex) return
+        val from = history[historyIndex]
         historyIndex++
         restore(history[historyIndex])
+        note("Redone", from, history[historyIndex])
         saveHistorySoon()
     }
 
@@ -3380,7 +3443,16 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                     val neighbours = s.selectedClip?.let { i -> listOfNotNull(s.clips.getOrNull(i - 1), s.clips.getOrNull(i + 1)) }.orEmpty()
                         .filter { !it.meta.isPhoto }
                         .associate { n -> n.id to neighbourLook(s, n) }
-                    _state.update { it.copy(previewCube = cube, previewMaskCubes = maskCubes, previewFromCube = fromCube, previewNeighbourCubes = neighbours) }
+                    // Their blends in too: the clip after the selected one starts with its own (from the selected's look).
+                    val neighbourFrom = s.selectedClip?.let { i -> listOfNotNull(s.clips.getOrNull(i - 1), s.clips.getOrNull(i + 1)) }.orEmpty()
+                        .filter { !it.meta.isPhoto && it.colorGrade }
+                        .associate { n -> n.id to s.transitionSource(n)?.let { prev -> bakeLook(s, prev) } }
+                    _state.update {
+                        it.copy(
+                            previewCube = cube, previewMaskCubes = maskCubes, previewFromCube = fromCube, previewNeighbourCubes = neighbours,
+                            previewNeighbourFrom = neighbourFrom, previewCubesFor = clip?.id,
+                        )
+                    }
                     analyseScope()
                 }
             } finally {
@@ -3631,6 +3703,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                     fadeOutMs = clip.fadeOutMs,
                     soundLevel = clip.soundLevel,
                     timelineStartMs = s.clips.take(i).sumOf { it.timelineDurationMs },
+                    clipLengthMs = clip.timelineDurationMs,
                     texts = if (kind == ExportKind.VIDEO) {
                         val start = s.clips.take(i).sumOf { it.timelineDurationMs }
                         s.texts.filter { it.startMs < start + clip.timelineDurationMs && it.endMs > start }

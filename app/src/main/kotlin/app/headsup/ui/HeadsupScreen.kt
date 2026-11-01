@@ -440,6 +440,8 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
                         framingOf = { state.framing(it) },
                         sourceOf = { state.previewSource(it) },
                         neighbourCubes = state.previewNeighbourCubes,
+                        neighbourFrom = state.previewNeighbourFrom,
+                        cubesFor = state.previewCubesFor,
                         // In an album each photo shows only its own texts (or its group's, or all photos').
                         texts = if (state.photoProject) state.texts.filter { it.showsOn(selected.id, selected.groupId) } else state.texts,
                         photoMode = state.photoProject,
@@ -483,6 +485,8 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
                             }
                         },
                     )
+                    // What an undo or redo just changed, for a moment.
+                    if (!fullscreen) UndoNotice(state.notice, state.noticeAt, Modifier.align(Alignment.TopCenter).padding(top = 52.dp))
                     // Undo/redo tucked into the picture's corner, only when there is something to undo.
                     if (!fullscreen) UndoRedo(state.canUndo, state.canRedo, vm::undo, vm::redo, vm::undoAll, vm::resetAllEdits, Modifier.align(Alignment.TopEnd).padding(top = 8.dp, end = 24.dp), canResetAll = state.clips.isNotEmpty(),
                         milestones = state.milestones, onAddMilestone = vm::addMilestone, onBackToMilestone = vm::backToMilestone, onRemoveMilestone = vm::removeMilestone,
@@ -1085,6 +1089,28 @@ private fun WorkLine(work: BackgroundWork, onStop: () -> Unit) {
             Spacer(Modifier.weight(1f))
         }
         SmallAction("Stop", onStop)
+    }
+}
+
+/** A short line over the picture saying what an undo or redo changed; it fades after a moment. */
+@Composable
+private fun UndoNotice(text: String?, at: Long, modifier: Modifier) {
+    var shown by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(at) {
+        if (text == null || at == 0L) return@LaunchedEffect
+        shown = text
+        kotlinx.coroutines.delay(1_800)
+        shown = null
+    }
+    androidx.compose.animation.AnimatedVisibility(
+        visible = shown != null, modifier = modifier,
+        enter = androidx.compose.animation.fadeIn(), exit = androidx.compose.animation.fadeOut(),
+    ) {
+        Text(
+            shown.orEmpty(),
+            Modifier.clip(RoundedCornerShape(50)).background(Color.Black.copy(alpha = 0.65f)).padding(horizontal = 12.dp, vertical = 5.dp),
+            color = Color.White, style = MaterialTheme.typography.labelLarge, maxLines = 1,
+        )
     }
 }
 
@@ -1847,7 +1873,7 @@ private fun SpeedRamp(clip: ClipState, timelineFps: Float, onCurve: (List<Float>
     // Speeds a point is caught by: round ratios, and those at which the footage's frames come out
     // exactly at the timeline's rate (every frame, every second frame…), so 24 fps stays 24, not 23.5.
     val frameSpeeds = SC.smoothLimit(clip.meta.frameRate, timelineFps)?.let { l -> List(6) { k -> l / clip.speed * (1 shl k) } }.orEmpty()
-    val snaps = (listOf(0.1f, 0.2f, 0.25f, 0.5f, 0.75f, 1f, 1.5f, 2f, 3f, 4f, 6f, 8f, 12f, 16f, 24f, 32f) + frameSpeeds).filter { it in SC.MIN..SC.MAX }
+    val snaps = (listOf(0.1f, 0.2f, 0.25f, 0.5f, 0.75f, 1f, 1.5f, 2f, 3f, 4f, 6f, 8f, 12f, 16f, 24f, 32f, 48f, 64f) + frameSpeeds).filter { it in SC.MIN..SC.MAX }
     val snapsNow by rememberUpdatedState(snaps)
     // The point being dragged, to show its value above it.
     var dragged by remember { mutableStateOf<Pair<Float, Float>?>(null) }
@@ -4157,6 +4183,14 @@ private fun EffectsPanel(state: UiState, vm: HeadsupViewModel, kind: EffectKind,
                 item { FilterChip(selected = effects.barsRatio == null, onClick = { updateEffects { it.copy(barsRatio = null) } }, label = { Text("Off") }) }
                 items(listOf(2.39f to "2.39:1", 2.0f to "2:1", 1.85f to "1.85:1")) { (ratio, label) ->
                     FilterChip(selected = effects.barsRatio == ratio, onClick = { updateEffects { it.copy(barsRatio = ratio) } }, label = { Text(label) })
+                }
+            }
+            if (effects.barsRatio != null) {
+                Row(Modifier.horizontalScroll(rememberScrollState()), verticalAlignment = Alignment.CenterVertically) {
+                    for (m in app.headsup.render.BarsMotion.entries) {
+                        FilterChip(selected = effects.barsMotion == m, onClick = { updateEffects { it.copy(barsMotion = m) } }, label = { Text(m.label) })
+                        Spacer(Modifier.width(8.dp))
+                    }
                 }
             }
             if (state.timelineAspect < 16f / 9f - 0.01f) Hint("On this frame the bars take as much of the height as they would on 16:9, for the same look.")

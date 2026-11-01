@@ -242,9 +242,18 @@ class ExportManager(private val context: Context) {
             } else null,
             // The marker moves in steps of ~1 m of latitude, so the bitmap is redrawn only when it moves.
             mapKey = { data -> if (request.routeMap.enabled) markerOf(data).let { (a, b) -> "m${a?.let { String.format(java.util.Locale.US, "%.5f", it) }},${b?.let { String.format(java.util.Locale.US, "%.5f", it) }}" } else "" },
-        ) { positionMs -> request.dataAt(positionMs, sampler) }
+            dataAt = { positionMs -> request.dataAt(positionMs, sampler) },
+            barsAt = { timelineMs -> request.effects.barsMotion.amount(timelineMs - request.clipStartMs, request.clipLengthMs) },
+        )
 
         val effects = mutableListOf<Effect>()
+        // Sped up: the file's frames that make one frame of the film run together (motion blur, as
+        // with a shutter open about three quarters of the frame), so a rush flows instead of jumping.
+        if (!request.isPhoto && request.speed > 1.5f) {
+            val fileFps = request.frameRate ?: 30f
+            val perFrame = fileFps * request.speed / (out.frameRate ?: fileFps)
+            if (perFrame >= MotionBlurEffect.FROM_FRAMES) effects += MotionBlurEffect(perFrame * 0.75f)
+        }
         val grade = request.grade
         if (hdr || (grade != null && grade.needsGradeEffect)) {
             // The HDR route always needs it: it undoes Media3's HLG conversion before the colour.

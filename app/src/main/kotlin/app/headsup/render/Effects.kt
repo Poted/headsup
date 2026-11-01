@@ -36,6 +36,10 @@ data class EffectSettings(
     val lensSoftness: Float = 0f,
     /** Target aspect ratio for black bars, or null for none. */
     val barsRatio: Float? = null,
+    /** How the bars come: there all along, sliding in at the clip's start, or in and out again. */
+    val barsMotion: BarsMotion = BarsMotion.STILL,
+    /** How far in the bars are at the moment drawn, 0..1 (set while drawing, not saved). */
+    val barsAmount: Float = 1f,
     /** Activity profile drawn along the bottom edge, or null for none. */
     val graph: GraphMetric? = null,
     /** Whether this clip shows the dashboard (its layout and widgets are the project's). */
@@ -59,9 +63,24 @@ data class EffectSettings(
         lensAberration = if (after.lensAberration != before.lensAberration) after.lensAberration else lensAberration,
         lensSoftness = if (after.lensSoftness != before.lensSoftness) after.lensSoftness else lensSoftness,
         barsRatio = if (after.barsRatio != before.barsRatio) after.barsRatio else barsRatio,
+        barsMotion = if (after.barsMotion != before.barsMotion) after.barsMotion else barsMotion,
         graph = if (after.graph != before.graph) after.graph else graph,
         dashboard = if (after.dashboard != before.dashboard) after.dashboard else dashboard,
     )
+}
+
+enum class BarsMotion(val label: String) {
+    STILL("Still"), SLIDE_IN("Slide in"), IN_OUT("In & out");
+
+    /** How far in the bars are at [ms] into a clip [lengthMs] long (timeline time), 0..1. */
+    fun amount(ms: Long, lengthMs: Long): Float {
+        if (this == STILL) return 1f
+        // About a second, less in a short clip.
+        val d = minOf(1_200L, (lengthMs / 3).coerceAtLeast(1L)).toFloat()
+        fun ease(t: Float) = t.coerceIn(0f, 1f).let { it * it * (3f - 2f * it) }
+        val inside = ease(ms / d)
+        return if (this == IN_OUT && lengthMs > 0L) minOf(inside, ease((lengthMs - ms) / d)) else inside
+    }
 }
 
 class EffectPrefs(context: Context) {

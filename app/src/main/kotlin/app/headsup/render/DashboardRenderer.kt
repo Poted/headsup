@@ -145,7 +145,7 @@ class DashboardRenderer(private val assets: AssetManager) {
      */
     fun contentKey(style: DashboardStyle, data: DashboardData, width: Float, height: Float, effects: EffectSettings = EffectSettings()): String {
         val sb = StringBuilder()
-        sb.append(effects.barsRatio).append('|')
+        sb.append(effects.barsRatio).append(':').append((effects.barsAmount * 200).toInt()).append('|')
         val u = unit(width, height, style)
         effects.graph?.let { metric ->
             val g = graphFor(data.track, metric)
@@ -275,7 +275,9 @@ class DashboardRenderer(private val assets: AssetManager) {
         canvas.drawPath(path, paint)
     }
 
-    private fun barHeight(width: Float, height: Float, effects: EffectSettings): Float {
+    private fun barHeight(width: Float, height: Float, effects: EffectSettings): Float = fullBarHeight(width, height, effects) * effects.barsAmount.coerceIn(0f, 1f)
+
+    private fun fullBarHeight(width: Float, height: Float, effects: EffectSettings): Float {
         val ratio = effects.barsRatio ?: return 0f
         val aspect = width / height
         // Frames narrower than 16:9 (square, vertical) take the share of the height the bars take

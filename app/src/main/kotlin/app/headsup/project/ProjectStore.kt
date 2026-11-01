@@ -471,6 +471,7 @@ internal object Json {
         .put("lensAberration", e.lensAberration.toDouble())
         .put("lensSoftness", e.lensSoftness.toDouble())
         .putOpt("barsRatio", e.barsRatio)
+        .put("barsMotion", e.barsMotion.name)
         .putOpt("graph", e.graph?.name)
         .put("dashboard", e.dashboard)
 
@@ -489,6 +490,7 @@ internal object Json {
             lensAberration = o.optDouble("lensAberration", d.lensAberration.toDouble()).toFloat(),
             lensSoftness = o.optDouble("lensSoftness", d.lensSoftness.toDouble()).toFloat(),
             barsRatio = if (o.has("barsRatio")) o.getDouble("barsRatio").toFloat() else null,
+            barsMotion = app.headsup.render.BarsMotion.entries.firstOrNull { it.name == o.optString("barsMotion") } ?: app.headsup.render.BarsMotion.STILL,
             graph = GraphMetric.entries.firstOrNull { it.name == o.optStringOrNull("graph") },
             dashboard = o.optBoolean("dashboard", true),
         )

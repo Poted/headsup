@@ -12,13 +12,13 @@ import kotlin.math.ln
 object SpeedCurve {
     /** Slowest and fastest speed a ramp can reach. */
     const val MIN = 0.1f
-    const val MAX = 32f
+    const val MAX = 64f
 
     /** How fast the presets' fast parts go unless chosen otherwise. */
     const val DEFAULT_RUSH = 3f
 
     /** Rush speeds offered for the presets' fast parts: up to a lightning move into the frame. */
-    val RUSHES = listOf(3f, 6f, 12f, 24f)
+    val RUSHES = listOf(3f, 8f, 16f, 32f, 48f)
 
     /**
      * Ready-made ramps. Their slow parts (0 in [template]) take the slow speed the footage allows
@@ -28,9 +28,10 @@ object SpeedCurve {
         // As in reels and property films: the camera rushes in, eases into slow motion, rushes on.
         SPEED_RAMP("Speed ramp", listOf(0f, -1f, 0.15f, -1f, 0.38f, 0f, 0.62f, 0f, 0.85f, -1f, 1f, -1f)),
         // The camera shoots up to the door in a blink and brakes hard into slow motion.
-        RUSH_IN("Rush in", listOf(0f, -1f, 0.36f, -1f, 0.43f, 0f, 1f, 0f)),
+        // The braking takes a little of the file, so it lasts a moment on screen, not one frame.
+        RUSH_IN("Rush in", listOf(0f, -1f, 0.33f, -1f, 0.45f, 0f, 1f, 0f)),
         // In a blink, slow through the moment, out in a blink.
-        RUSH_THROUGH("Rush through", listOf(0f, -1f, 0.3f, -1f, 0.36f, 0f, 0.64f, 0f, 0.7f, -1f, 1f, -1f)),
+        RUSH_THROUGH("Rush through", listOf(0f, -1f, 0.27f, -1f, 0.37f, 0f, 0.63f, 0f, 0.73f, -1f, 1f, -1f)),
         FAST_IN("Fast in", listOf(0f, -1f, 0.2f, -1f, 0.48f, 0f, 1f, 0f)),
         FAST_OUT("Fast out", listOf(0f, 0f, 0.52f, 0f, 0.8f, -1f, 1f, -1f)),
         DOUBLE("Double ramp", listOf(0f, -1f, 0.1f, -1f, 0.24f, 0f, 0.38f, 0f, 0.5f, -1f, 0.62f, 0f, 0.76f, 0f, 0.9f, -1f, 1f, -1f)),

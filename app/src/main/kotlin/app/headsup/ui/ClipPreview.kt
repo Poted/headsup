@@ -248,6 +248,10 @@ fun ClipPreview(
     sourceOf: (ClipState) -> android.net.Uri = { it.meta.uri },
     /** Colour tables of the clips next to [clip] (null: untouched), for a picture still showing one at a cut. */
     neighbourCubes: Map<Long, Array<Array<IntArray>>?> = emptyMap(),
+    /** The neighbours' blends in (the look of the clip before each). */
+    neighbourFrom: Map<Long, Array<Array<IntArray>>?> = emptyMap(),
+    /** The clip [gradeCube], [maskCubes] and [fromCube] were made for (they follow a new selection a moment later). */
+    cubesFor: Long? = null,
     /** The timeline's texts, drawn over the picture at the timeline's time. */
     texts: List<TextItem> = emptyList(),
     /** Set while a text is edited: a finger on the picture places it (0..1 of the frame). */
@@ -557,12 +561,17 @@ fun ClipPreview(
     // Each player's picture is coloured as its own clip: the selected one fully, a neighbour still on
     // screen at a cut (before the selection follows) by its look, so no frame shows another clip's colours.
     val playerShaders = remember { if (Build.VERSION.SDK_INT >= 33) List(2) { GradePreviewShader() } else null }
+    // Just after the selection moved on (playing into the next clip), the tables are still the last
+    // clip's: until the new ones come, the clip is coloured by its look as a neighbour, with its own
+    // blend in (never the last clip's).
+    val fresh = cubesFor == null || cubesFor == clip.id
     for (i in 0..1) key(i) {
         val id = pictureClip[i] ?: clip.id
-        val own = id == clip.id
+        val own = id == clip.id && fresh
         val cube = if (own) gradeCube else neighbourCubes[id]
-        LaunchedEffect(playerShaders, own, cube, maskCubes, fromCube) {
-            playerShaders?.get(i)?.setTables(if (own) GradeTables(gradeCube, maskCubes, fromCube) else GradeTables(cube))
+        val from = if (own) fromCube else neighbourFrom[id]
+        LaunchedEffect(playerShaders, own, cube, maskCubes, fromCube, from) {
+            playerShaders?.get(i)?.setTables(if (own) GradeTables(gradeCube, maskCubes, fromCube) else GradeTables(cube, emptyList(), from))
             tableVersion++
         }
     }
@@ -752,6 +761,8 @@ fun ClipPreview(
     // Position on the timeline within this clip, for fades and music.
     val clipTimelineMs = if (photo) positionMs else clip.timelineOfSource(positionMs)
     val fadeGain = Fade.gain(clipTimelineMs, clip.timelineDurationMs, clip.fadeInMs, clip.fadeOutMs)
+    // Bars sliding in (and out) with the clip's time, as in the export.
+    val barsNow = if (effects.barsRatio != null) effects.copy(barsAmount = effects.barsMotion.amount(clipTimelineMs, clip.timelineDurationMs)) else effects
     SideEffect { exoPlayer.volume = clipVolume * fadeGain }
     // Audio clips follow the timeline: each plays where it is placed, faded as in the export.
     val audioNow by rememberUpdatedState(audio)
@@ -1071,9 +1082,10 @@ fun ClipPreview(
                                 size.graphicsLayer {
                                     tableVersion
                                     val frame = if (effects.grain > 0f) (positionMs / 33).toFloat() else 0f
-                                    val fromWeight = if (fromCube != null) ColourTransition.fromWeight(positionMs, transitionMs) else 0f
+                                    val from = if (fresh) fromCube else neighbourFrom[clip.id]
+                                    val fromWeight = if (from != null) ColourTransition.fromWeight(positionMs, transitionMs) else 0f
                                     renderEffect = if (pictureClip[i] == null || pictureClip[i] == clip.id) {
-                                        playerShaders?.get(i)?.effect(effects, zebra, frame, this.size.width, this.size.height, masks.map { it.at(fileMs) }, fromWeight, presence = presence, warp = r.warp)
+                                        playerShaders?.get(i)?.effect(effects, zebra, frame, this.size.width, this.size.height, if (fresh) masks.map { it.at(fileMs) } else emptyList(), fromWeight, presence = presence, warp = r.warp)
                                     } else {
                                         playerShaders?.get(i)?.effect(effects, zebra, frame, this.size.width, this.size.height, emptyList(), 0f, warp = r.warp)
                                     }
@@ -1318,13 +1330,13 @@ fun ClipPreview(
                     val frame = utc?.let { sampler?.frameAt(it) }
                     if (utc == null || track == null || frame == null) {
                         // No watch data here: the picture effects still show.
-                        drawIntoCanvas { renderer.drawBars(it.nativeCanvas, size.width, size.height, effects) }
+                        drawIntoCanvas { renderer.drawBars(it.nativeCanvas, size.width, size.height, barsNow) }
                         return@Canvas
                     }
                     val zone = track.utcOffsetSeconds
                         ?: ZoneId.systemDefault().rules.getOffset(Instant.ofEpochMilli(utc)).totalSeconds
                     val data = DashboardData(track, frame, utc, zone)
-                    drawIntoCanvas { renderer.draw(it.nativeCanvas, size.width, size.height, style, data, effects) }
+                    drawIntoCanvas { renderer.draw(it.nativeCanvas, size.width, size.height, style, data, barsNow) }
                 }
                 // Texts sit on the frame (not the picture), over the dashboard, as in the export.
                 val textMover by rememberUpdatedState(onMoveText)
