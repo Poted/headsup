@@ -1229,6 +1229,15 @@ fun ClipPreview(
                                         val a = Math.toRadians(m.angleDegrees.toDouble())
                                         val c = kotlin.math.cos(a).toFloat()
                                         val s = kotlin.math.sin(a).toFloat()
+                                        // The turning handle (4): on a stalk from the middle, past the top.
+                                        run {
+                                            val perPx = g.pictureW / g.boxW.coerceAtLeast(1f)
+                                            val gap = ROTATE_GAP.toPx() * perPx
+                                            val out = if (m.kind == MaskKind.ELLIPSE) m.sizeY / 2f * g.pictureH + gap else gap
+                                            val hx = m.centerX * g.pictureW + s * out
+                                            val hy = m.centerY * g.pictureH - c * out
+                                            if (kotlin.math.hypot(px - hx, py - hy) < 24.dp.toPx() * perPx) return 4
+                                        }
                                         if (m.kind == MaskKind.LINEAR) {
                                             // The dashed lines: how far the finger is from each, across them.
                                             val d = (-(px - m.centerX * g.pictureW) * s + (py - m.centerY * g.pictureH) * c)
@@ -1394,7 +1403,7 @@ fun ClipPreview(
                                     drawPath(path, Color.White, style = Stroke(2.5.dp.toPx(), cap = androidx.compose.ui.graphics.StrokeCap.Round, join = androidx.compose.ui.graphics.StrokeJoin.Round))
                                 }
                             } else {
-                                drawMaskGuide(m, geometry.pictureW, geometry.pictureH)
+                                drawMaskGuide(m, geometry.pictureW, geometry.pictureH, gap = if (maskEnd != null) ROTATE_GAP.toPx() / t.zoom.coerceAtLeast(0.01f) else 0f)
                             }
                         }
                     }
@@ -1741,7 +1750,10 @@ private fun perspectiveMatrix(warp: DoubleArray, w: Float, h: Float): android.gr
 }
 
 /** The mask's edge (solid) and the ends of its soft blend (dashed), as in DaVinci's window controls. */
-private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawMaskGuide(mask: ColourMask, width: Float, height: Float) {
+/** How far the turning handle sits past a gradient's middle (a linear one) or its top end (a radial one). */
+private val ROTATE_GAP = 40.dp
+
+private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawMaskGuide(mask: ColourMask, width: Float, height: Float, gap: Float = 0f) {
     // A range mask is the whole picture: no window to show.
     if (mask.kind == MaskKind.RANGE) return
     val centre = Offset(mask.centerX * width, mask.centerY * height)
@@ -1764,6 +1776,12 @@ private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawMaskGuide(mask:
                         drawCircle(solid, radius = 5.5f * density, center = Offset(centre.x, y))
                     }
                 }
+                // The handle that turns it, on a stalk from the middle.
+                if (gap > 0f) {
+                    drawLine(solid, centre, Offset(centre.x, centre.y - gap), strokeWidth = 1.5f * density)
+                    drawCircle(Color.Black.copy(alpha = 0.45f), radius = 7.5f * density, center = Offset(centre.x, centre.y - gap))
+                    drawCircle(Color(0xFFFF9A4D), radius = 5.5f * density, center = Offset(centre.x, centre.y - gap))
+                }
             }
             MaskKind.BRUSH, MaskKind.RANGE -> Unit
             MaskKind.ELLIPSE -> {
@@ -1776,9 +1794,14 @@ private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawMaskGuide(mask:
                         style = Stroke((if (dashed) 1f else 1.5f) * density, pathEffect = if (dashed) dash else null),
                     )
                 }
-                // Its four ends, to grab and drag.
+                // Its four ends, to grab and drag; above, the handle that turns it.
                 val rx = mask.sizeX / 2f * height
                 val ry = mask.sizeY / 2f * height
+                if (gap > 0f) {
+                    drawLine(solid, Offset(centre.x, centre.y - ry), Offset(centre.x, centre.y - ry - gap), strokeWidth = 1.5f * density)
+                    drawCircle(Color.Black.copy(alpha = 0.45f), radius = 7.5f * density, center = Offset(centre.x, centre.y - ry - gap))
+                    drawCircle(Color(0xFFFF9A4D), radius = 5.5f * density, center = Offset(centre.x, centre.y - ry - gap))
+                }
                 for (p in listOf(Offset(centre.x + rx, centre.y), Offset(centre.x - rx, centre.y), Offset(centre.x, centre.y + ry), Offset(centre.x, centre.y - ry))) {
                     drawCircle(Color.Black.copy(alpha = 0.45f), radius = 7.5f * density, center = p)
                     drawCircle(solid, radius = 5.5f * density, center = p)

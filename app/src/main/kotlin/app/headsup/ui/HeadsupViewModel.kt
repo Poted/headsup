@@ -2657,6 +2657,16 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
         val clip = _state.value.selected ?: return
         val aspect = if (clip.meta.width > 0 && clip.meta.height > 0) clip.meta.width.toFloat() / clip.meta.height else 16f / 9f
         updateMask { m ->
+            if (end == 4) {
+                // The turning handle: the gradient points at the finger, about its middle.
+                val vx = (x - m.centerX) * aspect
+                val vy = y - m.centerY
+                if (kotlin.math.hypot(vx, vy) < 1e-3f) return@updateMask m
+                val deg = Math.toDegrees(kotlin.math.atan2(vx.toDouble(), (-vy).toDouble())).toFloat()
+                return@updateMask m.copy(
+                    angleDegrees = if (m.kind == MaskKind.ELLIPSE) ((deg + 90f) % 180f + 180f) % 180f - 90f else deg.coerceIn(-90f, 90f),
+                )
+            }
             if (m.kind == MaskKind.LINEAR) {
                 // A linear gradient's dashed lines (0 the far side, 1 the near): the one dragged
                 // follows the finger, the other stays; the middle line goes half way.
