@@ -68,6 +68,8 @@ data class ColorGrade(
      * and paler (−); greys stay ([ColourDensity]).
      */
     val density: Float = 0f,
+    /** Curves by hue and brightness: Hue vs Hue, Sat, Lum and Lum vs Sat ([HueCurves]); empty is none. */
+    val hueCurves: List<List<Float>> = HueCurves.NEUTRAL,
 ) {
     /** The corrections that look at a pixel's surroundings, drawn by the shader before the colour table. */
     val presence: Presence get() = Presence(texture, clarity, dehaze)
@@ -77,7 +79,8 @@ data class ColorGrade(
             highlights == 0f && saturation == 0f && temperature == 0f &&
             blacks == 0f && whites == 0f && vibrance == 0f && tint == 0f && skinHue == 0f &&
             rolloff == 0f && toneAmount == 0f && tame == 0f && mixer.all { it == 0f } && look == null && curves.all { it.isEmpty() } && wheels.all { it == 0f } &&
-            channelMix.all { it == 0f } && bw.all { it == 0f } && calibration.all { it == 0f } && dehaze == 0f && density == 0f
+            channelMix.all { it == 0f } && bw.all { it == 0f } && calibration.all { it == 0f } && dehaze == 0f && density == 0f &&
+            hueCurves.all { it.isEmpty() }
 
     /** The corrections scaled by [k] (hues stay), e.g. a suggestion at partial strength. */
     operator fun times(k: Float) = ColorGrade(
@@ -93,6 +96,8 @@ data class ColorGrade(
         bw.mapIndexed { i, v -> if (i == 0) v else v * k },
         calibration.map { it * k },
         glow * k, halation * k, density * k,
+        // The curves' changes scale; where they are stays.
+        hueCurves.map { c -> c.mapIndexed { i, v -> if (i % 2 == 1) v * k else v } },
     )
 
     /**
@@ -144,6 +149,8 @@ data class ColorGrade(
         glow = (glow + other.glow).coerceIn(0f, 1f),
         halation = (halation + other.halation).coerceIn(0f, 1f),
         density = (density + other.density).coerceIn(-1f, 1f),
+        // Curves cannot be added; one set on top wins, curve by curve.
+        hueCurves = List(4) { c -> other.hueCurves.getOrNull(c).orEmpty().ifEmpty { hueCurves.getOrNull(c).orEmpty() } },
     )
 
     /**
@@ -201,6 +208,10 @@ data class ColorGrade(
         glow = if (after.glow != before.glow) after.glow else glow,
         halation = if (after.halation != before.halation) after.halation else halation,
         density = if (after.density != before.density) after.density else density,
+        hueCurves = List(4) { c ->
+            val a = after.hueCurves.getOrNull(c).orEmpty()
+            if (a != before.hueCurves.getOrNull(c).orEmpty()) a else hueCurves.getOrNull(c).orEmpty()
+        },
     )
 
     companion object {
@@ -271,6 +282,7 @@ object LutBaker {
         // Film look and the skin line work on display-referred (Rec.709) colours, so they run last.
         FilmLook.apply(grade, rgb)
         ColourMixer.apply(grade.mixer, rgb)
+        HueCurves.apply(grade.hueCurves, rgb)
         ColourDensity.apply(grade.density, rgb)
         // Black and white after the colour mixer; curves and grading wheels can still tint it.
         BlackAndWhite.apply(grade.bw, rgb)

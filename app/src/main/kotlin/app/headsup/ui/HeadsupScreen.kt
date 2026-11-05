@@ -2736,7 +2736,7 @@ private val Adjustment.section: ColourSection
         Adjustment.SPLIT, Adjustment.SHADOW_HUE, Adjustment.HIGHLIGHT_HUE, Adjustment.TAME, Adjustment.VIGNETTE, Adjustment.WHEELS -> ColourSection.FILM
         Adjustment.TEXTURE, Adjustment.CLARITY, Adjustment.DEHAZE -> ColourSection.PRESENCE
         Adjustment.CINE, Adjustment.LUT, Adjustment.MATCH, Adjustment.BLEND -> ColourSection.TOOLS
-        Adjustment.MIXER, Adjustment.CHANNELS, Adjustment.BW, Adjustment.CALIBRATION -> ColourSection.MIXER
+        Adjustment.MIXER, Adjustment.HUE_CURVES, Adjustment.CHANNELS, Adjustment.BW, Adjustment.CALIBRATION -> ColourSection.MIXER
         // Looks sit with the other tools that set a whole look (LUT, shot match).
         Adjustment.LOOK -> ColourSection.TOOLS
         Adjustment.GLOW, Adjustment.HALATION -> ColourSection.EFFECTS
@@ -2821,6 +2821,9 @@ internal enum class Adjustment(
 
     /** Not a single ruler: hue, saturation and luminance per hue band. */
     MIXER("HSL", "Colour mixer", 0f..1f, 1f, "", { 0f }, { g, _ -> g }),
+
+    /** Not a single ruler: curves by hue and brightness (Hue vs Hue, Sat, Lum; Lum vs Sat). */
+    HUE_CURVES("H∿", "Hue curves", 0f..1f, 1f, "", { 0f }, { g, _ -> g }),
 
     /** Not a single ruler: a look (profile) under the corrections, with its amount. */
     LOOK("Look", "Looks", 0f..1f, 1f, "", { 0f }, { g, _ -> g }),
@@ -3028,6 +3031,7 @@ private fun ColourPage(
                 Adjustment.BW -> app.headsup.core.color.BlackAndWhite.on(state.grade.bw)
                 Adjustment.CALIBRATION -> state.grade.calibration.any { it != 0f }
                 Adjustment.CURVE -> state.grade.curves.any { it.isNotEmpty() }
+                Adjustment.HUE_CURVES -> state.grade.hueCurves.any { it.isNotEmpty() }
                 Adjustment.WHEELS -> state.grade.wheels.any { it != 0f }
                 Adjustment.LOOK -> state.grade.look != null
                 else -> a.get(state.grade) != a.neutral
@@ -3082,6 +3086,10 @@ private fun ColourPage(
     }
     if (adjustment == Adjustment.CURVE) {
         CurveControls(state, vm)
+        return
+    }
+    if (adjustment == Adjustment.HUE_CURVES) {
+        HueCurveControls(state, vm)
         return
     }
     if (adjustment == Adjustment.WHEELS) {
@@ -3286,6 +3294,117 @@ private fun CurveControls(state: UiState, vm: HeadsupViewModel) {
         for ((x, y) in points) drawCircle(colour, 6.dp.toPx(), Offset(x * w, (1 - y) * h))
     }
     Hint("Touch the curve to add a point and drag it; double-tap a point to remove it.")
+}
+
+/**
+ * Curves by hue (across: the colour wheel, red to red) or by brightness (dark to light): up gives
+ * more (a hue turned one way, richer, lighter), down less. Touch to add a point, drag it, double-tap
+ * to remove it.
+ */
+@Composable
+private fun HueCurveControls(state: UiState, vm: HeadsupViewModel) {
+    val HC = app.headsup.core.color.HueCurves
+    var channel by rememberSaveable { mutableStateOf(HC.Channel.HUE_SAT) }
+    val c = channel.ordinal
+    val flat = state.grade.hueCurves.getOrNull(c).orEmpty()
+    fun store(points: List<Pair<Float, Float>>) = vm.updateGrade { g ->
+        val none = points.all { kotlin.math.abs(it.second) < 0.005f }
+        g.copy(hueCurves = List(4) { i -> if (i == c) (if (none) emptyList() else points.flatMap { listOf(it.first, it.second) }) else g.hueCurves.getOrNull(i).orEmpty() })
+    }
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        FlowRow(Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            for (ch in HC.Channel.entries) {
+                val changed = state.grade.hueCurves.getOrNull(ch.ordinal).orEmpty().isNotEmpty()
+                FilterChip(selected = ch == channel, onClick = { channel = ch }, label = { Text(ch.label + if (changed) " •" else "") })
+            }
+        }
+        if (flat.isNotEmpty()) SmallAction("Reset", { store(emptyList()) })
+    }
+    val points = HC.points(flat)
+    val current by rememberUpdatedState(points)
+    val periodic = channel.periodic
+    androidx.compose.foundation.Canvas(
+        Modifier
+            .fillMaxWidth()
+            .aspectRatio(2f)
+            .clip(RoundedCornerShape(12.dp))
+            .background(Color.Black.copy(alpha = 0.35f))
+            .pointerInput(channel) {
+                var lastTap = 0L
+                awaitEachGesture {
+                    val down = awaitFirstDown()
+                    down.consume()
+                    val w = size.width.toFloat()
+                    val h = size.height.toFloat()
+                    fun at(p: Pair<Float, Float>) = Offset(p.first * w, (0.5f - p.second / 2f) * h)
+                    val work = current.toMutableList()
+                    val nearest = work.indices.minByOrNull { (at(work[it]) - down.position).getDistance() }
+                    val near = nearest != null && (at(work[nearest]) - down.position).getDistance() < 28.dp.toPx()
+                    var i: Int
+                    if (near && down.uptimeMillis - lastTap < 300) {
+                        work.removeAt(nearest!!)
+                        store(work.toList())
+                        lastTap = 0L
+                        return@awaitEachGesture
+                    }
+                    lastTap = down.uptimeMillis
+                    if (near) {
+                        i = nearest!!
+                    } else {
+                        // A new point on the curve where the finger is.
+                        val x = (down.position.x / w).coerceIn(0f, 1f)
+                        work += x to HC.valueAt(work, x, periodic)
+                        work.sortBy { it.first }
+                        i = work.indexOfFirst { it.first == x }
+                        store(work.toList())
+                    }
+                    while (true) {
+                        val event = awaitPointerEvent()
+                        val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                        if (!change.pressed) break
+                        change.consume()
+                        val lo = if (i == 0) 0f else work[i - 1].first + 0.01f
+                        val hi = if (i == work.lastIndex) 1f else work[i + 1].first - 0.01f
+                        val x = (change.position.x / w).coerceIn(lo, hi)
+                        val y = ((0.5f - change.position.y / h) * 2f).coerceIn(-1f, 1f)
+                        work[i] = x to y
+                        store(work.toList())
+                    }
+                }
+            },
+    ) {
+        val w = size.width
+        val h = size.height
+        // Across: the colours of the wheel (hue curves) or dark to light.
+        val stops = if (periodic) {
+            (0..12).map { k -> k / 12f to Color.hsv(k * 30f % 360f, 0.75f, 0.85f) }
+        } else {
+            listOf(0f to Color(0xFF111111), 1f to Color(0xFFEEEEEE))
+        }
+        drawRect(
+            androidx.compose.ui.graphics.Brush.horizontalGradient(*stops.toTypedArray()),
+            topLeft = Offset(0f, h - 10.dp.toPx()), size = androidx.compose.ui.geometry.Size(w, 10.dp.toPx()),
+        )
+        for (k in 1..3) drawLine(Color.White.copy(alpha = 0.1f), Offset(w * k / 4, 0f), Offset(w * k / 4, h - 10.dp.toPx()))
+        drawLine(Color.White.copy(alpha = 0.3f), Offset(0f, h / 2f), Offset(w, h / 2f))
+        val path = androidx.compose.ui.graphics.Path()
+        for (k in 0..120) {
+            val x = k / 120f
+            val y = HC.valueAt(points, x, periodic)
+            val py = (0.5f - y / 2f) * h
+            if (k == 0) path.moveTo(0f, py) else path.lineTo(x * w, py)
+        }
+        drawPath(path, Color.White, style = androidx.compose.ui.graphics.drawscope.Stroke(2.dp.toPx()))
+        for ((x, y) in points) drawCircle(Color.White, 6.dp.toPx(), Offset(x * w, (0.5f - y / 2f) * h))
+    }
+    Hint(
+        when (channel) {
+            HC.Channel.HUE_HUE -> "Turns one hue towards another: a point on a colour, up or down to shift it (e.g. greens towards yellow). Touch to add a point, drag it, double-tap to remove it."
+            HC.Channel.HUE_SAT -> "More or less colour in one hue only: e.g. a point on blue pulled down pales the sky alone."
+            HC.Channel.HUE_LUM -> "Lighter or darker in one hue only: e.g. orange up for skin, blue down for a deeper sky."
+            HC.Channel.LUM_SAT -> "More or less colour by brightness: pulling the dark end down takes colour out of the shadows, a filmic look."
+        },
+    )
 }
 
 private val RGB_NAMES = listOf("Red", "Green", "Blue")

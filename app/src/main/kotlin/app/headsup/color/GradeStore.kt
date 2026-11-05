@@ -78,6 +78,8 @@ class GradeStore(private val context: Context) {
         lookAmount = prefs.getFloat(prefix + "look_amount", 1f),
         curves = prefs.getString(prefix + "curves", null)?.split(';')?.takeIf { it.size == 4 }
             ?.map { c -> c.split(',').mapNotNull { it.toFloatOrNull() } } ?: app.headsup.core.color.ToneCurve.NEUTRAL,
+        hueCurves = prefs.getString(prefix + "hueCurves", null)?.split(';')?.takeIf { it.size == 4 }
+            ?.map { c -> c.split(',').mapNotNull { it.toFloatOrNull() } } ?: app.headsup.core.color.HueCurves.NEUTRAL,
         wheels = prefs.getString(prefix + "wheels", null)?.split(',')?.mapNotNull { it.toFloatOrNull() }
             ?.takeIf { it.size == app.headsup.core.color.ColourWheels.SIZE } ?: app.headsup.core.color.ColourWheels.NEUTRAL,
         texture = prefs.getFloat(prefix + "texture", 0f),
@@ -115,6 +117,7 @@ class GradeStore(private val context: Context) {
             .putString(prefix + "look", g.look)
             .putFloat(prefix + "look_amount", g.lookAmount)
             .putString(prefix + "curves", g.curves.joinToString(";") { it.joinToString(",") })
+            .putString(prefix + "hueCurves", g.hueCurves.joinToString(";") { it.joinToString(",") })
             .putString(prefix + "wheels", g.wheels.joinToString(","))
             .putFloat(prefix + "texture", g.texture)
             .putFloat(prefix + "clarity", g.clarity)
