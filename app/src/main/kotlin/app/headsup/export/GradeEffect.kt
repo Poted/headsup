@@ -507,16 +507,21 @@ class GradeEffect(
                 float w$i = mw.${"xyzw"[i]};
                 pr += uMp$i * w$i;""" }.joinToString("")}
                 if (pr.x != 0.0 || pr.y != 0.0) srcRgb = presence(vTexSamplingCoord, srcRgb, pr);
-                vec3 c = grade(uLut, srcRgb);
+                // As the preview: masks add their change to what is there.
+                vec3 base = grade(uLut, srcRgb);
+                vec3 c = base;
                 ${List(ColourMask.MAX_PER_CLIP) { i -> """
-                if (w$i > 0.0) c = mix(c, grade(uLutM$i, srcRgb), w$i);""" }.joinToString("")}
+                if (w$i > 0.0) c += (grade(uLutM$i, srcRgb) - base) * w$i;""" }.joinToString("")}
+                c = clamp(c, 0.0, 1.0);
                 // Blending in: from how the clip before looked at its end, masks and all.
                 if (uFromWeight > 0.0) {
-                    vec3 cf = grade(uLutFrom, srcRgb);
+                    vec3 cf0 = grade(uLutFrom, srcRgb);
+                    vec3 cf = cf0;
                     if (uFromMaskCount > 0.5) {
                         vec4 fw = weightsAtF(px, srcRgb, false);
                         ${List(ColourMask.MAX_PER_CLIP) { i -> """
-                        if (fw.${"xyzw"[i]} > 0.0) cf = mix(cf, grade(uLutFM$i, srcRgb), fw.${"xyzw"[i]});""" }.joinToString("")}
+                        if (fw.${"xyzw"[i]} > 0.0) cf += (grade(uLutFM$i, srcRgb) - cf0) * fw.${"xyzw"[i]};""" }.joinToString("")}
+                        cf = clamp(cf, 0.0, 1.0);
                     }
                     c = mix(c, cf, uFromWeight);
                 }

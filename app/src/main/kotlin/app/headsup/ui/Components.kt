@@ -43,6 +43,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.drawscope.clipPath
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.font.FontWeight
@@ -434,24 +435,40 @@ fun CineLoader(message: String, modifier: Modifier = Modifier, progress: Float? 
         Canvas(Modifier.size(40.dp)) {
             val r = size.minDimension / 2f
             val c = center
-            drawCircle(HeadsupColors.Outline, radius = r, center = c)
-            drawCircle(Color(0xFF0B0B0B), radius = r * 0.92f, center = c)
-            // Six blades: lines tangent to the opening, turning together.
-            val inner = r * (0.2f + 0.55f * open)
-            for (i in 0 until 6) {
-                val a = Math.toRadians((turn + i * 60f).toDouble())
-                val p = Offset(c.x + (inner * kotlin.math.cos(a)).toFloat(), c.y + (inner * kotlin.math.sin(a)).toFloat())
-                val dir = Offset(-kotlin.math.sin(a).toFloat(), kotlin.math.cos(a).toFloat())
-                drawLine(HeadsupColors.Accent.copy(alpha = 0.85f), p - dir * r, p + dir * r * 0.3f, strokeWidth = 1.6.dp.toPx(), cap = StrokeCap.Round)
+            val lens = r * 0.86f
+            // An iris: dark blades round a six-sided opening that opens and closes as it turns,
+            // all inside the lens's ring (nothing reaches past it).
+            drawCircle(Color(0xFF0B0B0B), radius = r, center = c)
+            val inner = lens * (0.25f + 0.5f * open)
+            fun corner(k: Int): Offset {
+                val a = Math.toRadians((turn + k * 60f).toDouble())
+                return Offset(c.x + (inner * kotlin.math.cos(a)).toFloat(), c.y + (inner * kotlin.math.sin(a)).toFloat())
             }
-            drawCircle(HeadsupColors.Outline, radius = r * 0.92f, center = c, style = androidx.compose.ui.graphics.drawscope.Stroke(2.dp.toPx()))
+            val clip = androidx.compose.ui.graphics.Path().apply { addOval(androidx.compose.ui.geometry.Rect(c, lens)) }
+            clipPath(clip) {
+                drawCircle(Color(0xFF2B231D), radius = lens, center = c)
+                val hole = androidx.compose.ui.graphics.Path().apply {
+                    moveTo(corner(0).x, corner(0).y)
+                    for (k in 1 until 6) lineTo(corner(k).x, corner(k).y)
+                    close()
+                }
+                drawPath(hole, Color(0xFF0B0B0B))
+                // Each blade's edge: from a corner of the opening on along its side, out to the ring.
+                for (k in 0 until 6) {
+                    val p0 = corner(k)
+                    val p1 = corner(k + 1)
+                    val d = (p1 - p0) / (p1 - p0).getDistance().coerceAtLeast(0.001f)
+                    drawLine(HeadsupColors.Accent.copy(alpha = 0.9f), p0, p0 + d * (2f * lens), strokeWidth = 1.3.dp.toPx(), cap = StrokeCap.Round)
+                }
+            }
+            drawCircle(HeadsupColors.Outline, radius = (r + lens) / 2f, center = c, style = androidx.compose.ui.graphics.drawscope.Stroke(r - lens))
         }
         androidx.compose.foundation.layout.Spacer(Modifier.width(12.dp))
         Column(Modifier.weight(1f)) {
             Text(message, style = MaterialTheme.typography.bodyMedium, maxLines = 2)
             val total = nowMs / 40
             Text(
-                if (progress != null) String.format(java.util.Locale.US, "%.0f %%", progress * 100)
+                if (progress != null) String.format(java.util.Locale.US, "%.0f%%", progress * 100)
                 else String.format(java.util.Locale.US, "%02d:%02d:%02d:%02d", total / 90000, total / 1500 % 60, total / 25 % 60, total % 25),
                 style = MaterialTheme.typography.labelSmall.copy(fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace),
                 color = HeadsupColors.TextMuted,

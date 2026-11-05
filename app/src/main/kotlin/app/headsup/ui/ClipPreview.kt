@@ -152,6 +152,8 @@ fun ClipPreview(
     onMoveMask: ((Float, Float) -> Unit)? = null,
     /** Two fingers on the picture while a mask is edited: move (fractions of the picture), scale, turn (degrees). */
     onTransformMask: ((dx: Float, dy: Float, zoom: Float, degrees: Float) -> Unit)? = null,
+    /** An oval's end (0 right, 1 left, 2 bottom, 3 top, before turning) dragged to (x, y), fractions of the picture. */
+    onMaskEnd: ((end: Int, x: Float, y: Float) -> Unit)? = null,
     /**
      * Painting a brush mask: a stroke starts (0), goes on (1) and ends (2) at a point of the picture
      * (fractions); the last argument grabs the picture (before colour) at a width, for finding edges.
@@ -586,6 +588,7 @@ fun ClipPreview(
     val sample by rememberUpdatedState(onSample)
     val maskMover by rememberUpdatedState(onMoveMask)
     val maskTransformer by rememberUpdatedState(onTransformMask)
+    val maskEnd by rememberUpdatedState(onMaskEnd)
     // Where a finger measuring colour is now (fractions of the view), shown before it lifts.
     var liveMarker by remember { mutableStateOf<Offset?>(null) }
     val brushPainter by rememberUpdatedState(onBrush)
@@ -764,6 +767,8 @@ fun ClipPreview(
     val positionMs = if (scrubbing) playerMs - clip.trimStartMs else playerMs
     // Masks that move are placed for this moment of the file.
     val fileMs = clip.trimStartMs + positionMs
+    // The oval being shaped as it shows now, for grabbing its ends.
+    val guideNow by rememberUpdatedState(guideMask?.at(fileMs))
     // Position on the timeline within this clip, for fades and music.
     val clipTimelineMs = if (photo) positionMs else clip.timelineOfSource(positionMs)
     val fadeGain = Fade.gain(clipTimelineMs, clip.timelineDurationMs, clip.fadeInMs, clip.fadeOutMs)
@@ -1206,9 +1211,31 @@ fun ClipPreview(
                                         return sx / g.pictureW to sy / g.pictureH
                                     }
                                     down.consume()
+                                    // An oval's ends: a finger near one drags that end (the other stays);
+                                    // two on opposite ends stretch it about its middle.
+                                    val grips = HashMap<androidx.compose.ui.input.pointer.PointerId, Int>()
+                                    fun endNear(p: Offset): Int? {
+                                        val m = guideNow?.takeIf { it.kind == MaskKind.ELLIPSE } ?: return null
+                                        if (maskEnd == null) return null
+                                        val g = geometryRef.value
+                                        val (fx, fy) = pictureOf(p)
+                                        val px = fx * g.pictureW
+                                        val py = fy * g.pictureH
+                                        val a = Math.toRadians(m.angleDegrees.toDouble())
+                                        val c = kotlin.math.cos(a).toFloat()
+                                        val s = kotlin.math.sin(a).toFloat()
+                                        val rx = m.sizeX / 2f * g.pictureH
+                                        val ry = m.sizeY / 2f * g.pictureH
+                                        val cx = m.centerX * g.pictureW
+                                        val cy = m.centerY * g.pictureH
+                                        val ends = listOf(Offset(cx + c * rx, cy + s * rx), Offset(cx - c * rx, cy - s * rx), Offset(cx - s * ry, cy + c * ry), Offset(cx + s * ry, cy - c * ry))
+                                        val reach = 36.dp.toPx() * g.pictureW / g.boxW.coerceAtLeast(1f)
+                                        return ends.indices.minByOrNull { (ends[it] - Offset(px, py)).getDistance() }?.takeIf { (ends[it] - Offset(px, py)).getDistance() < reach }
+                                    }
+                                    endNear(down.position)?.let { grips[down.id] = it }
                                     var painting = paint != null
                                     var last = down.position
-                                    if (paint != null) pictureOf(down.position).let { (x, y) -> paint(0, x, y, grab) } else move(down.position)
+                                    if (grips.isNotEmpty()) Unit else if (paint != null) pictureOf(down.position).let { (x, y) -> paint(0, x, y, grab) } else move(down.position)
                                     // One finger places the mask; two move, scale and turn it. After two,
                                     // the finger left on the picture no longer jumps it to itself.
                                     var pinched = false
@@ -1216,6 +1243,13 @@ fun ClipPreview(
                                         val event = awaitPointerEvent()
                                         val pressed = event.changes.filter { it.pressed }
                                         if (pressed.isEmpty()) break
+                                        if (grips.isNotEmpty()) {
+                                            // A second finger near the other end grabs it too.
+                                            for (ch in event.changes) if (ch.pressed && !ch.previousPressed && ch.id !in grips) endNear(ch.position)?.let { grips[ch.id] = it }
+                                            for (ch in pressed) grips[ch.id]?.let { end -> pictureOf(ch.position).let { (x, y) -> maskEnd?.invoke(end, x, y) } }
+                                            event.changes.forEach { it.consume() }
+                                            continue
+                                        }
                                         val transform = maskTransformer
                                         if (pressed.size >= 2) {
                                             pinched = true
@@ -1697,6 +1731,13 @@ private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawMaskGuide(mask:
                         if (dashed) faint else solid, topLeft = Offset(centre.x - rx, centre.y - ry), size = Size(2 * rx, 2 * ry),
                         style = Stroke((if (dashed) 1f else 1.5f) * density, pathEffect = if (dashed) dash else null),
                     )
+                }
+                // Its four ends, to grab and drag.
+                val rx = mask.sizeX / 2f * height
+                val ry = mask.sizeY / 2f * height
+                for (p in listOf(Offset(centre.x + rx, centre.y), Offset(centre.x - rx, centre.y), Offset(centre.x, centre.y + ry), Offset(centre.x, centre.y - ry))) {
+                    drawCircle(Color.Black.copy(alpha = 0.45f), radius = 7.5f * density, center = p)
+                    drawCircle(solid, radius = 5.5f * density, center = p)
                 }
             }
         }

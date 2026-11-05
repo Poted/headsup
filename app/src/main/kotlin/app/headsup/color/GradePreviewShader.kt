@@ -588,16 +588,22 @@ class GradePreviewShader {
                 float w$i = mw.${"xyzw"[i]};
                 pr += mp$i * w$i;""" }.joinToString("")}
                 if (pr.x != 0.0 || pr.y != 0.0) src = half4(half3(presence(coord, float3(src.rgb), pr)), src.a);
-                float3 c = float3(grade_lut(src.rgb));
+                // Masks add their change to what is there (as in Lightroom): where two overlap, both
+                // changes count, not only the last one's.
+                float3 base = float3(grade_lut(src.rgb));
+                float3 c = base;
                 ${List(ColourMask.MAX_PER_CLIP) { i -> """
-                if (w$i > 0.0) c = mix(c, float3(grade_lutM$i(src.rgb)), w$i);""" }.joinToString("")}
+                if (w$i > 0.0) c += (float3(grade_lutM$i(src.rgb)) - base) * w$i;""" }.joinToString("")}
+                c = clamp(c, 0.0, 1.0);
                 // Blending in: from how the clip before looked at its end, masks and all.
                 if (fromWeight > 0.0) {
-                    float3 cf = float3(grade_lutFrom(src.rgb));
+                    float3 cf0 = float3(grade_lutFrom(src.rgb));
+                    float3 cf = cf0;
                     if (fromMaskCount > 0.5) {
                         float4 fw = weightsAtF(coord, float3(src.rgb), false);
                         ${List(ColourMask.MAX_PER_CLIP) { i -> """
-                        if (fw.${"xyzw"[i]} > 0.0) cf = mix(cf, float3(grade_lutFM$i(src.rgb)), fw.${"xyzw"[i]});""" }.joinToString("")}
+                        if (fw.${"xyzw"[i]} > 0.0) cf += (float3(grade_lutFM$i(src.rgb)) - cf0) * fw.${"xyzw"[i]};""" }.joinToString("")}
+                        cf = clamp(cf, 0.0, 1.0);
                     }
                     c = mix(c, cf, fromWeight);
                 }

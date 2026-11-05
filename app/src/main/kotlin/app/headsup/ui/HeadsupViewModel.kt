@@ -2606,6 +2606,33 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
         )
     }
 
+    /**
+     * An oval's [end] (0 right, 1 left, 2 bottom, 3 top, before it is turned) dragged to ([x], [y])
+     * (fractions of the picture): the opposite end stays, so the oval grows or shrinks that way and
+     * its middle moves half as far. Two ends dragged apart at once stretch it about its middle.
+     */
+    fun dragMaskEnd(end: Int, x: Float, y: Float) {
+        val clip = _state.value.selected ?: return
+        val aspect = if (clip.meta.width > 0 && clip.meta.height > 0) clip.meta.width.toFloat() / clip.meta.height else 16f / 9f
+        updateMask { m ->
+            if (m.kind != MaskKind.ELLIPSE) return@updateMask m
+            val a = Math.toRadians(m.angleDegrees.toDouble())
+            val c = kotlin.math.cos(a).toFloat()
+            val s = kotlin.math.sin(a).toFloat()
+            // The axis of that end, in units of the picture's height.
+            val (axX, axY) = if (end < 2) c to s else -s to c
+            val vx = (x - m.centerX) * aspect
+            val vy = y - m.centerY
+            val along = vx * axX + vy * axY
+            val sign = if (end % 2 == 0) 1f else -1f
+            val half = (if (end < 2) m.sizeX else m.sizeY) / 2f
+            val size = (sign * along + half).coerceIn(0.05f, 2f)
+            val shift = sign * (size - 2f * half) / 2f
+            val moved = m.copy(centerX = m.centerX + axX * shift / aspect, centerY = m.centerY + axY * shift)
+            if (end < 2) moved.copy(sizeX = size) else moved.copy(sizeY = size)
+        }
+    }
+
     /** The base layer back to no corrections and none of the look's effects (grain, glow, halation, lens, bars). */
     fun resetBase() {
         val index = _state.value.selectedClip ?: return
