@@ -3698,44 +3698,33 @@ private fun BrushControls(state: UiState, vm: HeadsupViewModel, pictureSource: (
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 FilterChip(selected = !brush.subtract, onClick = { vm.updateBrush { it.copy(subtract = false) } }, label = { Text("Add") })
                 FilterChip(selected = brush.subtract, onClick = { vm.updateBrush { it.copy(subtract = true) } }, label = { Text("Subtract") })
-                Spacer(Modifier.weight(1f))
-                FilterChip(
-                    selected = false,
-                    enabled = pictureSource != null && !state.busy,
-                    onClick = { pictureSource?.let(vm::selectSky) },
-                    label = { Text(if (brush.subtract) "− Sky" else "+ Sky") },
-                )
             }
-            // Where the edge of what was found lies, and how wide a fix along it is.
-            var fixing by rememberSaveable { mutableStateOf(false) }
-            LazyRow(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
-                item { CircleOption("⇔", "Edge", selected = !fixing, modified = kotlin.math.abs(mask.edge) >= 0.005f) { fixing = false } }
-                item { CircleOption("●", "Fix size", selected = fixing, modified = false) { fixing = true } }
-            }
-            if (fixing) {
-                ValueHeader("Fix size", String.format(Locale.US, "%.0f %%", brush.radius * 100f))
-                RulerSlider(
-                    value = brush.radius, range = BrushSetting.SIZE.range, step = 0.005f,
-                    onChange = { v -> vm.updateBrush { it.copy(radius = v) }; vm.showBrush() },
-                    onReset = { vm.updateBrush { it.copy(radius = BrushSetting.SIZE.default) }; vm.showBrush() },
-                )
-            } else {
-                val e = mask.edge
-                ValueHeader(
-                    "Edge",
-                    when {
-                        kotlin.math.abs(e) < 0.005f -> "As found"
-                        e < 0f -> String.format(Locale.US, "Tighter %.0f %%", -e * 100f)
-                        else -> String.format(Locale.US, "Fuller %.0f %%", e * 100f)
-                    },
-                )
-                RulerSlider(value = e, range = -1f..1f, step = 0.05f, onChange = { v -> vm.updateMask { it.copy(edge = v) } }, onReset = { vm.updateMask { it.copy(edge = 0f) } })
-            }
-            Hint(
-                "Tap an object to select it (tap again for a smaller or larger part), or draw round it. " +
-                    "Where the outline is wrong, draw along that part: it is fixed only there, following the picture's edges " +
-                    "(Add takes in what is missing, Subtract takes away what is too much). Edge moves the whole outline in or out.",
+            // Where the edge of what was found lies.
+            val e = mask.edge
+            ValueHeader(
+                "Edge",
+                when {
+                    kotlin.math.abs(e) < 0.005f -> "As found"
+                    e < 0f -> String.format(Locale.US, "Tighter %.0f %%", -e * 100f)
+                    else -> String.format(Locale.US, "Fuller %.0f %%", e * 100f)
+                },
             )
+            RulerSlider(value = e, range = -1f..1f, step = 0.05f, onChange = { v -> vm.updateMask { it.copy(edge = v) } }, onReset = { vm.updateMask { it.copy(edge = 0f) } })
+            Hint("Tap an object to select it (tap again for a smaller or larger part), draw round it, or draw a line across to split the picture along it. A wrong bit of the outline: Fix. Edge moves the whole outline in or out.")
+        }
+        BrushMode.FIX -> {
+            // A brush along a wrong bit of the outline: only there, keeping to the picture's edges.
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                FilterChip(selected = !brush.subtract, onClick = { vm.updateBrush { it.copy(subtract = false) } }, label = { Text("Add") })
+                FilterChip(selected = brush.subtract, onClick = { vm.updateBrush { it.copy(subtract = true) } }, label = { Text("Subtract") })
+            }
+            ValueHeader("Size", String.format(Locale.US, "%.0f %%", brush.radius * 100f))
+            RulerSlider(
+                value = brush.radius, range = BrushSetting.SIZE.range, step = 0.005f,
+                onChange = { v -> vm.updateBrush { it.copy(radius = v) }; vm.showBrush() },
+                onReset = { vm.updateBrush { it.copy(radius = BrushSetting.SIZE.default) }; vm.showBrush() },
+            )
+            Hint("Paint along a wrong bit of the outline: it is fixed only there, and stops at the picture's edges (it takes only what looks like the colour under the brush). Add takes in what is missing, Subtract takes away what is too much.")
         }
         BrushMode.PAINT, BrushMode.ERASE, BrushMode.SOFTEN -> {
             val settings = BrushSetting.entries
@@ -3855,18 +3844,15 @@ private fun Layers(
             onMaskTools(true)
             action()
         }
-        // What a new mask is: found by AI at once (or by a tap), or drawn and picked.
-        SectionCaption("Found by AI")
+        // What a new mask is: one list, what is found (an object, the sky) and what is drawn or picked.
+        SectionCaption("New mask")
         LazyRow(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
             item { CircleOption("◎", "Object", selected = false, modified = false) { add { vm.addBrushMask(BrushMode.SELECT) } } }
-            items(app.headsup.color.SceneKeys.offered) { key ->
-                CircleOption(app.headsup.color.SceneKeys.symbol(key), app.headsup.color.SceneKeys.label(key), selected = false, modified = false) {
-                    add { pictureSource?.let { grab -> vm.addSceneMask(key, grab) } }
+            item {
+                CircleOption(app.headsup.color.SceneKeys.symbol(app.headsup.color.Scene.SKY.name), "Sky", selected = false, modified = false) {
+                    add { pictureSource?.let { grab -> vm.addSceneMask(app.headsup.color.Scene.SKY.name, grab) } }
                 }
             }
-        }
-        SectionCaption("Drawn or picked")
-        LazyRow(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
             item { CircleOption("✎", "Brush", selected = false, modified = false) { add { vm.addBrushMask(BrushMode.PAINT) } } }
             item { CircleOption("⟋", "Line", selected = false, modified = false) { add { vm.addMask(MaskKind.LINEAR) } } }
             item { CircleOption("◯", "Oval", selected = false, modified = false) { add { vm.addMask(MaskKind.ELLIPSE) } } }
@@ -3876,7 +3862,7 @@ private fun Layers(
             if (clip.meta.isPhoto) item { CircleOption("⌫", "Remove", selected = false, modified = false) { add { vm.startRemoval() } } }
         }
         Hint(
-            "Object: tap what to correct. Subject, People, Sky, Background and the rest are found at once (on video they are followed when tracked). " +
+            "Object: tap what to correct, draw round it or split the picture with a line. Sky: the sky found at once (on video followed when tracked). " +
                 "Brush: paint it. Line: a graduated filter. Oval: a face, a vignette of your own. Colour: everything of a colour you tap. Light: a range of brightness." +
                 if (clip.meta.isPhoto) " Remove: select something and it is taken out of the photo, filled from what is around it." else "",
         )

@@ -2671,7 +2671,11 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
         // While the finger paints, the stroke shows as drawn (on the picture, at once); the mask
         // itself is drawn again once, when the finger lifts.
         when (phase) {
-            0 -> _state.update { it.copy(paintPath = listOf(x, y)) }
+            0 -> {
+                // Fix keeps to the picture's edges: the picture under the finger is kept with the stroke.
+                if (s.brush.mode == BrushMode.FIX) lassoReference = brushReference(clip, placed, grab)
+                _state.update { it.copy(paintPath = listOf(x, y)) }
+            }
             1 -> _state.update { st ->
                 val p = st.paintPath
                 // Points closer than a fraction of the brush add nothing but work.
@@ -2685,7 +2689,13 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                 val points = path.chunked(2).flatMap { (px, py) -> app.headsup.core.color.BrushMask.unmove(px, py, placed, aspect).toList() }
                 // Radius in the strokes' own frame: as big as it looks on the mask now.
                 val radius = b.radius / placed.sizeX.coerceAtLeast(0.05f)
-                val stroke = app.headsup.core.color.BrushStroke(points, radius, b.flow, b.mode == BrushMode.ERASE, soften = b.mode == BrushMode.SOFTEN)
+                val stroke = if (b.mode == BrushMode.FIX) {
+                    // A fix of the outline just where it is drawn: only what looks like the colour
+                    // under the brush is taken in (Add) or away (Subtract), so it stops at the picture's edges.
+                    app.headsup.core.color.BrushStroke(points, radius, 1f, erase = b.subtract, reference = lassoReference)
+                } else {
+                    app.headsup.core.color.BrushStroke(points, radius, b.flow, b.mode == BrushMode.ERASE, soften = b.mode == BrushMode.SOFTEN)
+                }
                 val m = s.selectedMask
                 val add = {
                     _state.update { st ->
@@ -2703,8 +2713,9 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
 
     /**
      * Drawing in Select: shown as drawn, and when the finger lifts, a tap selects the object under
-     * it, a loop the object inside it (MobileSAM, given the loop's box) and a line fixes the
-     * outline where it is drawn (a brush that keeps to the picture's edges). The picture is read as the
+     * it, a loop the object inside it (MobileSAM, given the loop's box) and a line splits the
+     * picture along it ([app.headsup.core.color.BrushMask.select]). A wrong bit of the outline is
+     * fixed with Fix instead (a brush that keeps to the picture's edges). The picture is read as the
      * finger comes down, so the answer is quick when it lifts.
      */
     private fun selectStroke(
@@ -2740,15 +2751,8 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                     )
                     return
                 }
-                // A line drawn is a fix of the outline just there: a brush that follows the picture's
-                // edges (it takes only what looks like the colour under it), adding to the mask (or
-                // taking from it, with Subtract); the rest of what was found stays as it is.
                 val points = path.chunked(2).flatMap { (px, py) -> app.headsup.core.color.BrushMask.unmove(px, py, placed, aspect).toList() }
-                val b = _state.value.brush
-                val stroke = app.headsup.core.color.BrushStroke(
-                    points, radius = b.radius / placed.sizeX.coerceAtLeast(0.05f), flow = 1f,
-                    reference = lassoReference, erase = b.subtract,
-                )
+                val stroke = app.headsup.core.color.BrushStroke(points, radius = 0.01f, flow = 1f, reference = lassoReference, lasso = true, erase = _state.value.brush.subtract)
                 addStroke(index, clip, stroke)
             }
         }
@@ -3936,7 +3940,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
  */
 enum class BrushMode(val symbol: String, val label: String) {
     // View first: looking closer comes before working on the mask.
-    VIEW("✋", "View"), SELECT("◎", "Select"), PAINT("✎", "Paint"), ERASE("⌫", "Erase"), SOFTEN("≈", "Soften"), MOVE("✥", "Move"),
+    VIEW("✋", "View"), SELECT("◎", "Select"), FIX("⌁", "Fix"), PAINT("✎", "Paint"), ERASE("⌫", "Erase"), SOFTEN("≈", "Soften"), MOVE("✥", "Move"),
 }
 
 /** The brush: its radius (of the picture's height) and flow, 0..1. */
