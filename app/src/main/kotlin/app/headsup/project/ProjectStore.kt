@@ -104,7 +104,7 @@ class PresetStore(context: Context) {
         val a = JSONArray(file.readText())
         List(a.length()) { i ->
             val o = a.getJSONObject(i)
-            SavedPreset(o.optString("name", "Preset"), Json.grade(o.optJSONObject("grade")), Json.effects(o.optJSONObject("effects")), o.optStringOrNull("lut"))
+            SavedPreset(o.optString("name", "Preset"), Json.grade(o.optJSONObject("grade")), Json.effects(o.optJSONObject("effects")), o.optString("lut", "").takeIf { it.isNotEmpty() && !o.isNull("lut") })
         }
     }.getOrDefault(emptyList())
 

@@ -84,6 +84,7 @@ import app.headsup.project.ProjectData
 import app.headsup.project.ProjectInfo
 import app.headsup.project.ProjectKind
 import app.headsup.project.ProjectStore
+import app.headsup.project.PresetStore
 import app.headsup.project.SavedClip
 import app.headsup.project.SavedGroup
 import app.headsup.project.SavedReverse
@@ -508,7 +509,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
     private val gradeStore = GradeStore(app)
     private val effectPrefs = EffectPrefs(app)
     private val projectStore = ProjectStore(app)
-    private val presetStore = app.headsup.project.PresetStore(app)
+    private val presetStore = PresetStore(app)
     private val library = MediaLibrary(app)
     private var loadJob: kotlinx.coroutines.Job? = null
     private val _state = MutableStateFlow(
