@@ -415,6 +415,8 @@ data class UiState(
     val scope: ScopeResult? = null,
     /** Look copied with "Copy", waiting to be pasted. */
     val copiedLook: ClipLook? = null,
+    /** The user's saved looks ([app.headsup.project.PresetStore]). */
+    val presets: List<app.headsup.project.SavedPreset> = emptyList(),
     /** Preview files of large clips, by source. */
     val proxies: Map<Uri, ProxyState> = emptyMap(),
     /** A film (timeline) or a photo album (each photo edited and exported on its own). */
@@ -506,6 +508,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
     private val gradeStore = GradeStore(app)
     private val effectPrefs = EffectPrefs(app)
     private val projectStore = ProjectStore(app)
+    private val presetStore = app.headsup.project.PresetStore(app)
     private val library = MediaLibrary(app)
     private var loadJob: kotlinx.coroutines.Job? = null
     private val _state = MutableStateFlow(
@@ -1819,6 +1822,39 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     private fun ClipState.withLook(look: ClipLook) = copy(grade = look.grade, effects = look.effects, lutName = look.lutName, masks = look.masks)
+
+    fun loadPresets() = _state.update { it.copy(presets = presetStore.list()) }
+
+    /** The shown clip's look (corrections, LUT, the look's effects; not its masks) saved as [name]. */
+    fun savePreset(name: String) {
+        val clip = _state.value.selected ?: return
+        val n = name.trim().takeIf { it.isNotEmpty() } ?: return
+        val saved = presetStore.save(app.headsup.project.SavedPreset(n, clip.grade, clip.effects, clip.lutName))
+        _state.update { it.copy(presets = saved, messages = it.messages + "Saved the look as \"$n\".") }
+    }
+
+    fun deletePreset(name: String) = _state.update { it.copy(presets = presetStore.delete(name)) }
+
+    /**
+     * A saved look on the shown clip: its corrections and LUT, and the look's effects (grain,
+     * glow, halation, lens, bars); the clip's masks, framing and dashboard stay.
+     */
+    fun applyPreset(preset: app.headsup.project.SavedPreset) {
+        val index = _state.value.selectedClip ?: return
+        val e = preset.effects
+        updateClip(index) { c ->
+            c.copy(
+                grade = preset.grade,
+                lutName = preset.lutName,
+                effects = c.effects.copy(
+                    grain = e.grain, grainSize = e.grainSize, grainColour = e.grainColour,
+                    glow = e.glow, glowThreshold = e.glowThreshold, glowSpread = e.glowSpread, glowWarmth = e.glowWarmth,
+                    halation = e.halation, lensAberration = e.lensAberration, lensSoftness = e.lensSoftness,
+                    barsRatio = e.barsRatio, barsMotion = e.barsMotion,
+                ),
+            )
+        }
+    }
 
     fun dismissMessages() = _state.update { it.copy(messages = emptyList()) }
 

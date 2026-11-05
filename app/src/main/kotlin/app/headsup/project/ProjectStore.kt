@@ -92,6 +92,36 @@ data class ProjectData(
     val mediaUris: List<Uri> get() = activities + clips.map { it.uri } + audioFiles.map { it.uri } + audioClips.map { it.uri }
 }
 
+/** A look saved by name to use again in any project: corrections, LUT and the look's effects. */
+data class SavedPreset(val name: String, val grade: ColorGrade, val effects: EffectSettings, val lutName: String?)
+
+/** The user's presets, in the app's private storage, newest last. */
+class PresetStore(context: Context) {
+    private val file = File(context.filesDir, "presets.json")
+
+    fun list(): List<SavedPreset> = runCatching {
+        if (!file.exists()) return emptyList()
+        val a = JSONArray(file.readText())
+        List(a.length()) { i ->
+            val o = a.getJSONObject(i)
+            SavedPreset(o.optString("name", "Preset"), Json.grade(o.optJSONObject("grade")), Json.effects(o.optJSONObject("effects")), o.optStringOrNull("lut"))
+        }
+    }.getOrDefault(emptyList())
+
+    /** Saves [preset], replacing one of the same name. */
+    fun save(preset: SavedPreset): List<SavedPreset> = write(list().filter { it.name != preset.name } + preset)
+
+    fun delete(name: String): List<SavedPreset> = write(list().filter { it.name != name })
+
+    private fun write(all: List<SavedPreset>): List<SavedPreset> {
+        val a = JSONArray(all.map { JSONObject().put("name", it.name).put("grade", Json.grade(it.grade)).put("effects", Json.effects(it.effects)).putOpt("lut", it.lutName) })
+        val tmp = File(file.parentFile, "presets.json.tmp")
+        tmp.writeText(a.toString())
+        tmp.renameTo(file)
+        return all
+    }
+}
+
 /** A saved project as listed; [bytes] is the space its copied media take (shared copies counted in each). */
 data class ProjectInfo(val name: String, val modifiedMs: Long, val bytes: Long = 0L, val kind: ProjectKind = ProjectKind.VIDEO, val starred: Boolean = false)
 
@@ -478,7 +508,7 @@ internal object Json {
         )
     }
 
-    private fun effects(e: EffectSettings) = JSONObject()
+    internal fun effects(e: EffectSettings) = JSONObject()
         .put("grain", e.grain)
         .put("grainSize", e.grainSize)
         .put("glow", e.glow)
@@ -494,7 +524,7 @@ internal object Json {
         .putOpt("graph", e.graph?.name)
         .put("dashboard", e.dashboard)
 
-    private fun effects(o: JSONObject?): EffectSettings {
+    internal fun effects(o: JSONObject?): EffectSettings {
         val d = EffectSettings()
         if (o == null) return d
         return EffectSettings(

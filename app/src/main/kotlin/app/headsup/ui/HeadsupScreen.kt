@@ -3564,6 +3564,37 @@ private fun suggestedLooks(s: app.headsup.core.color.FrameStats): List<app.heads
 /** Skin-like tones count when they are more than this share of the picture. */
 private const val SKIN_SHARE = 0.08f
 
+/** The user's saved looks: one tap puts it on the clip; the clip's own look can be saved by name. */
+@Composable
+private fun PresetControls(state: UiState, vm: HeadsupViewModel) {
+    LaunchedEffect(Unit) { vm.loadPresets() }
+    var naming by remember { mutableStateOf(false) }
+    SectionCaption("My presets") {
+        Spacer(Modifier.width(8.dp))
+        SmallAction("Save this look", { naming = true })
+    }
+    if (state.presets.isEmpty()) {
+        Hint("Save the look of a clip or photo you like (its corrections, LUT, grain, glow…) and put it on others in any project with one tap. Masks and framing stay each clip's own.")
+    } else {
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            for (p in state.presets) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    PillAction("◆", p.name, { vm.applyPreset(p) })
+                    Text(
+                        "✕",
+                        Modifier.clip(CircleShape).clickable { vm.deletePreset(p.name) }.padding(horizontal = 8.dp, vertical = 4.dp),
+                        style = MaterialTheme.typography.labelMedium, color = HeadsupColors.TextMuted,
+                    )
+                }
+            }
+        }
+        Hint("Tap a preset to put its look on this ${if (state.photoProject) "photo" else "clip"}; ✕ deletes it.")
+    }
+    if (naming) {
+        RenameDialog("Preset ${state.presets.size + 1}", onDismiss = { naming = false }, title = "Preset name") { vm.savePreset(it); naming = false }
+    }
+}
+
 /**
  * Looks, in one place: Cinematic (complete looks: colour, contrast, grain, light, lens) and
  * Profiles (a starting rendering under the corrections). Analyse clip measures frames across the
@@ -3579,9 +3610,13 @@ private fun LooksPanel(state: UiState, vm: HeadsupViewModel, frameSource: (() ->
         return
     }
     var category by rememberSaveable { mutableStateOf(0) }
-    Segmented(listOf("Cinematic", "Profiles"), category, { category = it })
+    Segmented(listOf("Cinematic", "Profiles", "My presets"), category, { category = it })
     if (category == 1) {
         LookControls(state, vm)
+        return
+    }
+    if (category == 2) {
+        PresetControls(state, vm)
         return
     }
     val stats = state.lookStats?.takeIf { it.first == clip.id }?.second
