@@ -70,9 +70,11 @@ data class ColorGrade(
     val density: Float = 0f,
     /** Curves by hue and brightness: Hue vs Hue, Sat, Lum and Lum vs Sat ([HueCurves]); empty is none. */
     val hueCurves: List<List<Float>> = HueCurves.NEUTRAL,
+    /** Lens fringes taken out along hard edges (0..1); not a colour operation ([Presence.defringe]). */
+    val defringe: Float = 0f,
 ) {
     /** The corrections that look at a pixel's surroundings, drawn by the shader before the colour table. */
-    val presence: Presence get() = Presence(texture, clarity, dehaze)
+    val presence: Presence get() = Presence(texture, clarity, dehaze, defringe)
 
     val isNeutralColour: Boolean
         get() = exposure == 0f && brightness == 0f && contrast == 0f && shadows == 0f &&
@@ -98,6 +100,7 @@ data class ColorGrade(
         glow * k, halation * k, density * k,
         // The curves' changes scale; where they are stays.
         hueCurves.map { c -> c.mapIndexed { i, v -> if (i % 2 == 1) v * k else v } },
+        defringe * k,
     )
 
     /**
@@ -151,6 +154,7 @@ data class ColorGrade(
         density = (density + other.density).coerceIn(-1f, 1f),
         // Curves cannot be added; one set on top wins, curve by curve.
         hueCurves = List(4) { c -> other.hueCurves.getOrNull(c).orEmpty().ifEmpty { hueCurves.getOrNull(c).orEmpty() } },
+        defringe = (defringe + other.defringe).coerceIn(0f, 1f),
     )
 
     /**
@@ -212,6 +216,7 @@ data class ColorGrade(
             val a = after.hueCurves.getOrNull(c).orEmpty()
             if (a != before.hueCurves.getOrNull(c).orEmpty()) a else hueCurves.getOrNull(c).orEmpty()
         },
+        defringe = if (after.defringe != before.defringe) after.defringe else defringe,
     )
 
     companion object {

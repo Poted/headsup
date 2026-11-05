@@ -2734,7 +2734,7 @@ private val Adjustment.section: ColourSection
         Adjustment.WHITES, Adjustment.BLACKS, Adjustment.ROLLOFF, Adjustment.CURVE -> ColourSection.LIGHT
         Adjustment.TEMPERATURE, Adjustment.TINT, Adjustment.SATURATION, Adjustment.VIBRANCE, Adjustment.DENSITY, Adjustment.SKIN -> ColourSection.COLOUR
         Adjustment.SPLIT, Adjustment.SHADOW_HUE, Adjustment.HIGHLIGHT_HUE, Adjustment.TAME, Adjustment.VIGNETTE, Adjustment.WHEELS -> ColourSection.FILM
-        Adjustment.TEXTURE, Adjustment.CLARITY, Adjustment.DEHAZE -> ColourSection.PRESENCE
+        Adjustment.TEXTURE, Adjustment.CLARITY, Adjustment.DEHAZE, Adjustment.DEFRINGE -> ColourSection.PRESENCE
         Adjustment.CINE, Adjustment.LUT, Adjustment.MATCH, Adjustment.BLEND -> ColourSection.TOOLS
         Adjustment.MIXER, Adjustment.HUE_CURVES, Adjustment.CHANNELS, Adjustment.BW, Adjustment.CALIBRATION -> ColourSection.MIXER
         // Looks sit with the other tools that set a whole look (LUT, shot match).
@@ -2798,6 +2798,7 @@ internal enum class Adjustment(
     ),
     TAME("Tm", "Tame colours", 0f..1f, 0.02f, "%.2f", { it.tame }, { g, v -> g.copy(tame = v) }),
     TEXTURE("Tx", "Texture", -1f..1f, 0.02f, "%+.2f", { it.texture }, { g, v -> g.copy(texture = v) }),
+    DEFRINGE("Df", "Defringe", 0f..1f, 0.02f, "%.2f", { it.defringe }, { g, v -> g.copy(defringe = v) }),
     CLARITY("Cl", "Clarity", -1f..1f, 0.02f, "%+.2f", { it.clarity }, { g, v -> g.copy(clarity = v) }),
     DEHAZE("Dh", "Dehaze", -1f..1f, 0.02f, "%+.2f", { it.dehaze }, { g, v -> g.copy(dehaze = v) }),
     // Masks only (a clip's glow and halation are in Effects): light from what is bright inside the mask.

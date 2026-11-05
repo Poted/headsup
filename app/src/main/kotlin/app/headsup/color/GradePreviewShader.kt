@@ -156,6 +156,7 @@ class GradePreviewShader {
         shader.setFloatUniform("lcTexture", presence.texture)
         shader.setFloatUniform("lcClarity", presence.clarity)
         shader.setFloatUniform("lcDehaze", presence.dehaze)
+        shader.setFloatUniform("lcDefringe", presence.defringe)
         shader.setFloatUniform("n", tableSize.toFloat())
         shader.setFloatUniform("zebra", if (zebra) 1f else 0f)
         shader.setFloatUniform("time", frame)
@@ -346,6 +347,7 @@ class GradePreviewShader {
             uniform float sharpen;
             uniform float chromaNR;
             uniform float lcTexture;
+            uniform float lcDefringe;
             uniform float lcClarity;
             uniform float lcDehaze;
             ${List(ColourMask.MAX_PER_CLIP) { "uniform float3 mp$it;" }.joinToString("\n")}
@@ -592,12 +594,37 @@ class GradePreviewShader {
                 return clamp(c, 0.0, 1.0);
             }
 
+            // Lens fringes: purple or green along a hard edge (brightness changing sharply within a
+            // couple of pixels) lose their colour; elsewhere, and other hues, stay.
+            float3 defringed(float2 p, float3 c) {
+                float l = luma(c);
+                float e = 0.0;
+                e = max(e, abs(luma(float3(img(p + float2(2.0, 0.0)).rgb)) - l));
+                e = max(e, abs(luma(float3(img(p - float2(2.0, 0.0)).rgb)) - l));
+                e = max(e, abs(luma(float3(img(p + float2(0.0, 2.0)).rgb)) - l));
+                e = max(e, abs(luma(float3(img(p - float2(0.0, 2.0)).rgb)) - l));
+                float mx = max(c.r, max(c.g, c.b));
+                float mn = min(c.r, min(c.g, c.b));
+                float ch = mx - mn;
+                if (ch < 0.03 || e < 0.05) return c;
+                float h;
+                if (mx == c.r) h = (c.g - c.b) / ch / 6.0;
+                else if (mx == c.g) h = (2.0 + (c.b - c.r) / ch) / 6.0;
+                else h = (4.0 + (c.r - c.g) / ch) / 6.0;
+                h = fract(h + 1.0);
+                float purple = smooth01(0.68, 0.75, h) * (1.0 - smooth01(0.92, 0.97, h));
+                float green = smooth01(0.20, 0.26, h) * (1.0 - smooth01(0.42, 0.47, h));
+                float w = max(purple, green) * smooth01(0.05, 0.2, e) * clamp(lcDefringe, 0.0, 1.0);
+                return mix(c, float3(l), w);
+            }
+
             half4 main(float2 coord) {
                 // Android draws an effect beyond the layer it is on: outside the picture nothing is
                 // drawn (the picture's edge, repeated there, showed as streaks over blurred bars).
                 if (coord.x < 0.0 || coord.y < 0.0 || coord.x > size.x || coord.y > size.y) return half4(0.0);
                 half4 src = (lensCA > 0.0 || lensSoft > 0.0) ? lensed(coord) : img(coord);
                 if (sharpen > 0.0 || chromaNR > 0.0) src = half4(half3(detailed(coord, float3(src.rgb))), src.a);
+                if (lcDefringe > 0.0) src = half4(half3(defringed(coord, float3(src.rgb))), src.a);
                 // Masks first: inside one, its texture, clarity and dehaze add to the clip's.
                 float3 pr = float3(lcTexture, lcClarity, lcDehaze);
                 float4 mw = maskCount > 0.5 ? weightsAt(srcPx(coord), float3(src.rgb), true) : float4(0.0);

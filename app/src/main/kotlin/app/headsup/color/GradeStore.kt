@@ -83,6 +83,7 @@ class GradeStore(private val context: Context) {
         wheels = prefs.getString(prefix + "wheels", null)?.split(',')?.mapNotNull { it.toFloatOrNull() }
             ?.takeIf { it.size == app.headsup.core.color.ColourWheels.SIZE } ?: app.headsup.core.color.ColourWheels.NEUTRAL,
         texture = prefs.getFloat(prefix + "texture", 0f),
+        defringe = prefs.getFloat(prefix + "defringe", 0f),
         clarity = prefs.getFloat(prefix + "clarity", 0f),
         dehaze = prefs.getFloat(prefix + "dehaze", 0f),
         channelMix = floats(prefix + "channel_mix", app.headsup.core.color.ChannelMixer.SIZE) ?: app.headsup.core.color.ChannelMixer.NEUTRAL,
@@ -120,6 +121,7 @@ class GradeStore(private val context: Context) {
             .putString(prefix + "hueCurves", g.hueCurves.joinToString(";") { it.joinToString(",") })
             .putString(prefix + "wheels", g.wheels.joinToString(","))
             .putFloat(prefix + "texture", g.texture)
+            .putFloat(prefix + "defringe", g.defringe)
             .putFloat(prefix + "clarity", g.clarity)
             .putFloat(prefix + "dehaze", g.dehaze)
             .putString(prefix + "channel_mix", g.channelMix.joinToString(","))

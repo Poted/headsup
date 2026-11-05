@@ -188,6 +188,7 @@ class GradeEffect(
                 program.setFloatsUniform("uHlgFix", if (hdrInput == HdrInput.RELABELLED_BT709) HdrRoute.HLG_FIX else HdrRoute.IDENTITY)
                 program.setFloatUniform("uSdrWhite", HdrRoute.SDR_WHITE)
                 program.setFloatsUniform("uPresence", floatArrayOf(presence.texture, presence.clarity, presence.dehaze))
+                program.setFloatUniform("uDefringe", presence.defringe)
                 program.setFloatUniform("uHasWarp", if (warp != null) 1f else 0f)
                 val m = warp ?: doubleArrayOf(1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0)
                 // Given column by column, as GLSL reads a mat3.
@@ -321,6 +322,7 @@ class GradeEffect(
             uniform mat3 uHlgFix;
             uniform float uSdrWhite;
             uniform vec3 uPresence;
+            uniform float uDefringe;
             uniform float uHasWarp;
             uniform mat3 uWarp;
             ${List(ColourMask.MAX_PER_CLIP) { "uniform vec3 uMp$it;" }.joinToString("\n")}
@@ -512,9 +514,35 @@ class GradeEffect(
                 return g;
             }
 
+            // As the preview's defringed(): purple or green along a hard edge loses its colour.
+            vec3 defringed(vec2 uv, vec3 c) {
+                float l = luma(c);
+                vec2 dx = vec2(2.0 / uSize.x, 0.0);
+                vec2 dy = vec2(0.0, 2.0 / uSize.y);
+                float e = 0.0;
+                e = max(e, abs(luma(source(uv + dx)) - l));
+                e = max(e, abs(luma(source(uv - dx)) - l));
+                e = max(e, abs(luma(source(uv + dy)) - l));
+                e = max(e, abs(luma(source(uv - dy)) - l));
+                float mx = max(c.r, max(c.g, c.b));
+                float mn = min(c.r, min(c.g, c.b));
+                float ch = mx - mn;
+                if (ch < 0.03 || e < 0.05) return c;
+                float h;
+                if (mx == c.r) h = (c.g - c.b) / ch / 6.0;
+                else if (mx == c.g) h = (2.0 + (c.b - c.r) / ch) / 6.0;
+                else h = (4.0 + (c.r - c.g) / ch) / 6.0;
+                h = fract(h + 1.0);
+                float purple = smoothstep(0.68, 0.75, h) * (1.0 - smoothstep(0.92, 0.97, h));
+                float green = smoothstep(0.20, 0.26, h) * (1.0 - smoothstep(0.42, 0.47, h));
+                float w = max(purple, green) * smoothstep(0.05, 0.2, e) * clamp(uDefringe, 0.0, 1.0);
+                return mix(c, vec3(l), w);
+            }
+
             void main() {
                 vec4 src = texture2D(uTexSampler, vTexSamplingCoord);
                 vec3 srcRgb = source(vTexSamplingCoord);
+                if (uDefringe > 0.0) srcRgb = defringed(vTexSamplingCoord, srcRgb);
                 vec2 px = vec2(vTexSamplingCoord.x, 1.0 - vTexSamplingCoord.y) * uSize;
                 // Masks first: inside one, its texture, clarity and dehaze add to the clip's.
                 vec3 pr = uPresence;
