@@ -591,6 +591,20 @@ fun ClipPreview(
             tableVersion++
         }
     }
+    // The mask worked on shows red over the picture while it changes (and a moment after), or all
+    // the time with Overlay on.
+    var maskFlash by remember { mutableStateOf(false) }
+    LaunchedEffect(guideMask) {
+        if (guideMask == null) { maskFlash = false; return@LaunchedEffect }
+        maskFlash = true
+        delay(900)
+        maskFlash = false
+    }
+    val overlayLayer = if (guideMask != null && (maskOverlay || maskFlash) && guideIndex in masks.indices) {
+        var l = guideIndex
+        while (l > 0 && masks[l].join != app.headsup.core.color.MaskJoin.NEW) l--
+        l
+    } else -1
     var textureView by remember { mutableStateOf<TextureView?>(null) }
     LaunchedEffect(active) { textureView = textureViews[active] }
     val sample by rememberUpdatedState(onSample)
@@ -1104,6 +1118,7 @@ fun ClipPreview(
                         tableVersion
                         val frame = if (effects.grain > 0f) (positionMs / 33).toFloat() else 0f
                         val fromWeight = if (fromCube != null) ColourTransition.fromWeight(positionMs, transitionMs) else 0f
+                        previewShader?.overlayLayer = overlayLayer
                         renderEffect = previewShader?.effect(effects, zebra, frame, size.width, size.height, masks.map { it.at(fileMs) }, fromWeight, if (raw) clip.rawDevelop else null, presence, reframe.warp)
                         // Reframing moves the graded picture, as in the export (colour first, then framing).
                         val t = reframeTransform(reframe, geometry)
@@ -1161,6 +1176,7 @@ fun ClipPreview(
                                     val frame = if (effects.grain > 0f) (positionMs / 33).toFloat() else 0f
                                     val from = if (fresh) fromCube else neighbourFrom[clip.id]
                                     val fromWeight = if (from != null) ColourTransition.fromWeight(positionMs, transitionMs) else 0f
+                                    playerShaders?.get(i)?.overlayLayer = if (fresh) overlayLayer else -1
                                     renderEffect = if (pictureClip[i] == null || pictureClip[i] == clip.id) {
                                         playerShaders?.get(i)?.effect(
                                             effects, zebra, frame, this.size.width, this.size.height, if (fresh) masks.map { it.at(fileMs) } else emptyList(), fromWeight,
@@ -1393,9 +1409,10 @@ fun ClipPreview(
                             // correction, so it shows where it applies.
                             reframe.warp?.let { warp -> drawIntoCanvas { it.nativeCanvas.concat(perspectiveMatrix(warp, geometry.pictureW, geometry.pictureH)) } }
                             if (m.kind == MaskKind.BRUSH) {
-                                if (maskOverlay) {
+                                // With the overlay on, the picture itself shows the mask red (the shader).
+                                if (previewShader == null && maskOverlay) {
                                     brushAtlas?.let { atlas -> drawIntoCanvas { drawBrushOverlay(it.nativeCanvas, atlas, guideIndex, m, geometry.pictureW, geometry.pictureH) } }
-                                } else {
+                                } else if (!maskOverlay) {
                                     brushOutline?.let { outline -> drawIntoCanvas { drawBrushOutline(it.nativeCanvas, outline, m, geometry.pictureW, geometry.pictureH) } }
                                 }
                                 if (paintPath.size >= 2) {
@@ -1508,19 +1525,22 @@ fun ClipPreview(
                         val sy = boxH / 2f + t.translation.y + (qx * kotlin.math.sin(a) + qy * kotlin.math.cos(a)).toFloat()
                         if (sx < 0f || sy < 0f || sx > boxW || sy > boxH) return@forEachIndexed
                         val on = i == pickedMask
-                        val pin = with(density) { 26.dp.toPx() }
+                        val pin = with(density) { 22.dp.toPx() }
+                        // A plain dot (filled: the mask worked on), no number over the picture.
                         Box(
                             Modifier
                                 .align(Alignment.TopStart)
                                 .offset { androidx.compose.ui.unit.IntOffset((sx - pin / 2f).toInt(), (sy - pin / 2f).toInt()) }
-                                .size(26.dp)
+                                .size(22.dp)
                                 .clip(CircleShape)
-                                .background(if (on) HeadsupColors.Accent else Color.Black.copy(alpha = 0.55f))
-                                .border(2.dp, Color.White, CircleShape)
                                 .clickable { onPickMask(i) },
                             contentAlignment = Alignment.Center,
                         ) {
-                            Text("${i + 1}", style = MaterialTheme.typography.labelSmall, color = if (on) HeadsupColors.OnAccent else Color.White)
+                            Box(
+                                Modifier.size(12.dp).clip(CircleShape)
+                                    .background(if (on) HeadsupColors.Accent else Color.Black.copy(alpha = 0.45f))
+                                    .border(1.5.dp, Color.White, CircleShape),
+                            )
                         }
                     }
                 }
@@ -1717,7 +1737,12 @@ fun ClipPreview(
             }
             // A ramped clip: a little speed graph.
             if (clip.speedCurve.isNotEmpty() && !photoMode) SpeedRampIcon(Modifier.padding(end = 8.dp), tint = HeadsupColors.TextMuted)
-            ToggleDot("H", histogramOn) { histogramOn = !histogramOn }
+            // Scopes, a tap each: histogram, waveform, RGB parade, off.
+            ToggleDot(if (!histogramOn) "H" else listOf("H", "W", "P")[scopeKind], histogramOn) {
+                if (!histogramOn) { histogramOn = true; scopeKind = 0 }
+                else if (scopeKind < 2) scopeKind++
+                else { histogramOn = false; scopeKind = 0 }
+            }
             Spacer(Modifier.width(4.dp))
             if (Build.VERSION.SDK_INT >= 33) ToggleDot("Z", zebra) { zebra = !zebra }
             // Sideways: fold the transport and the timeline away for a bigger picture (upright the

@@ -411,9 +411,9 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
                         // A painted mask moves with two fingers only in Move; otherwise they zoom the view.
                         onTransformMask = if (shaping && !fullscreen && !editingRange && !pickingColour && (!editingBrush || state.brush.mode == BrushMode.MOVE)) vm::transformMask else null,
                         onMaskEnd = if (shaping && !fullscreen && !editingBrush && !editingRange && !pickingColour) vm::dragMaskEnd else null,
-                        // The masks' pins while the clip's layers are worked on (not while one is shaped).
+                        // The masks' pins while masks are worked on (not on Base, nor while one is shaped).
                         onPickMask = if (tool == Tool.COLOUR && !fullscreen && !shaping && !pickingColour && selected.colorGrade &&
-                            (state.target == GradeTarget.CLIP || state.target == GradeTarget.MASK) && selected.masks.isNotEmpty()
+                            state.target == GradeTarget.MASK && selected.masks.size > 1
                         ) { i -> vm.selectMask(i); vm.setTarget(GradeTarget.MASK) } else null,
                         pickedMask = state.selectedMask.takeIf { state.target == GradeTarget.MASK },
                         zoomForPainting = shaping && editingBrush && state.brush.mode != BrushMode.MOVE && !fullscreen,
@@ -2953,6 +2953,7 @@ private fun ColourPage(
             RulerSlider(mask.feather, 0f..1f, 0.02f, { v -> vm.updateMask { it.copy(feather = v) } }, onReset = { vm.updateMask { it.copy(feather = 0f) } })
             Hint("Makes the mask's edge a gradual band instead of a sharp cut, for edges no selection follows exactly. Off: the edge follows the picture's.")
         } else if (editingShape != null) {
+            SmallAction(if (state.maskOverlay) "Overlay ✓" else "Overlay", { vm.toggleMaskOverlay() })
             LazyRow(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
                 items(shapes) { m -> CircleOption(m.symbol, m.label, selected = m == editingShape, modified = false) { shape = m } }
             }
@@ -3112,6 +3113,7 @@ private fun ColourPage(
         onReset = { vm.updateGrade { adjustment.set(it, adjustment.neutral) } },
         onHold = { held -> vm.setCompareGrade(if (held) adjustment.set(state.grade, adjustment.neutral) else null) },
     )
+    if (adjustment == Adjustment.DEFRINGE) Hint("Takes out the purple and green fringes a lens leaves along hard, contrasty edges (branches against the sky, window frames). Only those edges change; zoom in on one to see it.")
 }
 
 /** Colour grading: a wheel per range (drag to the hue, outwards for more), its brightness, and the balance. */

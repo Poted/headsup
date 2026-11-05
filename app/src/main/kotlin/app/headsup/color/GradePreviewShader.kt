@@ -61,6 +61,12 @@ class GradePreviewShader {
         shader.setFloatUniform("brushFromSlot", bitmap.width.toFloat() / slots, bitmap.height.toFloat())
     }
 
+    /**
+     * The layer ([ColourMask.join]: a mask and those joined to it) shown red over the picture, or -1
+     * for none. Read when the uniforms are next set.
+     */
+    var overlayLayer: Int = -1
+
     fun setTables(tables: GradeTables) {
         val base = tables.base ?: identity
         val baseShader = tableShader(base)
@@ -162,6 +168,7 @@ class GradePreviewShader {
         shader.setFloatUniform("lcDefringe", presence.defringe)
         shader.setFloatUniform("n", tableSize.toFloat())
         shader.setFloatUniform("zebra", if (zebra) 1f else 0f)
+        shader.setFloatUniform("overlay", overlayLayer.takeIf { it in 0 until masks.size.coerceAtMost(ColourMask.MAX_PER_CLIP) }?.toFloat() ?: -1f)
         shader.setFloatUniform("time", frame)
         shader.setFloatUniform("shortSide", minOf(width, height))
         shader.setFloatUniform("size", width, height)
@@ -335,6 +342,7 @@ class GradePreviewShader {
             ${List(ColourMask.MAX_PER_CLIP) { "uniform float4 m${it}a;\nuniform float4 m${it}b;" }.joinToString("\n")}
             uniform float fromWeight;
             uniform float zebra;
+            uniform float overlay;
             uniform float time;
             uniform float shortSide;
             uniform float grain;
@@ -710,6 +718,11 @@ class GradePreviewShader {
                 // Zebra: stripes where the picture is at or near clipping.
                 if (zebra > 0.5 && luma(c) > 0.95 && mod(coord.x + coord.y, 12.0) < 6.0) {
                     c = float3(0.15);
+                }
+                // The mask worked on, shown red over the picture (as in Lightroom): where and how much.
+                if (overlay > -0.5) {
+                    float ow = overlay < 0.5 ? mw.x : (overlay < 1.5 ? mw.y : (overlay < 2.5 ? mw.z : mw.w));
+                    c = mix(c, float3(0.95, 0.12, 0.12), 0.6 * clamp(ow, 0.0, 1.0));
                 }
                 return half4(half3(c), src.a);
             }
