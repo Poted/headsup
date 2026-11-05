@@ -52,6 +52,19 @@ data class BrushStroke(
      * the [reference] picture's edges close to it): the mask's side of it filled, the other cleared.
      */
     val reshape: Boolean = false,
+    /**
+     * Neither paints nor finds: the mask's edge pushed along the stroke's path, as if grabbed with
+     * the finger ([radius] the reach of the grip): the part of the outline under it follows the
+     * finger, smoothly into the rest, which stays.
+     */
+    val push: Boolean = false,
+    /**
+     * No points: the mask's whole edge laid onto the [reference] picture's edges close to it (each
+     * pixel along it put with the side it looks more like), after it was corrected by hand.
+     */
+    val fit: Boolean = false,
+    /** The brush's own softness for this stroke (0 hard … 1 soft); null: the mask's. */
+    val softness: Float? = null,
 )
 
 /**
@@ -87,7 +100,7 @@ object BrushMask {
         val out = start?.takeIf { it.size == width * height }?.copyOf() ?: FloatArray(width * height)
         if (strokes.isEmpty() || width <= 0 || height <= 0) return out
         val layer = FloatArray(width * height)
-        val hard = (1f - softness).coerceIn(0f, 0.99f)
+        val maskHard = (1f - softness).coerceIn(0f, 0.99f)
         val gridAspect = width.toFloat() / height
         for (stroke in strokes) {
             val r = (stroke.radius * height).coerceAtLeast(0.5f)
@@ -97,6 +110,15 @@ object BrushMask {
                 reshape(out, width, height, pts, stroke.reference?.let { references[it] }, gridAspect)
                 continue
             }
+            if (stroke.push) {
+                push(out, width, height, pts, r)
+                continue
+            }
+            if (stroke.fit) {
+                stroke.reference?.let { references[it] }?.let { fitEdges(out, width, height, it, gridAspect) }
+                continue
+            }
+            val hard = stroke.softness?.let { (1f - it).coerceIn(0f, 0.99f) } ?: maskHard
             // The part of the grid the stroke can reach (an outline: with some background around it).
             // A line splits the whole picture, and a found object may be anywhere in it.
             val pad = if (stroke.segment || (stroke.lasso && !isLoop(pts))) {
@@ -586,6 +608,101 @@ object BrushMask {
             val keep = smoothstep(gapAt[i] + 1f, gapAt[i] + 3f, abs(d))
             val o = y * width + x
             out[o] = target + (out[o] - target) * keep
+        }
+    }
+
+    /**
+     * [out]'s edge pushed along [path] (grid pixels) with a grip of radius [r]: in small steps,
+     * each moving what is around the finger by the step, most at the finger, nothing at the grip's
+     * rim, so the edge bends smoothly into the rest.
+     */
+    private fun push(out: FloatArray, width: Int, height: Int, path: List<Pair<Float, Float>>, r: Float) {
+        if (path.size < 2 || r < 1f) return
+        val step = max(0.5f, r * 0.15f)
+        var cx = path[0].first
+        var cy = path[0].second
+        for (k in 1 until path.size) {
+            val (tx, ty) = path[k]
+            val n = ceil(hypot(tx - cx, ty - cy) / step).toInt()
+            if (n == 0) continue
+            val sx = (tx - cx) / n
+            val sy = (ty - cy) / n
+            repeat(n) {
+                warp(out, width, height, cx, cy, sx, sy, r)
+                cx += sx
+                cy += sy
+            }
+        }
+    }
+
+    /** One small push: what is around ([cx], [cy]) moved by ([dx], [dy]), fading to nothing at [r]. */
+    private fun warp(out: FloatArray, width: Int, height: Int, cx: Float, cy: Float, dx: Float, dy: Float, r: Float) {
+        val x0 = max(0, floor(cx - r - 2).toInt())
+        val x1 = min(width - 1, ceil(cx + r + 2).toInt())
+        val y0 = max(0, floor(cy - r - 2).toInt())
+        val y1 = min(height - 1, ceil(cy + r + 2).toInt())
+        if (x0 > x1 || y0 > y1) return
+        val before = out.copyOf()
+        fun at(x: Float, y: Float): Float {
+            val fx = (x - 0.5f).coerceIn(0f, width - 1f)
+            val fy = (y - 0.5f).coerceIn(0f, height - 1f)
+            val ix = fx.toInt().coerceAtMost(width - 2).coerceAtLeast(0)
+            val iy = fy.toInt().coerceAtMost(height - 2).coerceAtLeast(0)
+            val ax = (fx - ix).coerceIn(0f, 1f)
+            val ay = (fy - iy).coerceIn(0f, 1f)
+            val i = iy * width + ix
+            val right = if (width > 1) 1 else 0
+            val down = if (height > 1) width else 0
+            val top = before[i] + (before[i + right] - before[i]) * ax
+            val bottom = before[i + down] + (before[i + down + right] - before[i + down]) * ax
+            return top + (bottom - top) * ay
+        }
+        for (y in y0..y1) for (x in x0..x1) {
+            val px = x + 0.5f
+            val py = y + 0.5f
+            val d = hypot(px - cx, py - cy) / r
+            if (d >= 1f) continue
+            val f = (1f - d * d).let { it * it }
+            out[y * width + x] = at(px - dx * f, py - dy * f)
+        }
+    }
+
+    /**
+     * [out]'s edge laid onto the picture's edges near it: along the edge (a few pixels each way),
+     * each pixel is given to the side whose colours nearby it looks more like, the inside's and the
+     * outside's measured a little way in and out. Where both sides look alike nothing changes.
+     */
+    private fun fitEdges(out: FloatArray, width: Int, height: Int, ref: BrushReference, gridAspect: Float) {
+        if (out.none { it >= 0.5f } || out.all { it >= 0.5f }) return
+        val colours = sampleArea(ref, width, height, gridAspect, 0, width - 1, 0, height - 1)
+        val sd = MaskEdge.signedDistance(out, width, height)
+        val band = max(4f, 0.012f * max(width, height))
+        val n = width * height
+        val inRing = FloatArray(n) { if (sd[it] in band..3 * band) 1f else 0f }
+        val outRing = FloatArray(n) { if (-sd[it] in band..3 * band) 1f else 0f }
+        val win = (4 * band).toInt()
+        val inN = MaskRefine.box(inRing, width, height, win)
+        val outN = MaskRefine.box(outRing, width, height, win)
+        val inMean = Array(3) { c -> MaskRefine.box(FloatArray(n) { colours[it * 3 + c] * inRing[it] }, width, height, win) }
+        val outMean = Array(3) { c -> MaskRefine.box(FloatArray(n) { colours[it * 3 + c] * outRing[it] }, width, height, win) }
+        for (i in 0 until n) {
+            val d = abs(sd[i])
+            if (d >= 1.5f * band || inN[i] < 1e-4f || outN[i] < 1e-4f) continue
+            var dIn = 0f
+            var dOut = 0f
+            var contrast = 0f
+            for (c in 0..2) {
+                val a = inMean[c][i] / inN[i]
+                val b = outMean[c][i] / outN[i]
+                val col = colours[i * 3 + c]
+                dIn += (col - a) * (col - a)
+                dOut += (col - b) * (col - b)
+                contrast += (a - b) * (a - b)
+            }
+            val like = sqrt(dOut) / (sqrt(dIn) + sqrt(dOut) + 1e-5f)
+            val target = smoothstep(0.4f, 0.6f, like)
+            val sure = smoothstep(0.03f, 0.1f, sqrt(contrast)) * (1f - smoothstep(band, 1.5f * band, d))
+            out[i] += (target - out[i]) * sure
         }
     }
 

@@ -880,6 +880,22 @@ fun ClipPreview(
     val viewZoomed = inspect || zoomForPainting
     var viewZoom by remember(clip.id) { mutableStateOf(1f) }
     var viewPan by remember(clip.id) { mutableStateOf(Offset.Zero) }
+    /**
+     * The view zoomed by [factor] around [at] (where the fingers are, in a [w]×[h] area) and moved
+     * by [pan]: the picture under the fingers stays under them. It never leaves the frame.
+     */
+    fun zoomViewAt(at: Offset, factor: Float, pan: Offset, w: Float, h: Float) {
+        val z0 = viewZoom
+        val z1 = (z0 * factor).coerceIn(1f, 8f)
+        val k = z1 / z0
+        // The view is scaled about its middle: keep the point under [at] where it is.
+        val fromMiddle = at - Offset(w / 2f, h / 2f)
+        val moved = fromMiddle * (1f - k) + viewPan * k + pan
+        viewZoom = z1
+        val maxX = w * (z1 - 1f) / 2f
+        val maxY = h * (z1 - 1f) / 2f
+        viewPan = if (z1 <= 1.001f) Offset.Zero else Offset(moved.x.coerceIn(-maxX, maxX), moved.y.coerceIn(-maxY, maxY))
+    }
     Column(Modifier.padding(horizontal = if (edgeToEdge) 0.dp else 16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Box(
             Modifier.fillMaxWidth().clip(RoundedCornerShape(if (edgeToEdge) 0.dp else 20.dp)).background(Color.Black).then(
@@ -913,15 +929,16 @@ fun ClipPreview(
                 if (inspect) {
                     Modifier
                         .pointerInput(Unit) {
-                            detectTransformGestures { _, pan, zoomChange, _ ->
-                                viewZoom = (viewZoom * zoomChange).coerceIn(1f, 8f)
-                                // The zoomed picture never leaves the frame.
-                                val maxX = size.width * (viewZoom - 1f) / 2f
-                                val maxY = size.height * (viewZoom - 1f) / 2f
-                                viewPan = if (viewZoom <= 1.001f) Offset.Zero else (viewPan + pan).let { Offset(it.x.coerceIn(-maxX, maxX), it.y.coerceIn(-maxY, maxY)) }
+                            detectTransformGestures { centroid, pan, zoomChange, _ ->
+                                zoomViewAt(centroid, zoomChange, pan, size.width.toFloat(), size.height.toFloat())
                             }
                         }
-                        .pointerInput(Unit) { detectTapGestures(onDoubleTap = { viewZoom = if (viewZoom > 1.01f) 1f else 3f; viewPan = Offset.Zero }) }
+                        .pointerInput(Unit) {
+                            detectTapGestures(onDoubleTap = { at ->
+                                if (viewZoom > 1.01f) { viewZoom = 1f; viewPan = Offset.Zero }
+                                else zoomViewAt(at, 3f, Offset.Zero, size.width.toFloat(), size.height.toFloat())
+                            })
+                        }
                 } else if (zoomForPainting) {
                     // Painting: two fingers zoom and pan the view, taken before the painting sees
                     // them (one finger still paints; in View it moves the view). A double tap
@@ -935,8 +952,13 @@ fun ClipPreview(
                             if (downMs - lastTapMs < 300L && (first.position - lastTapAt).getDistance() < 48.dp.toPx()) {
                                 first.consume()
                                 lastTapMs = 0L
-                                viewZoom = 1f
-                                viewPan = Offset.Zero
+                                // Zoomed: back to the whole picture; not: 3× closer where tapped.
+                                if (viewZoom > 1.01f) {
+                                    viewZoom = 1f
+                                    viewPan = Offset.Zero
+                                } else {
+                                    zoomViewAt(first.position, 3f, Offset.Zero, size.width.toFloat(), size.height.toFloat())
+                                }
                                 brushPainter?.invoke(4, 0f, 0f, grab)
                                 do {
                                     val e = awaitPointerEvent(androidx.compose.ui.input.pointer.PointerEventPass.Initial)
@@ -959,11 +981,7 @@ fun ClipPreview(
                                 }
                                 if (event.changes.count { it.pressed } >= 2) {
                                     multi = true
-                                    viewZoom = (viewZoom * event.calculateZoom()).coerceIn(1f, 8f)
-                                    val maxX = size.width * (viewZoom - 1f) / 2f
-                                    val maxY = size.height * (viewZoom - 1f) / 2f
-                                    viewPan = if (viewZoom <= 1.001f) Offset.Zero
-                                        else (viewPan + event.calculatePan()).let { Offset(it.x.coerceIn(-maxX, maxX), it.y.coerceIn(-maxY, maxY)) }
+                                    zoomViewAt(event.calculateCentroid(useCurrent = true), event.calculateZoom(), event.calculatePan(), size.width.toFloat(), size.height.toFloat())
                                     event.changes.forEach { it.consume() }
                                 }
                             }

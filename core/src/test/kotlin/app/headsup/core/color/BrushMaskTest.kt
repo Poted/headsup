@@ -191,4 +191,44 @@ class BrushMaskTest {
         kotlin.test.assertTrue(at(map, w, 65, 65) > 0.9f, "bite ${at(map, w, 65, 65)}")
         kotlin.test.assertTrue(at(map, w, 50, 65) < 0.1f)
     }
+
+    @Test
+    fun `pushing the edge moves it under the finger and leaves the rest`() {
+        val w = 100
+        val h = 80
+        // Mask on the right of x = 60.
+        val start = FloatArray(w * h) { i -> if (i % w >= 60) 1f else 0f }
+        // Grabbed on the edge at (60, 40) and pushed 8 px right (taken out of the mask there).
+        val push = BrushStroke(listOf(60f / w, 40f / h, 68f / w, 40f / h), radius = 15f / h, push = true)
+        val map = BrushMask.rasterize(listOf(push), w, h, start = start)
+        kotlin.test.assertTrue(at(map, w, 64, 40) < 0.2f, "pushed ${at(map, w, 64, 40)}")
+        // Far along the edge it stays where it was.
+        kotlin.test.assertTrue(at(map, w, 61, 5) > 0.8f)
+        kotlin.test.assertTrue(at(map, w, 58, 5) < 0.2f)
+    }
+
+    @Test
+    fun `fitting lays the edge on the picture's edge`() {
+        val w = 100
+        val h = 80
+        // The picture: dark on the left of x = 55, light on the right. The mask's edge is at 60 (5 px off).
+        val rgb = FloatArray(w * h * 3) { i -> if ((i / 3) % w >= 55) 0.9f else 0.1f }
+        val ref = BrushReference(w, h, rgb, BrushMask.BASE)
+        val start = FloatArray(w * h) { i -> if (i % w >= 60) 1f else 0f }
+        val map = BrushMask.rasterize(listOf(BrushStroke(emptyList<Float>().plus(listOf(0f, 0f)), radius = 0.01f, reference = "p", fit = true)), w, h, references = mapOf("p" to ref), start = start)
+        kotlin.test.assertTrue(at(map, w, 57, 40) > 0.8f, "light side ${at(map, w, 57, 40)}")
+        kotlin.test.assertTrue(at(map, w, 52, 40) < 0.2f)
+        kotlin.test.assertTrue(at(map, w, 80, 40) > 0.9f)
+    }
+
+    @Test
+    fun `a stroke keeps its own softness`() {
+        val w = 60
+        val h = 60
+        val soft = BrushMask.rasterize(listOf(BrushStroke(listOf(0.5f, 0.5f), radius = 0.2f, softness = 1f)), w, h, softness = 0f)
+        val hard = BrushMask.rasterize(listOf(BrushStroke(listOf(0.5f, 0.5f), radius = 0.2f, softness = 0f)), w, h, softness = 1f)
+        // Halfway out: soft fades, hard is still full.
+        kotlin.test.assertTrue(at(hard, w, 36, 30) > 0.95f)
+        kotlin.test.assertTrue(at(soft, w, 36, 30) < 0.9f)
+    }
 }

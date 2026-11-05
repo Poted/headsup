@@ -3710,13 +3710,27 @@ private fun BrushControls(state: UiState, vm: HeadsupViewModel, pictureSource: (
                 },
             )
             RulerSlider(value = e, range = -1f..1f, step = 0.05f, onChange = { v -> vm.updateMask { it.copy(edge = v) } }, onReset = { vm.updateMask { it.copy(edge = 0f) } })
-            Hint("Tap an object to select it (tap again for a smaller or larger part), draw round it, or draw a line across to split the picture along it. Where the outline is wrong, draw it again along the true edge: it moves there, just in that part (Fix does only that). Edge moves the whole outline in or out.")
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                PillAction("⌁", "Fit to edges", { pictureSource?.let(vm::fitMaskToEdges) }, enabled = pictureSource != null && mask.strokes.isNotEmpty())
+            }
+            Hint("Tap an object to select it (tap again for a smaller or larger part), draw round it, or draw a line across to split the picture along it. A wrong bit of the outline: Push moves it. Fit to edges lays the outline onto the picture's edges close to it. Edge moves the whole outline in or out.")
         }
-        BrushMode.FIX -> {
-            Hint("Draw the outline where it should be: from where it is still right, along the true edge, to where it is right again (e.g. down the rock where the mask runs onto the trees). The outline between moves onto your line and settles on the picture's edge; the rest stays.")
+        BrushMode.PUSH -> {
+            // Grab the outline and move it; then lay it onto the picture's edges if wanted.
+            ValueHeader("Grip", String.format(Locale.US, "%.0f %%", brush.radius * 100f))
+            RulerSlider(
+                value = brush.radius, range = BrushSetting.SIZE.range, step = 0.005f,
+                onChange = { v -> vm.updateBrush { it.copy(radius = v) }; vm.showBrush() },
+                onReset = { vm.updateBrush { it.copy(radius = BrushSetting.SIZE.default) }; vm.showBrush() },
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                PillAction("⌁", "Fit to edges", { pictureSource?.let(vm::fitMaskToEdges) }, enabled = pictureSource != null && mask.strokes.isNotEmpty())
+            }
+            Hint("Put a finger on the outline where it is wrong and move it where it should be: that part follows, the rest stays. Grip: how much of the outline moves with the finger. Fit to edges then lays the whole outline onto the picture's edges close to it.")
         }
         BrushMode.PAINT, BrushMode.ERASE, BrushMode.SOFTEN -> {
-            val settings = BrushSetting.entries
+            // Strength only for Soften (how soft); painting is always at full strength.
+            val settings = if (brush.mode == BrushMode.SOFTEN) listOf(BrushSetting.SIZE, BrushSetting.FLOW) else listOf(BrushSetting.SIZE, BrushSetting.SOFTNESS)
             var chosen by rememberSaveable { mutableStateOf(BrushSetting.SIZE) }
             val setting = chosen.takeIf { it in settings } ?: settings.first()
             LazyRow(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
@@ -3726,14 +3740,14 @@ private fun BrushControls(state: UiState, vm: HeadsupViewModel, pictureSource: (
             }
             val value = when (setting) {
                 BrushSetting.SIZE -> brush.radius
-                BrushSetting.SOFTNESS -> mask.softness
+                BrushSetting.SOFTNESS -> brush.softness
                 BrushSetting.FLOW -> brush.flow
             }
             fun set(v: Float) {
                 when (setting) {
                     BrushSetting.SIZE -> vm.updateBrush { it.copy(radius = v) }
-                    // The whole painting's edge, at once.
-                    BrushSetting.SOFTNESS -> vm.updateMask { it.copy(softness = v) }
+                    // The brush's edge, for the strokes from now on (those painted stay as they are).
+                    BrushSetting.SOFTNESS -> vm.updateBrush { it.copy(softness = v) }
                     BrushSetting.FLOW -> vm.updateBrush { it.copy(flow = v) }
                 }
                 // The brush shows on the picture itself, at the picture's scale, for a moment.
@@ -3744,7 +3758,7 @@ private fun BrushControls(state: UiState, vm: HeadsupViewModel, pictureSource: (
             Hint(
                 if (brush.mode == BrushMode.SOFTEN) "Soften makes the mask's edge gradual where you paint along it; elsewhere the cut stays sharp. Size: how wide the soft band is; Strength: how soft. Two fingers zoom the picture; View moves around it."
                 else if (brush.mode == BrushMode.ERASE) "Erase takes the mask's corrections away where you paint. Two fingers zoom the picture; View moves around it."
-                else "Paint where the mask's corrections go. Strength: how much of the corrections one stroke gives (low: a light touch that builds up as you go over it again; full: all at once). Softness: how gradual the painting's edge is. Two fingers zoom the picture; View moves around it.",
+                else "Paint where the mask's corrections go. Softness: how gradual the brush's edge is, for the strokes you paint from now on (low for precise edges); what is painted stays as it is. Two fingers zoom the picture; View moves around it.",
             )
         }
         BrushMode.MOVE -> Hint("One finger moves the mask; two turn and scale it.")

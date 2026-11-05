@@ -534,6 +534,7 @@ internal object Json {
                     JSONObject().put("p", JSONArray(it.points.map { v -> v.toDouble() })).put("r", it.radius)
                         .put("f", it.flow).put("e", it.erase).put("ref", it.reference).put("tol", it.tolerance)
                         .put("lasso", it.lasso).put("seg", it.segment).put("sky", it.sky).put("scene", it.scene).put("soft", it.soften).put("reshape", it.reshape)
+                        .put("push", it.push).put("fit", it.fit).apply { it.softness?.let { v -> put("bs", v.toDouble()) } }
                 },
             ),
         )
@@ -584,6 +585,9 @@ internal object Json {
                     scene = it.optStringOrNull("scene") ?: if (it.optBoolean("sky", false)) "SKY" else null,
                     soften = it.optBoolean("soft", false),
                     reshape = it.optBoolean("reshape", false),
+                    push = it.optBoolean("push", false),
+                    fit = it.optBoolean("fit", false),
+                    softness = if (it.has("bs")) it.optDouble("bs", 0.5).toFloat() else null,
                 )
             },
             sequence = o.optStringOrNull("sequence"),

@@ -2664,8 +2664,12 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
             _state.update { it.copy(paintPath = emptyList(), lassoPath = emptyList()) }
             return
         }
-        if (s.brush.mode == BrushMode.SELECT || s.brush.mode == BrushMode.FIX) {
+        if (s.brush.mode == BrushMode.SELECT) {
             selectStroke(phase, x, y, grab, clip, index, mask, placed, aspect)
+            return
+        }
+        if (s.brush.mode == BrushMode.PUSH) {
+            pushStroke(phase, x, y, clip, index, placed, aspect)
             return
         }
         // While the finger paints, the stroke shows as drawn (on the picture, at once); the mask
@@ -2685,7 +2689,12 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                 val points = path.chunked(2).flatMap { (px, py) -> app.headsup.core.color.BrushMask.unmove(px, py, placed, aspect).toList() }
                 // Radius in the strokes' own frame: as big as it looks on the mask now.
                 val radius = b.radius / placed.sizeX.coerceAtLeast(0.05f)
-                val stroke = app.headsup.core.color.BrushStroke(points, radius, b.flow, b.mode == BrushMode.ERASE, soften = b.mode == BrushMode.SOFTEN)
+                // Full strength (a weaker stroke only made the mask uneven); the brush's own softness,
+                // so changing it never changes what was painted before. Soften keeps its strength.
+                val stroke = app.headsup.core.color.BrushStroke(
+                    points, radius, if (b.mode == BrushMode.SOFTEN) b.flow else 1f, b.mode == BrushMode.ERASE,
+                    soften = b.mode == BrushMode.SOFTEN, softness = if (b.mode == BrushMode.SOFTEN) null else b.softness,
+                )
                 val m = s.selectedMask
                 val add = {
                     _state.update { st ->
@@ -2730,14 +2739,6 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                 val xs = path.filterIndexed { i, _ -> i % 2 == 0 }
                 val ys = path.filterIndexed { i, _ -> i % 2 == 1 }
                 val tap = path.size < 6 || maxOf(xs.max() - xs.min(), ys.max() - ys.min()) < 0.02f
-                val fixing = _state.value.brush.mode == BrushMode.FIX
-                if (fixing) {
-                    // Fix: whatever is drawn is where the outline should be.
-                    if (tap) return
-                    val points = path.chunked(2).flatMap { (px, py) -> app.headsup.core.color.BrushMask.unmove(px, py, placed, aspect).toList() }
-                    addStroke(index, clip, app.headsup.core.color.BrushStroke(points, radius = 0.01f, reference = lassoReference, reshape = true))
-                    return
-                }
                 if (tap) {
                     afterTap { selectObject(path[0], path[1], null, grab, clip, index, placed) }
                     return
@@ -2751,35 +2752,50 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                     return
                 }
                 val points = path.chunked(2).flatMap { (px, py) -> app.headsup.core.color.BrushMask.unmove(px, py, placed, aspect).toList() }
-                // A line drawn along the outline (near it all the way): the outline moved onto it,
-                // just there. A line across the picture splits it.
-                val along = runCatching { alongOutline(clip, mask, aspect, points) }.getOrDefault(0f) > 0.8f
-                val stroke = if (along) {
-                    app.headsup.core.color.BrushStroke(points, radius = 0.01f, reference = lassoReference, reshape = true)
-                } else {
-                    app.headsup.core.color.BrushStroke(points, radius = 0.01f, flow = 1f, reference = lassoReference, lasso = true, erase = _state.value.brush.subtract)
-                }
+                val stroke = app.headsup.core.color.BrushStroke(points, radius = 0.01f, flow = 1f, reference = lassoReference, lasso = true, erase = _state.value.brush.subtract)
                 addStroke(index, clip, stroke)
             }
         }
     }
 
+    /** The push stroke being made while the finger moves (replaced at each move, so it shows at once). */
+    private var pushing: app.headsup.core.color.BrushStroke? = null
+
     /**
-     * How much of a line ([points], the strokes' own frame) runs along [mask]'s outline as it is
-     * now ([app.headsup.core.color.BrushMask.alongEdge]), the mask drawn small for it.
+     * Push: the finger grabs the outline and moves it; the stroke grows with the finger and the
+     * mask shows it as it goes.
      */
-    private fun alongOutline(clip: ClipState, mask: ColourMask, aspect: Float, points: List<Float>): Float {
-        val context: Application = getApplication()
-        val (w, h) = if (aspect >= 1f) 192 to (192 / aspect).roundToInt().coerceAtLeast(1) else (192 * aspect).roundToInt().coerceAtLeast(1) to 192
-        val refs = mask.strokes.mapNotNull { it.reference }.distinct()
-            .mapNotNull { id -> app.headsup.color.BrushReferences.get(context, id)?.let { id to it } }.toMap()
-        val tracked = mask.sequence?.let { app.headsup.color.MaskSequences.get(context, it) }?.at(playheadFileMs, w, h)
-        val coverage = if (tracked != null) {
-            app.headsup.core.color.BrushMask.rasterize(mask.strokes.drop(mask.sequenceStrokes), w, h, mask.softness, refs, start = tracked)
-        } else {
-            app.headsup.core.color.BrushMask.rasterize(mask.strokes, w, h, mask.softness, refs)
+    private fun pushStroke(phase: Int, x: Float, y: Float, clip: ClipState, index: Int, placed: ColourMask, aspect: Float) {
+        val (px, py) = app.headsup.core.color.BrushMask.unmove(x, y, placed, aspect)
+        when (phase) {
+            0 -> {
+                val radius = _state.value.brush.radius / placed.sizeX.coerceAtLeast(0.05f)
+                pushing = app.headsup.core.color.BrushStroke(listOf(px, py), radius, push = true)
+            }
+            1 -> {
+                val p = pushing ?: return
+                val last = p.points
+                if (last.size >= 2 && kotlin.math.hypot(px - last[last.size - 2], py - last.last()) < 0.003f) return
+                val grown = p.copy(points = last + px + py)
+                // The first move adds the stroke; later ones replace it.
+                addStroke(index, clip, grown, replacing = p.takeIf { last.size > 2 })
+                pushing = grown
+            }
+            else -> pushing = null
         }
-        return app.headsup.core.color.BrushMask.alongEdge(coverage, w, h, points)
+    }
+
+    /**
+     * The selected brush mask's whole edge laid onto the picture's edges near it
+     * ([app.headsup.core.color.BrushStroke.fit]), e.g. after it was pushed or painted by hand.
+     */
+    fun fitMaskToEdges(grab: (Int) -> android.graphics.Bitmap?) {
+        val s = _state.value
+        val index = s.selectedClip ?: return
+        val clip = s.selected ?: return
+        val mask = clip.masks.getOrNull(s.selectedMask)?.takeIf { it.kind == MaskKind.BRUSH && it.strokes.isNotEmpty() } ?: return
+        val reference = brushReference(clip, mask.at(playheadFileMs), grab) ?: return
+        addStroke(index, clip, app.headsup.core.color.BrushStroke(listOf(0.5f, 0.5f), radius = 0.01f, reference = reference, fit = true))
     }
 
     private fun addStroke(index: Int, clip: ClipState, stroke: app.headsup.core.color.BrushStroke, replacing: app.headsup.core.color.BrushStroke? = null) {
@@ -3964,7 +3980,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
  */
 enum class BrushMode(val symbol: String, val label: String) {
     // View first: looking closer comes before working on the mask.
-    VIEW("✋", "View"), SELECT("◎", "Select"), FIX("⌁", "Fix"), PAINT("✎", "Paint"), ERASE("⌫", "Erase"), SOFTEN("≈", "Soften"), MOVE("✥", "Move"),
+    VIEW("✋", "View"), SELECT("◎", "Select"), PUSH("↝", "Push"), PAINT("✎", "Paint"), ERASE("⌫", "Erase"), SOFTEN("≈", "Soften"), MOVE("✥", "Move"),
 }
 
 /** The brush: its radius (of the picture's height) and flow, 0..1. */
@@ -3972,6 +3988,8 @@ data class BrushSettings(
     val mode: BrushMode = BrushMode.PAINT,
     val radius: Float = 0.06f,
     val flow: Float = 1f,
+    /** How soft the brush's edge is for the strokes painted from now on (each keeps its own). */
+    val softness: Float = 0.5f,
     /** Select takes what it finds away from the mask instead of adding it. */
     val subtract: Boolean = false,
 )
