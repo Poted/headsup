@@ -2978,7 +2978,9 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
         cleanup(index, clip) { w, h ->
             val refs = mask.strokes.mapNotNull { it.reference }.distinct()
                 .mapNotNull { id -> app.headsup.color.BrushReferences.get(context, id)?.let { id to it } }.toMap()
-            val drawn = app.headsup.core.color.BrushMask.rasterize(mask.strokes, w, h, mask.softness, refs, edge = mask.edge)
+            val unmoved = app.headsup.core.color.BrushMask.rasterize(mask.strokes, w, h, mask.softness, refs)
+            // Edge moves the whole outline, as shown.
+            val drawn = if (mask.edge != 0f) app.headsup.core.color.MaskEdge.shape(unmoved, w, h, mask.edge) else unmoved
             val placed = app.headsup.core.color.BrushMask.placed(drawn, w, h, MaskKey.of(mask.at(0L), 0L))
             if (mask.inverted) FloatArray(placed.size) { 1f - placed[it] } else placed
         }
@@ -3180,10 +3182,11 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                     val refs = mask.strokes.mapNotNull { it.reference }.distinct()
                         .mapNotNull { id -> app.headsup.color.BrushReferences.get(context, id)?.let { id to it } }.toMap()
                     val start = if (old != null) {
-                        app.headsup.core.color.BrushMask.rasterize(mask.strokes.drop(mask.sequenceStrokes), w, h, mask.softness, refs, start = old.at(t0, w, h), edge = mask.edge)
+                        app.headsup.core.color.BrushMask.rasterize(mask.strokes.drop(mask.sequenceStrokes), w, h, mask.softness, refs, start = old.at(t0, w, h))
                     } else {
                         // Where the mask shows now: moved, turned or scaled after it was made, it starts from there.
-                        val drawn = app.headsup.core.color.BrushMask.rasterize(mask.strokes, w, h, mask.softness, refs, edge = mask.edge)
+                        // Without the Edge move: that is made when the mask is shown, on each frame.
+                        val drawn = app.headsup.core.color.BrushMask.rasterize(mask.strokes, w, h, mask.softness, refs)
                         app.headsup.core.color.BrushMask.placed(drawn, w, h, MaskKey.of(mask.at(t0), 0L))
                     }
                     if (!sky && app.headsup.core.color.MaskFollow.area(start) == 0f) return@withContext null

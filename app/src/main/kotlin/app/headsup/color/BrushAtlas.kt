@@ -42,9 +42,9 @@ object BrushAtlas {
         val base = if (cached != null && cached.width == w && cached.height == h && cached.softness == mask.softness && cached.edge == mask.edge && cached.strokes == earlier) {
             cached.map
         } else {
-            BrushMask.rasterize(earlier, w, h, mask.softness, refs, edge = mask.edge).also { synchronized(drawn) { drawn[slot] = Drawn(earlier, mask.softness, mask.edge, w, h, it) } }
+            BrushMask.rasterize(earlier, w, h, mask.softness, refs, edge = 0f).also { synchronized(drawn) { drawn[slot] = Drawn(earlier, mask.softness, mask.edge, w, h, it) } }
         }
-        return BrushMask.rasterize(listOf(mask.strokes.last()), w, h, mask.softness, refs, start = base, edge = mask.edge)
+        return BrushMask.rasterize(listOf(mask.strokes.last()), w, h, mask.softness, refs, start = base, edge = 0f)
             .also { synchronized(drawn) { finished[slot] = Drawn(mask.strokes, mask.softness, mask.edge, w, h, it) } }
     }
 
@@ -55,15 +55,16 @@ object BrushAtlas {
     private fun tracked(context: Context, mask: ColourMask, w: Int, h: Int, timeMs: Long): FloatArray? {
         val seq = mask.sequence?.let { MaskSequences.get(context, it) } ?: return null
         val maps = seq.at(timeMs, w, h)
-        val base = if (mask.edge == 0f) maps else app.headsup.core.color.MaskEdge.shape(maps, w, h, mask.edge)
+        // The edge is moved once, over the whole mask, when the atlas is built.
+        val base = maps
         val extra = mask.strokes.drop(mask.sequenceStrokes)
         if (extra.isEmpty()) return base
-        if (extra.any { it.erase || it.soften }) return BrushMask.rasterize(extra, w, h, mask.softness, references(context, extra), start = base, edge = mask.edge)
+        if (extra.any { it.erase || it.soften }) return BrushMask.rasterize(extra, w, h, mask.softness, references(context, extra), start = base, edge = 0f)
         // Strokes that only add are drawn once and laid over each frame's map (the same sum as
         // drawing them on it: 1 − (1 − map)(1 − strokes)), so a frame costs no drawing.
         val key = Drawn(extra, mask.softness, mask.edge, w, h, FloatArray(0))
         val added = synchronized(drawn) { extras[mask.sequence]?.takeIf { it.strokes == key.strokes && it.softness == key.softness && it.edge == key.edge && it.width == w && it.height == h }?.map }
-            ?: BrushMask.rasterize(extra, w, h, mask.softness, references(context, extra), edge = mask.edge).also { map ->
+            ?: BrushMask.rasterize(extra, w, h, mask.softness, references(context, extra), edge = 0f).also { map ->
                 synchronized(drawn) { extras[mask.sequence] = Drawn(extra, mask.softness, mask.edge, w, h, map) }
             }
         return FloatArray(base.size) { i -> base[i] + (1f - base[i]) * added[i] }
@@ -98,16 +99,21 @@ object BrushAtlas {
         val stride = w * ColourMask.MAX_PER_CLIP
         masks.take(ColourMask.MAX_PER_CLIP).forEachIndexed { slot, m ->
             if (m.kind != MaskKind.BRUSH || (m.strokes.isEmpty() && m.sequence == null)) return@forEachIndexed
-            val drawnMap = tracked(context, m, w, h, timeMs) ?: if (m.strokes.isEmpty()) return@forEachIndexed else coverage(context, slot, m, w, h)
+            val unmoved = tracked(context, m, w, h, timeMs) ?: if (m.strokes.isEmpty()) return@forEachIndexed else coverage(context, slot, m, w, h)
+            // Edge moves the whole mask's outline, what was found and what was painted alike.
+            val drawnMap = if (m.edge != 0f) app.headsup.core.color.MaskEdge.shape(unmoved, w, h, m.edge) else unmoved
             // A feathered edge: the coverage blurred (the cached drawings stay sharp).
             val map = if (m.feather > 0f) app.headsup.core.color.MaskFeather.apply(drawnMap, w, h, m.feather * ColourMask.FEATHER_REACH * h) else drawnMap
-            // Green: where Soften made the edge gradual (kept soft by the shaders).
+            // Green: where Soften made the edge gradual (kept soft by the shaders). Blue: the
+            // coverage before feathering, whose edge the shaders lay onto the picture's at full
+            // size and carry over to the feathered one, so a feathered edge keeps the picture's shape.
             val soft = softened(m, w, h)
             for (y in 0 until h) {
                 for (x in 0 until w) {
                     val v = (map[y * w + x] * 255f + 0.5f).toInt().coerceIn(0, 255)
                     val g = soft?.let { (it[y * w + x] * 255f + 0.5f).toInt().coerceIn(0, 255) } ?: 0
-                    pixels[y * stride + slot * w + x] = (0xFF shl 24) or (v shl 16) or (g shl 8) or v
+                    val raw = (drawnMap[y * w + x] * 255f + 0.5f).toInt().coerceIn(0, 255)
+                    pixels[y * stride + slot * w + x] = (0xFF shl 24) or (v shl 16) or (g shl 8) or raw
                 }
             }
         }

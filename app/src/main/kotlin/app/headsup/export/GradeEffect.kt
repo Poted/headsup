@@ -223,7 +223,7 @@ class GradeEffect(
         fun maskCode(sfx: String, m: String, brush: String, slot: String, count: String): String = """
             // As the preview shader's brushWeight$sfx(): back to where the strokes were painted, then the atlas slot.
             // The atlas at px: coverage (r) and where the edge was made gradual (g).
-            vec2 brushRG$sfx(vec4 a, vec4 b, vec2 px, float slot) {
+            vec3 brushRG$sfx(vec4 a, vec4 b, vec2 px, float slot) {
                 float aspect = uSize.x / uSize.y;
                 vec2 d = vec2((px.x / uSize.x - a.y) * aspect, px.y / uSize.y - a.z);
                 float c = cos(a.w);
@@ -234,9 +234,9 @@ class GradeEffect(
                     vec2 t = vec2(
                         (slot * $slot.x + clamp(q.x * $slot.x, 0.5, $slot.x - 0.5)) / ($slot.x * ${slot}s),
                         clamp(q.y * $slot.y, 0.5, $slot.y - 0.5) / $slot.y);
-                    return texture2D($brush, t).rg;
+                    return texture2D($brush, t).rgb;
                 }
-                return vec2(0.0);
+                return vec3(0.0);
             }
 
             float brushWeight$sfx(vec4 a, vec4 b, vec2 px, float slot) {
@@ -244,10 +244,17 @@ class GradeEffect(
                 return b.w > 0.5 ? 1.0 - w : w;
             }
 
+            // As the preview's brushRaw$sfx(): the coverage before feathering (blue).
+            float brushRaw$sfx(vec4 a, vec4 b, vec2 px, float slot) {
+                float w = brushRG$sfx(a, b, px, slot).z;
+                return b.w > 0.5 ? 1.0 - w : w;
+            }
+
             // As the preview shader's brushFine$sfx(): the small mask's soft edge laid onto the full picture.
             float brushFine$sfx(vec4 a, vec4 b, vec2 px, float slot, vec3 c) {
                 float w = brushWeight$sfx(a, b, px, slot);
-                if (w <= 0.02 || w >= 0.98 || b.z > 0.001) return w;
+                float raw = brushRaw$sfx(a, b, px, slot);
+                if (raw <= 0.02 || raw >= 0.98) return w;
                 float soft = brushRG$sfx(a, b, px, slot).y;
                 if (soft >= 0.98) return w;
                 vec2 st = uSize / $slot * max(b.xy, vec2(0.001));
@@ -258,11 +265,11 @@ class GradeEffect(
                         vec2 q = px + vec2(float(i), float(j)) * st;
                         vec3 d = source(vec2(q.x / uSize.x, 1.0 - q.y / uSize.y)) - c;
                         float k = exp(-dot(d, d) * 60.0) * ((i == 0 && j == 0) ? 1.0 : 0.6);
-                        acc += brushWeight$sfx(a, b, q, slot) * k;
+                        acc += brushRaw$sfx(a, b, q, slot) * k;
                         sum += k;
                     }
                 }
-                return mix(acc / max(sum, 0.0001), w, soft);
+                return clamp(w + (acc / max(sum, 0.0001) - raw) * (1.0 - soft), 0.0, 1.0);
             }
 
             float shapeAt$sfx(vec4 a, vec4 b, vec2 px, float slot, vec3 c, bool fine) {

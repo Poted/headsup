@@ -27,4 +27,17 @@ class MaskEdgeTest {
         assertEquals(1f, MaskEdge.shape(disc, w, h, -1f)[50 * w + 100], 1e-3f)
         assertEquals(0f, MaskEdge.shape(disc, w, h, 1f)[50 * w + 5], 1e-3f)
     }
+
+    @Test
+    fun `edge keeps a square's corners`() {
+        // A square 60 px wide: moved out by the same distance on all sides, its corner still square.
+        val sq = FloatArray(w * h) { i -> if ((i % w) in 70 until 130 && (i / w) in 20 until 80) 1f else 0f }
+        val out = MaskEdge.shape(sq, w, h, 0.4f)
+        val shift = (0.4f * MaskEdge.REACH * w).toInt()
+        // Just outside the old corner, diagonally, within the shift: now in.
+        assertTrue(out[(20 - shift / 2) * w + (70 - shift / 2)] > 0.5f)
+        // The side moved out by about the shift.
+        assertTrue(out[50 * w + (70 - shift + 1)] > 0.5f)
+        assertTrue(out[50 * w + (70 - shift - 2)] < 0.5f)
+    }
 }

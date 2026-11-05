@@ -232,7 +232,7 @@ class GradePreviewShader {
             // A brush mask (BrushMask): the pixel taken back to where its strokes were painted
             // (the mask at BrushMask.BASE: centred, upright, scale 1), then read from its atlas slot.
             // The atlas at coord: the mask's coverage (r) and where its edge was made gradual (g).
-            float2 brushRG$sfx(float4 a, float4 b, float2 coord, float slot) {
+            float3 brushRG$sfx(float4 a, float4 b, float2 coord, float slot) {
                 float aspect = size.x / size.y;
                 float2 d = float2((coord.x / size.x - a.y) * aspect, coord.y / size.y - a.z);
                 float c = cos(a.w);
@@ -243,9 +243,9 @@ class GradePreviewShader {
                     float2 p = float2(
                         slot * $slot.x + clamp(q.x * $slot.x, 0.5, $slot.x - 0.5),
                         clamp(q.y * $slot.y, 0.5, $slot.y - 0.5));
-                    return float2($brush.eval(p).rg);
+                    return float3($brush.eval(p).rgb);
                 }
-                return float2(0.0);
+                return float3(0.0);
             }
 
             float brushWeight$sfx(float4 a, float4 b, float2 coord, float slot) {
@@ -253,13 +253,22 @@ class GradePreviewShader {
                 return b.w > 0.5 ? 1.0 - w : w;
             }
 
+            // The coverage before feathering (blue), inverted as the mask is.
+            float brushRaw$sfx(float4 a, float4 b, float2 coord, float slot) {
+                float w = brushRG$sfx(a, b, coord, slot).z;
+                return b.w > 0.5 ? 1.0 - w : w;
+            }
+
             // A painted (or found) mask is kept small (640 px); its edge is laid onto the full picture
             // here: where it is soft, each neighbouring mask value counts as much as the picture there
             // looks like this pixel (a joint bilateral upsample), so the edge follows the picture's.
+            // A feathered mask: the unfeathered edge is fitted so, and what fitting changed is carried
+            // over to the feathered coverage, so its soft band follows the picture's shape.
             float brushFine$sfx(float4 a, float4 b, float2 p, float slot, float3 c) {
                 float w = brushWeight$sfx(a, b, p, slot);
-                // Feathered (b.z) or softened here (g): its soft band is wanted, not laid onto the picture's edges.
-                if (w <= 0.02 || w >= 0.98 || b.z > 0.001) return w;
+                float raw = brushRaw$sfx(a, b, p, slot);
+                if (raw <= 0.02 || raw >= 0.98) return w;
+                // Softened here (g): its soft band is wanted, not laid onto the picture's edges.
                 float soft = brushRG$sfx(a, b, p, slot).y;
                 if (soft >= 0.98) return w;
                 float2 st = size / $slot * max(b.xy, float2(0.001));
@@ -270,11 +279,11 @@ class GradePreviewShader {
                         float2 q = p + float2(float(i), float(j)) * st;
                         float3 d = float3(img(q).rgb) - c;
                         float k = exp(-dot(d, d) * 60.0) * ((i == 0 && j == 0) ? 1.0 : 0.6);
-                        acc += brushWeight$sfx(a, b, q, slot) * k;
+                        acc += brushRaw$sfx(a, b, q, slot) * k;
                         sum += k;
                     }
                 }
-                return mix(acc / max(sum, 0.0001), w, soft);
+                return clamp(w + (acc / max(sum, 0.0001) - raw) * (1.0 - soft), 0.0, 1.0);
             }
 
             float shapeAt$sfx(float4 a, float4 b, float2 p, float slot, float3 c, bool fine) {
