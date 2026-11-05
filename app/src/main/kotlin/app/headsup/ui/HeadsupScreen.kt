@@ -2957,7 +2957,7 @@ private fun ColourPage(
                 onChange = { v -> vm.updateMask { editingShape.set(it, v) } },
                 onReset = { vm.updateMask { editingShape.set(it, editingShape.get(ColourMask(it.kind))) } },
             )
-            Hint("Drag the mask on the picture to move it; two fingers resize and turn it.")
+            Hint(if (mask.kind == MaskKind.LINEAR) "Drag the middle line to move the gradient, a dashed line to set where it starts or ends (the other stays); two fingers turn it." else "Drag the middle to move it, an end to stretch it (the other end stays); two fingers resize and turn it. Feather: how gradual it is, up to a gradient from the middle far out.")
         }
         // A line or an oval can be narrowed to a colour or a brightness; a range mask is only that.
         // A selected or painted mask is not (it follows what was selected; to narrow it, combine it
@@ -3801,7 +3801,8 @@ private enum class MaskShape(
     POSITION("↕", "Position", setOf(MaskKind.LINEAR), 0f..1f, 0.01f, "%.0f %%", { it.centerY }, { m, v -> m.copy(centerY = v) }),
     WIDTH("↔", "Width", setOf(MaskKind.ELLIPSE), 0.05f..2f, 0.01f, "%.0f %%", { it.sizeX }, { m, v -> m.copy(sizeX = v) }),
     HEIGHT("↕", "Height", setOf(MaskKind.ELLIPSE), 0.05f..2f, 0.01f, "%.0f %%", { it.sizeY }, { m, v -> m.copy(sizeY = v) }),
-    SOFTNESS("◐", "Softness", setOf(MaskKind.LINEAR, MaskKind.ELLIPSE), 0.02f..1f, 0.02f, "%.0f %%", { it.softness }, { m, v -> m.copy(softness = v) }),
+    // How wide the gradient is: up to twice the picture's height, a gradient across all of it.
+    SOFTNESS("◐", "Feather", setOf(MaskKind.LINEAR, MaskKind.ELLIPSE), 0.02f..2f, 0.02f, "%.0f %%", { it.softness }, { m, v -> m.copy(softness = v) }),
     // A colour or light range covers the picture wherever it matches: turning it changes nothing.
     ANGLE("∠", "Angle", setOf(MaskKind.LINEAR, MaskKind.ELLIPSE, MaskKind.BRUSH), -90f..90f, 0.5f, "%+.1f°", { it.angleDegrees }, { m, v -> m.copy(angleDegrees = v) }),
     ;
@@ -3878,8 +3879,8 @@ private fun Layers(
                 }
             }
             item { CircleOption("✎", "Brush", selected = false, modified = false) { add { vm.addBrushMask(BrushMode.PAINT) } } }
-            item { CircleOption("⟋", "Line", selected = false, modified = false) { add { vm.addMask(MaskKind.LINEAR) } } }
-            item { CircleOption("◯", "Oval", selected = false, modified = false) { add { vm.addMask(MaskKind.ELLIPSE) } } }
+            item { CircleOption("⟋", "Linear", selected = false, modified = false) { add { vm.addMask(MaskKind.LINEAR) } } }
+            item { CircleOption("◯", "Radial", selected = false, modified = false) { add { vm.addMask(MaskKind.ELLIPSE) } } }
             item { CircleOption("◈", "Colour", selected = false, modified = false) { add { vm.addRangeMask(colour = true) } } }
             item { CircleOption("☼", "Light", selected = false, modified = false) { add { vm.addRangeMask(colour = false) } } }
             // Photos: select something as a mask is selected, and it is removed (filled from around it).
@@ -3887,7 +3888,7 @@ private fun Layers(
         }
         Hint(
             "Object: tap what to correct, draw round it or split the picture with a line. Sky: the sky found at once (on video followed when tracked). " +
-                "Brush: paint it. Line: a graduated filter. Oval: a face, a vignette of your own. Colour: everything of a colour you tap. Light: a range of brightness." +
+                "Brush: paint it. Linear: a gradient across the picture (drag its dashed lines to set where it starts and ends). Radial: a gradient round a point (a face, a light, a vignette of your own). Colour: everything of a colour you tap. Light: a range of brightness." +
                 if (clip.meta.isPhoto) " Remove: select something and it is taken out of the photo, filled from what is around it." else "",
         )
         return true
@@ -4019,8 +4020,8 @@ private fun maskNeedsTracking(clip: ClipState, mask: ColourMask): Boolean =
 
 /** What a mask is, as its list names it. */
 private fun maskName(m: ColourMask): String = when (m.kind) {
-    MaskKind.LINEAR -> "Line"
-    MaskKind.ELLIPSE -> "Oval"
+    MaskKind.LINEAR -> "Linear"
+    MaskKind.ELLIPSE -> "Radial"
     MaskKind.RANGE -> when {
         m.colour != null && m.luma == null -> "Colour"
         m.luma != null && m.colour == null -> "Light"
@@ -4042,8 +4043,8 @@ private fun maskSymbol(m: ColourMask): String = m.strokes.filter { !it.erase && 
     val scene = adds.firstOrNull()?.scene
     if (m.kind == MaskKind.BRUSH && scene != null && adds.all { it.scene == scene }) app.headsup.color.SceneKeys.symbol(scene) else null
 } ?: when (maskName(m)) {
-    "Line" -> "⟋"
-    "Oval" -> "◯"
+    "Linear" -> "⟋"
+    "Radial" -> "◯"
     "Sky" -> "☁"
     "Object" -> "◎"
     "Colour", "Range" -> "◈"

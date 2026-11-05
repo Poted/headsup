@@ -1220,7 +1220,7 @@ fun ClipPreview(
                                     // two on opposite ends stretch it about its middle.
                                     val grips = HashMap<androidx.compose.ui.input.pointer.PointerId, Int>()
                                     fun endNear(p: Offset): Int? {
-                                        val m = guideNow?.takeIf { it.kind == MaskKind.ELLIPSE } ?: return null
+                                        val m = guideNow?.takeIf { it.kind == MaskKind.ELLIPSE || it.kind == MaskKind.LINEAR } ?: return null
                                         if (maskEnd == null) return null
                                         val g = geometryRef.value
                                         val (fx, fy) = pictureOf(p)
@@ -1229,6 +1229,21 @@ fun ClipPreview(
                                         val a = Math.toRadians(m.angleDegrees.toDouble())
                                         val c = kotlin.math.cos(a).toFloat()
                                         val s = kotlin.math.sin(a).toFloat()
+                                        if (m.kind == MaskKind.LINEAR) {
+                                            // The dashed lines: how far the finger is from each, across them.
+                                            val d = (-(px - m.centerX * g.pictureW) * s + (py - m.centerY * g.pictureH) * c)
+                                            val half = m.softness / 2f * g.pictureH
+                                            val reachL = 28.dp.toPx() * g.pictureW / g.boxW.coerceAtLeast(1f)
+                                            val toFar = kotlin.math.abs(d - half)
+                                            val toNear = kotlin.math.abs(d + half)
+                                            // The middle line is left to move the whole gradient.
+                                            if (kotlin.math.abs(d) < reachL && kotlin.math.abs(d) <= minOf(toFar, toNear)) return null
+                                            return when {
+                                                toFar < reachL && toFar <= toNear -> 0
+                                                toNear < reachL -> 1
+                                                else -> null
+                                            }
+                                        }
                                         val rx = m.sizeX / 2f * g.pictureH
                                         val ry = m.sizeY / 2f * g.pictureH
                                         val cx = m.centerX * g.pictureW
@@ -1743,6 +1758,11 @@ private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawMaskGuide(mask:
                         if (dashed) faint else solid, Offset(centre.x - reach, y), Offset(centre.x + reach, y),
                         strokeWidth = (if (dashed) 1f else 1.5f) * density, pathEffect = if (dashed) dash else null,
                     )
+                    // Where the dashed lines (the gradient's start and end) are grabbed.
+                    if (dashed) {
+                        drawCircle(Color.Black.copy(alpha = 0.45f), radius = 7.5f * density, center = Offset(centre.x, y))
+                        drawCircle(solid, radius = 5.5f * density, center = Offset(centre.x, y))
+                    }
                 }
             }
             MaskKind.BRUSH, MaskKind.RANGE -> Unit

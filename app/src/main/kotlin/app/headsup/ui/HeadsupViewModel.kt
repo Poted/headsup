@@ -2644,7 +2644,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
             angleDegrees = if (m.kind == MaskKind.ELLIPSE) ((turned + 90f) % 180f + 180f) % 180f - 90f else turned.coerceIn(-90f, 90f),
             sizeX = if (m.kind != MaskKind.LINEAR) (m.sizeX * zoom).coerceIn(0.05f, if (m.kind == MaskKind.BRUSH) 5f else 2f) else m.sizeX,
             sizeY = if (m.kind != MaskKind.LINEAR) (m.sizeY * zoom).coerceIn(0.05f, if (m.kind == MaskKind.BRUSH) 5f else 2f) else m.sizeY,
-            softness = if (m.kind == MaskKind.LINEAR) (m.softness * zoom).coerceIn(0.02f, 1f) else m.softness,
+            softness = if (m.kind == MaskKind.LINEAR) (m.softness * zoom).coerceIn(0.02f, 2f) else m.softness,
         )
     }
 
@@ -2657,6 +2657,19 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
         val clip = _state.value.selected ?: return
         val aspect = if (clip.meta.width > 0 && clip.meta.height > 0) clip.meta.width.toFloat() / clip.meta.height else 16f / 9f
         updateMask { m ->
+            if (m.kind == MaskKind.LINEAR) {
+                // A linear gradient's dashed lines (0 the far side, 1 the near): the one dragged
+                // follows the finger, the other stays; the middle line goes half way.
+                val a = Math.toRadians(m.angleDegrees.toDouble())
+                val nx = -kotlin.math.sin(a).toFloat()
+                val ny = kotlin.math.cos(a).toFloat()
+                val along = (x - m.centerX) * aspect * nx + (y - m.centerY) * ny
+                val sign = if (end % 2 == 0) 1f else -1f
+                val half = m.softness / 2f
+                val width = (sign * along + half).coerceIn(0.02f, 2f)
+                val shift = sign * (width - 2f * half) / 2f
+                return@updateMask m.copy(softness = width, centerX = m.centerX + nx * shift / aspect, centerY = m.centerY + ny * shift)
+            }
             if (m.kind != MaskKind.ELLIPSE) return@updateMask m
             val a = Math.toRadians(m.angleDegrees.toDouble())
             val c = kotlin.math.cos(a).toFloat()
