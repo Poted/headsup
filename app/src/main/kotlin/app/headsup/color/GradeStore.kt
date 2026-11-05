@@ -29,7 +29,7 @@ class GradeStore(private val context: Context) {
 
     /** The LUT new clips get; the last one imported or picked. */
     var defaultLut: String?
-        get() = prefs.getString(KEY_DEFAULT, null)?.takeIf { fileFor(it).exists() }
+        get() = prefs.getString(KEY_DEFAULT, null)?.takeIf { app.headsup.core.color.CameraLog.profileOf(it) != null || fileFor(it).exists() }
         set(value) = prefs.edit().putString(KEY_DEFAULT, value).apply()
 
     /** Parses and stores a `.cube` file under its display name; throws if it is not a valid 3D LUT. */
@@ -43,7 +43,9 @@ class GradeStore(private val context: Context) {
         return name
     }
 
-    fun load(name: String): CubeLut? = runCatching { CubeLut.parse(fileFor(name).readText()) }.getOrNull()
+    /** A stored LUT, or a built-in camera log conversion ([app.headsup.core.color.CameraLog]) by its name. */
+    fun load(name: String): CubeLut? = app.headsup.core.color.CameraLog.profileOf(name)?.let { app.headsup.core.color.CameraLog.lut(it) }
+        ?: runCatching { CubeLut.parse(fileFor(name).readText()) }.getOrNull()
 
     fun delete(name: String) {
         fileFor(name).delete()

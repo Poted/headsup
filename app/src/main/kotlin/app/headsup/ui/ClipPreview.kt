@@ -558,7 +558,9 @@ fun ClipPreview(
         }
     }
     // Zebra: diagonal stripes over clipped highlights, as on a camera monitor.
-    var zebra by remember { mutableStateOf(false) }
+    // Exposure aids on the picture: 0 off, 1 zebra, 2 clipping (red: a channel at full, blue: black), 3 false colour.
+    var aid by androidx.compose.runtime.saveable.rememberSaveable { mutableIntStateOf(0) }
+    val zebra = aid > 0
     var histogramOn by remember { mutableStateOf(false) }
     var histogram by remember { mutableStateOf<FloatArray?>(null) }
     // Which scope shows (a tap on it steps through them): histogram, waveform, RGB parade.
@@ -1115,6 +1117,7 @@ fun ClipPreview(
                         val frame = if (effects.grain > 0f) (positionMs / 33).toFloat() else 0f
                         val fromWeight = if (fromCube != null) ColourTransition.fromWeight(positionMs, transitionMs) else 0f
                         previewShader?.overlayLayer = overlayLayer
+                        previewShader?.exposureAid = aid
                         renderEffect = previewShader?.effect(effects, zebra, frame, size.width, size.height, masks.map { it.at(fileMs) }, fromWeight, if (raw) clip.rawDevelop else null, presence, reframe.warp)
                         // Reframing moves the graded picture, as in the export (colour first, then framing).
                         val t = reframeTransform(reframe, geometry)
@@ -1173,6 +1176,7 @@ fun ClipPreview(
                                     val from = if (fresh) fromCube else neighbourFrom[clip.id]
                                     val fromWeight = if (from != null) ColourTransition.fromWeight(positionMs, transitionMs) else 0f
                                     playerShaders?.get(i)?.overlayLayer = if (fresh) overlayLayer else -1
+                                    playerShaders?.get(i)?.exposureAid = aid
                                     renderEffect = if (pictureClip[i] == null || pictureClip[i] == clip.id) {
                                         playerShaders?.get(i)?.effect(
                                             effects, zebra, frame, this.size.width, this.size.height, if (fresh) masks.map { it.at(fileMs) } else emptyList(), fromWeight,
@@ -1553,6 +1557,24 @@ fun ClipPreview(
                         color = Color.White,
                     )
                 }
+                if (aid >= 2) {
+                    // What the colours of the aid mean.
+                    val keys = if (aid == 2) listOf(Color(0xFFFF1A1A) to "clipped", Color(0xFF1A59FF) to "black")
+                    else listOf(
+                        Color(0xFF730099) to "black", Color(0xFF1A40F2) to "near black", Color(0xFF33CC40) to "18% grey",
+                        Color(0xFFFF8CBF) to "skin +1", Color(0xFFFFE61A) to "near clip", Color(0xFFFF1A1A) to "clipped",
+                    )
+                    Row(
+                        Modifier.align(Alignment.TopEnd).padding(8.dp).clip(RoundedCornerShape(8.dp)).background(Color.Black.copy(alpha = 0.55f))
+                            .padding(horizontal = 6.dp, vertical = 3.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        for ((colour, label) in keys) {
+                            Box(Modifier.size(8.dp).clip(CircleShape).background(colour))
+                            Text(" $label  ", style = MaterialTheme.typography.labelSmall, color = Color.White, maxLines = 1)
+                        }
+                    }
+                }
                 if (histogramOn) {
                     val at = Modifier.align(Alignment.BottomStart).padding(start = 10.dp, end = 10.dp, top = 10.dp, bottom = if (compactTransport) 56.dp else 10.dp)
                         .clickable { scopeKind = (scopeKind + 1) % 3 }
@@ -1695,7 +1717,8 @@ fun ClipPreview(
                 else { histogramOn = false; scopeKind = 0 }
             }
             Spacer(Modifier.width(4.dp))
-            if (Build.VERSION.SDK_INT >= 33) ToggleDot("Z", zebra) { zebra = !zebra }
+            // Exposure aids, a tap each: zebra, clipping, false colour, off.
+            if (Build.VERSION.SDK_INT >= 33) ToggleDot(listOf("Z", "Z", "C", "F")[aid], aid > 0) { aid = (aid + 1) % 4 }
             // Sideways: fold the transport and the timeline away for a bigger picture (upright the
             // arrow is beside the handle under the transport: the transport has no room).
             onCompact?.takeIf { sideways }?.let { fold ->

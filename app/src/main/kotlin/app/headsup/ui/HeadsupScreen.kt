@@ -3072,7 +3072,7 @@ private fun ColourPage(
         } else {
             val inherited = group?.lutName
             LutControls(
-                state, clip.lutName, if (inherited != null) "Group's ($inherited)" else "None", { vm.setClipLut(index, it) },
+                state, clip.lutName, if (inherited != null) "Group's (${app.headsup.core.color.CameraLog.labelOf(inherited)})" else "None", { vm.setClipLut(index, it) },
                 if (state.clips.size > 1) vm::setLutForAllClips else null, vm, onAddLut,
             )
         }
@@ -4289,6 +4289,7 @@ private fun LutControls(
     vm: HeadsupViewModel,
     onAddLut: () -> Unit,
 ) {
+    val CL = app.headsup.core.color.CameraLog
     FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         FilterChip(selected = current == null, onClick = { onPick(null) }, label = { Text(noneLabel) })
         for (name in state.luts) {
@@ -4296,10 +4297,19 @@ private fun LutControls(
         }
         FilterChip(selected = false, onClick = onAddLut, label = { Text("+ .cube") })
     }
+    // Built in: the cameras' log curves to Rec.709, from what their makers publish.
+    SectionCaption("Camera log → Rec.709")
+    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        for (p in app.headsup.core.color.CameraLog.Profile.entries) {
+            val name = CL.nameOf(p)
+            FilterChip(selected = current == name, onClick = { onPick(if (current == name) null else name) }, label = { Text(p.label) })
+        }
+    }
+    Hint("Pick the camera's log profile and gamut as set when shooting. Made from the makers' published curves; for a profile without one (DJI D-Log M), load the maker's .cube.")
     Row {
         if (onAll != null) SmallAction(if (state.photoProject) "Use for all photos" else "Use for all clips", { onAll(current) })
         Spacer(Modifier.weight(1f))
-        current?.let { name -> SmallAction("Delete $name", { vm.deleteLut(name) }) }
+        current?.takeIf { CL.profileOf(it) == null }?.let { name -> SmallAction("Delete $name", { vm.deleteLut(name) }) }
     }
 }
 

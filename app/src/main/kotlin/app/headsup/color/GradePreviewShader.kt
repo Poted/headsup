@@ -67,6 +67,9 @@ class GradePreviewShader {
      */
     var overlayLayer: Int = -1
 
+    /** With zebra on: 1 zebra stripes, 2 clipping (red where a channel is full, blue where all are black), 3 false colour. */
+    var exposureAid: Int = 1
+
     fun setTables(tables: GradeTables) {
         val base = tables.base ?: identity
         val baseShader = tableShader(base)
@@ -167,7 +170,7 @@ class GradePreviewShader {
         shader.setFloatUniform("lcDehaze", presence.dehaze)
         shader.setFloatUniform("lcDefringe", presence.defringe)
         shader.setFloatUniform("n", tableSize.toFloat())
-        shader.setFloatUniform("zebra", if (zebra) 1f else 0f)
+        shader.setFloatUniform("zebra", if (zebra) exposureAid.coerceIn(1, 3).toFloat() else 0f)
         shader.setFloatUniform("overlay", overlayLayer.takeIf { it in 0 until masks.size.coerceAtMost(ColourMask.MAX_PER_CLIP) }?.toFloat() ?: -1f)
         shader.setFloatUniform("time", frame)
         shader.setFloatUniform("shortSide", minOf(width, height))
@@ -716,8 +719,25 @@ class GradePreviewShader {
                 }
                 if (grain > 0.0) c = filmGrain(coord, c);
                 // Zebra: stripes where the picture is at or near clipping.
-                if (zebra > 0.5 && luma(c) > 0.95 && mod(coord.x + coord.y, 12.0) < 6.0) {
+                if (zebra > 0.5 && zebra < 1.5 && luma(c) > 0.95 && mod(coord.x + coord.y, 12.0) < 6.0) {
                     c = float3(0.15);
+                }
+                // Clipping: red where any channel is at full (detail lost there), blue where all are black.
+                if (zebra > 1.5 && zebra < 2.5) {
+                    if (max(c.r, max(c.g, c.b)) >= 0.995) c = float3(1.0, 0.1, 0.1);
+                    else if (max(c.r, max(c.g, c.b)) <= 0.005) c = float3(0.1, 0.35, 1.0);
+                }
+                // False colour: the picture grey with its brightness bands coloured (as on a cine monitor).
+                if (zebra > 2.5) {
+                    float y = luma(c);
+                    float3 g = float3(y);
+                    if (y < 0.025) g = float3(0.45, 0.0, 0.6);
+                    else if (y < 0.05) g = float3(0.1, 0.25, 0.95);
+                    else if (y >= 0.38 && y <= 0.44) g = float3(0.2, 0.8, 0.25);
+                    else if (y >= 0.54 && y <= 0.58) g = float3(1.0, 0.55, 0.75);
+                    else if (y >= 0.97 && y < 0.995) g = float3(1.0, 0.9, 0.1);
+                    else if (y >= 0.995) g = float3(1.0, 0.1, 0.1);
+                    c = g;
                 }
                 // The mask worked on, shown red over the picture (as in Lightroom): where and how much.
                 if (overlay > -0.5) {
