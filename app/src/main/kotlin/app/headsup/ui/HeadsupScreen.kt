@@ -3716,7 +3716,7 @@ private fun BrushControls(state: UiState, vm: HeadsupViewModel, pictureSource: (
                 FilterChip(selected = !brush.subtract, onClick = { vm.updateBrush { it.copy(subtract = false) } }, label = { Text("Add") })
                 FilterChip(selected = brush.subtract, onClick = { vm.updateBrush { it.copy(subtract = true) } }, label = { Text("Subtract") })
             }
-            Hint("Tap an object to select it (tap again for a smaller or larger part), draw round it, or draw a line across to split the picture along it. Then fix what is wrong (Push), and finish below.")
+            Hint("Tap an object to select it; tap other parts of it to take them in too, or with Subtract a part that is not it (the whole is found again each time). Tap the same place again for a smaller or larger part. You can also draw round it, or a line across to split the picture. Then fix what is wrong (Push), and finish below.")
         }
         BrushMode.PUSH -> {
             // Grab the outline and move it; then lay it onto the picture's edges if wanted.
@@ -3874,12 +3874,6 @@ private fun Layers(
         LazyRow(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
             item { CircleOption("◎", "Object", selected = false, modified = false) { add { vm.addBrushMask(BrushMode.SELECT) } } }
             item {
-                // The picture's subject: its people, animals or vehicles, else what is in the middle.
-                CircleOption(app.headsup.color.SceneKeys.symbol(app.headsup.color.SceneKeys.SUBJECT), "Subject", selected = false, modified = false) {
-                    add { pictureSource?.let { grab -> vm.addSceneMask(app.headsup.color.SceneKeys.SUBJECT, grab) } }
-                }
-            }
-            item {
                 CircleOption(app.headsup.color.SceneKeys.symbol(app.headsup.color.Scene.SKY.name), "Sky", selected = false, modified = false) {
                     add { pictureSource?.let { grab -> vm.addSceneMask(app.headsup.color.Scene.SKY.name, grab) } }
                 }
@@ -3893,7 +3887,7 @@ private fun Layers(
             if (clip.meta.isPhoto) item { CircleOption("⌫", "Remove", selected = false, modified = false) { add { vm.startRemoval() } } }
         }
         Hint(
-            "Object: tap what to correct, draw round it or split the picture with a line. Subject: the people, animals or vehicles found at once (else what is in the middle). Sky: the sky found at once (on video both are followed when tracked). " +
+            "Object: tap what to correct (tap more of it to take it in, with Subtract what is not it), draw round it or split the picture with a line. Sky: the sky found at once (on video followed when tracked). " +
                 "Brush: paint it. Linear: a gradient across the picture (drag its dashed lines to set where it starts and ends). Radial: a gradient round a point (a face, a light, a vignette of your own). Colour: everything of a colour you tap. Light: a range of brightness." +
                 if (clip.meta.isPhoto) " Remove: select something and it is taken out of the photo, filled from what is around it." else "",
         )

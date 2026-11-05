@@ -2952,7 +2952,12 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
      * The last object selected, while it can still be changed: tapping the same place again shows
      * the next of what MobileSAM offered there (a part, the object, more), smallest to largest.
      */
-    private class Pick(val clipId: Long, val x: Float, val y: Float, val candidates: List<FloatArray>, val shown: Int, val stroke: app.headsup.core.color.BrushStroke)
+    private class Pick(
+        val clipId: Long, val x: Float, val y: Float, val candidates: List<FloatArray>, val shown: Int, val stroke: app.headsup.core.color.BrushStroke,
+        /** The points MobileSAM was given (more are added by the next taps), and its rough answers, as [candidates]. */
+        val prompts: List<app.headsup.color.Segmenter.Prompt> = emptyList(),
+        val roughs: List<FloatArray> = emptyList(),
+    )
 
     private var lastPick: Pick? = null
 
@@ -2969,8 +2974,12 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
         val subtract = _state.value.brush.subtract
         val previous = lastPick
         val mask = _state.value.selected?.masks?.getOrNull(_state.value.selectedMask)
-        val again = box == null && previous != null && previous.clipId == clip.id &&
-            mask?.strokes?.lastOrNull() == previous.stroke && kotlin.math.hypot(x - previous.x, y - previous.y) < 0.03f
+        val still = box == null && previous != null && previous.clipId == clip.id && mask?.strokes?.lastOrNull() == previous.stroke
+        val again = still && previous != null && kotlin.math.hypot(x - previous.x, y - previous.y) < 0.03f
+        // A tap elsewhere while the object just found is still the last thing done: a point more
+        // for the same object (Add: this belongs to it, Subtract: this does not), so MobileSAM finds
+        // the whole of it at once instead of pieces stuck together.
+        val refine = still && !again && previous != null && !previous.stroke.erase && previous.prompts.isNotEmpty()
         val picture = segmentPicture(clip, grab) ?: return
         loadJob = viewModelScope.launch {
             val waiting = !picture.isCompleted
@@ -2985,11 +2994,25 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                 val pick = withContext(Dispatchers.Default) {
                     val candidates: List<FloatArray>
                     val shown: Int
+                    var prompts: List<app.headsup.color.Segmenter.Prompt> = previous?.prompts.orEmpty()
+                    var roughs: List<FloatArray> = previous?.roughs.orEmpty()
                     if (again && previous != null) {
                         candidates = previous.candidates
                         shown = (previous.shown + 1) % candidates.size
+                    } else if (refine && previous != null) {
+                        prompts = previous.prompts + app.headsup.color.Segmenter.Prompt(
+                            x, y, if (subtract) app.headsup.color.Segmenter.Prompt.Label.OUT else app.headsup.color.Segmenter.Prompt.Label.IN,
+                        )
+                        // From what is shown now, told the new point.
+                        val found = app.headsup.color.Segmenter.follow(getApplication(), seg.reading, prompts, seg.width, seg.height, previous.roughs.getOrNull(previous.shown))
+                        if (found.isEmpty()) return@withContext null
+                        val best = found.first()
+                        val sorted = found.sortedBy { f -> f.map.count { it > 0.5f } }
+                        candidates = sorted.map { it.map }
+                        roughs = sorted.map { it.rough }
+                        shown = sorted.indexOf(best)
                     } else {
-                        val prompts = if (box != null) {
+                        val asked = if (box != null) {
                             listOf(
                                 app.headsup.color.Segmenter.Prompt(box[0], box[1], app.headsup.color.Segmenter.Prompt.Label.BOX_START),
                                 app.headsup.color.Segmenter.Prompt(box[2], box[3], app.headsup.color.Segmenter.Prompt.Label.BOX_END),
@@ -2997,22 +3020,27 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                         } else {
                             listOf(app.headsup.color.Segmenter.Prompt(x, y, app.headsup.color.Segmenter.Prompt.Label.IN))
                         }
-                        val found = app.headsup.color.Segmenter.objects(getApplication(), seg.reading, prompts, seg.width, seg.height)
+                        val found = app.headsup.color.Segmenter.follow(getApplication(), seg.reading, asked, seg.width, seg.height, null)
                         if (found.isEmpty()) return@withContext null
                         // Smallest to largest (what the next taps step through), starting at the one the model likes best.
-                        candidates = found.map { it.first }.sortedBy { m -> m.count { it > 0.5f } }
-                        shown = candidates.indexOf(found.first().first)
+                        val best = found.first()
+                        val sorted = found.sortedBy { f -> f.map.count { it > 0.5f } }
+                        candidates = sorted.map { it.map }
+                        roughs = sorted.map { it.rough }
+                        shown = sorted.indexOf(best)
+                        prompts = asked
                     }
                     val refined = app.headsup.color.Segmenter.refine(seg.guide, candidates[shown], seg.width, seg.height)
                     val id = app.headsup.color.BrushReferences.create(getApplication(), seg.width, seg.height, refined, placement)
-                    val stroke = app.headsup.core.color.BrushStroke(listOf(x, y), radius = 0.01f, flow = 1f, erase = subtract, reference = id, segment = true)
-                    Pick(clip.id, x, y, candidates, shown, stroke)
+                    // A point more keeps the object what it was (added); Subtract then only told the model what is not it.
+                    val stroke = app.headsup.core.color.BrushStroke(listOf(x, y), radius = 0.01f, flow = 1f, erase = if (refine) false else subtract, reference = id, segment = true)
+                    Pick(clip.id, x, y, candidates, shown, stroke, prompts, roughs)
                 }
                 if (pick == null) {
                     _state.update { it.copy(messages = it.messages + if (box != null) "Nothing found inside: draw round the whole object." else "No object found there: tap its middle, or draw round it.") }
                     return@launch
                 }
-                addStroke(index, clip, pick.stroke, replacing = if (again) previous?.stroke else null)
+                addStroke(index, clip, pick.stroke, replacing = if (again || refine) previous?.stroke else null)
                 lastPick = pick
                 // What was found shows over the picture, so what to fix can be seen.
                 if (!_state.value.maskOverlay) _state.update { it.copy(maskOverlay = true) }
