@@ -33,11 +33,24 @@ data class Reframe(
     /** Perspective correction, −1..1 ([Perspective]): lines leaning together up/down, and sideways. */
     val vertical: Float = 0f,
     val horizontal: Float = 0f,
+    /** Lens distortion corrected, −1..1 ([Lens]): + pulls a barrel's bulge in, − a pincushion out. */
+    val distortion: Float = 0f,
+    /** The lens's darker corners brightened (+) or darkened (−), −1..1 ([Lens]). */
+    val lensVignette: Float = 0f,
 ) {
-    val isIdentity: Boolean get() = zoom == 1f && centerX == 0.5f && centerY == 0.5f && angleDegrees == 0f && aspect == null && vertical == 0f && horizontal == 0f
+    val isIdentity: Boolean get() = zoom == 1f && centerX == 0.5f && centerY == 0.5f && angleDegrees == 0f && aspect == null && vertical == 0f && horizontal == 0f &&
+        distortion == 0f && lensVignette == 0f
 
-    /** Where each point of the corrected picture comes from ([Perspective.sourceOf]); null without correction. */
-    val warp: DoubleArray? get() = Perspective.sourceOf(vertical, horizontal)
+    /**
+     * Where each point of the corrected picture comes from ([Perspective.sourceOf]), row by row, 3×3;
+     * with lens corrections also their two amounts after it ([Lens.K], [Lens.VIGNETTE]); null without
+     * correction.
+     */
+    val warp: DoubleArray? get() {
+        val m = Perspective.sourceOf(vertical, horizontal)
+        if (distortion == 0f && lensVignette == 0f) return m
+        return (m ?: doubleArrayOf(1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0)) + doubleArrayOf(Lens.k(distortion).toDouble(), lensVignette.toDouble())
+    }
 
     /** Output frame size for a [srcW]×[srcH] clip, in its pixels: inside the picture (fill) or around it (fit). */
     fun outputSize(srcW: Float, srcH: Float): Pair<Float, Float> {

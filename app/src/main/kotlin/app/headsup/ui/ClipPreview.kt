@@ -1216,8 +1216,12 @@ fun ClipPreview(
                                     // Masks live in the picture, so map the finger back through the framing.
                                     // Masks are kept on the original picture: with its perspective
                                     // corrected, a point on screen is first taken back to it.
-                                    fun original(x: Float, y: Float): Pair<Float, Float> =
-                                        currentReframe.warp?.let { m -> app.headsup.core.frame.Perspective.apply(m, x.toDouble(), y.toDouble()).let { (a, b) -> a.toFloat() to b.toFloat() } } ?: (x to y)
+                                    fun original(x: Float, y: Float): Pair<Float, Float> {
+                                        val m = currentReframe.warp ?: return x to y
+                                        val (a, b) = app.headsup.core.frame.Perspective.apply(m, x.toDouble(), y.toDouble())
+                                        val g = geometryRef.value
+                                        return app.headsup.core.frame.Lens.sourceOf(a.toFloat(), b.toFloat(), m.getOrElse(app.headsup.core.frame.Lens.K) { 0.0 }.toFloat(), g.pictureW / g.pictureH.coerceAtLeast(1f))
+                                    }
                                     fun move(p: Offset) {
                                         val g = geometryRef.value
                                         val (sx, sy) = currentReframe.sourceOf(p.x, p.y, g.boxW, g.boxH, g.pictureW, g.pictureH)

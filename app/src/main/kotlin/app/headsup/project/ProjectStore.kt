@@ -356,7 +356,8 @@ internal object Json {
             .put("shadows", c.rawDevelop.shadows.toDouble()).put("temperature", c.rawDevelop.temperature.toDouble()).put("tint", c.rawDevelop.tint.toDouble())
             .put("sharpen", c.rawDevelop.sharpen.toDouble()).put("colourNoise", c.rawDevelop.colourNoise.toDouble()))
         .put("reframe", JSONObject().put("zoom", c.reframe.zoom).put("centerX", c.reframe.centerX).put("centerY", c.reframe.centerY).put("angleDegrees", c.reframe.angleDegrees).put("fit", c.reframe.fit).put("blur", c.reframe.blur)
-            .put("vertical", c.reframe.vertical).put("horizontal", c.reframe.horizontal))
+            .put("vertical", c.reframe.vertical).put("horizontal", c.reframe.horizontal)
+            .put("distortion", c.reframe.distortion.toDouble()).put("lensVignette", c.reframe.lensVignette.toDouble()))
 
     private fun clip(o: JSONObject) = SavedClip(
         uri = Uri.parse(o.getString("uri")),
@@ -404,6 +405,8 @@ internal object Json {
                 fit = r.optBoolean("fit", false),
                 blur = r.optBoolean("blur", false),
                 vertical = r.optDouble("vertical", 0.0).toFloat(),
+                distortion = r.optDouble("distortion", 0.0).toFloat(),
+                lensVignette = r.optDouble("lensVignette", 0.0).toFloat(),
                 horizontal = r.optDouble("horizontal", 0.0).toFloat(),
             )
         } ?: Reframe(),

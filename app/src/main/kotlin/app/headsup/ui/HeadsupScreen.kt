@@ -3305,7 +3305,7 @@ private fun CurveControls(state: UiState, vm: HeadsupViewModel) {
 @Composable
 private fun HueCurveControls(state: UiState, vm: HeadsupViewModel) {
     val HC = app.headsup.core.color.HueCurves
-    var channel by rememberSaveable { mutableStateOf(HC.Channel.HUE_SAT) }
+    var channel by rememberSaveable { mutableStateOf(app.headsup.core.color.HueCurves.Channel.HUE_SAT) }
     val c = channel.ordinal
     val flat = state.grade.hueCurves.getOrNull(c).orEmpty()
     fun store(points: List<Pair<Float, Float>>) = vm.updateGrade { g ->
@@ -3314,7 +3314,7 @@ private fun HueCurveControls(state: UiState, vm: HeadsupViewModel) {
     }
     Row(verticalAlignment = Alignment.CenterVertically) {
         FlowRow(Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            for (ch in HC.Channel.entries) {
+            for (ch in app.headsup.core.color.HueCurves.Channel.entries) {
                 val changed = state.grade.hueCurves.getOrNull(ch.ordinal).orEmpty().isNotEmpty()
                 FilterChip(selected = ch == channel, onClick = { channel = ch }, label = { Text(ch.label + if (changed) " •" else "") })
             }
@@ -3400,10 +3400,10 @@ private fun HueCurveControls(state: UiState, vm: HeadsupViewModel) {
     }
     Hint(
         when (channel) {
-            HC.Channel.HUE_HUE -> "Turns one hue towards another: a point on a colour, up or down to shift it (e.g. greens towards yellow). Touch to add a point, drag it, double-tap to remove it."
-            HC.Channel.HUE_SAT -> "More or less colour in one hue only: e.g. a point on blue pulled down pales the sky alone."
-            HC.Channel.HUE_LUM -> "Lighter or darker in one hue only: e.g. orange up for skin, blue down for a deeper sky."
-            HC.Channel.LUM_SAT -> "More or less colour by brightness: pulling the dark end down takes colour out of the shadows, a filmic look."
+            app.headsup.core.color.HueCurves.Channel.HUE_HUE -> "Turns one hue towards another: a point on a colour, up or down to shift it (e.g. greens towards yellow). Touch to add a point, drag it, double-tap to remove it."
+            app.headsup.core.color.HueCurves.Channel.HUE_SAT -> "More or less colour in one hue only: e.g. a point on blue pulled down pales the sky alone."
+            app.headsup.core.color.HueCurves.Channel.HUE_LUM -> "Lighter or darker in one hue only: e.g. orange up for skin, blue down for a deeper sky."
+            app.headsup.core.color.HueCurves.Channel.LUM_SAT -> "More or less colour by brightness: pulling the dark end down takes colour out of the shadows, a filmic look."
         },
     )
 }
@@ -5354,6 +5354,13 @@ private fun PerspectiveRulers(r: Reframe, vm: HeadsupViewModel) {
     ValueHeader("Horizontal", String.format(Locale.US, "%+.0f", r.horizontal * 100))
     RulerSlider(r.horizontal, -1f..1f, 0.01f, { v -> vm.updateReframe { it.copy(horizontal = v) } }, onReset = { vm.updateReframe { it.copy(horizontal = 0f) } })
     Hint("Vertical straightens a building's sides when the camera looked up or down; Horizontal the same sideways. The picture zooms in just enough to hide the empty corners.")
+    // The lens: its distortion and its darker corners (a raw photo's lens profile is applied already).
+    SectionCaption("Lens")
+    ValueHeader("Distortion", String.format(Locale.US, "%+.0f", r.distortion * 100))
+    RulerSlider(r.distortion, -1f..1f, 0.01f, { v -> vm.updateReframe { it.copy(distortion = v) } }, onReset = { vm.updateReframe { it.copy(distortion = 0f) } })
+    ValueHeader("Lens vignette", String.format(Locale.US, "%+.0f", r.lensVignette * 100))
+    RulerSlider(r.lensVignette, -1f..1f, 0.01f, { v -> vm.updateReframe { it.copy(lensVignette = v) } }, onReset = { vm.updateReframe { it.copy(lensVignette = 0f) } })
+    Hint("Distortion: + pulls in a wide lens's bulge (straight lines bowing out, a drone's horizon), − pushes out a pinch. Lens vignette: + brightens the corners a lens darkens. Raw photos already get their lens's own correction.")
 }
 
 /** The activity's route over the picture: on or off, size, colour, background and the "you are here" dot. */

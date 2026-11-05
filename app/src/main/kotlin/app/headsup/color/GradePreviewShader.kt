@@ -149,6 +149,9 @@ class GradePreviewShader {
         shader.setFloatUniform("hasWarp", if (warp != null) 1f else 0f)
         val m = warp ?: doubleArrayOf(1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0)
         shader.setFloatUniform("warp", floatArrayOf(m[0].toFloat(), m[3].toFloat(), m[6].toFloat(), m[1].toFloat(), m[4].toFloat(), m[7].toFloat(), m[2].toFloat(), m[5].toFloat(), m[8].toFloat()))
+        // Lens corrections after the perspective ([app.headsup.core.frame.Lens]).
+        shader.setFloatUniform("lensK", m.getOrElse(app.headsup.core.frame.Lens.K) { 0.0 }.toFloat())
+        shader.setFloatUniform("lensVig", m.getOrElse(app.headsup.core.frame.Lens.VIGNETTE) { 0.0 }.toFloat())
         // A raw's sharpening and colour noise removal, on the picture before its colours.
         shader.setFloatUniform("sharpen", detail?.sharpen ?: 0f)
         shader.setFloatUniform("chromaNR", detail?.colourNoise ?: 0f)
@@ -359,12 +362,26 @@ class GradePreviewShader {
 
             uniform float hasWarp;
             uniform float3x3 warp;
+            uniform float lensK;
+            uniform float lensVig;
+
+            // Lens.r2 and Lens.sourceOf: how far out (corners at 1), and where a corrected point samples.
+            float lensR2(float2 f) {
+                float a = size.x / size.y;
+                float2 d = float2((f.x - 0.5) * a, f.y - 0.5);
+                return dot(d, d) / (0.25 * a * a + 0.25);
+            }
+            float2 lensOf(float2 f) {
+                if (lensK == 0.0) return f;
+                float s = (1.0 + lensK * lensR2(f)) / (lensK > 0.0 ? 1.0 + lensK : 1.0);
+                return float2(0.5) + (f - float2(0.5)) * s;
+            }
 
             // A point of the corrected picture in the original (where masks are kept).
             float2 srcPx(float2 p) {
                 if (hasWarp < 0.5) return p;
                 float3 q = warp * float3(p / size, 1.0);
-                return clamp(q.xy / q.z, float2(0.0), float2(1.0)) * size;
+                return clamp(lensOf(q.xy / q.z), float2(0.0), float2(1.0)) * size;
             }
 
             // The original picture as it is, at a point of it.
@@ -378,7 +395,11 @@ class GradePreviewShader {
                 p = clamp(p, float2(0.5), size - 0.5);
                 if (hasWarp < 0.5) return image.eval(p);
                 float3 q = warp * float3(p / size, 1.0);
-                return image.eval(clamp(q.xy / q.z, float2(0.0), float2(1.0)) * size);
+                float2 f = lensOf(q.xy / q.z);
+                half4 c = image.eval(clamp(f, float2(0.0), float2(1.0)) * size);
+                // The lens's darker corners: brightened by how much they fall off (on the coded values).
+                if (lensVig != 0.0) c.rgb = half3(clamp(float3(c.rgb) * pow(max(1.0 + lensVig * 0.6 * lensR2(f), 0.05), 0.45), 0.0, 1.0));
+                return c;
             }
 
             ${TABLES.joinToString("\n") { lookup(it) }}

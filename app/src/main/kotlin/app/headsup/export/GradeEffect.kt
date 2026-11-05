@@ -193,6 +193,8 @@ class GradeEffect(
                 val m = warp ?: doubleArrayOf(1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0)
                 // Given column by column, as GLSL reads a mat3.
                 program.setFloatsUniform("uWarp", floatArrayOf(m[0].toFloat(), m[3].toFloat(), m[6].toFloat(), m[1].toFloat(), m[4].toFloat(), m[7].toFloat(), m[2].toFloat(), m[5].toFloat(), m[8].toFloat()))
+                program.setFloatUniform("uLensK", m.getOrElse(app.headsup.core.frame.Lens.K) { 0.0 }.toFloat())
+                program.setFloatUniform("uLensVig", m.getOrElse(app.headsup.core.frame.Lens.VIGNETTE) { 0.0 }.toFloat())
                 program.bindAttributesAndUniforms()
                 GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4)
             } catch (e: GlUtil.GlException) {
@@ -324,6 +326,8 @@ class GradeEffect(
             uniform vec3 uPresence;
             uniform float uDefringe;
             uniform float uHasWarp;
+            uniform float uLensK;
+            uniform float uLensVig;
             uniform mat3 uWarp;
             ${List(ColourMask.MAX_PER_CLIP) { "uniform vec3 uMp$it;" }.joinToString("\n")}
             ${List(ColourMask.MAX_PER_CLIP) { "uniform vec2 uMg$it;" }.joinToString("\n")}
@@ -383,11 +387,23 @@ class GradeEffect(
                 return x <= 1.0 / 12.0 ? sqrt(3.0 * x) : 0.17883277 * log(12.0 * x - 0.28466892) + 0.55991073;
             }
 
+            // As the preview's lensR2 and lensOf ([app.headsup.core.frame.Lens]).
+            float lensR2(vec2 f) {
+                float a = uSize.x / uSize.y;
+                vec2 d = vec2((f.x - 0.5) * a, f.y - 0.5);
+                return dot(d, d) / (0.25 * a * a + 0.25);
+            }
+            vec2 lensOf(vec2 f) {
+                if (uLensK == 0.0) return f;
+                float s = (1.0 + uLensK * lensR2(f)) / (uLensK > 0.0 ? 1.0 + uLensK : 1.0);
+                return vec2(0.5) + (f - vec2(0.5)) * s;
+            }
+
             // A point of the corrected picture (pixels from the top) in the original, where masks are kept.
             vec2 srcPx(vec2 px) {
                 if (uHasWarp < 0.5) return px;
                 vec3 q = uWarp * vec3(px / uSize, 1.0);
-                return clamp(q.xy / q.z, 0.0, 1.0) * uSize;
+                return clamp(lensOf(q.xy / q.z), 0.0, 1.0) * uSize;
             }
 
             vec3 sourceRaw(vec2 uv);
@@ -397,12 +413,16 @@ class GradeEffect(
                 // Never outside the frame: the edges would glow.
                 uv = clamp(uv, 0.5 / uSize, 1.0 - 0.5 / uSize);
                 // Perspective correction, on fractions measured from the top (as the preview's).
+                float gain = 1.0;
                 if (uHasWarp > 0.5) {
                     vec3 q = uWarp * vec3(uv.x, 1.0 - uv.y, 1.0);
-                    vec2 s = clamp(q.xy / q.z, 0.0, 1.0);
+                    vec2 f = lensOf(q.xy / q.z);
+                    // The lens's darker corners, as the preview: on the coded values.
+                    if (uLensVig != 0.0) gain = pow(max(1.0 + uLensVig * 0.6 * lensR2(f), 0.05), 0.45);
+                    vec2 s = clamp(f, 0.0, 1.0);
                     uv = vec2(s.x, 1.0 - s.y);
                 }
-                return sourceRaw(uv);
+                return clamp(sourceRaw(uv) * gain, 0.0, 1.0);
             }
 
             // The file's values at a point of the original picture, as they are.
