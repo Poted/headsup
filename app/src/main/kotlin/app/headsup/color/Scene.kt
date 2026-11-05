@@ -26,9 +26,11 @@ object SceneKeys {
     const val SUBJECT = "SUBJECT"
     const val BACKGROUND = "BACKGROUND"
 
-    /** In the order the new-mask menu offers them. */
-    val offered = listOf(SUBJECT, Scene.PEOPLE.name, Scene.SKY.name, BACKGROUND) +
-        listOf(Scene.VEGETATION, Scene.WATER, Scene.MOUNTAINS, Scene.ARCHITECTURE, Scene.GROUND, Scene.VEHICLES, Scene.ANIMALS).map { it.name }
+    /**
+     * What the new-mask menu offers: only the sky, the one found reliably. The rest (people, plants,
+     * buildings…) missed too often to be worth a button; masks made with them still open.
+     */
+    val offered = listOf(Scene.SKY.name)
 
     fun scene(key: String?): Scene? = Scene.entries.firstOrNull { it.name == key }
 

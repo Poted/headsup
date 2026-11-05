@@ -2703,8 +2703,8 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
 
     /**
      * Drawing in Select: shown as drawn, and when the finger lifts, a tap selects the object under
-     * it, a loop the object inside it (MobileSAM, given the loop's box) and a line splits the
-     * picture along it ([app.headsup.core.color.BrushMask.select]). The picture is read as the
+     * it, a loop the object inside it (MobileSAM, given the loop's box) and a line fixes the
+     * outline where it is drawn (a brush that keeps to the picture's edges). The picture is read as the
      * finger comes down, so the answer is quick when it lifts.
      */
     private fun selectStroke(
@@ -2740,8 +2740,15 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                     )
                     return
                 }
+                // A line drawn is a fix of the outline just there: a brush that follows the picture's
+                // edges (it takes only what looks like the colour under it), adding to the mask (or
+                // taking from it, with Subtract); the rest of what was found stays as it is.
                 val points = path.chunked(2).flatMap { (px, py) -> app.headsup.core.color.BrushMask.unmove(px, py, placed, aspect).toList() }
-                val stroke = app.headsup.core.color.BrushStroke(points, radius = 0.01f, flow = 1f, reference = lassoReference, lasso = true, erase = _state.value.brush.subtract)
+                val b = _state.value.brush
+                val stroke = app.headsup.core.color.BrushStroke(
+                    points, radius = b.radius / placed.sizeX.coerceAtLeast(0.05f), flow = 1f,
+                    reference = lassoReference, erase = b.subtract,
+                )
                 addStroke(index, clip, stroke)
             }
         }
@@ -2856,6 +2863,8 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                 }
                 addStroke(index, clip, pick.stroke, replacing = if (again) previous?.stroke else null)
                 lastPick = pick
+                // What was found shows over the picture, so what to fix can be seen.
+                if (!_state.value.maskOverlay) _state.update { it.copy(maskOverlay = true) }
             } finally {
                 if (waiting) _state.update { it.copy(busy = false, loadingMessage = null) }
             }
@@ -3923,7 +3932,8 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
  * the mask, or only look (VIEW: one finger moves the zoomed picture, nothing is painted).
  */
 enum class BrushMode(val symbol: String, val label: String) {
-    SELECT("◎", "Select"), PAINT("✎", "Paint"), ERASE("⌫", "Erase"), SOFTEN("≈", "Soften"), MOVE("✥", "Move"), VIEW("✋", "View"),
+    // View first: looking closer comes before working on the mask.
+    VIEW("✋", "View"), SELECT("◎", "Select"), PAINT("✎", "Paint"), ERASE("⌫", "Erase"), SOFTEN("≈", "Soften"), MOVE("✥", "Move"),
 }
 
 /** The brush: its radius (of the picture's height) and flow, 0..1. */

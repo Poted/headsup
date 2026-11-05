@@ -3706,18 +3706,36 @@ private fun BrushControls(state: UiState, vm: HeadsupViewModel, pictureSource: (
                     label = { Text(if (brush.subtract) "− Sky" else "+ Sky") },
                 )
             }
-            // Where the edge of what was found lies.
-            val e = mask.edge
-            ValueHeader(
-                "Edge",
-                when {
-                    kotlin.math.abs(e) < 0.005f -> "As found"
-                    e < 0f -> String.format(Locale.US, "Tighter %.0f %%", -e * 100f)
-                    else -> String.format(Locale.US, "Fuller %.0f %%", e * 100f)
-                },
+            // Where the edge of what was found lies, and how wide a fix along it is.
+            var fixing by rememberSaveable { mutableStateOf(false) }
+            LazyRow(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+                item { CircleOption("⇔", "Edge", selected = !fixing, modified = kotlin.math.abs(mask.edge) >= 0.005f) { fixing = false } }
+                item { CircleOption("●", "Fix size", selected = fixing, modified = false) { fixing = true } }
+            }
+            if (fixing) {
+                ValueHeader("Fix size", String.format(Locale.US, "%.0f %%", brush.radius * 100f))
+                RulerSlider(
+                    value = brush.radius, range = BrushSetting.SIZE.range, step = 0.005f,
+                    onChange = { v -> vm.updateBrush { it.copy(radius = v) }; vm.showBrush() },
+                    onReset = { vm.updateBrush { it.copy(radius = BrushSetting.SIZE.default) }; vm.showBrush() },
+                )
+            } else {
+                val e = mask.edge
+                ValueHeader(
+                    "Edge",
+                    when {
+                        kotlin.math.abs(e) < 0.005f -> "As found"
+                        e < 0f -> String.format(Locale.US, "Tighter %.0f %%", -e * 100f)
+                        else -> String.format(Locale.US, "Fuller %.0f %%", e * 100f)
+                    },
+                )
+                RulerSlider(value = e, range = -1f..1f, step = 0.05f, onChange = { v -> vm.updateMask { it.copy(edge = v) } }, onReset = { vm.updateMask { it.copy(edge = 0f) } })
+            }
+            Hint(
+                "Tap an object to select it (tap again for a smaller or larger part), or draw round it. " +
+                    "Where the outline is wrong, draw along that part: it is fixed only there, following the picture's edges " +
+                    "(Add takes in what is missing, Subtract takes away what is too much). Edge moves the whole outline in or out.",
             )
-            RulerSlider(value = e, range = -1f..1f, step = 0.05f, onChange = { v -> vm.updateMask { it.copy(edge = v) } }, onReset = { vm.updateMask { it.copy(edge = 0f) } })
-            Hint("Tap an object to select all of it (tap again for a smaller or larger part), draw round it, or draw a line across to split the picture. Edge: tighter keeps away from what is around it, fuller takes in its rim. Found on the phone by AI models and laid onto the picture's edges.")
         }
         BrushMode.PAINT, BrushMode.ERASE, BrushMode.SOFTEN -> {
             val settings = BrushSetting.entries
@@ -3748,7 +3766,7 @@ private fun BrushControls(state: UiState, vm: HeadsupViewModel, pictureSource: (
             Hint(
                 if (brush.mode == BrushMode.SOFTEN) "Soften makes the mask's edge gradual where you paint along it; elsewhere the cut stays sharp. Size: how wide the soft band is; Strength: how soft. Two fingers zoom the picture; View moves around it."
                 else if (brush.mode == BrushMode.ERASE) "Erase takes the mask's corrections away where you paint. Two fingers zoom the picture; View moves around it."
-                else "Paint where the mask's corrections go. Strength: how much one stroke adds; Softness: the painting's edge. Two fingers zoom the picture; View moves around it.",
+                else "Paint where the mask's corrections go. Strength: how much of the corrections one stroke gives (low: a light touch that builds up as you go over it again; full: all at once). Softness: how gradual the painting's edge is. Two fingers zoom the picture; View moves around it.",
             )
         }
         BrushMode.MOVE -> Hint("One finger moves the mask; two turn and scale it.")
@@ -3771,7 +3789,8 @@ private enum class MaskShape(
     WIDTH("↔", "Width", setOf(MaskKind.ELLIPSE), 0.05f..2f, 0.01f, "%.0f %%", { it.sizeX }, { m, v -> m.copy(sizeX = v) }),
     HEIGHT("↕", "Height", setOf(MaskKind.ELLIPSE), 0.05f..2f, 0.01f, "%.0f %%", { it.sizeY }, { m, v -> m.copy(sizeY = v) }),
     SOFTNESS("◐", "Softness", setOf(MaskKind.LINEAR, MaskKind.ELLIPSE), 0.02f..1f, 0.02f, "%.0f %%", { it.softness }, { m, v -> m.copy(softness = v) }),
-    ANGLE("∠", "Angle", MaskKind.entries.toSet(), -90f..90f, 0.5f, "%+.1f°", { it.angleDegrees }, { m, v -> m.copy(angleDegrees = v) }),
+    // A colour or light range covers the picture wherever it matches: turning it changes nothing.
+    ANGLE("∠", "Angle", setOf(MaskKind.LINEAR, MaskKind.ELLIPSE, MaskKind.BRUSH), -90f..90f, 0.5f, "%+.1f°", { it.angleDegrees }, { m, v -> m.copy(angleDegrees = v) }),
     ;
 
     /** Value as shown above the ruler (fractions as percent). */
@@ -3831,6 +3850,9 @@ private fun Layers(
         fun add(action: () -> Unit) {
             adding = false
             vm.setTarget(GradeTarget.MASK)
+            // A new mask opens on its own tools (select, paint, shape), whichever was shown before:
+            // removing from a photo has no switch to get to them.
+            onMaskTools(true)
             action()
         }
         // What a new mask is: found by AI at once (or by a tap), or drawn and picked.
@@ -3903,7 +3925,14 @@ private fun MaskRanges(state: UiState, mask: ColourMask, vm: HeadsupViewModel) {
         PillAction("◈", if (colour == null) "Pick a colour" else "Pick again", { vm.setPickingColour(!state.pickingColour) }, selected = state.pickingColour)
     }
     if (state.pickingColour) Hint("Tap the colour on the picture (hold and slide to aim).")
+    if (colour == null && !state.pickingColour) {
+        Hint(
+            if (mask.kind == MaskKind.RANGE) "The mask is every part of the picture in one colour, wherever it is: pick it on the picture (e.g. the sky's blue, a red jacket), then set how close a colour must be to count. Its corrections (Adjust) change only that colour."
+            else "Narrows this mask to one colour inside it: pick the colour on the picture; only that colour within the mask gets its corrections.",
+        )
+    }
     if (colour != null) {
+        Hint("Range: how far from the picked colour still counts. Low: only that very colour; high: its neighbours too. Hold a finger on the picture to see it without this mask.")
         ValueHeader("Range", String.format(Locale.US, "%.0f %%", colour.tolerance * 100))
         RulerSlider(
             value = colour.tolerance,
