@@ -155,10 +155,6 @@ fun ClipPreview(
     onTransformMask: ((dx: Float, dy: Float, zoom: Float, degrees: Float) -> Unit)? = null,
     /** An oval's end (0 right, 1 left, 2 bottom, 3 top, before turning) dragged to (x, y), fractions of the picture. */
     onMaskEnd: ((end: Int, x: Float, y: Float) -> Unit)? = null,
-    /** Pins on the picture for each of [masks] (as in Lightroom): tapped, that mask is worked on. Null: no pins. */
-    onPickMask: ((Int) -> Unit)? = null,
-    /** Which of [masks] is worked on now (its pin lit), or null. */
-    pickedMask: Int? = null,
     /**
      * Painting a brush mask: a stroke starts (0), goes on (1) and ends (2) at a point of the picture
      * (fractions); the last argument grabs the picture (before colour) at a width, for finding edges.
@@ -1498,51 +1494,6 @@ fun ClipPreview(
                         ?: ZoneId.systemDefault().rules.getOffset(Instant.ofEpochMilli(utc)).totalSeconds
                     val data = DashboardData(track, frame, utc, zone)
                     drawIntoCanvas { renderer.draw(it.nativeCanvas, size.width, size.height, style, data, barsNow) }
-                }
-                // Each mask's pin, where it is on the picture: tapped, that mask is worked on.
-                if (onPickMask != null) {
-                    val t = reframeTransform(reframe, geometry)
-                    val back = reframe.warp?.let { app.headsup.core.frame.Perspective.invert(it) }
-                    val a = Math.toRadians(reframe.angleDegrees.toDouble())
-                    masks.forEachIndexed { i, mask ->
-                        val m = mask.at(fileMs)
-                        val (fx, fy) = when (m.kind) {
-                            MaskKind.RANGE -> return@forEachIndexed
-                            MaskKind.BRUSH -> {
-                                val pts = m.strokes.filter { !it.erase && !it.soften && !it.fit }.flatMap { it.points.chunked(2) }.filter { it.size == 2 }
-                                if (pts.isEmpty()) return@forEachIndexed
-                                val ax = pts.map { it[0] }.average().toFloat()
-                                val ay = pts.map { it[1] }.average().toFloat()
-                                (m.centerX + (ax - 0.5f) * m.sizeX) to (m.centerY + (ay - 0.5f) * m.sizeY)
-                            }
-                            else -> m.centerX to m.centerY
-                        }
-                        // On the corrected picture, then as the picture is framed in the box.
-                        val (ox, oy) = back?.let { app.headsup.core.frame.Perspective.apply(it, fx.toDouble(), fy.toDouble()) }?.let { it.first.toFloat() to it.second.toFloat() } ?: (fx to fy)
-                        val qx = (ox - 0.5f) * pictureW * t.zoom
-                        val qy = (oy - 0.5f) * pictureH * t.zoom
-                        val sx = boxW / 2f + t.translation.x + (qx * kotlin.math.cos(a) - qy * kotlin.math.sin(a)).toFloat()
-                        val sy = boxH / 2f + t.translation.y + (qx * kotlin.math.sin(a) + qy * kotlin.math.cos(a)).toFloat()
-                        if (sx < 0f || sy < 0f || sx > boxW || sy > boxH) return@forEachIndexed
-                        val on = i == pickedMask
-                        val pin = with(density) { 22.dp.toPx() }
-                        // A plain dot (filled: the mask worked on), no number over the picture.
-                        Box(
-                            Modifier
-                                .align(Alignment.TopStart)
-                                .offset { androidx.compose.ui.unit.IntOffset((sx - pin / 2f).toInt(), (sy - pin / 2f).toInt()) }
-                                .size(22.dp)
-                                .clip(CircleShape)
-                                .clickable { onPickMask(i) },
-                            contentAlignment = Alignment.Center,
-                        ) {
-                            Box(
-                                Modifier.size(12.dp).clip(CircleShape)
-                                    .background(if (on) HeadsupColors.Accent else Color.Black.copy(alpha = 0.45f))
-                                    .border(1.5.dp, Color.White, CircleShape),
-                            )
-                        }
-                    }
                 }
                 // Texts sit on the frame (not the picture), over the dashboard, as in the export.
                 val textMover by rememberUpdatedState(onMoveText)
