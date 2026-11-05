@@ -706,6 +706,10 @@ object BrushMask {
         }
     }
 
+    /** [ref]'s colours over a whole [width]×[height] grid of the frame, RGB in a row (for [MaskEdge.shapeGuided]). */
+    fun pictureGrid(ref: BrushReference, width: Int, height: Int): FloatArray =
+        sampleArea(ref, width, height, width.toFloat() / height.coerceAtLeast(1), 0, width - 1, 0, height - 1)
+
     /** [ref]'s colours at the grid pixels x0..x1, y0..y1 (the grid over the mask's own frame), RGB in a row. */
     private fun sampleArea(ref: BrushReference, width: Int, height: Int, gridAspect: Float, x0: Int, x1: Int, y0: Int, y1: Int): FloatArray {
         val out = FloatArray((x1 - x0 + 1) * (y1 - y0 + 1) * 3)

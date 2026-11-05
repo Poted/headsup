@@ -101,7 +101,7 @@ object BrushAtlas {
             if (m.kind != MaskKind.BRUSH || (m.strokes.isEmpty() && m.sequence == null)) return@forEachIndexed
             val unmoved = tracked(context, m, w, h, timeMs) ?: if (m.strokes.isEmpty()) return@forEachIndexed else coverage(context, slot, m, w, h)
             // Edge moves the whole mask's outline, what was found and what was painted alike.
-            val drawnMap = if (m.edge != 0f) app.headsup.core.color.MaskEdge.shape(unmoved, w, h, m.edge) else unmoved
+            val drawnMap = moveEdge(context, m, unmoved, w, h)
             // A feathered edge: the coverage blurred (the cached drawings stay sharp).
             val map = if (m.feather > 0f) app.headsup.core.color.MaskFeather.apply(drawnMap, w, h, m.feather * ColourMask.FEATHER_REACH * h) else drawnMap
             // Green: where Soften made the edge gradual (kept soft by the shaders). Blue: the
@@ -118,6 +118,20 @@ object BrushAtlas {
             }
         }
         return Bitmap.createBitmap(pixels, stride, h, Bitmap.Config.ARGB_8888)
+    }
+
+    /**
+     * [map] (the mask [m] drawn, [w]×[h]) with its Edge moved: following the picture Edge was set on
+     * where there is one (a still picture; on video the frames change), else by distance.
+     */
+    fun moveEdge(context: Context, m: ColourMask, map: FloatArray, w: Int, h: Int): FloatArray {
+        if (m.edge == 0f) return map
+        val picture = m.edgePicture?.takeIf { m.sequence == null }?.let { BrushReferences.get(context, it) }
+        return if (picture != null) {
+            app.headsup.core.color.MaskEdge.shapeGuided(map, w, h, m.edge, BrushMask.pictureGrid(picture, w, h))
+        } else {
+            app.headsup.core.color.MaskEdge.shape(map, w, h, m.edge)
+        }
     }
 
     /** A 1×1 black atlas for clips without brush masks (the shaders always need one). */

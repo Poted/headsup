@@ -311,7 +311,6 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
     var filmShare by rememberSaveable { mutableStateOf(0.32f) }
     var albumShare by rememberSaveable { mutableStateOf(0.5f) }
     // The album's thumbnails while editing a photo: folded by default.
-    var albumOpen by rememberSaveable { mutableStateOf(false) }
     var showOriginal by remember { mutableStateOf(false) }
     // A finger held on the picture while a mask's corrections are edited: the picture without that mask only.
     var hideMask by remember { mutableStateOf(false) }
@@ -345,7 +344,6 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
             photoFolded -> (configuration.screenHeightDp * albumShare + 110).dp
             // Sideways in an album with the photos folded into their bar: the photo takes the height
             // left over by the info row and the bar.
-            wide && state.photoProject && tool != Tool.FILES && !albumOpen -> (configuration.screenHeightDp - 150).dp
             else -> (configuration.screenHeightDp * share).dp
         },
         if (handleDragging) androidx.compose.animation.core.snap() else androidx.compose.animation.core.tween(220),
@@ -535,16 +533,9 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
             if (!fullscreen && !wide && state.clips.isNotEmpty()) {
                 // Dragging this moves the line between the picture and the tools.
                 // A double tap on it folds the transport and the timeline (or the album) away and
-                // brings them back; the arrows at its ends go to the clip (photo) before or after.
-                val at = state.selectedClip ?: 0
-                fun show(i: Int) {
-                    if (i !in state.clips.indices) return
-                    if (state.photoProject) vm.selectClip(i) else jumpTo(clipStarts[i])
-                }
+                // brings them back.
                 PreviewHandle(
                     onToggle = { if (!state.photoProject || tool != Tool.FILES) compact = !compact },
-                    onPrevious = if (at > 0) ({ show(at - 1) }) else null,
-                    onNext = if (at < state.clips.lastIndex) ({ show(at + 1) }) else null,
                     onDragging = { handleDragging = it },
                 ) { dy ->
                     val d = dy / (configuration.screenHeightDp * density.density)
@@ -565,11 +556,8 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
                         Icon(HeadsupIcons.ChevronUp, "Show the album", Modifier.size(20.dp), tint = HeadsupColors.TextMuted)
                     }
                 } else if (state.clips.isNotEmpty() && tool != Tool.EXPORT) {
-                    if (tool == Tool.FILES || albumOpen) {
-                        PhotoStrip(state, vm, onAdd = addPhotos, arrange = tool == Tool.FILES, onFold = if (tool == Tool.FILES) null else ({ albumOpen = false }))
-                    } else {
-                        AlbumBar(state, vm) { albumOpen = true }
-                    }
+                    // The album's photos are always shown; a double tap on the handle folds them away.
+                    PhotoStrip(state, vm, onAdd = addPhotos, arrange = tool == Tool.FILES)
                 }
             } else if (state.clips.isNotEmpty() && (folded || fullscreenFilm)) {
                 // Folded: the timeline is a line to scrub along.
@@ -2967,8 +2955,10 @@ private fun ColourPage(
             )
             Hint("Drag the mask on the picture to move it; two fingers resize and turn it.")
         }
-        // Any mask can be narrowed to a colour or a brightness; a range mask is only that.
-        MaskRanges(state, mask, vm)
+        // A line or an oval can be narrowed to a colour or a brightness; a range mask is only that.
+        // A selected or painted mask is not (it follows what was selected; to narrow it, combine it
+        // with a Colour or Light mask), so the three kinds stay apart.
+        if (mask.kind != MaskKind.BRUSH) MaskRanges(state, mask, vm)
         if (state.selectedMask > 0) MaskJoinControls(clip, state.selectedMask, mask, vm)
         if (mask.kind != MaskKind.RANGE) MaskMotion(state, clip, mask, vm, playhead, onSeek)
         return
@@ -3779,8 +3769,8 @@ private fun BrushControls(state: UiState, vm: HeadsupViewModel, pictureSource: (
                 else -> String.format(Locale.US, "Fuller %.0f %%", e * 100f)
             },
         )
-        RulerSlider(value = e, range = -1f..1f, step = 0.05f, onChange = { v -> vm.updateMask { it.copy(edge = v) } }, onReset = { vm.updateMask { it.copy(edge = 0f) } })
-        Hint("Edge takes in a little more (a rim, a halo) or a little less, the same few pixels all round.")
+        RulerSlider(value = e, range = -1f..1f, step = 0.05f, onChange = { v -> vm.setMaskEdge(v, pictureSource) }, onReset = { vm.setMaskEdge(0f, pictureSource) })
+        Hint("Edge takes in a little more by the outline (a rim, a halo) or a little less, only what looks like it, so the outline keeps the picture's shape.")
     }
 }
 
@@ -5064,18 +5054,6 @@ private fun RawControls(clip: ClipState, index: Int, vm: HeadsupViewModel) {
 
 /** The photos of a photo project as thumbnails: tap one to edit it. */
 @OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
-@Composable
-private fun AlbumBar(state: UiState, vm: HeadsupViewModel, onOpen: () -> Unit) {
-    val i = state.selectedClip ?: 0
-    Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 2.dp), verticalAlignment = Alignment.CenterVertically) {
-        SmallAction("‹", { vm.selectClip(i - 1) }, enabled = i > 0)
-        Hint("${i + 1} of ${state.clips.size}", Modifier.padding(horizontal = 6.dp))
-        SmallAction("›", { vm.selectClip(i + 1) }, enabled = i < state.clips.lastIndex)
-        Spacer(Modifier.weight(1f))
-        SmallAction("Album ▾", onOpen)
-    }
-}
-
 @OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
 private fun PhotoStrip(state: UiState, vm: HeadsupViewModel, onAdd: () -> Unit, arrange: Boolean, onFold: (() -> Unit)? = null) {
@@ -5241,8 +5219,6 @@ private fun SideHandle(onDrag: (Float) -> Unit) {
 @Composable
 private fun PreviewHandle(
     onToggle: () -> Unit,
-    onPrevious: (() -> Unit)?,
-    onNext: (() -> Unit)?,
     onDragging: (Boolean) -> Unit,
     onDrag: (Float) -> Unit,
 ) {
@@ -5263,23 +5239,6 @@ private fun PreviewHandle(
         contentAlignment = Alignment.Center,
     ) {
         Box(Modifier.width(40.dp).height(4.dp).clip(RoundedCornerShape(2.dp)).background(HeadsupColors.Outline))
-        for ((go, left) in listOf(onPrevious to true, onNext to false)) {
-            Box(
-                Modifier
-                    .align(if (left) Alignment.CenterStart else Alignment.CenterEnd)
-                    .padding(horizontal = 20.dp)
-                    .size(32.dp)
-                    .clip(CircleShape)
-                    .then(if (go != null) Modifier.clickable(onClick = go) else Modifier),
-                contentAlignment = Alignment.Center,
-            ) {
-                Text(
-                    if (left) "‹" else "›",
-                    style = MaterialTheme.typography.titleLarge,
-                    color = if (go != null) HeadsupColors.TextMuted else HeadsupColors.TextMuted.copy(alpha = 0.3f),
-                )
-            }
-        }
     }
 }
 

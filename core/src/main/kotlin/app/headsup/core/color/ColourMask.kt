@@ -107,6 +107,11 @@ data class ColourMask(
      * of a cut ([MaskFeather]).
      */
     val feather: Float = 0f,
+    /**
+     * The picture (a brush reference) Edge follows when it moves a painted or found mask's outline
+     * ([MaskEdge.shapeGuided]); null: moved by distance alone.
+     */
+    val edgePicture: String? = null,
 ) {
     /** True when a colour or luminance range narrows the mask. */
     val ranged: Boolean get() = luma != null || colour != null

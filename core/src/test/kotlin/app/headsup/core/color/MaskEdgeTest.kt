@@ -40,4 +40,20 @@ class MaskEdgeTest {
         assertTrue(out[50 * w + (70 - shift + 1)] > 0.5f)
         assertTrue(out[50 * w + (70 - shift - 2)] < 0.5f)
     }
+
+    @Test
+    fun `fuller following the picture stops at its edge`() {
+        val w = 400
+        val h = 100
+        // The picture: dark left of x = 57, light from it on; the mask starts at 60 (3 px short).
+        val rgb = FloatArray(w * h * 3) { i -> if ((i / 3) % w >= 57) 0.9f else 0.1f }
+        val mask = FloatArray(w * h) { i -> if (i % w >= 60) 1f else 0f }
+        val out = MaskEdge.shapeGuided(mask, w, h, 1f, rgb)
+        // Reach 4 px: the light pixels are taken in, the dark one as near is not.
+        assertTrue(out[50 * w + 57] > 0.5f, "light ${out[50 * w + 57]}")
+        assertTrue(out[50 * w + 56] < 0.5f, "dark ${out[50 * w + 56]}")
+        // Tighter: only what looks like the outside goes, so nothing here.
+        val tighter = MaskEdge.shapeGuided(mask, w, h, -1f, rgb)
+        assertTrue(tighter[50 * w + 61] > 0.5f, "kept ${tighter[50 * w + 61]}")
+    }
 }

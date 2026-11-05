@@ -37,6 +37,69 @@ object MaskEdge {
     }
 
     /**
+     * [shape] following the picture ([rgb], RGB per pixel of the same grid): Fuller takes in only
+     * pixels by the edge that look like the inside, Tighter lets go only of those that look like the
+     * outside, both within the same few pixels; so the outline keeps the picture's shape instead of
+     * filling its notches (or cutting its tips) with smooth arcs. Where both sides look alike it is
+     * moved as [shape] moves it.
+     */
+    fun shapeGuided(map: FloatArray, width: Int, height: Int, edge: Float, rgb: FloatArray): FloatArray {
+        val e = edge.coerceIn(-1f, 1f)
+        if (abs(e) < 1e-4f || rgb.size != map.size * 3) return shape(map, width, height, e)
+        val geo = shape(map, width, height, e)
+        val reach = max(1f, abs(e) * REACH * max(width, height))
+        val sd = signedDistance(map, width, height)
+        val n = map.size
+        // The colours just inside and just outside, past the reach, nearby.
+        val inRing = FloatArray(n) { if (sd[it] in (reach + 1f)..(reach + 6f)) 1f else 0f }
+        val outRing = FloatArray(n) { if (-sd[it] in (reach + 1f)..(reach + 6f)) 1f else 0f }
+        val win = (3 * reach + 8f).toInt()
+        val inN = MaskRefine.box(inRing, width, height, win)
+        val outN = MaskRefine.box(outRing, width, height, win)
+        val inMean = Array(3) { c -> MaskRefine.box(FloatArray(n) { rgb[it * 3 + c] * inRing[it] }, width, height, win) }
+        val outMean = Array(3) { c -> MaskRefine.box(FloatArray(n) { rgb[it * 3 + c] * outRing[it] }, width, height, win) }
+        val out = map.copyOf()
+        for (i in 0 until n) {
+            val d = sd[i]
+            // Only the pixels the move can reach: outside for Fuller, inside for Tighter.
+            val within = if (e > 0f) d < 0.5f && -d <= reach + 0.75f else d > -0.5f && d <= reach + 0.75f
+            if (!within) { out[i] = map[i]; continue }
+            var conf = 0f
+            var like = 0.5f
+            if (inN[i] > 1e-4f && outN[i] > 1e-4f) {
+                var dIn = 0f
+                var dOut = 0f
+                var contrast = 0f
+                for (c in 0..2) {
+                    val a = inMean[c][i] / inN[i]
+                    val b = outMean[c][i] / outN[i]
+                    val col = rgb[i * 3 + c]
+                    dIn += (col - a) * (col - a)
+                    dOut += (col - b) * (col - b)
+                    contrast += (a - b) * (a - b)
+                }
+                like = kotlin.math.sqrt(dOut) / (kotlin.math.sqrt(dIn) + kotlin.math.sqrt(dOut) + 1e-5f)
+                conf = smooth(0.03f, 0.1f, kotlin.math.sqrt(contrast))
+            }
+            out[i] = if (e > 0f) {
+                // Taken in when it looks (somewhat) like the inside: a rim, a halo.
+                val take = smooth(0.35f, 0.55f, like)
+                maxOf(map[i], take * conf + geo[i] * (1f - conf))
+            } else {
+                // Let go when it looks like the outside.
+                val keep = smooth(0.45f, 0.65f, like)
+                minOf(map[i], keep * conf + geo[i] * (1f - conf))
+            }
+        }
+        return out
+    }
+
+    private fun smooth(a: Float, b: Float, x: Float): Float {
+        val t = ((x - a) / (b - a)).coerceIn(0f, 1f)
+        return t * t * (3f - 2f * t)
+    }
+
+    /**
      * How far each pixel is from the mask's edge (where it crosses one half), in pixels: positive
      * inside, negative outside. Two passes of a 3-4 chamfer, close to the true distance.
      */

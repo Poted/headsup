@@ -2796,6 +2796,21 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
         val mask = clip.masks.getOrNull(s.selectedMask)?.takeIf { it.kind == MaskKind.BRUSH && it.strokes.isNotEmpty() } ?: return
         val reference = brushReference(clip, mask.at(playheadFileMs), grab) ?: return
         addStroke(index, clip, app.headsup.core.color.BrushStroke(listOf(0.5f, 0.5f), radius = 0.01f, reference = reference, fit = true))
+        // Edge then follows the same picture.
+        updateMask { it.copy(edgePicture = reference) }
+    }
+
+    /**
+     * The selected mask's Edge: moved by [edge], following the picture on screen (kept with the
+     * mask the first time) for a painted or found mask.
+     */
+    fun setMaskEdge(edge: Float, grab: ((Int) -> android.graphics.Bitmap?)?) {
+        val s = _state.value
+        val clip = s.selected ?: return
+        val mask = clip.masks.getOrNull(s.selectedMask) ?: return
+        val picture = mask.edgePicture
+            ?: if (mask.kind == MaskKind.BRUSH && mask.sequence == null && grab != null) brushReference(clip, mask.at(playheadFileMs), grab) else null
+        updateMask { it.copy(edge = edge, edgePicture = picture) }
     }
 
     private fun addStroke(index: Int, clip: ClipState, stroke: app.headsup.core.color.BrushStroke, replacing: app.headsup.core.color.BrushStroke? = null) {
@@ -3024,7 +3039,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                 .mapNotNull { id -> app.headsup.color.BrushReferences.get(context, id)?.let { id to it } }.toMap()
             val unmoved = app.headsup.core.color.BrushMask.rasterize(mask.strokes, w, h, mask.softness, refs)
             // Edge moves the whole outline, as shown.
-            val drawn = if (mask.edge != 0f) app.headsup.core.color.MaskEdge.shape(unmoved, w, h, mask.edge) else unmoved
+            val drawn = app.headsup.color.BrushAtlas.moveEdge(context, mask, unmoved, w, h)
             val placed = app.headsup.core.color.BrushMask.placed(drawn, w, h, MaskKey.of(mask.at(0L), 0L))
             if (mask.inverted) FloatArray(placed.size) { 1f - placed[it] } else placed
         }
