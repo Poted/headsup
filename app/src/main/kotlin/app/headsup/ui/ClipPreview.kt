@@ -773,7 +773,8 @@ fun ClipPreview(
     val clipTimelineMs = if (photo) positionMs else clip.timelineOfSource(positionMs)
     val fadeGain = Fade.gain(clipTimelineMs, clip.timelineDurationMs, clip.fadeInMs, clip.fadeOutMs)
     // Bars sliding in (and out) with the clip's time, as in the export.
-    val barsNow = if (effects.barsRatio != null) effects.copy(barsAmount = effects.barsMotion.amount(clipTimelineMs, clip.timelineDurationMs)) else effects
+    // A photo has no time: its bars are simply there.
+    val barsNow = if (effects.barsRatio == null) effects else if (photo) effects.copy(barsAmount = 1f) else effects.copy(barsAmount = effects.barsMotion.amount(clipTimelineMs, clip.timelineDurationMs))
     SideEffect { exoPlayer.volume = clipVolume * fadeGain }
     // Audio clips follow the timeline: each plays where it is placed, faded as in the export.
     val audioNow by rememberUpdatedState(audio)

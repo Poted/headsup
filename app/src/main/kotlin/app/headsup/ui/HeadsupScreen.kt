@@ -376,8 +376,9 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
                 CineLoader(
                     state.loadingMessage ?: "Working…", Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
                     progress = state.loadingProgress,
-                    // Long jobs can be stopped: copying, AI tracking (keeps what it found), Clean up.
-                    onCancel = if (listOf("Copying", "Tracking with AI", "Removing", "Reading frames").any { state.loadingMessage?.startsWith(it) == true }) vm::stopWork else null,
+                    // Every job shown here can be stopped (AI tracking keeps what it found); only
+                    // opening a project runs to its end, and a stop already asked for.
+                    onCancel = if (listOf("Opening", "Stopping").none { state.loadingMessage?.startsWith(it) == true }) vm::stopWork else null,
                 )
             }
             // Work in the background: one slim line each, the app usable meanwhile.
@@ -556,8 +557,9 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
                     if (wide) Box(Modifier.fillMaxWidth().clickable { compact = false }.padding(vertical = 2.dp), contentAlignment = Alignment.Center) {
                         Icon(HeadsupIcons.ChevronUp, "Show the album", Modifier.size(20.dp), tint = HeadsupColors.TextMuted)
                     }
-                } else if (state.clips.isNotEmpty() && tool != Tool.EXPORT) {
-                    // The album's photos are always shown; a double tap on the handle folds them away.
+                } else if (state.clips.isNotEmpty()) {
+                    // The album's photos are always shown (also on Export, where the marked ones
+                    // are exported); a double tap on the handle folds them away.
                     PhotoStrip(state, vm, onAdd = addPhotos, arrange = tool == Tool.FILES)
                 }
             } else if (state.clips.isNotEmpty() && (folded || fullscreenFilm)) {
@@ -3463,7 +3465,7 @@ private fun LooksPanel(state: UiState, vm: HeadsupViewModel, frameSource: (() ->
     // The clip measured: what was found, and the looks that suit it.
     Row(verticalAlignment = Alignment.CenterVertically) {
         Hint(
-            if (stats == null) "Analyse the clip: looks that suit it are suggested, and every look is fitted to it."
+            if (stats == null) (if (clip.meta.isPhoto) "Analyse the photo" else "Analyse the clip") + ": looks that suit it are suggested, and every look is fitted to it."
             else String.format(
                 Locale.US, "Mid-tones %.0f %% · %.1f %% clipped · %s%s",
                 stats.median * 100, stats.clipped * 100,
@@ -3621,7 +3623,7 @@ private fun ShotMatchPanel(state: UiState, clip: ClipState, vm: HeadsupViewModel
     if (state.photoProject) {
         // An album: the marked photos matched to the one shown, all at once.
         val marked = state.clips.count { it.picked && it.id != clip.id }
-        Hint("Mark the photos to match in the album (hold one: Mark for export), then show the photo whose colours you like and match them to it: white balance, tint, saturation and skin; each keeps its own brightness.")
+        Hint("Mark the photos to match in the album (hold a photo to mark it), then show the photo whose colours you like and match them to it: white balance, tint, saturation and skin; each keeps its own brightness.")
         Button(onClick = vm::matchMarkedTo, enabled = marked > 0 && !state.busy, modifier = Modifier.fillMaxWidth()) {
             Text(if (marked == 0) "No photos marked" else "Match $marked marked photo${if (marked == 1) "" else "s"} to this one", maxLines = 1)
         }
@@ -4495,7 +4497,8 @@ private fun EffectsPanel(state: UiState, vm: HeadsupViewModel, kind: EffectKind,
                     FilterChip(selected = effects.barsRatio == ratio, onClick = { updateEffects { it.copy(barsRatio = ratio) } }, label = { Text(label) })
                 }
             }
-            if (effects.barsRatio != null) {
+            // Sliding in and out is in time: a photo has none.
+            if (effects.barsRatio != null && !state.photoProject && state.selected?.meta?.isPhoto != true) {
                 Row(Modifier.horizontalScroll(rememberScrollState()), verticalAlignment = Alignment.CenterVertically) {
                     for (m in app.headsup.render.BarsMotion.entries) {
                         FilterChip(selected = effects.barsMotion == m, onClick = { updateEffects { it.copy(barsMotion = m) } }, label = { Text(m.label) })
@@ -4779,7 +4782,7 @@ private fun PhotoExport(state: UiState, vm: HeadsupViewModel) {
                 Text("Export the marked photos ($picked)")
             }
         } else if (photoCount > 1) {
-            Hint("Mark photos for export: hold a thumbnail (its menu), or Mark under the photos.")
+            Hint("Mark photos for export: hold a thumbnail (double-tap a marked one for its menu), or Mark under the photos.")
         }
         if (selectedPhoto && photoCount > 1) {
             OutlinedButton(onClick = { vm.exportPhotos(HeadsupViewModel.PhotoSet.CURRENT) }, enabled = !state.busy, modifier = Modifier.fillMaxWidth()) { Text("Export this photo (JPEG)") }
@@ -4888,9 +4891,12 @@ private fun TextPanel(state: UiState, vm: HeadsupViewModel, at: () -> Long) {
     }
     if (item == null) {
         if (state.texts.isEmpty()) {
-            Hint("Adds a text at the playhead. Drag it on the picture to place it; its bar on the timeline moves it in time.")
+            Hint(
+                if (state.photoProject) "Adds a text to the photo. Drag it on the picture to place it."
+                else "Adds a text at the playhead. Drag it on the picture to place it; its bar on the timeline moves it in time.",
+            )
         } else {
-            Hint("Tap a text's bar on the timeline to edit it.")
+            Hint(if (state.photoProject) "Tap a text below to edit it." else "Tap a text's bar on the timeline to edit it.")
             Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 val photoNow = state.selected
                 val shown = if (state.photoProject && photoNow != null) state.texts.filter { it.showsOn(photoNow.id, photoNow.groupId) } else state.texts
@@ -5086,7 +5092,8 @@ private fun PhotoStrip(state: UiState, vm: HeadsupViewModel, onAdd: () -> Unit, 
         items(state.clips.size) { i ->
             val c = state.clips[i]
             val selected = i == state.selectedClip
-            // Held: the photo's menu (mark, move, delete), as a clip's on the timeline.
+            // Held: marked (for export, matching, moving and deleting together). Double-tapped:
+            // the menu for the marked photos (this one alone when it is not marked).
             var menu by remember { mutableStateOf(false) }
             Box {
             Box(
@@ -5095,7 +5102,7 @@ private fun PhotoStrip(state: UiState, vm: HeadsupViewModel, onAdd: () -> Unit, 
                     .clip(RoundedCornerShape(10.dp))
                     .background(HeadsupColors.Surface)
                     .border(if (selected) 2.dp else 1.dp, if (selected) HeadsupColors.Accent else HeadsupColors.Outline, RoundedCornerShape(10.dp))
-                    .combinedClickable(onLongClick = { menu = true }) { onSelect(i) },
+                    .combinedClickable(onLongClick = { vm.togglePicked(i) }, onDoubleClick = { onSelect(i); menu = true }) { onSelect(i) },
             ) {
                 // Read here, so this tile (not only the row) shows its picture when it arrives.
                 thumbs.version.intValue
@@ -5110,10 +5117,23 @@ private fun PhotoStrip(state: UiState, vm: HeadsupViewModel, onAdd: () -> Unit, 
                 }
             }
             DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
-                DropdownMenuItem(text = { Text(if (c.picked) "Unmark for export" else "Mark for export") }, onClick = { menu = false; vm.togglePicked(i) })
-                if (i > 0) DropdownMenuItem(text = { Text("Move left") }, onClick = { menu = false; vm.moveClip(i, -1) })
-                if (i < state.clips.lastIndex) DropdownMenuItem(text = { Text("Move right") }, onClick = { menu = false; vm.moveClip(i, 1) })
-                DropdownMenuItem(text = { Text("Delete") }, onClick = { menu = false; vm.removeClip(i) })
+                val many = c.picked
+                val n = if (many) state.clips.count { it.picked } else 1
+                val what = if (n == 1) "photo" else "$n photos"
+                DropdownMenuItem(text = { Text("Export $what") }, onClick = {
+                    menu = false
+                    vm.exportPhotos(if (many) HeadsupViewModel.PhotoSet.PICKED else HeadsupViewModel.PhotoSet.CURRENT)
+                })
+                if (many) {
+                    if (state.clips.take(state.clips.indexOfFirst { it.picked }).any { !it.picked }) DropdownMenuItem(text = { Text("Move left") }, onClick = { menu = false; vm.movePicked(-1) })
+                    if (state.clips.drop(state.clips.indexOfLast { it.picked } + 1).any { !it.picked }) DropdownMenuItem(text = { Text("Move right") }, onClick = { menu = false; vm.movePicked(1) })
+                    DropdownMenuItem(text = { Text("Unmark") }, onClick = { menu = false; state.clips.indices.filter { state.clips[it].picked }.forEach(vm::togglePicked) })
+                    DropdownMenuItem(text = { Text("Delete $what") }, onClick = { menu = false; vm.removePicked() })
+                } else {
+                    if (i > 0) DropdownMenuItem(text = { Text("Move left") }, onClick = { menu = false; vm.moveClip(i, -1) })
+                    if (i < state.clips.lastIndex) DropdownMenuItem(text = { Text("Move right") }, onClick = { menu = false; vm.moveClip(i, 1) })
+                    DropdownMenuItem(text = { Text("Delete") }, onClick = { menu = false; vm.removeClip(i) })
+                }
             }
             }
         }

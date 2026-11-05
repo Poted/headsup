@@ -1715,6 +1715,27 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
         refreshPreview()
     }
 
+    /**
+     * The marked photos moved together past the nearest unmarked one before them ([delta] −1) or
+     * after them (+1), keeping their order; the photo shown stays shown.
+     */
+    fun movePicked(delta: Int) = _state.update { s ->
+        val marked = s.clips.filter { it.picked }
+        if (marked.isEmpty()) return@update s
+        val shownId = s.selected?.id
+        val first = s.clips.indexOfFirst { it.picked }
+        val last = s.clips.indexOfLast { it.picked }
+        val rest = s.clips.filter { !it.picked }
+        // Where the block goes among the unmarked ones: before the one before the first marked
+        // photo, or after the one after the last.
+        val unmarkedBefore = s.clips.take(first).count { !it.picked }
+        val unmarkedUpToLast = s.clips.take(last + 1).count { !it.picked }
+        val at = if (delta < 0) (unmarkedBefore - 1) else (unmarkedUpToLast + 1)
+        if (at < 0 || at > rest.size) return@update s
+        val clips = rest.take(at) + marked + rest.drop(at)
+        s.copy(clips = clips, selectedClip = clips.indexOfFirst { it.id == shownId }.takeIf { it >= 0 } ?: s.selectedClip)
+    }
+
     /** Removes the photos marked for export from the album. */
     fun removePicked() {
         _state.update { s ->
@@ -2194,7 +2215,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
     fun findHighlights(metric: Metric? = null) {
         val s = _state.value
         _state.update { it.copy(busy = true, loadingMessage = "Finding highlights…") }
-        viewModelScope.launch {
+        loadJob = viewModelScope.launch {
             val found = withContext(Dispatchers.Default) {
                 s.activities.indices.flatMap { trackIndex ->
                     val clips = s.clips.filter { it.sync?.trackIndex == trackIndex && !it.meta.isPhoto }
@@ -2262,7 +2283,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
         val cube = s.previewCube
         val context: Application = getApplication()
         _state.update { it.copy(busy = true, loadingMessage = "Analysing the clip", loadingProgress = null) }
-        viewModelScope.launch {
+        loadJob = viewModelScope.launch {
             try {
                 val stats = withContext(Dispatchers.Default) {
                     val frames = if (photoFrame != null) listOf(photoFrame) else {
@@ -2928,7 +2949,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
         val again = box == null && previous != null && previous.clipId == clip.id &&
             mask?.strokes?.lastOrNull() == previous.stroke && kotlin.math.hypot(x - previous.x, y - previous.y) < 0.03f
         val picture = segmentPicture(clip, grab) ?: return
-        viewModelScope.launch {
+        loadJob = viewModelScope.launch {
             val waiting = !picture.isCompleted
             if (waiting) _state.update { it.copy(busy = true, loadingMessage = "Reading the picture", loadingProgress = null) }
             try {
@@ -3002,7 +3023,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
         val large = if (things) grab(app.headsup.color.Segmenter.INPUT) else null
         val subtract = s.brush.subtract
         val label = keys.label(key)
-        viewModelScope.launch {
+        loadJob = viewModelScope.launch {
             _state.update { it.copy(busy = true, loadingMessage = "Finding ${label.lowercase(java.util.Locale.ROOT)}", loadingProgress = null) }
             try {
                 val stroke = withContext(Dispatchers.Default) {
