@@ -3874,6 +3874,12 @@ private fun Layers(
         LazyRow(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
             item { CircleOption("◎", "Object", selected = false, modified = false) { add { vm.addBrushMask(BrushMode.SELECT) } } }
             item {
+                // The picture's subject: its people, animals or vehicles, else what is in the middle.
+                CircleOption(app.headsup.color.SceneKeys.symbol(app.headsup.color.SceneKeys.SUBJECT), "Subject", selected = false, modified = false) {
+                    add { pictureSource?.let { grab -> vm.addSceneMask(app.headsup.color.SceneKeys.SUBJECT, grab) } }
+                }
+            }
+            item {
                 CircleOption(app.headsup.color.SceneKeys.symbol(app.headsup.color.Scene.SKY.name), "Sky", selected = false, modified = false) {
                     add { pictureSource?.let { grab -> vm.addSceneMask(app.headsup.color.Scene.SKY.name, grab) } }
                 }
@@ -3887,7 +3893,7 @@ private fun Layers(
             if (clip.meta.isPhoto) item { CircleOption("⌫", "Remove", selected = false, modified = false) { add { vm.startRemoval() } } }
         }
         Hint(
-            "Object: tap what to correct, draw round it or split the picture with a line. Sky: the sky found at once (on video followed when tracked). " +
+            "Object: tap what to correct, draw round it or split the picture with a line. Subject: the people, animals or vehicles found at once (else what is in the middle). Sky: the sky found at once (on video both are followed when tracked). " +
                 "Brush: paint it. Linear: a gradient across the picture (drag its dashed lines to set where it starts and ends). Radial: a gradient round a point (a face, a light, a vignette of your own). Colour: everything of a colour you tap. Light: a range of brightness." +
                 if (clip.meta.isPhoto) " Remove: select something and it is taken out of the photo, filled from what is around it." else "",
         )
