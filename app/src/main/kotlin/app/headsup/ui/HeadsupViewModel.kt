@@ -2046,8 +2046,26 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
             _state.update { it.copy(messages = it.messages + "The group has no other clip to match.") }
             return
         }
+        matchTo(ref, members, group.id, group.name)
+    }
+
+    /** The album's marked photos matched in colour to the one shown (each keeps its brightness). */
+    fun matchMarkedTo() {
+        val s = _state.value
+        val ref = s.selected ?: return
+        val members = s.clips.filter { it.picked && it.id != ref.id }
+        if (members.isEmpty()) {
+            _state.update { it.copy(messages = it.messages + "Mark the photos to match first (hold one in the album).") }
+            return
+        }
+        matchTo(ref, members, null, "the marked photos")
+    }
+
+    /** [members] matched in colour to [ref], in the background; [groupId] when they are its group. */
+    private fun matchTo(ref: ClipState, members: List<ClipState>, groupId: Long?, label: String) {
+        val s = _state.value
         val context: Application = getApplication()
-        runInBackground("Matching ${group.name}", ref.id, null) { report, stopped ->
+        runInBackground("Matching $label", ref.id, null) { report, stopped ->
             val refPixels = withContext(Dispatchers.IO) { framesOf(context, s, ref) }
             if (refPixels == null) {
                 _state.update { it.copy(messages = it.messages + "Could not read frames of the reference clip.") }
@@ -2087,12 +2105,13 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
             if (deltas.isEmpty()) return@runInBackground
             val now = _state.value
             val bases = now.clips.filter { it.id in deltas }.associate { it.id to it.grade }
-            val session = MatchSession(ref.id, group.id, ref.grade, ColorGrade(), GROUP_MATCH_STRENGTH, bases, deltas)
+            val session = MatchSession(ref.id, groupId, ref.grade, ColorGrade(), GROUP_MATCH_STRENGTH, bases, deltas)
+            val kind = if (ref.meta.isPhoto) "photo" else "clip"
             _state.update {
                 it.copy(
                     matchSession = session,
                     messages = it.messages + listOfNotNull(
-                        "${deltas.size} clip${if (deltas.size == 1) "" else "s"} of ${group.name} matched in colour to ${ref.meta.name}.",
+                        "${deltas.size} $kind${if (deltas.size == 1) "" else "s"} of $label matched in colour to ${ref.meta.name}.",
                         if (skipped > 0) "$skipped could not be read." else null,
                     ),
                 )
@@ -2107,7 +2126,9 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
      */
     private fun framesOf(context: android.content.Context, s: UiState, clip: ClipState, width: Int = 160): IntArray? = runCatching {
         val bitmaps = if (clip.meta.isPhoto) {
-            if (clip.meta.isRaw) return null
+            // A raw photo developed as the app develops it (small), so its colours start where the edit does.
+            if (clip.meta.isRaw) return@runCatching app.headsup.media.RawPhotos.decode(context, clip.meta.uri, clip.rawDevelop, width * 2)
+                ?.let { b -> val small = android.graphics.Bitmap.createScaledBitmap(b, width, (width * b.height / b.width.coerceAtLeast(1)).coerceAtLeast(1), true); pixelsOf(small) }
             val opts = android.graphics.BitmapFactory.Options().apply { inSampleSize = (clip.meta.width / (width * 2)).coerceAtLeast(1) }
             listOfNotNull(context.contentResolver.openInputStream(clip.meta.uri)?.use { android.graphics.BitmapFactory.decodeStream(it, null, opts) })
         } else {

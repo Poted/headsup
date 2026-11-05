@@ -2882,7 +2882,8 @@ private fun ColourPage(
     val maskOnly = setOf(Adjustment.GLOW, Adjustment.HALATION)
     val options = when (target) {
         // The Cine look is part of Looks (its Cinematic looks and the clip's analysis).
-        GradeTarget.CLIP -> (if (index > 0) Adjustment.entries else Adjustment.entries - Adjustment.BLEND) - maskOnly - Adjustment.CINE
+        // Blending in is from the clip before on the timeline: an album's photos have none.
+        GradeTarget.CLIP -> (if (index > 0 && !album) Adjustment.entries else Adjustment.entries - Adjustment.BLEND) - maskOnly - Adjustment.CINE
         GradeTarget.GROUP -> Adjustment.entries - Adjustment.BLEND - Adjustment.CINE - Adjustment.MATCH - maskOnly
         GradeTarget.GLOBAL -> Adjustment.entries - Adjustment.LUT - Adjustment.BLEND - Adjustment.CINE - Adjustment.MATCH - maskOnly
         GradeTarget.MASK -> Adjustment.entries - Adjustment.LUT - Adjustment.SKIN - Adjustment.VIGNETTE - Adjustment.BLEND -
@@ -3617,6 +3618,15 @@ private fun FastEdit(state: UiState, vm: HeadsupViewModel) {
  */
 @Composable
 private fun ShotMatchPanel(state: UiState, clip: ClipState, vm: HeadsupViewModel, frameSource: (() -> Bitmap?)?) {
+    if (state.photoProject) {
+        // An album: the marked photos matched to the one shown, all at once.
+        val marked = state.clips.count { it.picked && it.id != clip.id }
+        Hint("Mark the photos to match in the album (hold one: Mark for export), then show the photo whose colours you like and match them to it: white balance, tint, saturation and skin; each keeps its own brightness.")
+        Button(onClick = vm::matchMarkedTo, enabled = marked > 0 && !state.busy, modifier = Modifier.fillMaxWidth()) {
+            Text(if (marked == 0) "No photos marked" else "Match $marked marked photo${if (marked == 1) "" else "s"} to this one", maxLines = 1)
+        }
+        return
+    }
     val reference = state.matchReference
     val group = state.groupOf(clip)
     // A camera group is matched as a whole by default: colour character only, brightness per shot.
