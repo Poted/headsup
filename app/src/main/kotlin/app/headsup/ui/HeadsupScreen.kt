@@ -411,6 +411,11 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
                         // A painted mask moves with two fingers only in Move; otherwise they zoom the view.
                         onTransformMask = if (shaping && !fullscreen && !editingRange && !pickingColour && (!editingBrush || state.brush.mode == BrushMode.MOVE)) vm::transformMask else null,
                         onMaskEnd = if (shaping && !fullscreen && !editingBrush && !editingRange && !pickingColour) vm::dragMaskEnd else null,
+                        // The masks' pins while the clip's layers are worked on (not while one is shaped).
+                        onPickMask = if (tool == Tool.COLOUR && !fullscreen && !shaping && !pickingColour && selected.colorGrade &&
+                            (state.target == GradeTarget.CLIP || state.target == GradeTarget.MASK) && selected.masks.isNotEmpty()
+                        ) { i -> vm.selectMask(i); vm.setTarget(GradeTarget.MASK) } else null,
+                        pickedMask = state.selectedMask.takeIf { state.target == GradeTarget.MASK },
                         zoomForPainting = shaping && editingBrush && state.brush.mode != BrushMode.MOVE && !fullscreen,
                         // View: one finger moves the zoomed picture, nothing is painted.
                         panView = shaping && editingBrush && state.brush.mode == BrushMode.VIEW && !fullscreen,
