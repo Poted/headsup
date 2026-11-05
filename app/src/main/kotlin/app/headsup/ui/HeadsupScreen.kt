@@ -5265,6 +5265,9 @@ private fun PhotoStrip(state: UiState, vm: HeadsupViewModel, onAdd: () -> Unit, 
     val scope = rememberCoroutineScope()
     val thumbs = remember { Filmstrip(context, scope) }
     DisposableEffect(thumbs) { onDispose { thumbs.release() } }
+    // The whole album, large: stars, Auto pick, filters.
+    var browsing by rememberSaveable { mutableStateOf(false) }
+    if (browsing) AlbumBrowser(state, vm) { browsing = false }
     LazyRow(
         Modifier.fillMaxWidth().padding(vertical = 8.dp),
         horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -5296,6 +5299,14 @@ private fun PhotoStrip(state: UiState, vm: HeadsupViewModel, onAdd: () -> Unit, 
                         contentAlignment = Alignment.Center,
                     ) { Text("✓", style = MaterialTheme.typography.labelSmall, color = HeadsupColors.OnHighlight) }
                 }
+                if (c.rating > 0) {
+                    Text(
+                        "${if (c.suggested) "✩" else "★"}${c.rating}",
+                        Modifier.align(Alignment.BottomStart).padding(3.dp).clip(RoundedCornerShape(5.dp)).background(Color.Black.copy(alpha = 0.6f)).padding(horizontal = 4.dp),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = if (c.suggested) HeadsupColors.AccentSoft else HeadsupColors.Accent,
+                    )
+                }
             }
             DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
                 val many = c.picked
@@ -5324,6 +5335,17 @@ private fun PhotoStrip(state: UiState, vm: HeadsupViewModel, onAdd: () -> Unit, 
                 contentAlignment = Alignment.Center,
             ) { Icon(HeadsupIcons.Add, contentDescription = "Add", tint = HeadsupColors.Highlight) }
         }
+        item {
+            // The album large: rate, Auto pick, filter.
+            Column(
+                Modifier.size(64.dp).clip(RoundedCornerShape(10.dp)).border(1.dp, HeadsupColors.Outline, RoundedCornerShape(10.dp)).clickable { browsing = true },
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Center,
+            ) {
+                Text("⊞", style = MaterialTheme.typography.titleMedium, color = HeadsupColors.Highlight)
+                Text("Album", style = MaterialTheme.typography.labelSmall, color = HeadsupColors.TextMuted)
+            }
+        }
     }
     // The selected photo: its place in the album, or out of it.
     val i = state.selectedClip
@@ -5335,6 +5357,7 @@ private fun PhotoStrip(state: UiState, vm: HeadsupViewModel, onAdd: () -> Unit, 
             SmallAction("Move ▶", { vm.moveClip(i, 1) }, enabled = i < state.clips.lastIndex)
             SmallAction("Remove", { vm.removeClip(i) })
         }
+        StarRow(state.clips[i].rating, state.clips[i].suggested) { stars -> vm.setRating(i, stars) }
         // Several at once: the marked photos (undo brings them back).
         val marked = state.clips.count { it.picked }
         if (marked > 1) {

@@ -51,6 +51,10 @@ data class SavedClip(
     val flags: List<Long> = emptyList(),
     /** Set when [uri] is the app's reversed copy of part of another file. */
     val reversed: SavedReverse? = null,
+    /** An album photo's stars, whether Auto pick suggested them, and its takes of one shot. */
+    val rating: Int = 0,
+    val suggested: Boolean = false,
+    val cullGroup: Int? = null,
 )
 
 /** A reversed clip's source: [originalUri] from [startMs] to [endMs], played backwards. */
@@ -352,6 +356,9 @@ internal object Json {
         .put("fadeOutMs", c.fadeOutMs)
         .put("soundLevel", c.soundLevel)
         .put("picked", c.picked)
+        .put("rating", c.rating)
+        .put("suggested", c.suggested)
+        .apply { c.cullGroup?.let { put("cullGroup", it) } }
         .put("raw", JSONObject().put("exposure", c.rawDevelop.exposure.toDouble()).put("highlights", c.rawDevelop.highlights.toDouble())
             .put("shadows", c.rawDevelop.shadows.toDouble()).put("temperature", c.rawDevelop.temperature.toDouble()).put("tint", c.rawDevelop.tint.toDouble())
             .put("sharpen", c.rawDevelop.sharpen.toDouble()).put("colourNoise", c.rawDevelop.colourNoise.toDouble()))
@@ -388,6 +395,9 @@ internal object Json {
         fadeOutMs = o.optLong("fadeOutMs", 0L),
         soundLevel = o.optDouble("soundLevel", 1.0).toFloat(),
         picked = o.optBoolean("picked", false),
+        rating = o.optInt("rating", 0).coerceIn(0, 5),
+        suggested = o.optBoolean("suggested", false),
+        cullGroup = if (o.has("cullGroup")) o.optInt("cullGroup") else null,
         rawDevelop = o.optJSONObject("raw")?.let { r ->
             RawDevelop(
                 r.optDouble("exposure", 0.0).toFloat(), r.optDouble("highlights", 0.0).toFloat(), r.optDouble("shadows", 0.0).toFloat(),

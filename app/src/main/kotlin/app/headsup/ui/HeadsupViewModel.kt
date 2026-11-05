@@ -154,6 +154,12 @@ data class ClipState(
     val rawDevelop: RawDevelop = RawDevelop(),
     /** An album photo marked for export. */
     val picked: Boolean = false,
+    /** An album photo's stars, 0 (none) to 5. */
+    val rating: Int = 0,
+    /** Its stars were suggested by Auto pick (not given by hand). */
+    val suggested: Boolean = false,
+    /** Which takes of one shot it is with (Auto pick); null before Auto pick looked. */
+    val cullGroup: Int? = null,
     /** Moments flagged in the file (file time): to find again, cut at, work on. */
     val flags: List<Long> = emptyList(),
     /** Played backwards: [meta] is then the reversed copy of [ReversedSource.original]'s cut. */
@@ -610,6 +616,91 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
     /** Marks or unmarks an album photo for export. */
     fun togglePicked(index: Int) = updateClip(index) { it.copy(picked = !it.picked) }
 
+    /** An album photo's stars, by hand (the same stars again take them off). */
+    fun setRating(index: Int, stars: Int) = updateClip(index) {
+        val r = stars.coerceIn(0, 5)
+        it.copy(rating = if (it.rating == r && !it.suggested) 0 else r, suggested = false)
+    }
+
+    /** Marks the album's photos with at least [stars] stars (for export, matching, moving together). */
+    fun markRated(stars: Int) = _state.update { s ->
+        s.copy(clips = s.clips.map { if (it.meta.isPhoto) it.copy(picked = it.rating >= stars && stars > 0) else it })
+    }
+
+    /** Takes back the stars Auto pick suggested (stars given by hand stay). */
+    fun clearSuggestions() = _state.update { s ->
+        s.copy(clips = s.clips.map { if (it.suggested) it.copy(rating = 0, suggested = false) else it })
+    }
+
+    /**
+     * A first pass over the album ([app.headsup.core.photo.PhotoCull]): takes of one shot grouped,
+     * the best of each (sharp, well exposed) given [SUGGESTED_STARS] stars. Only photos without
+     * stars get them, and none is ever rejected or removed. Cancellable.
+     */
+    fun autoPick() {
+        val s = _state.value
+        val photos = s.clips.withIndex().filter { it.value.meta.isPhoto }
+        if (photos.isEmpty()) return
+        val context = getApplication<Application>()
+        _state.update { it.copy(busy = true, loadingMessage = "Looking through ${photos.size} photos…", loadingProgress = 0f) }
+        loadJob = viewModelScope.launch {
+            try {
+                val features = ArrayList<app.headsup.core.photo.PhotoCull.Features?>()
+                for ((n, entry) in photos.withIndex()) {
+                    ensureActive()
+                    features += withContext(Dispatchers.IO) { cullFeatures(context, entry.value) }
+                    _state.update { it.copy(loadingProgress = (n + 1f) / photos.size, loadingMessage = "Looking through photo ${n + 1} of ${photos.size}…") }
+                }
+                // Photos that could not be read stay out (each its own group).
+                val known = features.withIndex().filter { it.value != null }
+                val result = withContext(Dispatchers.Default) { app.headsup.core.photo.PhotoCull.choose(known.map { it.value!! }) }
+                val groupOf = HashMap<Long, Int>()
+                val chosen = HashSet<Long>()
+                known.forEachIndexed { k, iv ->
+                    val id = photos[iv.index].value.id
+                    groupOf[id] = result.group[k]
+                    if (k in result.suggested) chosen += id
+                }
+                var starred = 0
+                _state.update { st ->
+                    st.copy(
+                        busy = false, loadingMessage = null, loadingProgress = null,
+                        clips = st.clips.map { c ->
+                            if (!c.meta.isPhoto) return@map c
+                            // Earlier suggestions are looked at again; stars given by hand stay as they are.
+                            val base = if (c.suggested) c.copy(rating = 0, suggested = false) else c
+                            val g = groupOf[c.id] ?: return@map base
+                            if (c.id in chosen && base.rating == 0) {
+                                starred++
+                                base.copy(cullGroup = g, rating = SUGGESTED_STARS, suggested = true)
+                            } else base.copy(cullGroup = g)
+                        },
+                        messages = st.messages + "Auto pick: $starred suggested in ${result.group.toSet().size} shots. Nothing was removed.",
+                    )
+                }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                _state.update { it.copy(busy = false, loadingMessage = null, loadingProgress = null) }
+                throw e
+            }
+        }
+    }
+
+    /** A photo, small, measured for Auto pick; null when it cannot be read. */
+    private fun cullFeatures(context: android.content.Context, clip: ClipState): app.headsup.core.photo.PhotoCull.Features? = runCatching {
+        val width = 384
+        val decoded = if (clip.meta.isRaw) {
+            app.headsup.media.RawPhotos.decode(context, clip.meta.uri, clip.rawDevelop, width * 2)
+        } else {
+            val opts = android.graphics.BitmapFactory.Options().apply { inSampleSize = (clip.meta.width / (width * 2)).coerceAtLeast(1) }
+            context.contentResolver.openInputStream(clip.meta.uri)?.use { android.graphics.BitmapFactory.decodeStream(it, null, opts) }
+        } ?: return null
+        val h = (width * decoded.height / decoded.width.coerceAtLeast(1)).coerceAtLeast(3)
+        val small = Bitmap.createScaledBitmap(decoded, width, h, true)
+        if (small !== decoded) decoded.recycle()
+        val px = pixelsOf(small)
+        app.headsup.core.photo.PhotoCull.features(px, width, h)
+    }.getOrNull()
+
     // Texts
 
     private val samplers = java.util.WeakHashMap<app.headsup.core.track.ActivityTrack, app.headsup.core.track.TelemetrySampler>()
@@ -938,6 +1029,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                 fresh += ClipState(
                     meta = meta, sync = c.sync, id = c.id, manualOffsetMs = c.manualOffsetMs,
                     manualStart = c.manualStart, picked = c.picked, soundLevel = c.soundLevel,
+                    rating = c.rating, suggested = c.suggested, cullGroup = c.cullGroup,
                 )
             }
             s.copy(
@@ -1046,6 +1138,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                 it.fadeInMs, it.fadeOutMs, it.soundLevel, it.rawDevelop, it.picked, it.speedCurve, it.retouch,
                 flags = it.flags,
                 reversed = it.reversed?.let { r -> SavedReverse(r.original.uri, r.startMs, r.endMs) },
+                rating = it.rating, suggested = it.suggested, cullGroup = it.cullGroup,
             )
         },
         groups = groups.map { SavedGroup(it.id, it.name, it.grade, it.lutName) },
@@ -1185,6 +1278,9 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
             soundLevel = c.soundLevel,
             rawDevelop = c.rawDevelop,
             picked = c.picked,
+            rating = c.rating,
+            suggested = c.suggested,
+            cullGroup = c.cullGroup,
             groupId = c.groupId,
         )
     }
@@ -4134,6 +4230,8 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     companion object {
+        /** Stars Auto pick gives the photos it suggests. */
+        const val SUGGESTED_STARS = 3
         /** Large enough to fix a camera clock that is minutes off. */
         const val MAX_OFFSET_MS = 600_000L
         const val PHOTO_DEFAULT_MS = 4_000L
