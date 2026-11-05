@@ -107,6 +107,10 @@ data class ColourMask(
      * of a cut ([MaskFeather]).
      */
     val feather: Float = 0f,
+    /** A painted or found mask's wide transition into the picture, 0..1 ([MaskBlend]). */
+    val blend: Float = 0f,
+    /** Where that transition lies: 1 outside the outline, -1 inside, 0 across it ([MaskBlend]). */
+    val blendPosition: Float = 1f,
     /**
      * The picture (a brush reference) Edge follows when it moves a painted or found mask's outline
      * ([MaskEdge.shapeGuided]); null: moved by distance alone.

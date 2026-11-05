@@ -583,6 +583,8 @@ internal object Json {
         .put("anchors", JSONArray(m.anchors))
         .put("join", m.join.name)
         .put("feather", m.feather.toDouble())
+        .put("blend", m.blend.toDouble())
+        .put("blendPos", m.blendPosition.toDouble())
         .putOpt("edgePic", m.edgePicture)
         .apply {
             m.luma?.let { put("luma", JSONObject().put("low", it.low.toDouble()).put("high", it.high.toDouble()).put("soft", it.soft.toDouble())) }
@@ -636,6 +638,8 @@ internal object Json {
             anchors = o.optJSONArray("anchors")?.let { a -> List(a.length()) { a.optLong(it) } } ?: emptyList(),
             join = app.headsup.core.color.MaskJoin.entries.firstOrNull { it.name == o.optString("join") } ?: app.headsup.core.color.MaskJoin.NEW,
             feather = o.optDouble("feather", 0.0).toFloat(),
+            blend = o.optDouble("blend", 0.0).toFloat(),
+            blendPosition = o.optDouble("blendPos", 1.0).toFloat(),
             edgePicture = o.optStringOrNull("edgePic"),
             luma = o.optJSONObject("luma")?.let {
                 app.headsup.core.color.LumaRange(it.optDouble("low", 0.6).toFloat(), it.optDouble("high", 1.0).toFloat(), it.optDouble("soft", 0.15).toFloat())

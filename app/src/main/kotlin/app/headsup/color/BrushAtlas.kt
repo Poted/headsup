@@ -85,6 +85,19 @@ object BrushAtlas {
         return map
     }
 
+    private class Blended(val source: FloatArray, val blend: Float, val position: Float, val map: FloatArray)
+
+    private val blends = HashMap<Int, Blended>()
+
+    private fun blended(slot: Int, m: ColourMask, source: FloatArray, w: Int, h: Int): FloatArray {
+        synchronized(blends) {
+            blends[slot]?.takeIf { it.blend == m.blend && it.position == m.blendPosition && it.source.contentEquals(source) }?.let { return it.map }
+        }
+        val map = app.headsup.core.color.MaskBlend.apply(source, w, h, m.blend, m.blendPosition)
+        synchronized(blends) { blends[slot] = Blended(source, m.blend, m.blendPosition, map) }
+        return map
+    }
+
     /** Strokes added on top of tracked masks since they were tracked, drawn: by the mask's maps. */
     private val extras = HashMap<String?, Drawn>()
 
@@ -103,7 +116,10 @@ object BrushAtlas {
             // Edge moves the whole mask's outline, what was found and what was painted alike.
             val drawnMap = moveEdge(context, m, unmoved, w, h)
             // A feathered edge: the coverage blurred (the cached drawings stay sharp).
-            val map = if (m.feather > 0f) app.headsup.core.color.MaskFeather.apply(drawnMap, w, h, m.feather * ColourMask.FEATHER_REACH * h) else drawnMap
+            val feathered = if (m.feather > 0f) app.headsup.core.color.MaskFeather.apply(drawnMap, w, h, m.feather * ColourMask.FEATHER_REACH * h) else drawnMap
+            // Blend: the outline turned into a wide transition into the picture (in place of the
+            // narrow feather), cached while the mask stays the same.
+            val map = if (m.blend > 0f) blended(slot, m, drawnMap, w, h) else feathered
             // Green: where Soften made the edge gradual (kept soft by the shaders). Blue: the
             // coverage before feathering, whose edge the shaders lay onto the picture's at full
             // size and carry over to the feathered one, so a feathered edge keeps the picture's shape.
@@ -112,7 +128,9 @@ object BrushAtlas {
                 for (x in 0 until w) {
                     val v = (map[y * w + x] * 255f + 0.5f).toInt().coerceIn(0, 255)
                     val g = soft?.let { (it[y * w + x] * 255f + 0.5f).toInt().coerceIn(0, 255) } ?: 0
-                    val raw = (drawnMap[y * w + x] * 255f + 0.5f).toInt().coerceIn(0, 255)
+                    // Blended: the unfeathered coverage only as in or out, so the shaders leave the
+                    // smooth transition as it is (no edge laid onto the picture's across it).
+                    val raw = if (m.blend > 0f) (if (drawnMap[y * w + x] >= 0.5f) 255 else 0) else (drawnMap[y * w + x] * 255f + 0.5f).toInt().coerceIn(0, 255)
                     pixels[y * stride + slot * w + x] = (0xFF shl 24) or (v shl 16) or (g shl 8) or raw
                 }
             }

@@ -2668,6 +2668,10 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
         if (moved) kept.placedAt(t, edited.centerX, edited.centerY, edited.angleDegrees, edited.sizeX, edited.sizeY) else kept
     }
 
+    /** A mask's angle after turning: an oval within ±90° (half a turn is the same oval), anything else within ±180°. */
+    private fun turnedMaskAngle(kind: MaskKind, degrees: Float): Float =
+        if (kind == MaskKind.ELLIPSE) ((degrees + 90f) % 180f + 180f) % 180f - 90f else ((degrees + 180f) % 360f + 360f) % 360f - 180f
+
     /**
      * Two fingers on the selected mask: moved by ([dx], [dy]) of the picture, scaled by [zoom]
      * (an oval's size, a line's soft edge) and turned by [degrees].
@@ -2677,8 +2681,8 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
         m.copy(
             centerX = (m.centerX + dx).coerceIn(-0.5f, 1.5f),
             centerY = (m.centerY + dy).coerceIn(-0.5f, 1.5f),
-            // An oval turned by half a turn is the same oval; a line would swap its sides, so it stops.
-            angleDegrees = if (m.kind == MaskKind.ELLIPSE) ((turned + 90f) % 180f + 180f) % 180f - 90f else turned.coerceIn(-90f, 90f),
+            // An oval turned by half a turn is the same oval; a line turns all the way round.
+            angleDegrees = turnedMaskAngle(m.kind, turned),
             sizeX = if (m.kind != MaskKind.LINEAR) (m.sizeX * zoom).coerceIn(0.05f, if (m.kind == MaskKind.BRUSH) 5f else 2f) else m.sizeX,
             sizeY = if (m.kind != MaskKind.LINEAR) (m.sizeY * zoom).coerceIn(0.05f, if (m.kind == MaskKind.BRUSH) 5f else 2f) else m.sizeY,
             softness = if (m.kind == MaskKind.LINEAR) (m.softness * zoom).coerceIn(0.02f, 2f) else m.softness,
@@ -2701,7 +2705,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                 if (kotlin.math.hypot(vx, vy) < 1e-3f) return@updateMask m
                 val deg = Math.toDegrees(kotlin.math.atan2(vx.toDouble(), (-vy).toDouble())).toFloat()
                 return@updateMask m.copy(
-                    angleDegrees = if (m.kind == MaskKind.ELLIPSE) ((deg + 90f) % 180f + 180f) % 180f - 90f else deg.coerceIn(-90f, 90f),
+                    angleDegrees = turnedMaskAngle(m.kind, deg),
                 )
             }
             if (m.kind == MaskKind.LINEAR) {

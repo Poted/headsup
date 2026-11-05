@@ -2947,6 +2947,19 @@ private fun ColourPage(
             ValueHeader("Feather", if (mask.feather <= 0f) "Off" else String.format(Locale.US, "%.0f %%", mask.feather * 100f))
             RulerSlider(mask.feather, 0f..1f, 0.02f, { v -> vm.updateMask { it.copy(feather = v) } }, onReset = { vm.updateMask { it.copy(feather = 0f) } })
             Hint("Makes the mask's edge a gradual band instead of a sharp cut, for edges no selection follows exactly. Off: the edge follows the picture's.")
+            // A wide transition into the picture, where it lies set apart from how wide it is.
+            SectionCaption("Blend")
+            ValueHeader("Blend", if (mask.blend <= 0f) "Off" else String.format(Locale.US, "%.0f %%", mask.blend * 100f))
+            RulerSlider(mask.blend, 0f..1f, 0.01f, { v -> vm.updateMask { it.copy(blend = v) } }, onReset = { vm.updateMask { it.copy(blend = 0f) } })
+            if (mask.blend > 0f) {
+                ValueHeader("Position", when {
+                    mask.blendPosition >= 0.99f -> "Outside"
+                    mask.blendPosition <= -0.99f -> "Inside"
+                    else -> String.format(Locale.US, "%+.0f %%", mask.blendPosition * 100f)
+                })
+                RulerSlider(mask.blendPosition, -1f..1f, 0.02f, { v -> vm.updateMask { it.copy(blendPosition = v) } }, onReset = { vm.updateMask { it.copy(blendPosition = 1f) } })
+            }
+            Hint("Blend: how far the mask's change fades into the picture around what was selected, up to a third of the frame. Position: Outside keeps the full change on the selection and fades it out around it; Inside fades it within the selection, leaving the rest untouched; between, across the outline. Used in place of Feather.")
         } else if (editingShape != null) {
             SmallAction(if (state.maskOverlay) "Overlay ✓" else "Overlay", { vm.toggleMaskOverlay() })
             LazyRow(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
@@ -3961,7 +3974,7 @@ private enum class MaskShape(
     // How wide the gradient is: up to twice the picture's height, a gradient across all of it.
     SOFTNESS("◐", "Feather", setOf(MaskKind.LINEAR, MaskKind.ELLIPSE), 0.02f..2f, 0.02f, "%.0f %%", { it.softness }, { m, v -> m.copy(softness = v) }),
     // A colour or light range covers the picture wherever it matches: turning it changes nothing.
-    ANGLE("∠", "Angle", setOf(MaskKind.LINEAR, MaskKind.ELLIPSE, MaskKind.BRUSH), -90f..90f, 0.5f, "%+.1f°", { it.angleDegrees }, { m, v -> m.copy(angleDegrees = v) }),
+    ANGLE("∠", "Angle", setOf(MaskKind.LINEAR, MaskKind.ELLIPSE, MaskKind.BRUSH), -180f..180f, 0.5f, "%+.1f°", { it.angleDegrees }, { m, v -> m.copy(angleDegrees = v) }),
     ;
 
     /** Value as shown above the ruler (fractions as percent). */

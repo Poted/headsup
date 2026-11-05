@@ -1886,7 +1886,8 @@ private fun outlineOf(atlas: Bitmap, slot: Int): Bitmap? {
     if (w < 3 || h < 3 || slot !in 0 until ColourMask.MAX_PER_CLIP) return null
     val px = IntArray(w * h)
     atlas.getPixels(px, 0, w, slot * w, 0, w, h)
-    val inside = BooleanArray(w * h) { ((px[it] shr 16) and 0xFF) >= 128 }
+    // The outline of what was selected or painted (blue: before feather and blend).
+    val inside = BooleanArray(w * h) { (px[it] and 0xFF) >= 128 }
     val out = IntArray(w * h)
     val line = android.graphics.Color.WHITE
     val rim = android.graphics.Color.argb(140, 0, 0, 0)
