@@ -228,7 +228,12 @@ class GradePreviewShader {
          * The functions for one set of masks: [m] names their uniforms (m0a…), [brush] their
          * atlas, [slot] its slot size, [count] how many; [sfx] ends the functions' names.
          */
-        fun maskCode(sfx: String, m: String, brush: String, slot: String, count: String): String = """
+        /**
+         * [picture]: how the mask code reads the picture at a point of its own coordinates: the
+         * current clip's masks live in the original picture (they stay on what they cover when the
+         * perspective is corrected), so they read it as it is.
+         */
+        fun maskCode(sfx: String, m: String, brush: String, slot: String, count: String, picture: String = "img"): String = """
             // A brush mask (BrushMask): the pixel taken back to where its strokes were painted
             // (the mask at BrushMask.BASE: centred, upright, scale 1), then read from its atlas slot.
             // The atlas at coord: the mask's coverage (r) and where its edge was made gradual (g).
@@ -277,7 +282,7 @@ class GradePreviewShader {
                 for (int j = -1; j <= 1; j++) {
                     for (int i = -1; i <= 1; i++) {
                         float2 q = p + float2(float(i), float(j)) * st;
-                        float3 d = float3(img(q).rgb) - c;
+                        float3 d = float3($picture(q).rgb) - c;
                         float k = exp(-dot(d, d) * 60.0) * ((i == 0 && j == 0) ? 1.0 : 0.6);
                         acc += brushRaw$sfx(a, b, q, slot) * k;
                         sum += k;
@@ -352,6 +357,18 @@ class GradePreviewShader {
 
             uniform float hasWarp;
             uniform float3x3 warp;
+
+            // A point of the corrected picture in the original (where masks are kept).
+            float2 srcPx(float2 p) {
+                if (hasWarp < 0.5) return p;
+                float3 q = warp * float3(p / size, 1.0);
+                return clamp(q.xy / q.z, float2(0.0), float2(1.0)) * size;
+            }
+
+            // The original picture as it is, at a point of it.
+            half4 imgSrc(float2 p) {
+                return image.eval(clamp(p, float2(0.5), size - 0.5));
+            }
 
             // The picture, through the perspective correction (Perspective.sourceOf) when there is one.
             half4 img(float2 p) {
@@ -436,7 +453,7 @@ class GradePreviewShader {
             }
 
             // The clip's masks, and the masks of the clip it blends in from (as they were at its end).
-            ${maskCode("", "m", "brush", "brushSlot", "maskCount")}
+            ${maskCode("", "m", "brush", "brushSlot", "maskCount", picture = "imgSrc")}
             ${maskCode("F", "fm", "brushFrom", "brushFromSlot", "fromMaskCount")}
 
 
@@ -508,7 +525,7 @@ class GradePreviewShader {
 
             // Where each mask is at p, for masks that glow: their glow and halation there, added up.
             float2 maskGlowAt(float2 p) {
-                float4 w = weightsAt(p, float3(img(p).rgb), false);
+                float4 w = weightsAt(srcPx(p), float3(img(p).rgb), false);
                 float2 g = float2(0.0);
                 ${List(ColourMask.MAX_PER_CLIP) { i -> """
                 if (maskCount > ${i}.5 && (mg$i.x > 0.0 || mg$i.y > 0.0)) g += mg$i * w.${"xyzw"[i]};""" }.joinToString("")}
@@ -583,7 +600,7 @@ class GradePreviewShader {
                 if (sharpen > 0.0 || chromaNR > 0.0) src = half4(half3(detailed(coord, float3(src.rgb))), src.a);
                 // Masks first: inside one, its texture, clarity and dehaze add to the clip's.
                 float3 pr = float3(lcTexture, lcClarity, lcDehaze);
-                float4 mw = maskCount > 0.5 ? weightsAt(coord, float3(src.rgb), true) : float4(0.0);
+                float4 mw = maskCount > 0.5 ? weightsAt(srcPx(coord), float3(src.rgb), true) : float4(0.0);
                 ${List(ColourMask.MAX_PER_CLIP) { i -> """
                 float w$i = mw.${"xyzw"[i]};
                 pr += mp$i * w$i;""" }.joinToString("")}

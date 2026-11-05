@@ -220,7 +220,8 @@ class GradeEffect(
 
     private companion object {
         /** As the preview's: the functions for one set of masks ([m]: their uniforms' prefix). */
-        fun maskCode(sfx: String, m: String, brush: String, slot: String, count: String): String = """
+        /** As the preview's: [picture] reads the picture at a point of the masks' own coordinates. */
+        fun maskCode(sfx: String, m: String, brush: String, slot: String, count: String, picture: String = "source"): String = """
             // As the preview shader's brushWeight$sfx(): back to where the strokes were painted, then the atlas slot.
             // The atlas at px: coverage (r) and where the edge was made gradual (g).
             vec3 brushRG$sfx(vec4 a, vec4 b, vec2 px, float slot) {
@@ -263,7 +264,7 @@ class GradeEffect(
                 for (int j = -1; j <= 1; j++) {
                     for (int i = -1; i <= 1; i++) {
                         vec2 q = px + vec2(float(i), float(j)) * st;
-                        vec3 d = source(vec2(q.x / uSize.x, 1.0 - q.y / uSize.y)) - c;
+                        vec3 d = $picture(vec2(q.x / uSize.x, 1.0 - q.y / uSize.y)) - c;
                         float k = exp(-dot(d, d) * 60.0) * ((i == 0 && j == 0) ? 1.0 : 0.6);
                         acc += brushRaw$sfx(a, b, q, slot) * k;
                         sum += k;
@@ -380,6 +381,15 @@ class GradeEffect(
                 return x <= 1.0 / 12.0 ? sqrt(3.0 * x) : 0.17883277 * log(12.0 * x - 0.28466892) + 0.55991073;
             }
 
+            // A point of the corrected picture (pixels from the top) in the original, where masks are kept.
+            vec2 srcPx(vec2 px) {
+                if (uHasWarp < 0.5) return px;
+                vec3 q = uWarp * vec3(px / uSize, 1.0);
+                return clamp(q.xy / q.z, 0.0, 1.0) * uSize;
+            }
+
+            vec3 sourceRaw(vec2 uv);
+
             // The file's values as the colour tables expect them.
             vec3 source(vec2 uv) {
                 // Never outside the frame: the edges would glow.
@@ -390,6 +400,12 @@ class GradeEffect(
                     vec2 s = clamp(q.xy / q.z, 0.0, 1.0);
                     uv = vec2(s.x, 1.0 - s.y);
                 }
+                return sourceRaw(uv);
+            }
+
+            // The file's values at a point of the original picture, as they are.
+            vec3 sourceRaw(vec2 uv) {
+                uv = clamp(uv, 0.5 / uSize, 1.0 - 0.5 / uSize);
                 vec4 src = texture2D(uTexSampler, uv);
                 if (uHdrIn == 1) {
                     // Relabelled SDR/log: back to the file's own code values.
@@ -448,7 +464,7 @@ class GradeEffect(
             }
 
             // The clip's masks, and those of the clip it blends in from (as at its end).
-            ${maskCode("", "uM", "uBrush", "uBrushSlot", "uMaskCount")}
+            ${maskCode("", "uM", "uBrush", "uBrushSlot", "uMaskCount", picture = "sourceRaw")}
             ${maskCode("F", "uFm", "uBrushFrom", "uBrushFromSlot", "uFromMaskCount")}
 
 
@@ -489,7 +505,7 @@ class GradeEffect(
 
             // As the preview shader's maskGlowAt(): each glowing mask's glow and halation at px, added up.
             vec2 maskGlowAt(vec2 px) {
-                vec4 w = weightsAt(px, source(vec2(px.x / uSize.x, 1.0 - px.y / uSize.y)), false);
+                vec4 w = weightsAt(srcPx(px), source(vec2(px.x / uSize.x, 1.0 - px.y / uSize.y)), false);
                 vec2 g = vec2(0.0);
                 ${List(ColourMask.MAX_PER_CLIP) { i -> """
                 if (uMaskCount > $i.5 && (uMg$i.x > 0.0 || uMg$i.y > 0.0)) g += uMg$i * w.${"xyzw"[i]};""" }.joinToString("")}
@@ -502,7 +518,7 @@ class GradeEffect(
                 vec2 px = vec2(vTexSamplingCoord.x, 1.0 - vTexSamplingCoord.y) * uSize;
                 // Masks first: inside one, its texture, clarity and dehaze add to the clip's.
                 vec3 pr = uPresence;
-                vec4 mw = uMaskCount > 0.5 ? weightsAt(px, srcRgb, true) : vec4(0.0);
+                vec4 mw = uMaskCount > 0.5 ? weightsAt(srcPx(px), srcRgb, true) : vec4(0.0);
                 ${List(ColourMask.MAX_PER_CLIP) { i -> """
                 float w$i = mw.${"xyzw"[i]};
                 pr += uMp$i * w$i;""" }.joinToString("")}

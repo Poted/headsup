@@ -4769,7 +4769,7 @@ private fun PhotoExport(state: UiState, vm: HeadsupViewModel) {
                 Text("Export the marked photos ($picked)")
             }
         } else if (photoCount > 1) {
-            Hint("Mark photos for export in Edit: hold a thumbnail, or Mark under the photos.")
+            Hint("Mark photos for export: hold a thumbnail (its menu), or Mark under the photos.")
         }
         if (selectedPhoto && photoCount > 1) {
             OutlinedButton(onClick = { vm.exportPhotos(HeadsupViewModel.PhotoSet.CURRENT) }, enabled = !state.busy, modifier = Modifier.fillMaxWidth()) { Text("Export this photo (JPEG)") }
@@ -5076,13 +5076,16 @@ private fun PhotoStrip(state: UiState, vm: HeadsupViewModel, onAdd: () -> Unit, 
         items(state.clips.size) { i ->
             val c = state.clips[i]
             val selected = i == state.selectedClip
+            // Held: the photo's menu (mark, move, delete), as a clip's on the timeline.
+            var menu by remember { mutableStateOf(false) }
+            Box {
             Box(
                 Modifier
                     .size(64.dp)
                     .clip(RoundedCornerShape(10.dp))
                     .background(HeadsupColors.Surface)
                     .border(if (selected) 2.dp else 1.dp, if (selected) HeadsupColors.Accent else HeadsupColors.Outline, RoundedCornerShape(10.dp))
-                    .combinedClickable(onLongClick = { vm.togglePicked(i) }) { onSelect(i) },
+                    .combinedClickable(onLongClick = { menu = true }) { onSelect(i) },
             ) {
                 // Read here, so this tile (not only the row) shows its picture when it arrives.
                 thumbs.version.intValue
@@ -5095,6 +5098,13 @@ private fun PhotoStrip(state: UiState, vm: HeadsupViewModel, onAdd: () -> Unit, 
                         contentAlignment = Alignment.Center,
                     ) { Text("✓", style = MaterialTheme.typography.labelSmall, color = HeadsupColors.OnHighlight) }
                 }
+            }
+            DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+                DropdownMenuItem(text = { Text(if (c.picked) "Unmark for export" else "Mark for export") }, onClick = { menu = false; vm.togglePicked(i) })
+                if (i > 0) DropdownMenuItem(text = { Text("Move left") }, onClick = { menu = false; vm.moveClip(i, -1) })
+                if (i < state.clips.lastIndex) DropdownMenuItem(text = { Text("Move right") }, onClick = { menu = false; vm.moveClip(i, 1) })
+                DropdownMenuItem(text = { Text("Delete") }, onClick = { menu = false; vm.removeClip(i) })
+            }
             }
         }
         item {

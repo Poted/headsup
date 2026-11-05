@@ -1200,15 +1200,19 @@ fun ClipPreview(
                                 val paint = brushPainter
                                 if (moveMask != null || paint != null || maskTransformer != null) {
                                     // Masks live in the picture, so map the finger back through the framing.
+                                    // Masks are kept on the original picture: with its perspective
+                                    // corrected, a point on screen is first taken back to it.
+                                    fun original(x: Float, y: Float): Pair<Float, Float> =
+                                        currentReframe.warp?.let { m -> app.headsup.core.frame.Perspective.apply(m, x.toDouble(), y.toDouble()).let { (a, b) -> a.toFloat() to b.toFloat() } } ?: (x to y)
                                     fun move(p: Offset) {
                                         val g = geometryRef.value
                                         val (sx, sy) = currentReframe.sourceOf(p.x, p.y, g.boxW, g.boxH, g.pictureW, g.pictureH)
-                                        moveMask?.invoke(sx / g.pictureW, sy / g.pictureH)
+                                        original(sx / g.pictureW, sy / g.pictureH).let { (x, y) -> moveMask?.invoke(x, y) }
                                     }
                                     fun pictureOf(p: Offset): Pair<Float, Float> {
                                         val g = geometryRef.value
                                         val (sx, sy) = currentReframe.sourceOf(p.x, p.y, g.boxW, g.boxH, g.pictureW, g.pictureH)
-                                        return sx / g.pictureW to sy / g.pictureH
+                                        return original(sx / g.pictureW, sy / g.pictureH)
                                     }
                                     down.consume()
                                     // An oval's ends: a finger near one drags that end (the other stays);
@@ -1343,6 +1347,9 @@ fun ClipPreview(
                             rotate(reframe.angleDegrees, o)
                             scale(t.zoom, t.zoom, o)
                         }) {
+                            // The mask is kept on the original picture: drawn through the perspective
+                            // correction, so it shows where it applies.
+                            reframe.warp?.let { warp -> drawIntoCanvas { it.nativeCanvas.concat(perspectiveMatrix(warp, geometry.pictureW, geometry.pictureH)) } }
                             if (m.kind == MaskKind.BRUSH) {
                                 if (maskOverlay) {
                                     brushAtlas?.let { atlas -> drawIntoCanvas { drawBrushOverlay(it.nativeCanvas, atlas, guideIndex, m, geometry.pictureW, geometry.pictureH) } }
@@ -1700,6 +1707,22 @@ private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawThirds() {
     }
 }
 private const val ANALYSIS_WIDTH = 256
+
+/**
+ * From the original picture to the corrected one, in pixels of a [w]×[h] picture ([warp] takes
+ * the corrected picture's fractions to the original's): what is drawn on the original shows where
+ * it is on screen.
+ */
+private fun perspectiveMatrix(warp: DoubleArray, w: Float, h: Float): android.graphics.Matrix {
+    val back = app.headsup.core.frame.Perspective.invert(warp)
+    // In pixels: S · back · S⁻¹, S scaling fractions to pixels.
+    val m = floatArrayOf(
+        back[0].toFloat(), (back[1] * w / h).toFloat(), (back[2] * w).toFloat(),
+        (back[3] * h / w).toFloat(), back[4].toFloat(), (back[5] * h).toFloat(),
+        (back[6] / w).toFloat(), (back[7] / h).toFloat(), back[8].toFloat(),
+    )
+    return android.graphics.Matrix().apply { setValues(m) }
+}
 
 /** The mask's edge (solid) and the ends of its soft blend (dashed), as in DaVinci's window controls. */
 private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawMaskGuide(mask: ColourMask, width: Float, height: Float) {
