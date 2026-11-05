@@ -2664,18 +2664,14 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
             _state.update { it.copy(paintPath = emptyList(), lassoPath = emptyList()) }
             return
         }
-        if (s.brush.mode == BrushMode.SELECT) {
+        if (s.brush.mode == BrushMode.SELECT || s.brush.mode == BrushMode.FIX) {
             selectStroke(phase, x, y, grab, clip, index, mask, placed, aspect)
             return
         }
         // While the finger paints, the stroke shows as drawn (on the picture, at once); the mask
         // itself is drawn again once, when the finger lifts.
         when (phase) {
-            0 -> {
-                // Fix keeps to the picture's edges: the picture under the finger is kept with the stroke.
-                if (s.brush.mode == BrushMode.FIX) lassoReference = brushReference(clip, placed, grab)
-                _state.update { it.copy(paintPath = listOf(x, y)) }
-            }
+            0 -> _state.update { it.copy(paintPath = listOf(x, y)) }
             1 -> _state.update { st ->
                 val p = st.paintPath
                 // Points closer than a fraction of the brush add nothing but work.
@@ -2689,13 +2685,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                 val points = path.chunked(2).flatMap { (px, py) -> app.headsup.core.color.BrushMask.unmove(px, py, placed, aspect).toList() }
                 // Radius in the strokes' own frame: as big as it looks on the mask now.
                 val radius = b.radius / placed.sizeX.coerceAtLeast(0.05f)
-                val stroke = if (b.mode == BrushMode.FIX) {
-                    // A fix of the outline just where it is drawn: only what looks like the colour
-                    // under the brush is taken in (Add) or away (Subtract), so it stops at the picture's edges.
-                    app.headsup.core.color.BrushStroke(points, radius, 1f, erase = b.subtract, reference = lassoReference)
-                } else {
-                    app.headsup.core.color.BrushStroke(points, radius, b.flow, b.mode == BrushMode.ERASE, soften = b.mode == BrushMode.SOFTEN)
-                }
+                val stroke = app.headsup.core.color.BrushStroke(points, radius, b.flow, b.mode == BrushMode.ERASE, soften = b.mode == BrushMode.SOFTEN)
                 val m = s.selectedMask
                 val add = {
                     _state.update { st ->
@@ -2725,7 +2715,8 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
         when (phase) {
             0 -> {
                 lassoReference = brushReference(clip, placed, grab)
-                segmentPicture(clip, grab)
+                // Only Select finds objects: the picture is read for it as the finger comes down.
+                if (_state.value.brush.mode == BrushMode.SELECT) segmentPicture(clip, grab)
                 _state.update { it.copy(lassoPath = listOf(x, y)) }
             }
             1 -> _state.update { st ->
@@ -2739,6 +2730,14 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                 val xs = path.filterIndexed { i, _ -> i % 2 == 0 }
                 val ys = path.filterIndexed { i, _ -> i % 2 == 1 }
                 val tap = path.size < 6 || maxOf(xs.max() - xs.min(), ys.max() - ys.min()) < 0.02f
+                val fixing = _state.value.brush.mode == BrushMode.FIX
+                if (fixing) {
+                    // Fix: whatever is drawn is where the outline should be.
+                    if (tap) return
+                    val points = path.chunked(2).flatMap { (px, py) -> app.headsup.core.color.BrushMask.unmove(px, py, placed, aspect).toList() }
+                    addStroke(index, clip, app.headsup.core.color.BrushStroke(points, radius = 0.01f, reference = lassoReference, reshape = true))
+                    return
+                }
                 if (tap) {
                     afterTap { selectObject(path[0], path[1], null, grab, clip, index, placed) }
                     return
@@ -2752,10 +2751,35 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                     return
                 }
                 val points = path.chunked(2).flatMap { (px, py) -> app.headsup.core.color.BrushMask.unmove(px, py, placed, aspect).toList() }
-                val stroke = app.headsup.core.color.BrushStroke(points, radius = 0.01f, flow = 1f, reference = lassoReference, lasso = true, erase = _state.value.brush.subtract)
+                // A line drawn along the outline (near it all the way): the outline moved onto it,
+                // just there. A line across the picture splits it.
+                val along = runCatching { alongOutline(clip, mask, aspect, points) }.getOrDefault(0f) > 0.8f
+                val stroke = if (along) {
+                    app.headsup.core.color.BrushStroke(points, radius = 0.01f, reference = lassoReference, reshape = true)
+                } else {
+                    app.headsup.core.color.BrushStroke(points, radius = 0.01f, flow = 1f, reference = lassoReference, lasso = true, erase = _state.value.brush.subtract)
+                }
                 addStroke(index, clip, stroke)
             }
         }
+    }
+
+    /**
+     * How much of a line ([points], the strokes' own frame) runs along [mask]'s outline as it is
+     * now ([app.headsup.core.color.BrushMask.alongEdge]), the mask drawn small for it.
+     */
+    private fun alongOutline(clip: ClipState, mask: ColourMask, aspect: Float, points: List<Float>): Float {
+        val context: Application = getApplication()
+        val (w, h) = if (aspect >= 1f) 192 to (192 / aspect).roundToInt().coerceAtLeast(1) else (192 * aspect).roundToInt().coerceAtLeast(1) to 192
+        val refs = mask.strokes.mapNotNull { it.reference }.distinct()
+            .mapNotNull { id -> app.headsup.color.BrushReferences.get(context, id)?.let { id to it } }.toMap()
+        val tracked = mask.sequence?.let { app.headsup.color.MaskSequences.get(context, it) }?.at(playheadFileMs, w, h)
+        val coverage = if (tracked != null) {
+            app.headsup.core.color.BrushMask.rasterize(mask.strokes.drop(mask.sequenceStrokes), w, h, mask.softness, refs, start = tracked)
+        } else {
+            app.headsup.core.color.BrushMask.rasterize(mask.strokes, w, h, mask.softness, refs)
+        }
+        return app.headsup.core.color.BrushMask.alongEdge(coverage, w, h, points)
     }
 
     private fun addStroke(index: Int, clip: ClipState, stroke: app.headsup.core.color.BrushStroke, replacing: app.headsup.core.color.BrushStroke? = null) {

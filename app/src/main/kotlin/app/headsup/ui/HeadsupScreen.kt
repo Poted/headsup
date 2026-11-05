@@ -3710,21 +3710,10 @@ private fun BrushControls(state: UiState, vm: HeadsupViewModel, pictureSource: (
                 },
             )
             RulerSlider(value = e, range = -1f..1f, step = 0.05f, onChange = { v -> vm.updateMask { it.copy(edge = v) } }, onReset = { vm.updateMask { it.copy(edge = 0f) } })
-            Hint("Tap an object to select it (tap again for a smaller or larger part), draw round it, or draw a line across to split the picture along it. A wrong bit of the outline: Fix. Edge moves the whole outline in or out.")
+            Hint("Tap an object to select it (tap again for a smaller or larger part), draw round it, or draw a line across to split the picture along it. Where the outline is wrong, draw it again along the true edge: it moves there, just in that part (Fix does only that). Edge moves the whole outline in or out.")
         }
         BrushMode.FIX -> {
-            // A brush along a wrong bit of the outline: only there, keeping to the picture's edges.
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                FilterChip(selected = !brush.subtract, onClick = { vm.updateBrush { it.copy(subtract = false) } }, label = { Text("Add") })
-                FilterChip(selected = brush.subtract, onClick = { vm.updateBrush { it.copy(subtract = true) } }, label = { Text("Subtract") })
-            }
-            ValueHeader("Size", String.format(Locale.US, "%.0f %%", brush.radius * 100f))
-            RulerSlider(
-                value = brush.radius, range = BrushSetting.SIZE.range, step = 0.005f,
-                onChange = { v -> vm.updateBrush { it.copy(radius = v) }; vm.showBrush() },
-                onReset = { vm.updateBrush { it.copy(radius = BrushSetting.SIZE.default) }; vm.showBrush() },
-            )
-            Hint("Paint along a wrong bit of the outline: it is fixed only there, and stops at the picture's edges (it takes only what looks like the colour under the brush). Add takes in what is missing, Subtract takes away what is too much.")
+            Hint("Draw the outline where it should be: from where it is still right, along the true edge, to where it is right again (e.g. down the rock where the mask runs onto the trees). The outline between moves onto your line and settles on the picture's edge; the rest stays.")
         }
         BrushMode.PAINT, BrushMode.ERASE, BrushMode.SOFTEN -> {
             val settings = BrushSetting.entries

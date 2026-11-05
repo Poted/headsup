@@ -533,7 +533,7 @@ internal object Json {
                 m.strokes.map {
                     JSONObject().put("p", JSONArray(it.points.map { v -> v.toDouble() })).put("r", it.radius)
                         .put("f", it.flow).put("e", it.erase).put("ref", it.reference).put("tol", it.tolerance)
-                        .put("lasso", it.lasso).put("seg", it.segment).put("sky", it.sky).put("scene", it.scene).put("soft", it.soften)
+                        .put("lasso", it.lasso).put("seg", it.segment).put("sky", it.sky).put("scene", it.scene).put("soft", it.soften).put("reshape", it.reshape)
                 },
             ),
         )
@@ -583,6 +583,7 @@ internal object Json {
                     sky = it.optBoolean("sky", false),
                     scene = it.optStringOrNull("scene") ?: if (it.optBoolean("sky", false)) "SKY" else null,
                     soften = it.optBoolean("soft", false),
+                    reshape = it.optBoolean("reshape", false),
                 )
             },
             sequence = o.optStringOrNull("sequence"),

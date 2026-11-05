@@ -1,5 +1,6 @@
 package app.headsup.core.color
 
+import kotlin.math.abs
 import kotlin.math.ceil
 import kotlin.math.cos
 import kotlin.math.floor
@@ -45,6 +46,12 @@ data class BrushStroke(
      * the brush's size, by its flow), the cut elsewhere left sharp.
      */
     val soften: Boolean = false,
+    /**
+     * Neither paints nor finds: the outline drawn again where it should be. Between the points
+     * where the line leaves and meets the mask's edge, the edge is moved onto the line (and onto
+     * the [reference] picture's edges close to it): the mask's side of it filled, the other cleared.
+     */
+    val reshape: Boolean = false,
 )
 
 /**
@@ -86,6 +93,10 @@ object BrushMask {
             val r = (stroke.radius * height).coerceAtLeast(0.5f)
             val pts = stroke.points.chunked(2).filter { it.size == 2 }.map { it[0] * width to it[1] * height }
             if (pts.isEmpty()) continue
+            if (stroke.reshape) {
+                reshape(out, width, height, pts, stroke.reference?.let { references[it] }, gridAspect)
+                continue
+            }
             // The part of the grid the stroke can reach (an outline: with some background around it).
             // A line splits the whole picture, and a found object may be anywhere in it.
             val pad = if (stroke.segment || (stroke.lasso && !isLoop(pts))) {
@@ -436,6 +447,145 @@ object BrushMask {
                 val small = if (target) members.size < insideArea * 0.02f else !touchesBorder && members.size < insideArea * 0.01f
                 if (small) for (i in members) fg[i] = !target
             }
+        }
+    }
+
+    /**
+     * How far the line [points] (fractions of the frame) keeps from the edge of [coverage]
+     * ([width]×[height]): the share of its points within [reach] (of the long side) of it. Near 1:
+     * a line drawn along the outline (to move it there), not across the picture.
+     */
+    fun alongEdge(coverage: FloatArray, width: Int, height: Int, points: List<Float>, reach: Float = 0.1f): Float {
+        if (coverage.none { it >= 0.5f } || coverage.all { it >= 0.5f }) return 0f
+        val sd = MaskEdge.signedDistance(coverage, width, height)
+        val limit = reach * max(width, height)
+        val pts = points.chunked(2).filter { it.size == 2 }
+        if (pts.isEmpty()) return 0f
+        val near = pts.count { (x, y) ->
+            val i = (y * height).toInt().coerceIn(0, height - 1) * width + (x * width).toInt().coerceIn(0, width - 1)
+            abs(sd[i]) <= limit
+        }
+        return near.toFloat() / pts.size
+    }
+
+    /**
+     * A [BrushStroke.reshape]: [out]'s edge moved onto the line [pts] (grid pixels) between its
+     * ends. Each pixel near the line is put on one side of it; the side the mask mostly covers is
+     * the mask's. Only as far from the line as the old edge was (plus a little) is changed, so the
+     * rest of the mask stays. Close to the line the picture's colours decide (like the line's two
+     * sides), so the new edge sits on the picture's edge, not exactly where the finger went.
+     */
+    private fun reshape(out: FloatArray, width: Int, height: Int, pts: List<Pair<Float, Float>>, ref: BrushReference?, gridAspect: Float) {
+        // The line every two pixels or so, so the old edge's distance is known along all of it.
+        val line = mutableListOf<Pair<Float, Float>>()
+        for (p in pts) {
+            val last = line.lastOrNull()
+            if (last == null) { line.add(p); continue }
+            val d = hypot(p.first - last.first, p.second - last.second)
+            if (d < 1f) continue
+            val steps = ceil(d / 2f).toInt()
+            for (j in 1..steps) line.add(last.first + (p.first - last.first) * j / steps to last.second + (p.second - last.second) * j / steps)
+        }
+        if (line.size < 2) return
+        val sd = MaskEdge.signedDistance(out, width, height)
+        fun sdAt(x: Float, y: Float) = sd[y.toInt().coerceIn(0, height - 1) * width + x.toInt().coerceIn(0, width - 1)]
+        val cap = 0.12f * max(width, height)
+        // How far the old edge is from each point of the line.
+        val gaps = FloatArray(line.size) { abs(sdAt(line[it].first, line[it].second)).coerceAtMost(cap) }
+        val reach = (gaps.max() + 4f).coerceIn(4f, cap + 4f)
+        val x0 = max(0, floor(line.minOf { it.first } - reach).toInt())
+        val x1 = min(width - 1, ceil(line.maxOf { it.first } + reach).toInt())
+        val y0 = max(0, floor(line.minOf { it.second } - reach).toInt())
+        val y1 = min(height - 1, ceil(line.maxOf { it.second } + reach).toInt())
+        if (x0 > x1 || y0 > y1) return
+        val spanW = x1 - x0 + 1
+        val n = spanW * (y1 - y0 + 1)
+        // Per pixel of the area: signed distance from the line (NaN past its ends or too far) and
+        // the old edge's distance there.
+        val side = FloatArray(n) { Float.NaN }
+        val gapAt = FloatArray(n)
+        for (y in y0..y1) for (x in x0..x1) {
+            val px = x + 0.5f
+            val py = y + 0.5f
+            var best = Float.MAX_VALUE
+            var bestSigned = 0f
+            var bestGap = 0f
+            var outside = false
+            for (k in 0 until line.size - 1) {
+                val (ax, ay) = line[k]
+                val (bx, by) = line[k + 1]
+                val dx = bx - ax
+                val dy = by - ay
+                val len2 = (dx * dx + dy * dy).coerceAtLeast(1e-6f)
+                val tRaw = ((px - ax) * dx + (py - ay) * dy) / len2
+                val t = tRaw.coerceIn(0f, 1f)
+                val qx = ax + dx * t
+                val qy = ay + dy * t
+                val d = hypot(px - qx, py - qy)
+                if (d < best) {
+                    best = d
+                    bestSigned = if (dx * (py - ay) - dy * (px - ax) >= 0f) d else -d
+                    bestGap = gaps[k] + (gaps[k + 1] - gaps[k]) * t
+                    outside = (k == 0 && tRaw < 0f) || (k == line.size - 2 && tRaw > 1f)
+                }
+            }
+            val i = (y - y0) * spanW + (x - x0)
+            gapAt[i] = bestGap
+            if (!outside && best <= bestGap + 3f) side[i] = bestSigned
+        }
+        // The mask's side: the one it covers more of, near the line.
+        var pos = 0f
+        var posN = 0
+        var neg = 0f
+        var negN = 0
+        for (y in y0..y1) for (x in x0..x1) {
+            val v = side[(y - y0) * spanW + (x - x0)]
+            if (v.isNaN()) continue
+            if (v > 0f) { pos += out[y * width + x]; posN++ } else { neg += out[y * width + x]; negN++ }
+        }
+        if (posN == 0 || negN == 0) return
+        val inSign = if (pos / posN >= neg / negN) 1f else -1f
+        // The picture's colours on both sides, a little away from the line.
+        val colours = ref?.let { sampleArea(it, width, height, gridAspect, x0, x1, y0, y1) }
+        val snap = 3f
+        val mIn = FloatArray(3)
+        val mOut = FloatArray(3)
+        var cIn = 0
+        var cOut = 0
+        if (colours != null) {
+            for (i in 0 until n) {
+                val v = side[i]
+                if (v.isNaN()) continue
+                val d = v * inSign
+                if (d in snap..3 * snap) { for (c in 0..2) mIn[c] += colours[i * 3 + c]; cIn++ }
+                if (-d in snap..3 * snap) { for (c in 0..2) mOut[c] += colours[i * 3 + c]; cOut++ }
+            }
+            if (cIn > 0) for (c in 0..2) mIn[c] /= cIn
+            if (cOut > 0) for (c in 0..2) mOut[c] /= cOut
+        }
+        val byColour = colours != null && cIn > 0 && cOut > 0
+        for (y in y0..y1) for (x in x0..x1) {
+            val i = (y - y0) * spanW + (x - x0)
+            val v = side[i]
+            if (v.isNaN()) continue
+            val d = v * inSign
+            var target = smoothstep(-0.75f, 0.75f, d)
+            if (byColour && abs(d) < 2 * snap) {
+                var dIn = 0f
+                var dOut = 0f
+                for (c in 0..2) {
+                    val col = colours!![i * 3 + c]
+                    dIn += (col - mIn[c]) * (col - mIn[c])
+                    dOut += (col - mOut[c]) * (col - mOut[c])
+                }
+                val like = sqrt(dOut) / (sqrt(dIn) + sqrt(dOut) + 1e-5f)
+                val near = 1f - smoothstep(snap, 2 * snap, abs(d))
+                target += (smoothstep(0.35f, 0.65f, like) - target) * near
+            }
+            // Fading out where the change ends, so it meets the rest of the mask without a seam.
+            val keep = smoothstep(gapAt[i] + 1f, gapAt[i] + 3f, abs(d))
+            val o = y * width + x
+            out[o] = target + (out[o] - target) * keep
         }
     }
 

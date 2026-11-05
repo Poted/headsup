@@ -159,4 +159,36 @@ class BrushMaskTest {
         val same = BrushMask.placed(map, w, h, BrushMask.BASE)
         kotlin.test.assertEquals(map.toList(), same.toList())
     }
+
+    @Test
+    fun `a line drawn along the outline moves it there`() {
+        // The mask: the right part of the frame (a rock), leaking left at the bottom (onto trees).
+        val w = 100
+        val h = 80
+        val start = FloatArray(w * h) { i -> val x = i % w; val y = i / w; if (x >= 60 || (y >= 50 && x >= 52)) 1f else 0f }
+        // The rock's true edge goes straight down at x = 60: drawn along it, from the edge above the leak to the bottom.
+        val line = listOf(60f / w, 40f / h, 60f / w, 79.5f / h)
+        kotlin.test.assertTrue(BrushMask.alongEdge(start, w, h, line) > 0.9f)
+        val stroke = BrushStroke(line, radius = 0.01f, reshape = true)
+        val map = BrushMask.rasterize(listOf(stroke), w, h, start = start)
+        // The leak is gone, the rock stays, the rest of the outline is untouched.
+        kotlin.test.assertTrue(at(map, w, 55, 65) < 0.1f, "leak ${at(map, w, 55, 65)}")
+        kotlin.test.assertTrue(at(map, w, 70, 65) > 0.9f)
+        kotlin.test.assertTrue(at(map, w, 30, 20) < 0.1f)
+        kotlin.test.assertTrue(at(map, w, 80, 20) > 0.9f)
+        // A line across the picture is not along the edge.
+        kotlin.test.assertTrue(BrushMask.alongEdge(start, w, h, listOf(0f, 0.1f, 1f, 0.1f)) < 0.6f)
+    }
+
+    @Test
+    fun `a line drawn inside a gap fills it to the line`() {
+        val w = 100
+        val h = 80
+        // Missing a bite at the bottom: the edge there is at x = 68 instead of 60.
+        val start = FloatArray(w * h) { i -> val x = i % w; val y = i / w; if (x >= 60 && !(y >= 50 && x < 68)) 1f else 0f }
+        val line = listOf(60f / w, 40f / h, 60f / w, 79.5f / h)
+        val map = BrushMask.rasterize(listOf(BrushStroke(line, radius = 0.01f, reshape = true)), w, h, start = start)
+        kotlin.test.assertTrue(at(map, w, 65, 65) > 0.9f, "bite ${at(map, w, 65, 65)}")
+        kotlin.test.assertTrue(at(map, w, 50, 65) < 0.1f)
+    }
 }
