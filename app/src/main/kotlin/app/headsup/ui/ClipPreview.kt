@@ -565,6 +565,9 @@ fun ClipPreview(
     var zebra by remember { mutableStateOf(false) }
     var histogramOn by remember { mutableStateOf(false) }
     var histogram by remember { mutableStateOf<FloatArray?>(null) }
+    // Which scope shows (a tap on it steps through them): histogram, waveform, RGB parade.
+    var scopeKind by androidx.compose.runtime.saveable.rememberSaveable { mutableIntStateOf(0) }
+    var scopeImage by remember { mutableStateOf<androidx.compose.ui.graphics.ImageBitmap?>(null) }
     val previewShader = remember { if (Build.VERSION.SDK_INT >= 33) GradePreviewShader() else null }
     var tableVersion by remember { mutableIntStateOf(0) }
     LaunchedEffect(gradeCube, maskCubes, fromCube, fromMaskCubes) {
@@ -626,8 +629,13 @@ fun ClipPreview(
         onPictureSource?.invoke { w -> grab(w) }
     }
 
-    LaunchedEffect(histogramOn, gradeCube) {
-        while (histogramOn) {
+    LaunchedEffect(histogramOn, gradeCube, scopeKind) {
+        while (histogramOn && scopeKind > 0) {
+            val frame = grab(192)
+            if (frame != null) scopeImage = withContext(Dispatchers.Default) { if (scopeKind == 1) waveform(frame, gradeCube) else parade(frame, gradeCube) }
+            delay(250)
+        }
+        while (histogramOn && scopeKind == 0) {
             val frame = grab(160)
             if (frame != null) histogram = withContext(Dispatchers.Default) { luminanceHistogram(frame, gradeCube) }
             delay(250)
@@ -1570,8 +1578,14 @@ fun ClipPreview(
                         color = Color.White,
                     )
                 }
-                histogram?.takeIf { histogramOn }?.let { bins ->
-                    Histogram(bins, Modifier.align(Alignment.BottomStart).padding(start = 10.dp, end = 10.dp, top = 10.dp, bottom = if (compactTransport) 56.dp else 10.dp).size(width = 128.dp, height = 56.dp))
+                if (histogramOn) {
+                    val at = Modifier.align(Alignment.BottomStart).padding(start = 10.dp, end = 10.dp, top = 10.dp, bottom = if (compactTransport) 56.dp else 10.dp)
+                        .clickable { scopeKind = (scopeKind + 1) % 3 }
+                    if (scopeKind == 0) {
+                        histogram?.let { bins -> Histogram(bins, at.size(width = 128.dp, height = 56.dp)) }
+                    } else {
+                        scopeImage?.let { img -> Scope(img, if (scopeKind == 1) "Waveform" else "RGB parade", at.size(width = 176.dp, height = 88.dp)) }
+                    }
                 }
                 if (showTransport && compactTransport && !photoMode) {
                     // Folded transport: play, the time and unfolding, on the picture.
@@ -1984,6 +1998,91 @@ private fun Histogram(bins: FloatArray, modifier: Modifier) {
         if (bins.first() > 0.6f) drawRect(HeadsupColors.Accent, size = androidx.compose.ui.geometry.Size(2.dp.toPx(), size.height))
         if (bins.last() > 0.6f) drawRect(HeadsupColors.Accent, topLeft = Offset(size.width - 2.dp.toPx(), 0f), size = androidx.compose.ui.geometry.Size(2.dp.toPx(), size.height))
     }
+}
+
+/**
+ * A waveform or parade drawn over the preview's corner: across, the picture's columns; up, how
+ * bright (0 at the bottom, full at the top), with lines at 0, 50 and 100 %; a tap shows the next scope.
+ */
+@Composable
+private fun Scope(image: androidx.compose.ui.graphics.ImageBitmap, label: String, modifier: Modifier) {
+    Canvas(modifier.clip(RoundedCornerShape(8.dp)).background(Color.Black.copy(alpha = 0.6f))) {
+        drawImage(
+            image,
+            dstSize = androidx.compose.ui.unit.IntSize(size.width.toInt(), size.height.toInt()),
+            filterQuality = androidx.compose.ui.graphics.FilterQuality.Low,
+        )
+        for (level in listOf(0f, 0.5f, 1f)) {
+            val y = size.height * (1f - level * 0.96f) - 1f
+            drawLine(Color.White.copy(alpha = if (level == 0.5f) 0.15f else 0.3f), Offset(0f, y), Offset(size.width, y))
+        }
+        drawIntoCanvas {
+            val p = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply { color = android.graphics.Color.argb(150, 255, 255, 255); textSize = 9.dp.toPx() }
+            it.nativeCanvas.drawText(label, 5.dp.toPx(), 11.dp.toPx(), p)
+        }
+    }
+}
+
+/** The small frame's colours after the colour table, as 0..1 RGB in a row. */
+private fun gradedPixels(frame: Bitmap, cube: Array<Array<IntArray>>?): Triple<FloatArray, Int, Int> {
+    val w = frame.width
+    val h = frame.height
+    val pixels = IntArray(w * h)
+    frame.getPixels(pixels, 0, w, 0, 0, w, h)
+    frame.recycle()
+    val out = FloatArray(w * h * 3)
+    val rgb = FloatArray(3)
+    for (i in pixels.indices) {
+        val p = pixels[i]
+        rgb[0] = ((p shr 16) and 0xFF) / 255f
+        rgb[1] = ((p shr 8) and 0xFF) / 255f
+        rgb[2] = (p and 0xFF) / 255f
+        if (cube != null) LutBaker.sampleBaked(cube, rgb[0], rgb[1], rgb[2], rgb)
+        out[i * 3] = rgb[0]; out[i * 3 + 1] = rgb[1]; out[i * 3 + 2] = rgb[2]
+    }
+    return Triple(out, w, h)
+}
+
+private const val SCOPE_LEVELS = 96
+
+/** How many pixels of each column fall at each level, as a picture: brighter where more. */
+private fun scopePicture(counts: Array<IntArray>, colour: (Int) -> Int, perColumn: Int): androidx.compose.ui.graphics.ImageBitmap {
+    val cols = counts.size
+    val px = IntArray(cols * SCOPE_LEVELS)
+    for (c in 0 until cols) for (l in 0 until SCOPE_LEVELS) {
+        val n = counts[c][l]
+        if (n == 0) continue
+        // A square root keeps a few pixels visible beside many.
+        val a = (kotlin.math.sqrt(n.toFloat() / perColumn.coerceAtLeast(1)) * 255f * 2.2f).toInt().coerceIn(40, 255)
+        px[(SCOPE_LEVELS - 1 - l) * cols + c] = (a shl 24) or (colour(c) and 0xFFFFFF)
+    }
+    return Bitmap.createBitmap(px, cols, SCOPE_LEVELS, Bitmap.Config.ARGB_8888).asImageBitmap()
+}
+
+/** Luma waveform: for each column of the picture, where its pixels' brightness lies. */
+private fun waveform(frame: Bitmap, cube: Array<Array<IntArray>>?): androidx.compose.ui.graphics.ImageBitmap {
+    val (rgb, w, h) = gradedPixels(frame, cube)
+    val counts = Array(w) { IntArray(SCOPE_LEVELS) }
+    for (y in 0 until h) for (x in 0 until w) {
+        val i = (y * w + x) * 3
+        val l = 0.2126f * rgb[i] + 0.7152f * rgb[i + 1] + 0.0722f * rgb[i + 2]
+        counts[x][(l * (SCOPE_LEVELS - 1)).toInt().coerceIn(0, SCOPE_LEVELS - 1)]++
+    }
+    return scopePicture(counts, { 0xCFF5D6 }, h)
+}
+
+/** RGB parade: red, green and blue waveforms side by side, each a third of the width. */
+private fun parade(frame: Bitmap, cube: Array<Array<IntArray>>?): androidx.compose.ui.graphics.ImageBitmap {
+    val (rgb, w, h) = gradedPixels(frame, cube)
+    val third = (w / 2).coerceAtLeast(1)
+    val counts = Array(third * 3) { IntArray(SCOPE_LEVELS) }
+    for (y in 0 until h) for (x in 0 until w) {
+        val i = (y * w + x) * 3
+        val col = x * third / w
+        for (c in 0..2) counts[c * third + col][(rgb[i + c] * (SCOPE_LEVELS - 1)).toInt().coerceIn(0, SCOPE_LEVELS - 1)]++
+    }
+    val colours = intArrayOf(0xFF5A5A, 0x5AE05A, 0x6A8CFF)
+    return scopePicture(counts, { c -> colours[c / third] }, h * 2)
 }
 
 /** 64-bin luminance histogram of a small frame grab after the colour table, scaled to its peak. */
