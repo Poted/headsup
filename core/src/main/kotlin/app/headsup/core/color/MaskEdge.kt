@@ -10,8 +10,11 @@ import kotlin.math.max
  * the turns that follow the picture stay, never rounded into smooth arcs.
  */
 object MaskEdge {
-    /** At most this much of the picture's long side is the edge moved by (at |edge| = 1). */
-    const val REACH = 0.025f
+    /**
+     * At most this much of the picture's long side is the edge moved by (at |edge| = 1): a few
+     * pixels, a rim or a halo; more would round off details of the outline smaller than the move.
+     */
+    const val REACH = 0.01f
 
     /** [map] (0..1, [width]×[height]) with its edge at [edge] (-1..1), as a clean edge. */
     fun shape(map: FloatArray, width: Int, height: Int, edge: Float): FloatArray {

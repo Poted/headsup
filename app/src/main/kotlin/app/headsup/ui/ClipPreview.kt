@@ -1496,7 +1496,8 @@ fun ClipPreview(
                             maxLines = 1,
                         )
                         Spacer(Modifier.weight(1f))
-                        onCompact?.let { unfold ->
+                        // Sideways only: upright a double tap on the handle under the picture brings them back.
+                        onCompact?.takeIf { sideways }?.let { unfold ->
                             Box(
                                 Modifier.size(36.dp).clip(CircleShape).background(Color.Black.copy(alpha = 0.5f)).clickable { unfold(false) },
                                 contentAlignment = Alignment.Center,

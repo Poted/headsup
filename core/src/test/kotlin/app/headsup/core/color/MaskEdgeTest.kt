@@ -21,8 +21,8 @@ class MaskEdgeTest {
         val none = area(MaskEdge.shape(disc, w, h, 0f))
         val fuller = area(MaskEdge.shape(disc, w, h, 1f))
         val tighter = area(MaskEdge.shape(disc, w, h, -1f))
-        assertTrue(fuller > none * 1.15f, "fuller $fuller vs $none")
-        assertTrue(tighter < none * 0.85f, "tighter $tighter vs $none")
+        assertTrue(fuller > none * 1.08f, "fuller $fuller vs $none")
+        assertTrue(tighter < none * 0.92f, "tighter $tighter vs $none")
         // The centre stays in, far away stays out.
         assertEquals(1f, MaskEdge.shape(disc, w, h, -1f)[50 * w + 100], 1e-3f)
         assertEquals(0f, MaskEdge.shape(disc, w, h, 1f)[50 * w + 5], 1e-3f)

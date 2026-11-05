@@ -331,6 +331,9 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
     // Full screen keeps a line to scrub along under a film's picture, and play on it.
     val fullscreenFilm = fullscreen && !state.photoProject && state.clips.isNotEmpty()
     // The picture grows and shrinks smoothly when the transport folds or full screen changes.
+    // While the handle under the picture is dragged the picture follows the finger at once (an
+    // animation each step made it lag and catch up in jumps).
+    var handleDragging by remember { mutableStateOf(false) }
     val previewMaxHeight by androidx.compose.animation.core.animateDpAsState(
         when {
             fullscreenFilm -> configuration.screenHeightDp.dp - 40.dp
@@ -345,7 +348,7 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
             wide && state.photoProject && tool != Tool.FILES && !albumOpen -> (configuration.screenHeightDp - 150).dp
             else -> (configuration.screenHeightDp * share).dp
         },
-        androidx.compose.animation.core.tween(220),
+        if (handleDragging) androidx.compose.animation.core.snap() else androidx.compose.animation.core.tween(220),
         label = "preview height",
     )
     // A small settle of the whole screen when full screen comes or goes.
@@ -531,9 +534,19 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
             }
             if (!fullscreen && !wide && state.clips.isNotEmpty()) {
                 // Dragging this moves the line between the picture and the tools.
-                // Upright, the arrow at its right folds the transport and timeline away (the transport
-                // is full; the arrow on the folded picture brings them back).
-                PreviewHandle(onFold = if (!state.photoProject && !folded) ({ compact = true }) else null) { dy ->
+                // A double tap on it folds the transport and the timeline (or the album) away and
+                // brings them back; the arrows at its ends go to the clip (photo) before or after.
+                val at = state.selectedClip ?: 0
+                fun show(i: Int) {
+                    if (i !in state.clips.indices) return
+                    if (state.photoProject) vm.selectClip(i) else jumpTo(clipStarts[i])
+                }
+                PreviewHandle(
+                    onToggle = { if (!state.photoProject || tool != Tool.FILES) compact = !compact },
+                    onPrevious = if (at > 0) ({ show(at - 1) }) else null,
+                    onNext = if (at < state.clips.lastIndex) ({ show(at + 1) }) else null,
+                    onDragging = { handleDragging = it },
+                ) { dy ->
                     val d = dy / (configuration.screenHeightDp * density.density)
                     if (state.photoProject) albumShare = (albumShare + d).coerceIn(0.2f, 0.75f) else filmShare = (filmShare + d).coerceIn(0.18f, 0.6f)
                 }
@@ -546,8 +559,9 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
                 // them (mark, move, remove) is on the Project page.
                 // Elsewhere it folds into a slim bar (previous, next) to leave room for the picture.
                 if (photoFolded) {
-                    // Folded: a small handle brings the info row and the album back (or a swipe up).
-                    Box(Modifier.fillMaxWidth().clickable { compact = false }.padding(vertical = 2.dp), contentAlignment = Alignment.Center) {
+                    // Folded: sideways a small arrow brings the info row and the album back (or a
+                    // swipe up); upright a double tap on the handle above does.
+                    if (wide) Box(Modifier.fillMaxWidth().clickable { compact = false }.padding(vertical = 2.dp), contentAlignment = Alignment.Center) {
                         Icon(HeadsupIcons.ChevronUp, "Show the album", Modifier.size(20.dp), tint = HeadsupColors.TextMuted)
                     }
                 } else if (state.clips.isNotEmpty() && tool != Tool.EXPORT) {
@@ -3699,21 +3713,7 @@ private fun BrushControls(state: UiState, vm: HeadsupViewModel, pictureSource: (
                 FilterChip(selected = !brush.subtract, onClick = { vm.updateBrush { it.copy(subtract = false) } }, label = { Text("Add") })
                 FilterChip(selected = brush.subtract, onClick = { vm.updateBrush { it.copy(subtract = true) } }, label = { Text("Subtract") })
             }
-            // Where the edge of what was found lies.
-            val e = mask.edge
-            ValueHeader(
-                "Edge",
-                when {
-                    kotlin.math.abs(e) < 0.005f -> "As found"
-                    e < 0f -> String.format(Locale.US, "Tighter %.0f %%", -e * 100f)
-                    else -> String.format(Locale.US, "Fuller %.0f %%", e * 100f)
-                },
-            )
-            RulerSlider(value = e, range = -1f..1f, step = 0.05f, onChange = { v -> vm.updateMask { it.copy(edge = v) } }, onReset = { vm.updateMask { it.copy(edge = 0f) } })
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                PillAction("⌁", "Fit to edges", { pictureSource?.let(vm::fitMaskToEdges) }, enabled = pictureSource != null && mask.strokes.isNotEmpty())
-            }
-            Hint("Tap an object to select it (tap again for a smaller or larger part), draw round it, or draw a line across to split the picture along it. A wrong bit of the outline: Push moves it. Fit to edges lays the outline onto the picture's edges close to it. Edge moves the whole outline in or out.")
+            Hint("Tap an object to select it (tap again for a smaller or larger part), draw round it, or draw a line across to split the picture along it. Then fix what is wrong (Push), and finish below.")
         }
         BrushMode.PUSH -> {
             // Grab the outline and move it; then lay it onto the picture's edges if wanted.
@@ -3723,10 +3723,7 @@ private fun BrushControls(state: UiState, vm: HeadsupViewModel, pictureSource: (
                 onChange = { v -> vm.updateBrush { it.copy(radius = v) }; vm.showBrush() },
                 onReset = { vm.updateBrush { it.copy(radius = BrushSetting.SIZE.default) }; vm.showBrush() },
             )
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                PillAction("⌁", "Fit to edges", { pictureSource?.let(vm::fitMaskToEdges) }, enabled = pictureSource != null && mask.strokes.isNotEmpty())
-            }
-            Hint("Put a finger on the outline where it is wrong and move it where it should be: that part follows, the rest stays. Grip: how much of the outline moves with the finger. Fit to edges then lays the whole outline onto the picture's edges close to it.")
+            Hint("Put a finger on the outline where it is wrong and move it where it should be: that part follows, the rest stays. Grip: how much of the outline moves with the finger.")
         }
         BrushMode.PAINT, BrushMode.ERASE, BrushMode.SOFTEN -> {
             // Strength only for Soften (how soft); painting is always at full strength.
@@ -3763,6 +3760,27 @@ private fun BrushControls(state: UiState, vm: HeadsupViewModel, pictureSource: (
         }
         BrushMode.MOVE -> Hint("One finger moves the mask; two turn and scale it.")
         BrushMode.VIEW -> Hint("One finger moves around the zoomed picture, two zoom it, a double tap fits it again. Nothing is painted.")
+    }
+    // The last steps, in the order they are taken: Select, fix it (Push, Paint, Erase), then lay it
+    // onto the picture's edges, then take a little in or out.
+    if (mask.strokes.isNotEmpty() || mask.sequence != null) {
+        SectionCaption("Finish")
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text("1", style = MaterialTheme.typography.labelLarge, color = HeadsupColors.TextMuted)
+            PillAction("⌁", "Fit to edges", { pictureSource?.let(vm::fitMaskToEdges) }, enabled = pictureSource != null && mask.strokes.isNotEmpty() && !state.busy)
+            Hint("lays the outline onto the picture's edges close to it", Modifier.weight(1f))
+        }
+        val e = mask.edge
+        ValueHeader(
+            "2 · Edge",
+            when {
+                kotlin.math.abs(e) < 0.005f -> "As it is"
+                e < 0f -> String.format(Locale.US, "Tighter %.0f %%", -e * 100f)
+                else -> String.format(Locale.US, "Fuller %.0f %%", e * 100f)
+            },
+        )
+        RulerSlider(value = e, range = -1f..1f, step = 0.05f, onChange = { v -> vm.updateMask { it.copy(edge = v) } }, onReset = { vm.updateMask { it.copy(edge = 0f) } })
+        Hint("Edge takes in a little more (a rim, a halo) or a little less, the same few pixels all round.")
     }
 }
 
@@ -5221,29 +5239,46 @@ private fun SideHandle(onDrag: (Float) -> Unit) {
 }
 
 @Composable
-private fun PreviewHandle(onFold: (() -> Unit)? = null, onDrag: (Float) -> Unit) {
+private fun PreviewHandle(
+    onToggle: () -> Unit,
+    onPrevious: (() -> Unit)?,
+    onNext: (() -> Unit)?,
+    onDragging: (Boolean) -> Unit,
+    onDrag: (Float) -> Unit,
+) {
     val state = androidx.compose.foundation.gestures.rememberDraggableState(onDrag)
-    // A tall touch area around the small bar, so it is easy to catch.
+    val toggle by rememberUpdatedState(onToggle)
+    // A tall touch area around the small bar, so it is easy to catch: dragged it sizes the picture,
+    // double-tapped it folds what is under the picture away and back.
     Box(
         Modifier
             .fillMaxWidth()
-            .height(32.dp)
-            .draggable(state, Orientation.Vertical),
+            .height(36.dp)
+            .draggable(
+                state, Orientation.Vertical,
+                onDragStarted = { onDragging(true) },
+                onDragStopped = { onDragging(false) },
+            )
+            .pointerInput(Unit) { detectTapGestures(onDoubleTap = { toggle() }) },
         contentAlignment = Alignment.Center,
     ) {
         Box(Modifier.width(40.dp).height(4.dp).clip(RoundedCornerShape(2.dp)).background(HeadsupColors.Outline))
-        onFold?.let { fold ->
+        for ((go, left) in listOf(onPrevious to true, onNext to false)) {
             Box(
                 Modifier
-                    .align(Alignment.CenterEnd)
-                    // Under the transport's last button (Z), the same size.
-                    .padding(end = 20.dp)
+                    .align(if (left) Alignment.CenterStart else Alignment.CenterEnd)
+                    .padding(horizontal = 20.dp)
                     .size(32.dp)
                     .clip(CircleShape)
-                    .border(1.dp, HeadsupColors.Outline, CircleShape)
-                    .clickable(onClick = fold),
+                    .then(if (go != null) Modifier.clickable(onClick = go) else Modifier),
                 contentAlignment = Alignment.Center,
-            ) { Icon(HeadsupIcons.ChevronDown, "Fold the transport and timeline", Modifier.size(18.dp), tint = HeadsupColors.TextMuted) }
+            ) {
+                Text(
+                    if (left) "‹" else "›",
+                    style = MaterialTheme.typography.titleLarge,
+                    color = if (go != null) HeadsupColors.TextMuted else HeadsupColors.TextMuted.copy(alpha = 0.3f),
+                )
+            }
         }
     }
 }
