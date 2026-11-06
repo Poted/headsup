@@ -18,8 +18,9 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.statusBarsPadding
-import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.asPaddingValues
+import androidx.compose.foundation.layout.statusBars
+import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
@@ -94,77 +95,36 @@ fun AlbumBrowser(state: UiState, vm: HeadsupViewModel, onClose: () -> Unit) {
     }
     // Takes of one shot: how many there are and which of them each is.
     val groupSizes = photos.mapNotNull { it.value.cullGroup }.groupingBy { it }.eachCount()
+    val bars = systemBars()
     Dialog(onDismissRequest = onClose, properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)) {
-        Column(Modifier.fillMaxSize().background(HeadsupColors.Background).statusBarsPadding().navigationBarsPadding()) {
-            Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+        Column(Modifier.fillMaxSize().background(HeadsupColors.Background).padding(bars)) {
+            // Top: what the album holds and which set the editor works through; closing.
+            Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 8.dp, top = 8.dp, bottom = 4.dp), verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
                     Text("Album", style = MaterialTheme.typography.titleMedium)
                     val starred = photos.count { it.value.rating > 0 }
-                    val marked = photos.count { it.value.picked }
+                    val editing = if (state.albumScope == AlbumScope.ALL) "all" else "${state.albumScope.label} (${photos.count { state.albumScope.has(it.value) }})"
                     Text(
-                        "${photos.size} photos · $starred with stars" + (if (marked > 0) " · $marked marked" else ""),
-                        style = MaterialTheme.typography.labelMedium, color = HeadsupColors.TextMuted,
+                        "${photos.size} photos · $starred with stars · editing $editing",
+                        style = MaterialTheme.typography.labelMedium, color = HeadsupColors.TextMuted, maxLines = 1,
                     )
                 }
-                SmallAction("Close", onClose)
+                SmallAction("✕", onClose)
             }
-            if (state.busy && state.loadingMessage != null) {
-                // Auto pick at work (it shows here: the dialog covers the screen's loader).
-                Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp)) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(state.loadingMessage, Modifier.weight(1f), style = MaterialTheme.typography.labelMedium)
-                        SmallAction("Cancel", { vm.cancelLoading() })
-                    }
-                    state.loadingProgress?.let { p -> LinearProgressIndicator(progress = { p }, modifier = Modifier.fillMaxWidth().padding(top = 4.dp)) }
-                        ?: LinearProgressIndicator(Modifier.fillMaxWidth().padding(top = 4.dp))
-                }
-            } else {
-                Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-                    PillAction("✦", "Auto pick", { vm.autoPick() }, enabled = photos.isNotEmpty())
-                    Spacer(Modifier.width(6.dp))
-                    if (photos.any { it.value.suggested }) SmallAction("Clear suggested", { vm.clearSuggestions() })
-                    Spacer(Modifier.weight(1f))
-                    PillAction("✓", if (selecting) "Selecting" else "Select", { selecting = !selecting }, selected = selecting)
-                }
-                if (selecting || markedCount > 0) {
-                    // What to do with the marked photos.
-                    Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 2.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Text("$markedCount marked", Modifier.weight(1f), style = MaterialTheme.typography.labelMedium, color = HeadsupColors.TextMuted)
-                        if (shown.isNotEmpty()) SmallAction("All shown", {
-                            val ids = shown.map { it.value.id }.toSet()
-                            state.clips.forEachIndexed { i, c -> if (c.meta.isPhoto && c.id in ids && !c.picked) vm.togglePicked(i) }
-                        })
-                        if (markedCount > 0) {
-                            SmallAction("Unmark", { state.clips.forEachIndexed { i, c -> if (c.picked) vm.togglePicked(i) } })
-                            SmallAction("Delete $markedCount", { confirmDelete = true })
-                        }
-                    }
-                }
-                Text(
-                    "Auto pick groups takes of one shot and stars the sharpest, best exposed of each (${HeadsupViewModel.SUGGESTED_STARS} stars, shown hollow until you change them). Screenshots are left out. It never removes or rejects a photo; stars you gave stay.",
-                    Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
-                    style = MaterialTheme.typography.labelSmall, color = HeadsupColors.TextMuted,
-                )
-            }
-            FlowRow(Modifier.padding(horizontal = 12.dp), horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.Center) {
-                for (f in AlbumScope.entries) FilterChip(selected = filter == f, onClick = { filter = f }, label = { Text(f.label) })
-            }
-            // Which photos the editor works through: the set shown here, or the whole album.
-            Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    if (state.albumScope == AlbumScope.ALL) "The editor shows all photos" else "The editor shows ${state.albumScope.label} (${photos.count { state.albumScope.has(it.value) }})",
-                    Modifier.weight(1f), style = MaterialTheme.typography.labelMedium, color = HeadsupColors.TextMuted,
-                )
-                if (filter != state.albumScope || filter == AlbumScope.ALL) {
-                    PillAction("✎", if (filter == AlbumScope.ALL) "Edit all" else "Edit these ${shown.size}", {
-                        vm.setAlbumScope(filter)
-                        onClose()
-                    }, enabled = shown.isNotEmpty())
+            // The sets, on one line.
+            androidx.compose.foundation.lazy.LazyRow(
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 12.dp),
+            ) {
+                items(AlbumScope.entries.size) { k ->
+                    val f = AlbumScope.entries[k]
+                    val n = photos.count { f.has(it.value) }
+                    FilterChip(selected = filter == f, onClick = { filter = f }, label = { Text("${f.label} · $n") })
                 }
             }
             LazyVerticalGrid(
                 columns = GridCells.Adaptive(112.dp),
-                modifier = Modifier.fillMaxSize().padding(horizontal = 8.dp),
+                modifier = Modifier.weight(1f).fillMaxWidth().padding(horizontal = 8.dp),
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
                 verticalArrangement = Arrangement.spacedBy(6.dp),
                 contentPadding = androidx.compose.foundation.layout.PaddingValues(vertical = 8.dp),
@@ -199,18 +159,91 @@ fun AlbumBrowser(state: UiState, vm: HeadsupViewModel, onClose: () -> Unit) {
                                     )
                                 }
                             }
+                            if (selecting && c.picked) Box(Modifier.matchParentSize().background(HeadsupColors.Highlight.copy(alpha = 0.15f)))
                             // The mark: always tappable while selecting, shown when set.
                             if (c.picked || selecting) {
                                 Box(Modifier.align(Alignment.TopEnd).padding(4.dp)) { MarkButton(c.picked, 26.dp) { vm.togglePicked(i) } }
                             }
-                            if (selecting && c.picked) Box(Modifier.matchParentSize().background(HeadsupColors.Highlight.copy(alpha = 0.12f)))
                         }
                         StarRow(c.rating, c.suggested) { stars -> vm.setRating(i, stars) }
                     }
                 }
             }
+            // Bottom, under the thumb: one bar, its actions by what is going on.
+            Column(
+                Modifier.fillMaxWidth().background(HeadsupColors.Surface).padding(horizontal = 12.dp, vertical = 8.dp),
+            ) {
+                when {
+                    state.busy && state.loadingMessage != null -> {
+                        // Auto pick at work (shown here: the album covers the screen's loader).
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(state.loadingMessage, Modifier.weight(1f), style = MaterialTheme.typography.labelMedium, maxLines = 1)
+                            SmallAction("Cancel", { vm.cancelLoading() })
+                        }
+                        state.loadingProgress?.let { p -> LinearProgressIndicator(progress = { p }, modifier = Modifier.fillMaxWidth().padding(top = 6.dp)) }
+                            ?: LinearProgressIndicator(Modifier.fillMaxWidth().padding(top = 6.dp))
+                    }
+                    selecting -> Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text("$markedCount marked", Modifier.weight(1f), style = MaterialTheme.typography.labelLarge)
+                        if (shown.any { !it.value.picked }) SmallAction("All", {
+                            val ids = shown.map { it.value.id }.toSet()
+                            state.clips.forEachIndexed { i, c -> if (c.meta.isPhoto && c.id in ids && !c.picked) vm.togglePicked(i) }
+                        })
+                        if (markedCount > 0) {
+                            SmallAction("None", { state.clips.forEachIndexed { i, c -> if (c.picked) vm.togglePicked(i) } })
+                            SmallAction("Delete", { confirmDelete = true })
+                        }
+                        Spacer(Modifier.width(4.dp))
+                        PillAction("✓", "Done", { selecting = false }, selected = true)
+                    }
+                    else -> Row(verticalAlignment = Alignment.CenterVertically) {
+                        AutoPickButton(enabled = photos.isNotEmpty(), suggested = photos.any { it.value.suggested }, onPick = vm::autoPick, onClear = vm::clearSuggestions)
+                        Spacer(Modifier.width(6.dp))
+                        PillAction("✓", "Select", { selecting = true })
+                        Spacer(Modifier.weight(1f))
+                        // The set shown becomes the one the editor works through.
+                        PillAction("✎", if (filter == AlbumScope.ALL) "Edit all" else "Edit ${shown.size}", {
+                            vm.setAlbumScope(filter)
+                            onClose()
+                        }, enabled = shown.isNotEmpty(), selected = true)
+                    }
+                }
+            }
         }
     }
+}
+
+/**
+ * Auto pick, with what it does a tap away: a first tap runs it; once it has suggested, a menu
+ * offers running it again or taking its suggestions back.
+ */
+@Composable
+private fun AutoPickButton(enabled: Boolean, suggested: Boolean, onPick: () -> Unit, onClear: () -> Unit) {
+    var menu by remember { mutableStateOf(false) }
+    Box {
+        PillAction("✦", "Auto pick", { if (suggested) menu = true else onPick() }, enabled = enabled)
+        androidx.compose.material3.DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+            Text(
+                "Groups takes of one shot and stars the sharpest, level, well exposed one of each " +
+                    "(${HeadsupViewModel.SUGGESTED_STARS} hollow stars). Leaves out screenshots. Never removes a photo; your stars stay.",
+                Modifier.padding(horizontal = 16.dp, vertical = 8.dp).width(260.dp),
+                style = MaterialTheme.typography.labelSmall, color = HeadsupColors.TextMuted,
+            )
+            androidx.compose.material3.DropdownMenuItem(text = { Text("Pick again") }, onClick = { menu = false; onPick() })
+            androidx.compose.material3.DropdownMenuItem(text = { Text("Clear suggested stars") }, onClick = { menu = false; onClear() })
+        }
+    }
+}
+
+/**
+ * The system bars' room, read from the app's own window: a dialog's window is not told it (so
+ * its content ran under the navigation bar), while the album and viewer cover the whole screen.
+ */
+@Composable
+private fun systemBars(): androidx.compose.foundation.layout.PaddingValues {
+    val top = androidx.compose.foundation.layout.WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
+    val bottom = androidx.compose.foundation.layout.WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
+    return androidx.compose.foundation.layout.PaddingValues(top = top, bottom = bottom)
 }
 
 /** Five stars: tap one to give that many (the same again takes them off); suggested ones are hollow. */
@@ -250,8 +283,9 @@ fun PhotoViewer(state: UiState, vm: HeadsupViewModel, indices: List<Int>, start:
     val page = pager.currentPage.coerceIn(0, indices.lastIndex)
     val index = indices[page]
     androidx.compose.runtime.LaunchedEffect(page) { tried = null; zoomed = false }
+    val bars = systemBars()
     Dialog(onDismissRequest = onClose, properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)) {
-        Column(Modifier.fillMaxSize().background(Color.Black).statusBarsPadding().navigationBarsPadding()) {
+        Column(Modifier.fillMaxSize().background(Color.Black).padding(bars)) {
             val clip = state.clips.getOrNull(index)
             Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {

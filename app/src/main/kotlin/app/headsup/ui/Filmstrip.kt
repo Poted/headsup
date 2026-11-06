@@ -89,7 +89,8 @@ class Filmstrip(private val context: Context, private val scope: CoroutineScope)
                 return (app.headsup.media.RawPhotos.preview(context, uri, 192) ?: app.headsup.media.Exif.thumbnail(context, uri))?.asImageBitmap()
             }
             val opts = BitmapFactory.Options().apply { inSampleSize = 16 }
-            return context.contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, opts) }?.asImageBitmap()
+            return context.contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, opts) }
+                ?.let { app.headsup.media.Exif.upright(context, uri, it) }?.asImageBitmap()
         }
         val r = retrievers.getOrPut(uri) { MediaMetadataRetriever().apply { setDataSource(context, uri) } }
         return r.getScaledFrameAtTime(key * 1000, MediaMetadataRetriever.OPTION_CLOSEST_SYNC, 192, 192)?.asImageBitmap()

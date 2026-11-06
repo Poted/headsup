@@ -112,6 +112,27 @@ class PhotoCullTest {
         assertTrue(1 !in r.suggested)
     }
 
+    /** [px] smeared sideways over [len] pixels (the camera moved while it took the photo). */
+    private fun shaken(px: IntArray, len: Int): IntArray = IntArray(px.size) { i ->
+        val x = i % w
+        var s = 0
+        var n = 0
+        for (d in 0 until len) { val xx = x + d; if (xx < w) { s += px[i + d] and 0xFF; n++ } }
+        val v = s / n.coerceAtLeast(1)
+        (0xFF shl 24) or (v shl 16) or (v shl 8) or v
+    }
+
+    @Test
+    fun aShakenPhotoIsSoft() {
+        val sharp = f(scene(8))
+        val shake = f(shaken(scene(8), 6))
+        assertTrue(shake.sharpness < 0.7f * sharp.sharpness, "${shake.sharpness} vs ${sharp.sharpness}")
+        // Two takes of one shot: the shaken one is never the one suggested, nor with it.
+        val r = PhotoCull.choose(listOf(shake, sharp, f(scene(24, tint = 60))))
+        assertTrue(0 !in r.suggested)
+        assertTrue(1 in r.suggested)
+    }
+
     @Test
     fun nothingToChooseFrom() {
         assertTrue(PhotoCull.choose(emptyList()).suggested.isEmpty())

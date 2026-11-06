@@ -133,10 +133,12 @@ object PhotoCull {
 
     /**
      * How sharp the sharpest parts are, whatever their contrast: in each tile of a 6×6 grid the
-     * finest detail (the Laplacian at full size) against the coarser detail of the same tile (at
-     * half size). Focus or shake takes the fine detail first, so the ratio falls; a dim, soft-lit
-     * landscape in focus scores as well as a contrasty one. Tiles with hardly any structure (open
-     * sky, where only noise is fine) do not count; of the rest, the sharpest third does.
+     * finest detail (second differences at full size) against the coarser detail of the same
+     * tile (at half size), in four directions, the weakest counting: shake blurs one direction
+     * and leaves the others, so it shows there. Focus or shake takes the fine detail first, so the
+     * ratio falls; a dim, soft-lit landscape in focus scores as well as a contrasty one. Tiles with
+     * hardly any structure (open sky, where only noise is fine) do not count; of the rest, the
+     * sharpest third does.
      */
     private fun sharpnessOf(y: FloatArray, width: Int, height: Int): Float {
         val hw = width / 2
@@ -149,23 +151,32 @@ object PhotoCull {
         val grid = 6
         val fine = energy(y, width, height, grid)
         val coarse = energy(half, hw, hh, grid)
-        val tiles = (0 until grid * grid).filter { coarse[it] > 0.012f }.ifEmpty { (0 until grid * grid).toList() }
-        val ratios = tiles.map { fine[it] / (coarse[it] + 0.004f) }.sortedDescending()
+        val tiles = (0 until grid * grid).filter { t -> coarse[t].average() > 0.012 }.ifEmpty { (0 until grid * grid).toList() }
+        val ratios = tiles.map { t -> (0 until 4).minOf { d -> fine[t][d] / (coarse[t][d] + 0.004f) } }.sortedDescending()
         return ratios.take((ratios.size / 3).coerceAtLeast(1)).average().toFloat()
     }
 
-    /** Root mean square of the Laplacian in each tile of a [grid]×[grid] split. */
-    private fun energy(y: FloatArray, width: Int, height: Int, grid: Int): FloatArray {
-        val sums = FloatArray(grid * grid)
+    /** Root mean square of the second differences across, down and along both diagonals, in each tile of a [grid]×[grid] split. */
+    private fun energy(y: FloatArray, width: Int, height: Int, grid: Int): Array<FloatArray> {
+        val sums = Array(grid * grid) { DoubleArray(4) }
         val counts = IntArray(grid * grid)
         for (yy in 1 until height - 1) for (xx in 1 until width - 1) {
             val i = yy * width + xx
-            val l = 4f * y[i] - y[i - 1] - y[i + 1] - y[i - width] - y[i + width]
+            val c = 2f * y[i]
+            val h = c - y[i - 1] - y[i + 1]
+            val v = c - y[i - width] - y[i + width]
+            val d1 = c - y[i - width - 1] - y[i + width + 1]
+            val d2 = c - y[i - width + 1] - y[i + width - 1]
             val t = (yy * grid / height) * grid + (xx * grid / width)
-            sums[t] += l * l
+            val s = sums[t]
+            s[0] += (h * h).toDouble()
+            s[1] += (v * v).toDouble()
+            // Diagonal steps are longer (√2): their differences scaled to match.
+            s[2] += (d1 * d1 / 2f).toDouble()
+            s[3] += (d2 * d2 / 2f).toDouble()
             counts[t]++
         }
-        return FloatArray(grid * grid) { sqrt(sums[it] / counts[it].coerceAtLeast(1)) }
+        return Array(grid * grid) { t -> FloatArray(4) { d -> sqrt(sums[t][d] / counts[t].coerceAtLeast(1)).toFloat() } }
     }
 
     /** How alike two photos look, 0..1: their brightness layout and their colours. */
@@ -193,7 +204,7 @@ object PhotoCull {
         val sharp = photos.map { it.sharpness }.sorted()
         // Against the album's sharp photos (its top tenth), not its middle: a soft photo among
         // a few others is still soft.
-        val reference = sharp[((n - 1) * 0.9f).toInt()].coerceAtLeast(1e-6f)
+        val reference = sharp[kotlin.math.ceil((n - 1) * 0.9).toInt().coerceIn(0, n - 1)].coerceAtLeast(1e-6f)
         val top = sharp.last().coerceAtLeast(1e-6f)
         val score = FloatArray(n) { i -> (0.75f * photos[i].sharpness / top + 0.25f * photos[i].exposure).coerceIn(0f, 1f) }
         fun good(i: Int): Boolean {

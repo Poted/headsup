@@ -732,6 +732,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
             val side = maxOf(clip.meta.width, clip.meta.height)
             val opts = android.graphics.BitmapFactory.Options().apply { inSampleSize = Integer.highestOneBit((side / maxSide).coerceAtLeast(1)) }
             context.contentResolver.openInputStream(clip.meta.uri)?.use { android.graphics.BitmapFactory.decodeStream(it, null, opts) }
+                ?.let { app.headsup.media.Exif.upright(context, clip.meta.uri, it) }
         }.getOrNull()
     }
 
