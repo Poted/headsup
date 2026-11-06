@@ -5268,12 +5268,22 @@ private fun PhotoStrip(state: UiState, vm: HeadsupViewModel, onAdd: () -> Unit, 
     // The whole album, large: stars, Auto pick, filters.
     var browsing by rememberSaveable { mutableStateOf(false) }
     if (browsing) AlbumBrowser(state, vm) { browsing = false }
+    // Only the set chosen in the album (Edit these): 20 starred photos, not all 500.
+    val inScope = state.clips.indices.filter { state.albumScope.has(state.clips[it]) }
+    if (state.albumScope != AlbumScope.ALL) {
+        Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
+            Hint("Editing ${state.albumScope.label}: ${inScope.size} of ${state.clips.size}", Modifier.weight(1f))
+            SmallAction("Change", { browsing = true })
+            SmallAction("All", { vm.setAlbumScope(AlbumScope.ALL) })
+        }
+    }
     LazyRow(
         Modifier.fillMaxWidth().padding(vertical = 8.dp),
         horizontalArrangement = Arrangement.spacedBy(8.dp),
         contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 16.dp),
     ) {
-        items(state.clips.size) { i ->
+        items(inScope.size) { k ->
+            val i = inScope[k]
             val c = state.clips[i]
             val selected = i == state.selectedClip
             // Held: marked (for export, matching, moving and deleting together). Double-tapped:
@@ -5347,25 +5357,11 @@ private fun PhotoStrip(state: UiState, vm: HeadsupViewModel, onAdd: () -> Unit, 
             }
         }
     }
-    // The selected photo: its place in the album, or out of it.
+    // The selected photo's stars. Marking, moving, exporting and deleting are in its menu (a
+    // double tap on it; held, a photo is marked), so they are not repeated here.
     val i = state.selectedClip
     if (arrange && i != null && i in state.clips.indices) {
-        Row(Modifier.padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-            Hint("${i + 1} of ${state.clips.size}" + state.clips.count { it.picked }.let { if (it > 0) " · $it marked" else "" }, Modifier.weight(1f).padding(start = 4.dp))
-            SmallAction(if (state.clips[i].picked) "✓ Marked" else "Mark", { vm.togglePicked(i) })
-            SmallAction("◀ Move", { vm.moveClip(i, -1) }, enabled = i > 0)
-            SmallAction("Move ▶", { vm.moveClip(i, 1) }, enabled = i < state.clips.lastIndex)
-            SmallAction("Remove", { vm.removeClip(i) })
-        }
         StarRow(state.clips[i].rating, state.clips[i].suggested) { stars -> vm.setRating(i, stars) }
-        // Several at once: the marked photos (undo brings them back).
-        val marked = state.clips.count { it.picked }
-        if (marked > 1) {
-            Row(Modifier.padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-                Spacer(Modifier.weight(1f))
-                SmallAction("Remove marked ($marked)", vm::removePicked)
-            }
-        }
     }
 }
 

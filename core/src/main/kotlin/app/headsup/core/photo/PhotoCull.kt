@@ -1,7 +1,6 @@
 package app.headsup.core.photo
 
 import kotlin.math.abs
-import kotlin.math.ln
 import kotlin.math.sqrt
 
 /**
@@ -43,29 +42,7 @@ object PhotoCull {
             val p = argb[i]
             (0.2126f * ((p shr 16) and 0xFF) + 0.7152f * ((p shr 8) and 0xFF) + 0.0722f * (p and 0xFF)) / 255f
         }
-        // Sharpness: the spread of the Laplacian in each tile of a 6×6 grid; the sharpest tiles
-        // (a sixth of them) count, so a sharp subject before a soft background is sharp.
-        val grid = 6
-        val tiles = FloatArray(grid * grid)
-        val counts = IntArray(grid * grid)
-        val sums = FloatArray(grid * grid)
-        val squares = FloatArray(grid * grid)
-        for (yy in 1 until height - 1) for (xx in 1 until width - 1) {
-            val i = yy * width + xx
-            val l = 4f * y[i] - y[i - 1] - y[i + 1] - y[i - width] - y[i + width]
-            val t = (yy * grid / height) * grid + (xx * grid / width)
-            sums[t] += l
-            squares[t] += l * l
-            counts[t]++
-        }
-        for (t in tiles.indices) {
-            val c = counts[t].coerceAtLeast(1)
-            val m = sums[t] / c
-            tiles[t] = squares[t] / c - m * m
-        }
-        tiles.sortDescending()
-        val top = tiles.take((tiles.size / 6).coerceAtLeast(1))
-        val sharpness = ln(1f + top.average().toFloat() * 1e4f)
+        val sharpness = sharpnessOf(y, width, height)
         // Exposure: what is burnt out or crushed to black, over the whole picture.
         var bright = 0
         var dark = 0
@@ -100,6 +77,43 @@ object PhotoCull {
         return Features(sharpness, exposure, print, colour)
     }
 
+    /**
+     * How sharp the sharpest parts are, whatever their contrast: in each tile of a 6×6 grid the
+     * finest detail (the Laplacian at full size) against the coarser detail of the same tile (at
+     * half size). Focus or shake takes the fine detail first, so the ratio falls; a dim, soft-lit
+     * landscape in focus scores as well as a contrasty one. Tiles with hardly any structure (open
+     * sky, where only noise is fine) do not count; of the rest, the sharpest third does.
+     */
+    private fun sharpnessOf(y: FloatArray, width: Int, height: Int): Float {
+        val hw = width / 2
+        val hh = height / 2
+        val half = FloatArray(hw * hh) { i ->
+            val x = (i % hw) * 2
+            val yy = (i / hw) * 2
+            (y[yy * width + x] + y[yy * width + x + 1] + y[(yy + 1) * width + x] + y[(yy + 1) * width + x + 1]) / 4f
+        }
+        val grid = 6
+        val fine = energy(y, width, height, grid)
+        val coarse = energy(half, hw, hh, grid)
+        val tiles = (0 until grid * grid).filter { coarse[it] > 0.012f }.ifEmpty { (0 until grid * grid).toList() }
+        val ratios = tiles.map { fine[it] / (coarse[it] + 0.004f) }.sortedDescending()
+        return ratios.take((ratios.size / 3).coerceAtLeast(1)).average().toFloat()
+    }
+
+    /** Root mean square of the Laplacian in each tile of a [grid]×[grid] split. */
+    private fun energy(y: FloatArray, width: Int, height: Int, grid: Int): FloatArray {
+        val sums = FloatArray(grid * grid)
+        val counts = IntArray(grid * grid)
+        for (yy in 1 until height - 1) for (xx in 1 until width - 1) {
+            val i = yy * width + xx
+            val l = 4f * y[i] - y[i - 1] - y[i + 1] - y[i - width] - y[i + width]
+            val t = (yy * grid / height) * grid + (xx * grid / width)
+            sums[t] += l * l
+            counts[t]++
+        }
+        return FloatArray(grid * grid) { sqrt(sums[it] / counts[it].coerceAtLeast(1)) }
+    }
+
     /** How alike two photos look, 0..1: their brightness layout and their colours. */
     fun similarity(a: Features, b: Features): Float {
         var dot = 0f
@@ -113,7 +127,7 @@ object PhotoCull {
     }
 
     /** Groups the photos (in album order: takes of one shot follow each other) and picks the best of each. */
-    fun choose(photos: List<Features>): Result {
+    fun choose(photos: List<Features>, eligible: (Int) -> Boolean = { true }): Result {
         val n = photos.size
         val group = IntArray(n)
         var g = 0
@@ -129,12 +143,12 @@ object PhotoCull {
         val suggested = HashSet<Int>()
         for (members in (0 until n).groupBy { group[it] }.values) {
             // Within a group, sharpness against the group's sharpest matters most.
-            val best = members.maxByOrNull { score[it] } ?: continue
+            val best = members.filter(eligible).maxByOrNull { score[it] } ?: continue
             val p = photos[best]
             if (p.sharpness >= 0.6f * median && p.exposure >= 0.55f) {
                 suggested += best
                 // Another take as good (a tie) is suggested too, to choose between.
-                members.filter { it != best && score[it] >= score[best] - 0.02f && photos[it].exposure >= 0.55f }.forEach { suggested += it }
+                members.filter { it != best && eligible(it) && score[it] >= score[best] - 0.02f && photos[it].exposure >= 0.55f }.forEach { suggested += it }
             }
         }
         return Result(group, score, suggested)

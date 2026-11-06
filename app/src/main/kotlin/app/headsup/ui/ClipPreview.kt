@@ -592,8 +592,11 @@ fun ClipPreview(
     // The mask worked on shows red over the picture while it changes (and a moment after), or all
     // the time with Overlay on.
     var maskFlash by remember { mutableStateOf(false) }
-    LaunchedEffect(guideMask) {
-        if (guideMask == null) { maskFlash = false; return@LaunchedEffect }
+    // On choosing a mask and while its shape changes (moved, stretched, painted), not while its
+    // corrections are set: then the picture itself must be seen.
+    val guideShape = guideMask?.copy(grade = app.headsup.core.color.ColorGrade())
+    LaunchedEffect(guideIndex, guideShape) {
+        if (guideShape == null) { maskFlash = false; return@LaunchedEffect }
         maskFlash = true
         delay(900)
         maskFlash = false

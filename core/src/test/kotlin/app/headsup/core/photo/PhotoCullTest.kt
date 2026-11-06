@@ -43,6 +43,22 @@ class PhotoCullTest {
     }
 
     @Test
+    fun aDimSharpSceneIsAsSharpAsABrightOne() {
+        // The same sharp scene at a fifth of the contrast (a dim landscape) against a blurred bright one.
+        val dim = scene(8).map { p -> val v = (p and 0xFF) / 5 + 40; (0xFF shl 24) or (v shl 16) or (v shl 8) or v }.toIntArray()
+        val dimSharp = f(dim).sharpness
+        assertTrue(dimSharp > f(scene(8, blur = 2)).sharpness)
+        assertTrue(dimSharp > 0.6f * f(scene(8)).sharpness)
+    }
+
+    @Test
+    fun onlyEligiblePhotosAreSuggested() {
+        val r = PhotoCull.choose(listOf(f(scene(8)), f(scene(24, tint = 60))), eligible = { it != 1 })
+        assertTrue(0 in r.suggested)
+        assertTrue(1 !in r.suggested)
+    }
+
+    @Test
     fun burntOutIsBadlyExposed() {
         val white = IntArray(w * h) { grey(255) }
         assertTrue(f(white).exposure < 0.1f)

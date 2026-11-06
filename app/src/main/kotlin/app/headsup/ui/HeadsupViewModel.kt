@@ -205,6 +205,25 @@ data class ClipState(
 }
 
 /** What "Copy" takes from a clip and "Paste" gives to another: corrections, effects and LUT. */
+/** A set of the album's photos by their stars or marks: shown in the album, edited in the editor. */
+enum class AlbumScope(val label: String) {
+    ALL("All"), FOUR("★ 4+"), FIVE("★ 5"), UNRATED("No stars"), MARKED("Marked");
+
+    fun has(c: ClipState): Boolean = when (this) {
+        ALL -> true
+        FOUR -> c.rating >= 4
+        FIVE -> c.rating >= 5
+        UNRATED -> c.rating == 0
+        MARKED -> c.picked
+    }
+}
+
+/** A look tried on a photo in the album's viewer: one of the looks, or a saved preset; null its own. */
+sealed interface TriedLook {
+    data class Profile(val look: app.headsup.core.color.Look) : TriedLook
+    data class Preset(val preset: app.headsup.project.SavedPreset) : TriedLook
+}
+
 data class ClipLook(val grade: ColorGrade, val effects: EffectSettings, val lutName: String?, val masks: List<ColourMask> = emptyList())
 
 /**
@@ -398,6 +417,8 @@ data class UiState(
     val loadingMessage: String? = null,
     /** 0..1 while copying files in, null when the length is unknown or nothing is copied. */
     val loadingProgress: Float? = null,
+    /** Which of the album's photos the editor shows (set in the album: Edit these). */
+    val albumScope: AlbumScope = AlbumScope.ALL,
     val canRedo: Boolean = false,
     /** What the last undo or redo changed, shown for a moment over the picture, and when. */
     val notice: String? = null,
@@ -653,7 +674,10 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                 }
                 // Photos that could not be read stay out (each its own group).
                 val known = features.withIndex().filter { it.value != null }
-                val result = withContext(Dispatchers.Default) { app.headsup.core.photo.PhotoCull.choose(known.map { it.value!! }) }
+                // Screenshots and graphics are not photos to choose: they are never suggested (nor rejected).
+                val result = withContext(Dispatchers.Default) {
+                    app.headsup.core.photo.PhotoCull.choose(known.map { it.value!! }) { k -> !notAPhoto(photos[known[k].index].value) }
+                }
                 val groupOf = HashMap<Long, Int>()
                 val chosen = HashSet<Long>()
                 known.forEachIndexed { k, iv ->
@@ -683,6 +707,75 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                 throw e
             }
         }
+    }
+
+    /**
+     * The editor shows only the album's photos in [scope] (all of them again with ALL). The photo
+     * on screen stays when it is in the set, else the first one of it is shown.
+     */
+    fun setAlbumScope(scope: AlbumScope) {
+        val s = _state.value
+        _state.update { it.copy(albumScope = scope) }
+        val sel = s.selectedClip
+        if (sel == null || sel !in s.clips.indices || !scope.has(s.clips[sel])) {
+            s.clips.indices.firstOrNull { scope.has(s.clips[it]) }?.let { selectClip(it) }
+        }
+    }
+
+    /** The photo [index] large, for the album's viewer ([maxSide] pixels on its longer side); null when it cannot be read. */
+    suspend fun viewerPicture(index: Int, maxSide: Int): Bitmap? = withContext(Dispatchers.IO) {
+        val clip = _state.value.clips.getOrNull(index) ?: return@withContext null
+        val context = getApplication<Application>()
+        runCatching {
+            if (clip.meta.isRaw) return@runCatching app.headsup.media.RawPhotos.decode(context, clip.meta.uri, clip.rawDevelop, maxSide)
+            val side = maxOf(clip.meta.width, clip.meta.height)
+            val opts = android.graphics.BitmapFactory.Options().apply { inSampleSize = Integer.highestOneBit((side / maxSide).coerceAtLeast(1)) }
+            context.contentResolver.openInputStream(clip.meta.uri)?.use { android.graphics.BitmapFactory.decodeStream(it, null, opts) }
+        }.getOrNull()
+    }
+
+    /** What [look] does to photo [index] (its colours outside masks), as a table; null [look] its own look. */
+    private fun triedGrade(clip: ClipState, look: TriedLook?): Pair<String?, ColorGrade> {
+        val s = _state.value
+        return when (look) {
+            null -> s.lutFor(clip) to s.appliedGrade(clip)
+            is TriedLook.Profile -> s.lutFor(clip) to s.appliedGrade(clip.copy(grade = clip.grade.copy(look = look.look.name, lookAmount = 1f)))
+            is TriedLook.Preset -> (look.preset.lutName ?: s.lutFor(clip)) to s.appliedGrade(clip.copy(grade = look.preset.grade))
+        }
+    }
+
+    suspend fun viewerTable(index: Int, look: TriedLook?): Array<Array<IntArray>>? {
+        val clip = _state.value.clips.getOrNull(index) ?: return null
+        if (!clip.colorGrade) return bakeAlways(null, ColorGrade(), clip.wideGamut)
+        val (lut, grade) = triedGrade(clip, look)
+        return bakeAlways(lut, grade, clip.wideGamut)
+    }
+
+    /** Keeps [look] on photo [index] (as the editor's Looks would). */
+    fun keepTriedLook(index: Int, look: TriedLook) {
+        record(_state.value.snapshot())
+        when (look) {
+            is TriedLook.Profile -> updateClip(index) { it.copy(grade = it.grade.copy(look = look.look.name, lookAmount = 1f)) }
+            is TriedLook.Preset -> {
+                val e = look.preset.effects
+                updateClip(index) { c ->
+                    c.copy(
+                        grade = look.preset.grade, lutName = look.preset.lutName,
+                        effects = c.effects.copy(
+                            grain = e.grain, grainSize = e.grainSize, grainColour = e.grainColour,
+                            glow = e.glow, glowThreshold = e.glowThreshold, glowSpread = e.glowSpread, glowWarmth = e.glowWarmth,
+                            halation = e.halation, lensAberration = e.lensAberration, lensSoftness = e.lensSoftness,
+                        ),
+                    )
+                }
+            }
+        }
+    }
+
+    /** A screenshot or a graphic (by its name or format), not a photo taken: Auto pick leaves it be. */
+    private fun notAPhoto(clip: ClipState): Boolean {
+        val name = clip.meta.name.lowercase()
+        return "screenshot" in name || "screen_" in name || "zrzut" in name || name.endsWith(".png") || name.endsWith(".gif")
     }
 
     /** A photo, small, measured for Auto pick; null when it cannot be read. */
@@ -2764,9 +2857,12 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
         if (moved) kept.placedAt(t, edited.centerX, edited.centerY, edited.angleDegrees, edited.sizeX, edited.sizeY) else kept
     }
 
-    /** A mask's angle after turning: an oval within ±90° (half a turn is the same oval), anything else within ±180°. */
-    private fun turnedMaskAngle(kind: MaskKind, degrees: Float): Float =
-        if (kind == MaskKind.ELLIPSE) ((degrees + 90f) % 180f + 180f) % 180f - 90f else ((degrees + 180f) % 360f + 360f) % 360f - 180f
+    /**
+     * A mask's angle after turning, within ±180°. An oval keeps the whole turn too (half a turn
+     * looks the same), so its turning handle stays under the finger instead of jumping across.
+     */
+    @Suppress("UNUSED_PARAMETER")
+    private fun turnedMaskAngle(kind: MaskKind, degrees: Float): Float = ((degrees + 180f) % 360f + 360f) % 360f - 180f
 
     /**
      * Two fingers on the selected mask: moved by ([dx], [dy]) of the picture, scaled by [zoom]
@@ -2777,7 +2873,6 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
         m.copy(
             centerX = (m.centerX + dx).coerceIn(-0.5f, 1.5f),
             centerY = (m.centerY + dy).coerceIn(-0.5f, 1.5f),
-            // An oval turned by half a turn is the same oval; a line turns all the way round.
             angleDegrees = turnedMaskAngle(m.kind, turned),
             sizeX = if (m.kind != MaskKind.LINEAR) (m.sizeX * zoom).coerceIn(0.05f, if (m.kind == MaskKind.BRUSH) 5f else 2f) else m.sizeX,
             sizeY = if (m.kind != MaskKind.LINEAR) (m.sizeY * zoom).coerceIn(0.05f, if (m.kind == MaskKind.BRUSH) 5f else 2f) else m.sizeY,
@@ -4230,8 +4325,8 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     companion object {
-        /** Stars Auto pick gives the photos it suggests. */
-        const val SUGGESTED_STARS = 3
+        /** Stars Auto pick gives the photos it suggests: enough for the ★4+ set to edit. */
+        const val SUGGESTED_STARS = 4
         /** Large enough to fix a camera clock that is minutes off. */
         const val MAX_OFFSET_MS = 600_000L
         const val PHOTO_DEFAULT_MS = 4_000L
