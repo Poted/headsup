@@ -4395,7 +4395,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
         val slots = (total / block + 1).toInt()
         val sources = job.parts.count { !it.isPhoto } + job.audio.size
         var done = 0
-        fun measured(uri: Uri, from: Long, to: Long): L.Measure? = soundMeasures.getOrPut(Triple(uri, from, to)) {
+        fun measured(uri: Uri, from: Long, to: Long): app.headsup.core.audio.Loudness.Measure? = soundMeasures.getOrPut(Triple(uri, from, to)) {
             app.headsup.media.SoundMeter.measure(context, uri, from, to) { !isActive }
         }.also {
             done++
