@@ -606,6 +606,7 @@ fun ClipPreview(
         while (l > 0 && masks[l].join != app.headsup.core.color.MaskJoin.NEW) l--
         l
     } else -1
+    val holdNow by rememberUpdatedState(onHoldOriginal)
     var textureView by remember { mutableStateOf<TextureView?>(null) }
     // The shot steadied: each frame's correction, worked out once for the clip's path.
     val steady = clip.stabilize
@@ -942,6 +943,8 @@ fun ClipPreview(
                 // Holding a finger still shows the original until it lifts; moving or a second
                 // finger (zoom) is left to the other gestures.
                 if (onHoldOriginal != null) {
+                    // The gesture lives as long as the preview: it calls what the screen gives now
+                    // (Base shows the original, a mask hides that mask), not what it gave first.
                     Modifier.pointerInput(Unit) {
                         awaitEachGesture {
                             val down = awaitFirstDown(requireUnconsumed = false)
@@ -954,11 +957,12 @@ fun ClipPreview(
                                 true
                             }
                             if (released == null) {
-                                onHoldOriginal(true)
+                                val hold = holdNow ?: return@awaitEachGesture
+                                hold(true)
                                 do {
                                     val e = awaitPointerEvent(androidx.compose.ui.input.pointer.PointerEventPass.Initial)
                                 } while (e.changes.any { it.pressed })
-                                onHoldOriginal(false)
+                                hold(false)
                             }
                         }
                     }
