@@ -89,3 +89,44 @@ class FadeAudioProcessor(private val totalUs: Long, private val fadeInUs: Long, 
         framesDone = 0L
     }
 }
+
+/**
+ * Lowers 16-bit PCM by [gains] (one per [app.headsup.core.audio.Loudness.BLOCK_MS] of the
+ * timeline, interpolated between), for sound placed at [startOnTimelineMs]: music ducked under
+ * the clips' own sound.
+ */
+@OptIn(UnstableApi::class)
+class DuckAudioProcessor(private val gains: FloatArray, private val startOnTimelineMs: Long) : BaseAudioProcessor() {
+    private var framesDone = 0L
+
+    override fun onConfigure(inputAudioFormat: AudioProcessor.AudioFormat): AudioProcessor.AudioFormat {
+        if (inputAudioFormat.encoding != C.ENCODING_PCM_16BIT) throw AudioProcessor.UnhandledAudioFormatException(inputAudioFormat)
+        return inputAudioFormat
+    }
+
+    override fun queueInput(inputBuffer: ByteBuffer) {
+        val format = inputAudioFormat
+        val channels = format.channelCount
+        val frameBytes = 2 * channels
+        val frames = inputBuffer.remaining() / frameBytes
+        val out = replaceOutputBuffer(frames * frameBytes)
+        val input = inputBuffer.order(ByteOrder.LITTLE_ENDIAN)
+        val block = app.headsup.core.audio.Loudness.BLOCK_MS.toFloat()
+        for (f in 0 until frames) {
+            val ms = startOnTimelineMs + (framesDone + f) * 1000f / format.sampleRate
+            val at = (ms / block).coerceIn(0f, (gains.size - 1).coerceAtLeast(0).toFloat())
+            val i = at.toInt()
+            val g = if (gains.isEmpty()) 1f else gains[i] + (gains[minOf(i + 1, gains.size - 1)] - gains[i]) * (at - i)
+            for (c in 0 until channels) {
+                val sample = input.short
+                out.putShort((sample * g).toInt().coerceIn(Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt()).toShort())
+            }
+        }
+        framesDone += frames
+        out.flip()
+    }
+
+    override fun onFlush() {
+        framesDone = 0L
+    }
+}

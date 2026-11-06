@@ -70,6 +70,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.async
 import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.isActive
 import kotlin.math.roundToInt
 import kotlinx.coroutines.withContext
 import app.headsup.core.sync.ClipInfo
@@ -4360,9 +4361,84 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                 val why = if (kind == ExportKind.PNG_SEQUENCE) "the dashboard needs activity data, and no clip is matched to an activity." else "no clips."
                 _state.update { it.copy(messages = it.messages + "Nothing to export: $why") }
             } else {
-                exportManager.enqueue(jobsFor(kind, requests, s))
+                var jobs = jobsFor(kind, requests, s)
+                val settings = s.exportSettings
+                if (kind == ExportKind.VIDEO && (settings.loudness.lufs != null || (settings.duck && s.audioClips.isNotEmpty()))) {
+                    _state.update { it.copy(busy = true, loadingMessage = "Measuring the sound…", loadingProgress = 0f) }
+                    try {
+                        jobs = jobs.map { levelled(it, settings) ?: return@launch }
+                    } finally {
+                        _state.update { it.copy(busy = false, loadingMessage = null, loadingProgress = null) }
+                    }
+                }
+                exportManager.enqueue(jobs)
+            }
+        }.also { loadJob = it }
+    }
+
+    /** Sound measured once per file and stretch (the same clip exported again is not measured again). */
+    private val soundMeasures = HashMap<Triple<Uri, Long, Long>, app.headsup.core.audio.Loudness.Measure?>()
+
+    /**
+     * [job] with its sound levelled: the whole film's loudness (clips and music as mixed, at
+     * their levels) brought to the target by one gain, so the balance stays, never past −1 dBFS
+     * peaks; and with [ExportSettings.duck] the music lowered where the clips have sound. Null
+     * when cancelled.
+     */
+    private suspend fun levelled(job: JobSpec, settings: app.headsup.export.ExportSettings): JobSpec? = withContext(Dispatchers.IO) {
+        val L = app.headsup.core.audio.Loudness
+        val context = getApplication<Application>()
+        val block = L.BLOCK_MS
+        // Where each part sits in the exported film.
+        val starts = job.parts.runningFold(0L) { at, p -> at + if (p.isPhoto) p.durationMs else (p.durationMs / p.speed).toLong() }
+        val total = starts.last()
+        val slots = (total / block + 1).toInt()
+        val sources = job.parts.count { !it.isPhoto } + job.audio.size
+        var done = 0
+        fun measured(uri: Uri, from: Long, to: Long): L.Measure? = soundMeasures.getOrPut(Triple(uri, from, to)) {
+            app.headsup.media.SoundMeter.measure(context, uri, from, to) { !isActive }
+        }.also {
+            done++
+            _state.update { st -> st.copy(loadingProgress = done.toFloat() / sources.coerceAtLeast(1)) }
+        }
+        val clip = FloatArray(slots)
+        var clipPeak = 0f
+        for ((k, p) in job.parts.withIndex()) {
+            if (!isActive) return@withContext null
+            if (p.isPhoto || (p.speed != 1f && p.muteChangedSpeed)) continue
+            val gain = job.clipSound * p.soundLevel
+            if (gain <= 0f) continue
+            val m = measured(p.uri, p.trimStartMs, p.trimEndMs) ?: continue
+            clipPeak = maxOf(clipPeak, m.peak * gain)
+            val start = starts[k]
+            val end = starts[k + 1]
+            for (slot in (start / block).toInt() until minOf(slots, (end / block).toInt())) {
+                // The part's file block shown at this moment of the film (sped up: further on).
+                val src = (((slot * block - start) * p.speed) / block).toInt()
+                if (src in m.power.indices) clip[slot] += m.power[src] * gain * gain
             }
         }
+        val duck = if (settings.duck && job.audio.isNotEmpty()) app.headsup.core.audio.Ducking.envelope(clip) else null
+        val mix = clip.copyOf()
+        var musicPeak = 0f
+        for (a in job.audio) {
+            if (!isActive) return@withContext null
+            val p = a.piece
+            val m = measured(a.uri, p.sourceStartMs, if (p.sourceEndMs > 0) p.sourceEndMs else p.sourceStartMs + (p.endOnTimelineMs - p.startOnTimelineMs)) ?: continue
+            musicPeak = maxOf(musicPeak, m.peak * a.volume)
+            for (slot in (p.startOnTimelineMs / block).toInt() until minOf(slots, (p.endOnTimelineMs / block).toInt())) {
+                val src = ((slot * block - p.startOnTimelineMs) / block).toInt()
+                val d = duck?.getOrNull(slot) ?: 1f
+                if (src in m.power.indices) mix[slot] += m.power[src] * a.volume * a.volume * d * d
+            }
+        }
+        val target = settings.loudness.lufs
+        val g = if (target == null) 1f else L.gainTo(target, L.integrated(mix), maxOf(clipPeak, musicPeak))
+        job.copy(
+            clipSound = job.clipSound * g,
+            audio = job.audio.map { it.copy(volume = it.volume * g) },
+            duck = duck,
+        )
     }
 
     /**

@@ -13,6 +13,14 @@ enum class VideoCodec(val label: String, val mimeType: String) {
  */
 enum class PhotoFormat(val label: String) { JPEG("JPEG"), ULTRA_HDR("Ultra HDR"), TIFF16("TIFF 16-bit") }
 
+/** Loudness a video's sound is brought to (integrated, BS.1770), or none. */
+enum class LoudnessTarget(val label: String, val lufs: Double?) {
+    OFF("As mixed", null),
+    ONLINE("−14 LUFS (online)", -14.0),
+    PODCAST("−16 LUFS", -16.0),
+    BROADCAST("−23 LUFS (TV)", -23.0),
+}
+
 enum class ExportPreset(val label: String) { VERTICAL("Reels · TikTok · Shorts"), YOUTUBE("YouTube") }
 
 /** Video export choices from the export panel. The frame rate is the timeline's (a project setting). */
@@ -33,6 +41,10 @@ data class ExportSettings(
     val photoLongSide: Int? = null,
     val photoQuality: Int = 92,
     val photoFormat: PhotoFormat = PhotoFormat.JPEG,
+    /** The whole film's sound brought to this loudness (its balance kept). */
+    val loudness: LoudnessTarget = LoudnessTarget.OFF,
+    /** Music lowered where the clips have their own sound (speech, a scene). */
+    val duck: Boolean = false,
 ) {
     companion object {
         val PHOTO_SIZES: List<Pair<Int?, String>> = listOf(null to "Full", 4096 to "4096 px", 2048 to "2048 px", 1080 to "1080 px")
@@ -80,4 +92,6 @@ data class JobSpec(
     val audio: List<AudioClip> = emptyList(),
     /** Level of the video clips' own sound, 0..1. */
     val clipSound: Float = 1f,
+    /** The music's level under the clips' sound, per [app.headsup.core.audio.Loudness.BLOCK_MS] of the timeline (null: steady). */
+    val duck: FloatArray? = null,
 )

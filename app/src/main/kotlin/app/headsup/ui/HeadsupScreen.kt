@@ -4896,6 +4896,23 @@ private fun ExportControls(
             FilterChip(selected = settings.bitrateFactor == factor, onClick = { vm.updateExportSettings { it.copy(bitrateFactor = factor) } }, label = { Text(label) })
         }
     }
+    // The film's sound: brought to a loudness, the music under the clips' own sound.
+    SectionCaption("Sound")
+    SettingRow("Loudness") {
+        for (t in app.headsup.export.LoudnessTarget.entries) {
+            FilterChip(selected = settings.loudness == t, onClick = { vm.updateExportSettings { it.copy(loudness = t) } }, label = { Text(t.label) })
+        }
+    }
+    if (state.audioClips.isNotEmpty()) {
+        SettingRow("Music") {
+            FilterChip(selected = !settings.duck, onClick = { vm.updateExportSettings { it.copy(duck = false) } }, label = { Text("Steady") })
+            FilterChip(selected = settings.duck, onClick = { vm.updateExportSettings { it.copy(duck = true) } }, label = { Text("Lower under clip sound") })
+        }
+    }
+    Hint(
+        if (settings.loudness.lufs != null) "The whole film is measured and set to ${settings.loudness.label} as a whole: clips and music keep the balance you gave them; peaks stay under −1 dB. −14 is what YouTube, Instagram and TikTok play at."
+        else "The sound is exported as you mixed it.",
+    )
     val tenBitBlocker = remember(state.clips) { vm.tenBitBlocker(state) }
     val tenBit = settings.tenBit && tenBitBlocker == null
     SectionCaption("Encoding")

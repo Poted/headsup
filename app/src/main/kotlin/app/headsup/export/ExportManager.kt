@@ -364,7 +364,7 @@ class ExportManager(private val context: Context) {
      * the timeline ends (and where the next one on the same track begins), at its level and with
      * its fades. Media3 mixes the sequences with the video's sound.
      */
-    private fun audioTracks(clips: List<AudioClip>, totalMs: Long): List<EditedMediaItemSequence> =
+    private fun audioTracks(clips: List<AudioClip>, totalMs: Long, duck: FloatArray? = null): List<EditedMediaItemSequence> =
         clips.groupBy { it.lane }.toSortedMap().values.mapNotNull { lane ->
             val builder = EditedMediaItemSequence.Builder(emptyList<EditedMediaItem>()).experimentalSetForceAudioTrack(true)
             var at = 0L
@@ -384,6 +384,8 @@ class ExportManager(private val context: Context) {
                     .build()
                 val audio = buildList<AudioProcessor> {
                     add(AudioMix.gain(clip.volume))
+                    // Lowered under the clips' own sound, where they have it.
+                    duck?.let { add(DuckAudioProcessor(it, start)) }
                     // Fades as placed: in from the clip's start, out before its own end (even if cut earlier).
                     if (p.fadeIn > 0 || p.fadeOut > 0) {
                         add(FadeAudioProcessor((p.endOnTimelineMs - start) * 1000L, (p.fadeIn - (start - p.startOnTimelineMs)).coerceAtLeast(0L) * 1000L, p.fadeOut * 1000L))
@@ -406,7 +408,7 @@ class ExportManager(private val context: Context) {
         val parts = spec.parts.map(::startedWithPicture)
         val items = parts.map { editedItem(it, out, soundGain = spec.clipSound * it.soundLevel) }
         val totalMs = parts.sumOf { if (it.isPhoto) it.durationMs else (it.durationMs / it.speed).toLong() }
-        val tracks = audioTracks(spec.audio, totalMs)
+        val tracks = audioTracks(spec.audio, totalMs, spec.duck)
         // Clips without sound (drones) or muted slow motion get silence, so the parts join cleanly.
         val video = EditedMediaItemSequence.Builder(items).experimentalSetForceAudioTrack(items.size > 1 || tracks.isNotEmpty()).build()
         val composition = Composition.Builder(listOf(video) + tracks).build()
