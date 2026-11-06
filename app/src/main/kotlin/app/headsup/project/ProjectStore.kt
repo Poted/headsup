@@ -57,6 +57,8 @@ data class SavedClip(
     val cullGroup: Int? = null,
     /** Corrections changing over the shot, file time. */
     val gradeKeys: List<app.headsup.core.color.GradeKey> = emptyList(),
+    /** The shot steadied (its measured path and strength), or null. */
+    val stabilize: app.headsup.core.frame.Stabilizer.Path? = null,
 )
 
 /** A reversed clip's source: [originalUri] from [startMs] to [endMs], played backwards. */
@@ -361,6 +363,13 @@ internal object Json {
         .put("rating", c.rating)
         .put("suggested", c.suggested)
         .apply { c.cullGroup?.let { put("cullGroup", it) } }
+        .apply {
+            c.stabilize?.let { p ->
+                val flat = JSONArray()
+                for (st in p.steps) { flat.put(st.dx.toDouble()); flat.put(st.dy.toDouble()); flat.put(st.degrees.toDouble()) }
+                put("stabilize", JSONObject().put("start", p.startMs).put("frame", p.frameMs.toDouble()).put("strength", p.strength.toDouble()).put("steps", flat))
+            }
+        }
         .apply { if (c.gradeKeys.isNotEmpty()) put("gradeKeys", JSONArray(c.gradeKeys.map { k -> JSONObject().put("t", k.timeMs).put("grade", grade(k.grade)) })) }
         .put("raw", JSONObject().put("exposure", c.rawDevelop.exposure.toDouble()).put("highlights", c.rawDevelop.highlights.toDouble())
             .put("shadows", c.rawDevelop.shadows.toDouble()).put("temperature", c.rawDevelop.temperature.toDouble()).put("tint", c.rawDevelop.tint.toDouble())
@@ -402,6 +411,14 @@ internal object Json {
         rating = o.optInt("rating", 0).coerceIn(0, 5),
         suggested = o.optBoolean("suggested", false),
         cullGroup = if (o.has("cullGroup")) o.optInt("cullGroup") else null,
+        stabilize = o.optJSONObject("stabilize")?.let { j ->
+            val flat = j.optJSONArray("steps") ?: return@let null
+            app.headsup.core.frame.Stabilizer.Path(
+                j.optLong("start"), j.optDouble("frame", 33.3).toFloat(),
+                List(flat.length() / 3) { k -> app.headsup.core.frame.Stabilizer.Step(flat.optDouble(k * 3).toFloat(), flat.optDouble(k * 3 + 1).toFloat(), flat.optDouble(k * 3 + 2).toFloat()) },
+                j.optDouble("strength", 0.7).toFloat(),
+            )
+        },
         gradeKeys = o.optJSONArray("gradeKeys").objects().map { k -> app.headsup.core.color.GradeKey(k.optLong("t"), grade(k.optJSONObject("grade"))) }.sortedBy { it.timeMs },
         rawDevelop = o.optJSONObject("raw")?.let { r ->
             RawDevelop(

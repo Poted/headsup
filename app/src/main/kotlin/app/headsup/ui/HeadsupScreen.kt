@@ -1456,6 +1456,32 @@ private fun CutTool(state: UiState, vm: HeadsupViewModel, playhead: LongState, o
                 Modifier.weight(1f),
             )
         }
+        // Steadied: the shake taken out, the camera's own move kept.
+        SectionCaption("Steady")
+        val steady = clip.stabilize
+        val measuring = state.work.any { it.clipId == clip.id && it.maskIndex == null && it.label.startsWith("Steadying") }
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            PillAction("≋", if (steady != null) "Steadied" else "Steady", { if (steady == null) vm.stabilizeClip(index) else vm.removeStabilize(index) }, selected = steady != null, enabled = !measuring)
+            Spacer(Modifier.width(10.dp))
+            Hint(
+                when {
+                    measuring -> "Measuring the shake (in the background)…"
+                    steady != null -> "Tap again to show it as shot. Trimmed wider? Steady it again."
+                    else -> "Takes out handheld shake (pans and walks stay). The picture is zoomed in a little, at most 20 %."
+                },
+                Modifier.weight(1f),
+            )
+        }
+        if (steady != null) {
+            ValueHeader("Strength", String.format(Locale.US, "%.0f %%", steady.strength * 100))
+            RulerSlider(steady.strength, 0f..1f, 0.05f, { v -> vm.setStabilizeStrength(index, v) }, onReset = { vm.setStabilizeStrength(index, 0.7f) })
+            if (steady.startMs > clip.trimStartMs + 100 || steady.startMs + (steady.steps.size * steady.frameMs).toLong() < clip.trimEndMs - 100) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Hint("The cut is wider than what was measured.", Modifier.weight(1f))
+                    SmallAction("Measure again", { vm.stabilizeClip(index) }, enabled = !measuring)
+                }
+            }
+        }
         FlagList(state, vm, onFlag)
     }
 }

@@ -163,6 +163,36 @@ class ExportManager(private val context: Context) {
         }
     }
 
+    /**
+     * The shot steadied: each frame moved, turned and zoomed by its correction
+     * ([app.headsup.core.frame.Stabilizer.corrections]), in Media3's normalised coordinates,
+     * aspect-corrected so the turn does not shear the picture.
+     */
+    private fun stabilizeEffect(path: app.headsup.core.frame.Stabilizer.Path, width: Int, height: Int, fileStartMs: Long): androidx.media3.common.Effect? {
+        if (width <= 0 || height <= 0) return null
+        val corrections = app.headsup.core.frame.Stabilizer.corrections(path, width.toFloat() / height)
+        if (corrections.all { it.isNone }) return null
+        val w = width.toFloat()
+        val h = height.toFloat()
+        return object : MatrixTransformation {
+            // Time counts from the first frame, however Media3 timestamps a clipped item.
+            private var firstUs = -1L
+            override fun getMatrix(presentationTimeUs: Long): Matrix {
+                if (firstUs < 0) firstUs = presentationTimeUs
+                val c = app.headsup.core.frame.Stabilizer.at(path, corrections, fileStartMs + (presentationTimeUs - firstUs) / 1000)
+                return Matrix().apply {
+                    postScale(w / 2f, h / 2f)
+                    // Clockwise on screen is a negative angle with y pointing up.
+                    postRotate(-c.degrees)
+                    postScale(2f / w, 2f / h)
+                    // Fractions of the frame to normalised coordinates (y up).
+                    postTranslate(2f * c.dx, -2f * c.dy)
+                    postScale(c.zoom, c.zoom)
+                }
+            }
+        }
+    }
+
     /** Source → frame (Media3's normalised coordinates) for [reframe]; null when it changes nothing. */
     private fun reframeMatrix(reframe: Reframe, width: Int, height: Int): Matrix? {
         if (reframe.isIdentity || width <= 0 || height <= 0) return null
@@ -274,6 +304,8 @@ class ExportManager(private val context: Context) {
             grade?.cube?.let { effects += SingleColorLut.createFromCube(it) }
         }
         if (request.effects.changesPixels) effects += FinishEffect(request.effects)
+        // Steadied: each frame moved by its correction, before it is framed (as in the preview).
+        request.stabilize?.let { path -> stabilizeEffect(path, request.width, request.height, request.trimStartMs)?.let { effects += it } }
         // Reframing comes after colour and texture (as in the preview) and before the dashboard.
         reframeEffect(request.reframe, request.width, request.height, out.width, out.height)?.let { effects += it }
         // The timeline's frame scaled to the output size (the same shape), so every clip of a joined

@@ -71,6 +71,8 @@ data class ExportRequest(
     val grade: GradeSetup?,
     /** Zoom, position, straightening and output shape of the picture. */
     val reframe: Reframe = Reframe(),
+    /** The shot steadied ([app.headsup.core.frame.Stabilizer]), or null. */
+    val stabilize: app.headsup.core.frame.Stabilizer.Path? = null,
     /** Playback speed (0.5 = half speed); the dashboard follows the picture. */
     val speed: Float = 1f,
     /** Silence the sound when the speed is changed (otherwise it is stretched, keeping its pitch). */

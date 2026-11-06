@@ -607,6 +607,11 @@ fun ClipPreview(
         l
     } else -1
     var textureView by remember { mutableStateOf<TextureView?>(null) }
+    // The shot steadied: each frame's correction, worked out once for the clip's path.
+    val steady = clip.stabilize
+    val steadyCorrections = remember(steady, clip.meta.width, clip.meta.height) {
+        steady?.let { app.headsup.core.frame.Stabilizer.corrections(it, if (clip.meta.height > 0) clip.meta.width.toFloat() / clip.meta.height else 16f / 9f) }
+    }
     LaunchedEffect(active) { textureView = textureViews[active] }
     val sample by rememberUpdatedState(onSample)
     val maskMover by rememberUpdatedState(onMoveMask)
@@ -1124,11 +1129,13 @@ fun ClipPreview(
                         renderEffect = previewShader?.effect(effects, zebra, frame, size.width, size.height, masks.map { it.at(fileMs) }, fromWeight, if (raw) clip.rawDevelop else null, presence, reframe.warp)
                         // Reframing moves the graded picture, as in the export (colour first, then framing).
                         val t = reframeTransform(reframe, geometry)
-                        scaleX = t.zoom
-                        scaleY = t.zoom
-                        rotationZ = reframe.angleDegrees
-                        translationX = t.translation.x
-                        translationY = t.translation.y
+                        // Steadied: the frame's correction on the picture before it is framed.
+                        val c = if (steady != null && steadyCorrections != null && !photo) app.headsup.core.frame.Stabilizer.at(steady, steadyCorrections, fileMs) else null
+                        scaleX = t.zoom * (c?.zoom ?: 1f)
+                        scaleY = t.zoom * (c?.zoom ?: 1f)
+                        rotationZ = reframe.angleDegrees + (c?.degrees ?: 0f)
+                        translationX = t.translation.x + (c?.let { it.dx * size.width * t.zoom } ?: 0f)
+                        translationY = t.translation.y + (c?.let { it.dy * size.height * t.zoom } ?: 0f)
                     }
                 val bitmap = photoBitmap
                 if (photo) {
@@ -1189,11 +1196,13 @@ fun ClipPreview(
                                         playerShaders?.get(i)?.effect(effects, zebra, frame, this.size.width, this.size.height, emptyList(), 0f, warp = r.warp)
                                     }
                                     val t = reframeTransform(r, g)
-                                    scaleX = t.zoom
-                                    scaleY = t.zoom
-                                    rotationZ = r.angleDegrees
-                                    translationX = t.translation.x
-                                    translationY = t.translation.y
+                                    // Steadied (the selected clip's own player).
+                                    val c = if (fresh && (pictureClip[i] == null || pictureClip[i] == clip.id) && steady != null && steadyCorrections != null) app.headsup.core.frame.Stabilizer.at(steady, steadyCorrections, fileMs) else null
+                                    scaleX = t.zoom * (c?.zoom ?: 1f)
+                                    scaleY = t.zoom * (c?.zoom ?: 1f)
+                                    rotationZ = r.angleDegrees + (c?.degrees ?: 0f)
+                                    translationX = t.translation.x + (c?.let { it.dx * this.size.width * t.zoom } ?: 0f)
+                                    translationY = t.translation.y + (c?.let { it.dy * this.size.height * t.zoom } ?: 0f)
                                 }
                             },
                         )

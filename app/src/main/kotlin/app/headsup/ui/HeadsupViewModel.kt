@@ -132,6 +132,8 @@ data class ClipState(
      * [grade] all through. With keys, [grade] is only what was last edited.
      */
     val gradeKeys: List<app.headsup.core.color.GradeKey> = emptyList(),
+    /** The shot steadied: its measured camera path and how much of the shake goes; null: as shot. */
+    val stabilize: app.headsup.core.frame.Stabilizer.Path? = null,
     /** Picture effects of this clip. */
     val effects: EffectSettings = EffectSettings(),
     /** Windows with their own corrections (graduated lines, ovals), at most [ColourMask.MAX_PER_CLIP]. */
@@ -1329,6 +1331,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                 reversed = it.reversed?.let { r -> SavedReverse(r.original.uri, r.startMs, r.endMs) },
                 rating = it.rating, suggested = it.suggested, cullGroup = it.cullGroup,
                 gradeKeys = it.gradeKeys,
+                stabilize = it.stabilize,
             )
         },
         groups = groups.map { SavedGroup(it.id, it.name, it.grade, it.lutName) },
@@ -1472,6 +1475,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
             suggested = c.suggested,
             cullGroup = c.cullGroup,
             gradeKeys = c.gradeKeys,
+            stabilize = c.stabilize,
             groupId = c.groupId,
         )
     }
@@ -1828,6 +1832,74 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
      * which takes a while), or forwards again when it is reversed. Its look and flags stay; masks
      * stay where they are (their tracking, made forwards, is dropped).
      */
+    /**
+     * Steadies clip [index]: the camera's move from frame to frame measured over its cut (in the
+     * background: a few seconds per minute of video), then the shake taken out as it plays and
+     * when it is exported. The cut is measured as it is; trimmed wider later, it is measured again.
+     */
+    fun stabilizeClip(index: Int) {
+        val clip = _state.value.clips.getOrNull(index)?.takeIf { !it.meta.isPhoto } ?: return
+        val context: Application = getApplication()
+        runInBackground("Steadying ${clip.meta.name}", clip.id, null) { report, stopped ->
+            val path = withContext(Dispatchers.IO) { measureShake(context, clip, report, stopped) }
+            if (path == null) {
+                if (!stopped()) _state.update { it.copy(messages = it.messages + "Could not read the clip's frames to steady it.") }
+                return@runInBackground
+            }
+            _state.update { st -> st.copy(clips = st.clips.map { c -> if (c.id == clip.id) c.copy(stabilize = path.copy(strength = c.stabilize?.strength ?: path.strength)) else c }) }
+            if (_state.value.selected?.id == clip.id) refreshPreview()
+        }
+    }
+
+    /** How much of the shake goes (0..1); 0 keeps the measured path but steadies nothing. */
+    fun setStabilizeStrength(index: Int, strength: Float) = updateClip(index) { c -> c.stabilize?.let { c.copy(stabilize = it.copy(strength = strength.coerceIn(0f, 1f))) } ?: c }
+
+    fun removeStabilize(index: Int) = updateClip(index) { it.copy(stabilize = null) }
+
+    /** The camera path over [clip]'s cut, frame by frame, from small grey copies of its frames. */
+    private fun measureShake(context: android.content.Context, clip: ClipState, report: (Float) -> Unit, stopped: () -> Boolean): app.headsup.core.frame.Stabilizer.Path? {
+        val r = android.media.MediaMetadataRetriever()
+        try {
+            r.setDataSource(context, clip.meta.uri)
+            val fps = (clip.meta.frameRate ?: 30f).coerceIn(1f, 240f)
+            val total = r.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_VIDEO_FRAME_COUNT)?.toIntOrNull() ?: return null
+            val first = (clip.trimStartMs * fps / 1000f).toInt().coerceIn(0, total - 1)
+            val last = (clip.trimEndMs * fps / 1000f).toInt().coerceIn(first, total - 1)
+            val params = android.media.MediaMetadataRetriever.BitmapParams().apply { preferredConfig = Bitmap.Config.RGB_565 }
+            val width = 192
+            var prev: FloatArray? = null
+            var h = 0
+            val steps = ArrayList<app.headsup.core.frame.Stabilizer.Step>()
+            var at = first
+            while (at <= last) {
+                if (stopped()) return null
+                val n = minOf(8, last - at + 1)
+                val frames = r.getFramesAtIndex(at, n, params)
+                if (frames.isEmpty()) break
+                for (f in frames) {
+                    h = (width * f.height / f.width.coerceAtLeast(1)).coerceAtLeast(16)
+                    val small = Bitmap.createScaledBitmap(f, width, h, true)
+                    f.recycle()
+                    val px = IntArray(width * h)
+                    small.getPixels(px, 0, width, 0, 0, width, h)
+                    small.recycle()
+                    val grey = FloatArray(px.size) { i -> val p = px[i]; (0.299f * ((p shr 16) and 0xFF) + 0.587f * ((p shr 8) and 0xFF) + 0.114f * (p and 0xFF)) / 255f }
+                    steps += prev?.let { app.headsup.core.frame.Stabilizer.step(it, grey, width, h) } ?: app.headsup.core.frame.Stabilizer.Step(0f, 0f, 0f)
+                    prev = grey
+                }
+                at += frames.size
+                report((at - first).toFloat() / (last - first + 1))
+            }
+            if (steps.size < 2) return null
+            return app.headsup.core.frame.Stabilizer.Path((first * 1000f / fps).toLong(), 1000f / fps, steps)
+        } catch (e: Throwable) {
+            e.printStackTrace()
+            return null
+        } finally {
+            r.release()
+        }
+    }
+
     fun reverseClip(index: Int) {
         val s = _state.value
         val clip = s.clips.getOrNull(index)?.takeIf { !it.meta.isPhoto } ?: return
@@ -4366,6 +4438,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                         else if (cube != null || warp != null) GradeSetup(cube, 0f, warp = warp) else null
                     },
                     reframe = s.framing(clip),
+                    stabilize = clip.stabilize?.takeIf { it.strength > 0f },
                     speed = clip.speed,
                     isPhoto = clip.meta.isPhoto,
                     muteChangedSpeed = clip.muteChangedSpeed,
