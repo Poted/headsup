@@ -675,8 +675,9 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                 // Photos that could not be read stay out (each its own group).
                 val known = features.withIndex().filter { it.value != null }
                 // Screenshots and graphics are not photos to choose: they are never suggested (nor rejected).
+                val camera = withContext(Dispatchers.IO) { known.map { !notAPhoto(photos[it.index].value) } }
                 val result = withContext(Dispatchers.Default) {
-                    app.headsup.core.photo.PhotoCull.choose(known.map { it.value!! }) { k -> !notAPhoto(photos[known[k].index].value) }
+                    app.headsup.core.photo.PhotoCull.choose(known.map { it.value!! }) { k -> camera[k] }
                 }
                 val groupOf = HashMap<Long, Int>()
                 val chosen = HashSet<Long>()
@@ -753,7 +754,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
 
     /** Keeps [look] on photo [index] (as the editor's Looks would). */
     fun keepTriedLook(index: Int, look: TriedLook) {
-        record(_state.value.snapshot())
+        // The step is recorded with the others (recordHistory).
         when (look) {
             is TriedLook.Profile -> updateClip(index) { it.copy(grade = it.grade.copy(look = look.look.name, lookAmount = 1f)) }
             is TriedLook.Preset -> {
@@ -772,23 +773,42 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    /** A screenshot or a graphic (by its name or format), not a photo taken: Auto pick leaves it be. */
+    /**
+     * A screenshot or a graphic, not a photo taken: no camera in its EXIF (screenshots and
+     * graphics have none), or named or made as one. Auto pick leaves it be.
+     */
     private fun notAPhoto(clip: ClipState): Boolean {
         val name = clip.meta.name.lowercase()
-        return "screenshot" in name || "screen_" in name || "zrzut" in name || name.endsWith(".png") || name.endsWith(".gif")
+        if ("screenshot" in name || "screen_" in name || "zrzut" in name || name.endsWith(".png") || name.endsWith(".gif")) return true
+        if (clip.meta.isRaw) return false
+        val context = getApplication<Application>()
+        val camera = runCatching {
+            context.contentResolver.openInputStream(clip.meta.uri)?.use { input ->
+                val exif = android.media.ExifInterface(input)
+                !exif.getAttribute(android.media.ExifInterface.TAG_MAKE).isNullOrBlank() || !exif.getAttribute(android.media.ExifInterface.TAG_MODEL).isNullOrBlank()
+            }
+        }.getOrNull() ?: false
+        return !camera
     }
 
-    /** A photo, small, measured for Auto pick; null when it cannot be read. */
+    /**
+     * A photo measured for Auto pick; null when it cannot be read. Big enough (1536 px across)
+     * for blur and shake to show: made small, a soft photo looks sharp.
+     */
     private fun cullFeatures(context: android.content.Context, clip: ClipState): app.headsup.core.photo.PhotoCull.Features? = runCatching {
-        val width = 384
+        val side = 1536
         val decoded = if (clip.meta.isRaw) {
-            app.headsup.media.RawPhotos.decode(context, clip.meta.uri, clip.rawDevelop, width * 2)
+            app.headsup.media.RawPhotos.decode(context, clip.meta.uri, clip.rawDevelop, side)
         } else {
-            val opts = android.graphics.BitmapFactory.Options().apply { inSampleSize = (clip.meta.width / (width * 2)).coerceAtLeast(1) }
+            val long = maxOf(clip.meta.width, clip.meta.height)
+            val opts = android.graphics.BitmapFactory.Options().apply { inSampleSize = Integer.highestOneBit((long / side).coerceAtLeast(1)) }
             context.contentResolver.openInputStream(clip.meta.uri)?.use { android.graphics.BitmapFactory.decodeStream(it, null, opts) }
         } ?: return null
-        val h = (width * decoded.height / decoded.width.coerceAtLeast(1)).coerceAtLeast(3)
-        val small = Bitmap.createScaledBitmap(decoded, width, h, true)
+        // The longer side at [side] (never made larger: that would hide nothing and show nothing).
+        val k = minOf(1f, side.toFloat() / maxOf(decoded.width, decoded.height))
+        val width = (decoded.width * k).toInt().coerceAtLeast(3)
+        val h = (decoded.height * k).toInt().coerceAtLeast(3)
+        val small = if (k < 1f) Bitmap.createScaledBitmap(decoded, width, h, true) else decoded
         if (small !== decoded) decoded.recycle()
         val px = pixelsOf(small)
         app.headsup.core.photo.PhotoCull.features(px, width, h)

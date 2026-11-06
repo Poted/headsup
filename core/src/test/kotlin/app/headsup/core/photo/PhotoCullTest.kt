@@ -3,6 +3,7 @@ package app.headsup.core.photo
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotEquals
+import kotlin.math.abs
 import kotlin.test.assertTrue
 
 class PhotoCullTest {
@@ -84,6 +85,31 @@ class PhotoCullTest {
     fun aBlackFrameIsNotSuggested() {
         val r = PhotoCull.choose(listOf(f(scene(8)), f(scene(24, tint = 60)), f(scene(8, dark = true, tint = 0, shift = 5))))
         assertTrue(2 !in r.suggested)
+    }
+
+    /** Straight light and dark bands (soft, as a camera sees them) turned by [degrees]. */
+    private fun bands(degrees: Double): FloatArray {
+        val a = Math.toRadians(degrees)
+        return FloatArray(w * h) { i ->
+            val x = i % w - w / 2.0
+            val y = i / w - h / 2.0
+            val along = -x * kotlin.math.sin(a) + y * kotlin.math.cos(a)
+            (0.5 + 0.35 * kotlin.math.sin(along / 4.0)).toFloat()
+        }
+    }
+
+    @Test
+    fun aCrookedHorizonIsTold() {
+        assertEquals(0f, PhotoCull.tiltOf(bands(0.0), w, h)!!, 0.6f)
+        assertEquals(5f, PhotoCull.tiltOf(bands(5.0), w, h)!!, 1f)
+        assertEquals(-4f, PhotoCull.tiltOf(bands(-4.0), w, h)!!, 1f)
+    }
+
+    @Test
+    fun aSoftPhotoAmongSharpOnesIsNotSuggested() {
+        val r = PhotoCull.choose(listOf(f(scene(8)), f(scene(24, tint = 60, blur = 4)), f(scene(12, tint = -50))))
+        assertTrue(0 in r.suggested)
+        assertTrue(1 !in r.suggested)
     }
 
     @Test

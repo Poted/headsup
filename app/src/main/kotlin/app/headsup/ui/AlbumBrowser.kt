@@ -51,7 +51,6 @@ import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.calculatePan
@@ -74,6 +73,19 @@ fun AlbumBrowser(state: UiState, vm: HeadsupViewModel, onClose: () -> Unit) {
     var filter by rememberSaveable { mutableStateOf(state.albumScope) }
     val photos = state.clips.withIndex().filter { it.value.meta.isPhoto }
     val shown = photos.filter { (_, c) -> filter.has(c) }
+    // Select: a tap marks (or unmarks) a photo instead of opening it.
+    var selecting by rememberSaveable { mutableStateOf(false) }
+    var confirmDelete by remember { mutableStateOf(false) }
+    val markedCount = photos.count { it.value.picked }
+    if (confirmDelete) {
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { confirmDelete = false },
+            title = { Text("Delete $markedCount marked photos from the album?") },
+            text = { Text("They are taken out of this album only; the files stay on the phone. Undo brings them back.") },
+            confirmButton = { androidx.compose.material3.TextButton(onClick = { confirmDelete = false; vm.removePicked() }) { Text("Delete") } },
+            dismissButton = { androidx.compose.material3.TextButton(onClick = { confirmDelete = false }) { Text("Cancel") } },
+        )
+    }
     // The photo looked at large (its place in [shown]), or null.
     var viewing by rememberSaveable { mutableStateOf<Int?>(null) }
     viewing?.let { start ->
@@ -82,7 +94,7 @@ fun AlbumBrowser(state: UiState, vm: HeadsupViewModel, onClose: () -> Unit) {
     }
     // Takes of one shot: how many there are and which of them each is.
     val groupSizes = photos.mapNotNull { it.value.cullGroup }.groupingBy { it }.eachCount()
-    Dialog(onDismissRequest = onClose, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+    Dialog(onDismissRequest = onClose, properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)) {
         Column(Modifier.fillMaxSize().background(HeadsupColors.Background).statusBarsPadding().navigationBarsPadding()) {
             Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
@@ -112,11 +124,20 @@ fun AlbumBrowser(state: UiState, vm: HeadsupViewModel, onClose: () -> Unit) {
                     Spacer(Modifier.width(6.dp))
                     if (photos.any { it.value.suggested }) SmallAction("Clear suggested", { vm.clearSuggestions() })
                     Spacer(Modifier.weight(1f))
-                    if (filter != AlbumScope.ALL && filter != AlbumScope.MARKED && shown.isNotEmpty()) {
-                        SmallAction("Mark these ${shown.size}", {
+                    PillAction("✓", if (selecting) "Selecting" else "Select", { selecting = !selecting }, selected = selecting)
+                }
+                if (selecting || markedCount > 0) {
+                    // What to do with the marked photos.
+                    Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 2.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Text("$markedCount marked", Modifier.weight(1f), style = MaterialTheme.typography.labelMedium, color = HeadsupColors.TextMuted)
+                        if (shown.isNotEmpty()) SmallAction("All shown", {
                             val ids = shown.map { it.value.id }.toSet()
-                            state.clips.forEachIndexed { i, c -> if (c.picked != (c.id in ids) && c.meta.isPhoto) vm.togglePicked(i) }
+                            state.clips.forEachIndexed { i, c -> if (c.meta.isPhoto && c.id in ids && !c.picked) vm.togglePicked(i) }
                         })
+                        if (markedCount > 0) {
+                            SmallAction("Unmark", { state.clips.forEachIndexed { i, c -> if (c.picked) vm.togglePicked(i) } })
+                            SmallAction("Delete $markedCount", { confirmDelete = true })
+                        }
                     }
                 }
                 Text(
@@ -158,7 +179,9 @@ fun AlbumBrowser(state: UiState, vm: HeadsupViewModel, onClose: () -> Unit) {
                     ) {
                         Box(
                             Modifier.fillMaxWidth().aspectRatio(1f)
-                                .combinedClickable(onLongClick = { vm.togglePicked(i) }) { viewing = shown.indexOfFirst { it.index == i } },
+                                .combinedClickable(onLongClick = { vm.togglePicked(i) }) {
+                                    if (selecting) vm.togglePicked(i) else viewing = shown.indexOfFirst { it.index == i }
+                                },
                         ) {
                             thumbs.version.intValue
                             thumbs.frame(c.meta.uri, 0L, 1L, photo = true)?.let { img ->
@@ -176,12 +199,11 @@ fun AlbumBrowser(state: UiState, vm: HeadsupViewModel, onClose: () -> Unit) {
                                     )
                                 }
                             }
-                            if (c.picked) {
-                                Box(
-                                    Modifier.align(Alignment.TopEnd).padding(4.dp).size(18.dp).clip(CircleShape).background(HeadsupColors.Highlight),
-                                    contentAlignment = Alignment.Center,
-                                ) { Text("✓", style = MaterialTheme.typography.labelSmall, color = HeadsupColors.OnHighlight) }
+                            // The mark: always tappable while selecting, shown when set.
+                            if (c.picked || selecting) {
+                                Box(Modifier.align(Alignment.TopEnd).padding(4.dp)) { MarkButton(c.picked, 26.dp) { vm.togglePicked(i) } }
                             }
+                            if (selecting && c.picked) Box(Modifier.matchParentSize().background(HeadsupColors.Highlight.copy(alpha = 0.12f)))
                         }
                         StarRow(c.rating, c.suggested) { stars -> vm.setRating(i, stars) }
                     }
@@ -228,7 +250,7 @@ fun PhotoViewer(state: UiState, vm: HeadsupViewModel, indices: List<Int>, start:
     val page = pager.currentPage.coerceIn(0, indices.lastIndex)
     val index = indices[page]
     androidx.compose.runtime.LaunchedEffect(page) { tried = null; zoomed = false }
-    Dialog(onDismissRequest = onClose, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+    Dialog(onDismissRequest = onClose, properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)) {
         Column(Modifier.fillMaxSize().background(Color.Black).statusBarsPadding().navigationBarsPadding()) {
             val clip = state.clips.getOrNull(index)
             Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -236,9 +258,7 @@ fun PhotoViewer(state: UiState, vm: HeadsupViewModel, indices: List<Int>, start:
                     Text("${page + 1} / ${indices.size}", style = MaterialTheme.typography.titleSmall, color = Color.White)
                     Text(clip?.meta?.name.orEmpty(), style = MaterialTheme.typography.labelSmall, color = HeadsupColors.TextMuted, maxLines = 1)
                 }
-                if (clip != null) SmallAction(if (clip.picked) "✓ Marked" else "Mark", { vm.togglePicked(index) })
-                SmallAction("Edit", { onEdit(index) })
-                SmallAction("Close", onClose)
+                SmallAction("✕", onClose)
             }
             androidx.compose.foundation.pager.HorizontalPager(
                 state = pager,
@@ -250,14 +270,19 @@ fun PhotoViewer(state: UiState, vm: HeadsupViewModel, indices: List<Int>, start:
                 ViewerPage(vm, indices[p], state.clips.getOrNull(indices[p])?.let { listOf(it.grade, it.lutName, it.colorGrade) }, if (p == page) tried else null, onZoomed = { if (p == page) zoomed = it })
             }
             if (clip != null) {
+                // Under the thumb: stars, then the mark, the looks and Edit.
                 StarRow(clip.rating, clip.suggested, Modifier.padding(top = 4.dp), big = true) { stars -> vm.setRating(index, stars) }
                 Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-                    PillAction("◐", if (looks) "Hide looks" else "Looks", { looks = !looks }, selected = looks)
+                    MarkButton(clip.picked) { vm.togglePicked(index) }
+                    Spacer(Modifier.width(8.dp))
+                    PillAction("◐", "Looks", { looks = !looks }, selected = looks)
                     Spacer(Modifier.weight(1f))
                     tried?.let { t ->
-                        SmallAction("Undo look", { tried = null })
-                        PillAction("✓", "Keep", { vm.keepTriedLook(index, t); tried = null })
+                        SmallAction("Undo", { tried = null })
+                        PillAction("✓", "Keep look", { vm.keepTriedLook(index, t); tried = null })
+                        Spacer(Modifier.width(6.dp))
                     }
+                    PillAction("✎", "Edit", { onEdit(index) })
                 }
                 if (looks) {
                     androidx.compose.foundation.lazy.LazyRow(
@@ -299,30 +324,47 @@ private fun ViewerPage(vm: HeadsupViewModel, index: Int, edit: Any?, tried: Trie
     Box(
         Modifier.fillMaxSize().clipToBounds()
             .pointerInput(index) {
-                detectTapGestures(onDoubleTap = {
-                    if (zoom > 1f) { zoom = 1f; offset = androidx.compose.ui.geometry.Offset.Zero } else zoom = 2.5f
-                    onZoomed(zoom > 1f)
-                })
-            }
-            .pointerInput(index) {
+                // One handler for all of it, so a double tap is never taken for the start of a swipe.
+                var lastTapMs = 0L
+                var lastTap = androidx.compose.ui.geometry.Offset.Zero
                 awaitEachGesture {
-                    awaitFirstDown(requireUnconsumed = false)
+                    val down = awaitFirstDown(requireUnconsumed = false)
+                    var moved = false
+                    var many = false
                     do {
                         val event = awaitPointerEvent()
                         val fingers = event.changes.count { it.pressed }
+                        if (fingers >= 2) many = true
+                        event.changes.firstOrNull()?.let { c -> if ((c.position - down.position).getDistance() > viewConfiguration.touchSlop) moved = true }
                         // Two fingers zoom; one moves the zoomed photo (at 1× it swipes to the next).
                         if (fingers >= 2 || zoom > 1f) {
                             val z = event.calculateZoom()
                             val pan = event.calculatePan()
                             zoom = (zoom * z).coerceIn(1f, 6f)
-                            val maxX = size.width * (zoom - 1f) / 2f
-                            val maxY = size.height * (zoom - 1f) / 2f
-                            offset = if (zoom <= 1f) androidx.compose.ui.geometry.Offset.Zero
-                            else androidx.compose.ui.geometry.Offset((offset.x + pan.x).coerceIn(-maxX, maxX), (offset.y + pan.y).coerceIn(-maxY, maxY))
+                            offset = clampOffset(offset + pan, zoom, size.width.toFloat(), size.height.toFloat())
                             onZoomed(zoom > 1f)
                             event.changes.forEach { it.consume() }
                         }
                     } while (event.changes.any { it.pressed })
+                    // A tap; a second one soon after, near the first, zooms in there (or back out).
+                    if (!moved && !many) {
+                        val now = System.currentTimeMillis()
+                        if (now - lastTapMs < 320L && (down.position - lastTap).getDistance() < 80f) {
+                            if (zoom > 1f) {
+                                zoom = 1f
+                                offset = androidx.compose.ui.geometry.Offset.Zero
+                            } else {
+                                zoom = 2.5f
+                                val centre = androidx.compose.ui.geometry.Offset(size.width / 2f, size.height / 2f)
+                                offset = clampOffset((centre - down.position) * (zoom - 1f), zoom, size.width.toFloat(), size.height.toFloat())
+                            }
+                            onZoomed(zoom > 1f)
+                            lastTapMs = 0L
+                        } else {
+                            lastTapMs = now
+                            lastTap = down.position
+                        }
+                    }
                 }
             },
         contentAlignment = Alignment.Center,
@@ -343,5 +385,27 @@ private fun ViewerPage(vm: HeadsupViewModel, index: Int, edit: Any?, tried: Trie
                 },
             )
         }
+    }
+}
+
+/** How far a photo zoomed by [zoom] can be moved and still fill the view ([w]×[h]). */
+private fun clampOffset(o: androidx.compose.ui.geometry.Offset, zoom: Float, w: Float, h: Float): androidx.compose.ui.geometry.Offset {
+    if (zoom <= 1f) return androidx.compose.ui.geometry.Offset.Zero
+    val mx = w * (zoom - 1f) / 2f
+    val my = h * (zoom - 1f) / 2f
+    return androidx.compose.ui.geometry.Offset(o.x.coerceIn(-mx, mx), o.y.coerceIn(-my, my))
+}
+
+/** A photo's mark: a tick, filled when marked. */
+@Composable
+fun MarkButton(marked: Boolean, size: androidx.compose.ui.unit.Dp = 36.dp, onClick: () -> Unit) {
+    Box(
+        Modifier.size(size).clip(CircleShape)
+            .background(if (marked) HeadsupColors.Highlight else Color.Black.copy(alpha = 0.35f))
+            .border(1.5.dp, if (marked) HeadsupColors.Highlight else Color.White.copy(alpha = 0.8f), CircleShape)
+            .clickable(onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text("✓", style = MaterialTheme.typography.labelLarge, color = if (marked) HeadsupColors.OnHighlight else Color.White)
     }
 }
