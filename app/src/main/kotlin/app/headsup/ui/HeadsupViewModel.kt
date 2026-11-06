@@ -207,10 +207,11 @@ data class ClipState(
 /** What "Copy" takes from a clip and "Paste" gives to another: corrections, effects and LUT. */
 /** A set of the album's photos by their stars or marks: shown in the album, edited in the editor. */
 enum class AlbumScope(val label: String) {
-    ALL("All"), FOUR("★ 4+"), FIVE("★ 5"), UNRATED("No stars"), MARKED("Marked");
+    ALL("All"), STARRED("★ 1+"), FOUR("★ 4+"), FIVE("★ 5"), UNRATED("No stars"), MARKED("Marked");
 
     fun has(c: ClipState): Boolean = when (this) {
         ALL -> true
+        STARRED -> c.rating >= 1
         FOUR -> c.rating >= 4
         FIVE -> c.rating >= 5
         UNRATED -> c.rating == 0
@@ -642,7 +643,8 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
     /** An album photo's stars, by hand (the same stars again take them off). */
     fun setRating(index: Int, stars: Int) = updateClip(index) {
         val r = stars.coerceIn(0, 5)
-        it.copy(rating = if (it.rating == r && !it.suggested) 0 else r, suggested = false)
+        // The stars it has, tapped again, take them off (suggested ones too).
+        it.copy(rating = if (it.rating == r) 0 else r, suggested = false)
     }
 
     /** Gives every marked photo [stars] stars by hand (0 takes them off); the marks stay. */
@@ -746,6 +748,33 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
             context.contentResolver.openInputStream(clip.meta.uri)?.use { android.graphics.BitmapFactory.decodeStream(it, null, opts) }
                 ?.let { app.headsup.media.Exif.upright(context, clip.meta.uri, it) }
         }.getOrNull()
+    }
+
+    /** Small tables for thumbnails, by look: one per edit, shared by the photos that have it. */
+    private val thumbTables = android.util.LruCache<Triple<String?, ColorGrade, Boolean>, Array<Array<IntArray>>>(32)
+
+    /**
+     * [thumb] (the photo [clipId] small, as decoded) coloured as the photo is edited (outside its
+     * masks), or null when its colours are untouched (the thumbnail is then shown as it is).
+     */
+    suspend fun gradedThumb(clipId: Long, thumb: Bitmap): Bitmap? {
+        val s = _state.value
+        val clip = s.clips.firstOrNull { it.id == clipId } ?: return null
+        if (!clip.colorGrade) return null
+        val lut = s.lutFor(clip)
+        val grade = s.appliedGrade(clip)
+        if (lut == null && grade.isNeutralColour && !clip.wideGamut) return null
+        val key = Triple(lut, grade, clip.wideGamut)
+        val table = thumbTables.get(key) ?: run {
+            val cube = loadLut(lut)
+            // 17 points a side: plenty for a thumbnail, an eighth of the work of the full table.
+            withContext(Dispatchers.Default) { app.headsup.core.color.LutBaker.bake(cube, grade, 17, clip.wideGamut) }.also { thumbTables.put(key, it) }
+        }
+        return withContext(Dispatchers.Default) {
+            val px = IntArray(thumb.width * thumb.height)
+            thumb.getPixels(px, 0, thumb.width, 0, 0, thumb.width, thumb.height)
+            Bitmap.createBitmap(app.headsup.core.color.LutBaker.applyTable(px, table), thumb.width, thumb.height, Bitmap.Config.ARGB_8888)
+        }
     }
 
     /** The album viewer's photos as decoded, by clip: the next and last stay ready. */

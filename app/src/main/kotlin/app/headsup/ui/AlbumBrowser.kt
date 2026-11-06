@@ -47,8 +47,10 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.launch
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.foundation.gestures.awaitEachGesture
@@ -140,9 +142,7 @@ fun AlbumBrowser(state: UiState, vm: HeadsupViewModel, onClose: () -> Unit) {
                                 },
                         ) {
                             thumbs.version.intValue
-                            thumbs.frame(c.meta.uri, 0L, 1L, photo = true)?.let { img ->
-                                Image(img, contentDescription = c.meta.name, contentScale = ContentScale.Crop, modifier = Modifier.matchParentSize())
-                            }
+                            GradedThumb(vm, c, thumbs.frame(c.meta.uri, 0L, 1L, photo = true), Modifier.matchParentSize())
                             // Takes of one shot: which shot, and how many takes it has.
                             c.cullGroup?.let { g ->
                                 val n = groupSizes[g] ?: 1
@@ -309,7 +309,18 @@ fun PhotoViewer(state: UiState, vm: HeadsupViewModel, indices: List<Int>, start:
             beyondViewportPageCount = 1,
             key = { indices[it] },
         ) { p ->
-            ViewerPage(vm, indices[p], state.clips.getOrNull(indices[p])?.let { listOf(it.grade, it.lutName, it.colorGrade) }, if (p == page) tried else null, onZoomed = { if (p == page) zoomed = it }, onDismiss = onClose)
+            // Swiping: the photo leaving shrinks and dims a little, the one coming grows into place.
+            Box(
+                Modifier.fillMaxSize().graphicsLayer {
+                    val away = kotlin.math.abs((pager.currentPage - p) + pager.currentPageOffsetFraction).coerceIn(0f, 1f)
+                    val k = 1f - 0.08f * away
+                    scaleX = k
+                    scaleY = k
+                    alpha = 1f - 0.45f * away
+                },
+            ) {
+                ViewerPage(vm, indices[p], state.clips.getOrNull(indices[p])?.let { listOf(it.grade, it.lutName, it.colorGrade) }, if (p == page) tried else null, onZoomed = { if (p == page) zoomed = it }, onDismiss = onClose)
+            }
         }
     }
     val header: @Composable () -> Unit = {
@@ -405,8 +416,21 @@ private fun ViewerPage(vm: HeadsupViewModel, index: Int, edit: Any?, tried: Trie
         vm.viewerGraded(index, tried, 2048)?.let { value = it.asImageBitmap() }
     }
     var zoom by remember { mutableStateOf(1f) }
-    // Pulled down (not zoomed): the photo follows the finger; far enough, the viewer closes.
-    var pull by remember { mutableStateOf(0f) }
+    // Pulled down (not zoomed): the photo follows the finger; let go far enough, it slides away
+    // and the viewer closes, else it springs back.
+    val pullAnim = remember { androidx.compose.animation.core.Animatable(0f) }
+    val motion = rememberCoroutineScope()
+    // A double tap's zoom eases in and out instead of jumping.
+    fun zoomTo(target: Float, targetOffset: androidx.compose.ui.geometry.Offset) {
+        val z0 = zoom
+        val o0 = offset
+        motion.launch {
+            androidx.compose.animation.core.animate(0f, 1f, animationSpec = androidx.compose.animation.core.tween(220)) { t, _ ->
+                zoom = z0 + (target - z0) * t
+                offset = o0 + (targetOffset - o0) * t
+            }
+        }
+    }
     var offset by remember { mutableStateOf(androidx.compose.ui.geometry.Offset.Zero) }
     Box(
         Modifier.fillMaxSize().clipToBounds()
@@ -429,7 +453,7 @@ private fun ViewerPage(vm: HeadsupViewModel, index: Int, edit: Any?, tried: Trie
                             val d = (event.changes.firstOrNull()?.position ?: down.position) - down.position
                             if (!pulling && d.y > viewConfiguration.touchSlop && d.y > 2f * kotlin.math.abs(d.x)) pulling = true
                             if (pulling) {
-                                pull = d.y.coerceAtLeast(0f)
+                                motion.launch { pullAnim.snapTo(d.y.coerceAtLeast(0f)) }
                                 event.changes.forEach { it.consume() }
                                 continue
                             }
@@ -445,7 +469,15 @@ private fun ViewerPage(vm: HeadsupViewModel, index: Int, edit: Any?, tried: Trie
                         }
                     } while (event.changes.any { it.pressed })
                     if (pulling) {
-                        if (pull > size.height * 0.18f) onDismiss() else pull = 0f
+                        val h = size.height.toFloat()
+                        if (pullAnim.value > h * 0.18f) {
+                            motion.launch {
+                                pullAnim.animateTo(h, androidx.compose.animation.core.tween(180))
+                                onDismiss()
+                            }
+                        } else {
+                            motion.launch { pullAnim.animateTo(0f, androidx.compose.animation.core.spring(dampingRatio = 0.75f)) }
+                        }
                         return@awaitEachGesture
                     }
                     // A tap; a second one soon after, near the first, zooms in there (or back out).
@@ -453,14 +485,13 @@ private fun ViewerPage(vm: HeadsupViewModel, index: Int, edit: Any?, tried: Trie
                         val now = System.currentTimeMillis()
                         if (now - lastTapMs < 320L && (down.position - lastTap).getDistance() < 80f) {
                             if (zoom > 1f) {
-                                zoom = 1f
-                                offset = androidx.compose.ui.geometry.Offset.Zero
+                                zoomTo(1f, androidx.compose.ui.geometry.Offset.Zero)
+                                onZoomed(false)
                             } else {
-                                zoom = 2.5f
                                 val centre = androidx.compose.ui.geometry.Offset(size.width / 2f, size.height / 2f)
-                                offset = clampOffset((centre - down.position) * (zoom - 1f), zoom, size.width.toFloat(), size.height.toFloat())
+                                zoomTo(2.5f, clampOffset((centre - down.position) * 1.5f, 2.5f, size.width.toFloat(), size.height.toFloat()))
+                                onZoomed(true)
                             }
-                            onZoomed(zoom > 1f)
                             lastTapMs = 0L
                         } else {
                             lastTapMs = now
@@ -481,6 +512,7 @@ private fun ViewerPage(vm: HeadsupViewModel, index: Int, edit: Any?, tried: Trie
                     scaleX = zoom
                     scaleY = zoom
                     translationX = offset.x
+                    val pull = pullAnim.value
                     translationY = offset.y + pull
                     // Pulled away, it fades a little as it goes.
                     alpha = 1f - (pull / size.height.coerceAtLeast(1f)).coerceIn(0f, 1f) * 0.6f
@@ -510,4 +542,17 @@ fun MarkButton(marked: Boolean, size: androidx.compose.ui.unit.Dp = 36.dp, onCli
     ) {
         Text("✓", style = MaterialTheme.typography.labelLarge, color = if (marked) HeadsupColors.OnHighlight else Color.White)
     }
+}
+
+/**
+ * A photo's thumbnail as it is edited (its colours, LUT and look; masks and effects are not in
+ * it), worked out in the background; the plain one shows until then.
+ */
+@Composable
+fun GradedThumb(vm: HeadsupViewModel, clip: ClipState, plain: androidx.compose.ui.graphics.ImageBitmap?, modifier: Modifier) {
+    plain ?: return
+    val graded by androidx.compose.runtime.produceState<androidx.compose.ui.graphics.ImageBitmap?>(null, plain, clip.grade, clip.lutName, clip.colorGrade, clip.groupId) {
+        value = vm.gradedThumb(clip.id, plain.asAndroidBitmap())?.asImageBitmap()
+    }
+    Image(graded ?: plain, contentDescription = clip.meta.name, contentScale = ContentScale.Crop, modifier = modifier)
 }

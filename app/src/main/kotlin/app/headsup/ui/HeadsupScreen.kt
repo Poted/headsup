@@ -5299,9 +5299,7 @@ private fun PhotoStrip(state: UiState, vm: HeadsupViewModel, onAdd: () -> Unit, 
             ) {
                 // Read here, so this tile (not only the row) shows its picture when it arrives.
                 thumbs.version.intValue
-                thumbs.frame(c.meta.uri, 0L, 1L, photo = true)?.let { img ->
-                    androidx.compose.foundation.Image(img, contentDescription = c.meta.name, contentScale = androidx.compose.ui.layout.ContentScale.Crop, modifier = Modifier.matchParentSize())
-                }
+                GradedThumb(vm, c, thumbs.frame(c.meta.uri, 0L, 1L, photo = true), Modifier.matchParentSize())
                 if (c.picked) {
                     Box(
                         Modifier.align(Alignment.TopEnd).padding(4.dp).size(18.dp).clip(CircleShape).background(HeadsupColors.Highlight),
