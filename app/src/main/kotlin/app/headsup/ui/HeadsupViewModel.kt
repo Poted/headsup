@@ -419,6 +419,8 @@ data class UiState(
     val loadingProgress: Float? = null,
     /** Which of the album's photos the editor shows (set in the album: Edit these). */
     val albumScope: AlbumScope = AlbumScope.ALL,
+    /** The album is open over the editor (kept here, so turning the phone keeps it open). */
+    val albumOpen: Boolean = false,
     val canRedo: Boolean = false,
     /** What the last undo or redo changed, shown for a moment over the picture, and when. */
     val notice: String? = null,
@@ -709,6 +711,10 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
             }
         }
     }
+
+    fun openAlbum() = _state.update { it.copy(albumOpen = true) }
+
+    fun closeAlbum() = _state.update { it.copy(albumOpen = false) }
 
     /**
      * The editor shows only the album's photos in [scope] (all of them again with ALL). The photo

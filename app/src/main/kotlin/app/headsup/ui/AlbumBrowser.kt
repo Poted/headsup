@@ -18,9 +18,10 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.asPaddingValues
-import androidx.compose.foundation.layout.statusBars
-import androidx.compose.foundation.layout.navigationBars
+import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
@@ -46,8 +47,6 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.window.Dialog
-import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
@@ -89,15 +88,12 @@ fun AlbumBrowser(state: UiState, vm: HeadsupViewModel, onClose: () -> Unit) {
     }
     // The photo looked at large (its place in [shown]), or null.
     var viewing by rememberSaveable { mutableStateOf<Int?>(null) }
-    viewing?.let { start ->
-        if (shown.isNotEmpty()) PhotoViewer(state, vm, shown.map { it.index }, start.coerceIn(0, shown.lastIndex), onEdit = { i -> vm.selectClip(i); viewing = null; onClose() }) { viewing = null }
-        else viewing = null
-    }
     // Takes of one shot: how many there are and which of them each is.
     val groupSizes = photos.mapNotNull { it.value.cullGroup }.groupingBy { it }.eachCount()
-    val bars = systemBars()
-    Dialog(onDismissRequest = onClose, properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)) {
-        Column(Modifier.fillMaxSize().background(HeadsupColors.Background).padding(bars)) {
+    androidx.activity.compose.BackHandler(enabled = viewing == null) { if (selecting) selecting = false else onClose() }
+    Box(Modifier.fillMaxSize()) {
+    FullScreenLayer(HeadsupColors.Background) {
+        Column(Modifier.fillMaxSize()) {
             // Top: what the album holds and which set the editor works through; closing.
             Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 8.dp, top = 8.dp, bottom = 4.dp), verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
@@ -211,6 +207,17 @@ fun AlbumBrowser(state: UiState, vm: HeadsupViewModel, onClose: () -> Unit) {
             }
         }
     }
+    // On top of the album: the photo looked at large.
+    viewing?.let { start ->
+        if (shown.isNotEmpty()) {
+            PhotoViewer(
+                state, vm, shown.map { it.index }, start.coerceIn(0, shown.lastIndex),
+                onPage = { viewing = it },
+                onEdit = { i -> vm.selectClip(i); viewing = null; onClose() },
+            ) { viewing = null }
+        } else viewing = null
+    }
+    }
 }
 
 /**
@@ -233,17 +240,6 @@ private fun AutoPickButton(enabled: Boolean, suggested: Boolean, onPick: () -> U
             androidx.compose.material3.DropdownMenuItem(text = { Text("Clear suggested stars") }, onClick = { menu = false; onClear() })
         }
     }
-}
-
-/**
- * The system bars' room, read from the app's own window: a dialog's window is not told it (so
- * its content ran under the navigation bar), while the album and viewer cover the whole screen.
- */
-@Composable
-private fun systemBars(): androidx.compose.foundation.layout.PaddingValues {
-    val top = androidx.compose.foundation.layout.WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
-    val bottom = androidx.compose.foundation.layout.WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
-    return androidx.compose.foundation.layout.PaddingValues(top = top, bottom = bottom)
 }
 
 /** Five stars: tap one to give that many (the same again takes them off); suggested ones are hollow. */
@@ -274,70 +270,107 @@ fun StarRow(rating: Int, suggested: Boolean, modifier: Modifier = Modifier, big:
  */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-fun PhotoViewer(state: UiState, vm: HeadsupViewModel, indices: List<Int>, start: Int, onEdit: (Int) -> Unit, onClose: () -> Unit) {
+fun PhotoViewer(state: UiState, vm: HeadsupViewModel, indices: List<Int>, start: Int, onPage: (Int) -> Unit, onEdit: (Int) -> Unit, onClose: () -> Unit) {
     val pager = androidx.compose.foundation.pager.rememberPagerState(initialPage = start) { indices.size }
     var zoomed by remember { mutableStateOf(false) }
     // A look tried on the photo on screen (null: its own).
     var tried by remember { mutableStateOf<TriedLook?>(null) }
-    var looks by remember { mutableStateOf(false) }
+    var looks by rememberSaveable { mutableStateOf(false) }
     val page = pager.currentPage.coerceIn(0, indices.lastIndex)
     val index = indices[page]
-    androidx.compose.runtime.LaunchedEffect(page) { tried = null; zoomed = false }
-    val bars = systemBars()
-    Dialog(onDismissRequest = onClose, properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)) {
-        Column(Modifier.fillMaxSize().background(Color.Black).padding(bars)) {
-            val clip = state.clips.getOrNull(index)
-            Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
-                Column(Modifier.weight(1f)) {
-                    Text("${page + 1} / ${indices.size}", style = MaterialTheme.typography.titleSmall, color = Color.White)
-                    Text(clip?.meta?.name.orEmpty(), style = MaterialTheme.typography.labelSmall, color = HeadsupColors.TextMuted, maxLines = 1)
+    androidx.compose.runtime.LaunchedEffect(page) { tried = null; zoomed = false; onPage(page) }
+    androidx.activity.compose.BackHandler(onBack = onClose)
+    val clip = state.clips.getOrNull(index)
+    val photo: @Composable (Modifier) -> Unit = { m ->
+        androidx.compose.foundation.pager.HorizontalPager(
+            state = pager,
+            modifier = m,
+            userScrollEnabled = !zoomed,
+            beyondViewportPageCount = 1,
+            key = { indices[it] },
+        ) { p ->
+            ViewerPage(vm, indices[p], state.clips.getOrNull(indices[p])?.let { listOf(it.grade, it.lutName, it.colorGrade) }, if (p == page) tried else null, onZoomed = { if (p == page) zoomed = it })
+        }
+    }
+    val header: @Composable () -> Unit = {
+        Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text("${page + 1} / ${indices.size}", style = MaterialTheme.typography.titleSmall, color = Color.White)
+                Text(clip?.meta?.name.orEmpty(), style = MaterialTheme.typography.labelSmall, color = HeadsupColors.TextMuted, maxLines = 1)
+            }
+            SmallAction("✕", onClose)
+        }
+    }
+    // Stars, then the mark, the looks and Edit; the looks to try under them.
+    val controls: @Composable () -> Unit = {
+        if (clip != null) {
+            StarRow(clip.rating, clip.suggested, Modifier.padding(top = 4.dp), big = true) { stars -> vm.setRating(index, stars) }
+            Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                MarkButton(clip.picked) { vm.togglePicked(index) }
+                Spacer(Modifier.width(8.dp))
+                PillAction("◐", "Looks", { looks = !looks }, selected = looks)
+                Spacer(Modifier.weight(1f))
+                PillAction("✎", "Edit", { onEdit(index) })
+            }
+            tried?.let { t ->
+                Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 2.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Text("Trying a look", Modifier.weight(1f), style = MaterialTheme.typography.labelMedium, color = HeadsupColors.TextMuted)
+                    SmallAction("Undo", { tried = null })
+                    PillAction("✓", "Keep look", { vm.keepTriedLook(index, t); tried = null }, selected = true)
                 }
-                SmallAction("✕", onClose)
             }
-            androidx.compose.foundation.pager.HorizontalPager(
-                state = pager,
-                modifier = Modifier.weight(1f).fillMaxWidth(),
-                userScrollEnabled = !zoomed,
-                beyondViewportPageCount = 1,
-                key = { indices[it] },
-            ) { p ->
-                ViewerPage(vm, indices[p], state.clips.getOrNull(indices[p])?.let { listOf(it.grade, it.lutName, it.colorGrade) }, if (p == page) tried else null, onZoomed = { if (p == page) zoomed = it })
-            }
-            if (clip != null) {
-                // Under the thumb: stars, then the mark, the looks and Edit.
-                StarRow(clip.rating, clip.suggested, Modifier.padding(top = 4.dp), big = true) { stars -> vm.setRating(index, stars) }
-                Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-                    MarkButton(clip.picked) { vm.togglePicked(index) }
-                    Spacer(Modifier.width(8.dp))
-                    PillAction("◐", "Looks", { looks = !looks }, selected = looks)
-                    Spacer(Modifier.weight(1f))
-                    tried?.let { t ->
-                        SmallAction("Undo", { tried = null })
-                        PillAction("✓", "Keep look", { vm.keepTriedLook(index, t); tried = null })
-                        Spacer(Modifier.width(6.dp))
+            if (looks) {
+                FlowRow(
+                    Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    for (look in app.headsup.core.color.Look.entries) {
+                        val t = TriedLook.Profile(look)
+                        FilterChip(selected = tried == t, onClick = { tried = if (tried == t) null else t }, label = { Text(look.label) })
                     }
-                    PillAction("✎", "Edit", { onEdit(index) })
-                }
-                if (looks) {
-                    androidx.compose.foundation.lazy.LazyRow(
-                        horizontalArrangement = Arrangement.spacedBy(6.dp),
-                        contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 12.dp, vertical = 4.dp),
-                    ) {
-                        items(app.headsup.core.color.Look.entries.size) { k ->
-                            val look = app.headsup.core.color.Look.entries[k]
-                            val t = TriedLook.Profile(look)
-                            FilterChip(selected = tried == t, onClick = { tried = if (tried == t) null else t }, label = { Text(look.label) })
-                        }
-                        items(state.presets.size) { k ->
-                            val preset = state.presets[k]
-                            val t = TriedLook.Preset(preset)
-                            FilterChip(selected = tried == t, onClick = { tried = if (tried == t) null else t }, label = { Text("★ ${preset.name}") })
-                        }
+                    for (preset in state.presets) {
+                        val t = TriedLook.Preset(preset)
+                        FilterChip(selected = tried == t, onClick = { tried = if (tried == t) null else t }, label = { Text("★ ${preset.name}") })
                     }
                 }
             }
         }
     }
+    FullScreenLayer(Color.Black) {
+        androidx.compose.foundation.layout.BoxWithConstraints(Modifier.fillMaxSize()) {
+            if (maxWidth > maxHeight) {
+                // Sideways: the photo as large as it goes, everything else in a column beside it.
+                Row(Modifier.fillMaxSize()) {
+                    photo(Modifier.weight(1f).fillMaxSize())
+                    Column(Modifier.width(320.dp).fillMaxSize().verticalScroll(androidx.compose.foundation.rememberScrollState())) {
+                        header()
+                        controls()
+                    }
+                }
+            } else {
+                Column(Modifier.fillMaxSize()) {
+                    header()
+                    photo(Modifier.weight(1f).fillMaxWidth())
+                    // Under the thumb; the looks scroll when they need more room.
+                    Column(Modifier.fillMaxWidth().heightIn(max = maxHeight * 0.45f).verticalScroll(androidx.compose.foundation.rememberScrollState())) { controls() }
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Covers the whole screen inside the app's own window (not a dialog's: those were cut short
+ * sideways and lost on turning the phone), clear of the system bars and the camera cutout;
+ * nothing under it takes a touch.
+ */
+@Composable
+fun FullScreenLayer(background: Color, content: @Composable () -> Unit) {
+    Box(
+        Modifier.fillMaxSize().background(background)
+            .pointerInput(Unit) { awaitEachGesture { awaitFirstDown(requireUnconsumed = false); do { val e = awaitPointerEvent(androidx.compose.ui.input.pointer.PointerEventPass.Final); e.changes.forEach { it.consume() } } while (e.changes.any { it.pressed }) } }
+            .windowInsetsPadding(androidx.compose.foundation.layout.WindowInsets.safeDrawing),
+    ) { content() }
 }
 
 /** One photo of the viewer, coloured as edited (or with the look tried), zoomable. */

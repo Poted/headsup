@@ -796,6 +796,8 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
                 ) { tools() }
             }
         }
+        // The album over everything (the whole screen, either way the phone is held).
+        if (state.albumOpen && state.photoProject) AlbumBrowser(state, vm) { vm.closeAlbum() }
     }
 }
 
@@ -5265,15 +5267,12 @@ private fun PhotoStrip(state: UiState, vm: HeadsupViewModel, onAdd: () -> Unit, 
     val scope = rememberCoroutineScope()
     val thumbs = remember { Filmstrip(context, scope) }
     DisposableEffect(thumbs) { onDispose { thumbs.release() } }
-    // The whole album, large: stars, Auto pick, filters.
-    var browsing by rememberSaveable { mutableStateOf(false) }
-    if (browsing) AlbumBrowser(state, vm) { browsing = false }
     // Only the set chosen in the album (Edit these): 20 starred photos, not all 500.
     val inScope = state.clips.indices.filter { state.albumScope.has(state.clips[it]) }
     if (state.albumScope != AlbumScope.ALL) {
         Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
             Hint("Editing ${state.albumScope.label}: ${inScope.size} of ${state.clips.size}", Modifier.weight(1f))
-            SmallAction("Change", { browsing = true })
+            SmallAction("Change", { vm.openAlbum() })
             SmallAction("All", { vm.setAlbumScope(AlbumScope.ALL) })
         }
     }
@@ -5348,7 +5347,7 @@ private fun PhotoStrip(state: UiState, vm: HeadsupViewModel, onAdd: () -> Unit, 
         item {
             // The album large: rate, Auto pick, filter.
             Column(
-                Modifier.size(64.dp).clip(RoundedCornerShape(10.dp)).border(1.dp, HeadsupColors.Outline, RoundedCornerShape(10.dp)).clickable { browsing = true },
+                Modifier.size(64.dp).clip(RoundedCornerShape(10.dp)).border(1.dp, HeadsupColors.Outline, RoundedCornerShape(10.dp)).clickable { vm.openAlbum() },
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.Center,
             ) {
