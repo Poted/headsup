@@ -24,6 +24,11 @@ object PhotoCull {
          * plumb, in degrees; null when it has no dominant lines to tell by.
          */
         val tilt: Float? = null,
+        /**
+         * How well lit it looks, 0..1: little burnt out or crushed, its middle tones neither dark
+         * nor washed out, a full range from shadows to highlights.
+         */
+        val light: Float = 1f,
     )
 
     class Result(
@@ -86,7 +91,21 @@ object PhotoCull {
         for (k in print.indices) print[k] -= mean
         val len = sqrt(print.sumOf { (it * it).toDouble() }).toFloat()
         if (len > 1e-6f) for (k in print.indices) print[k] /= len
-        return Features(sharpness, exposure, print, colour, tiltOf(y, width, height))
+        // Light: where the middle of the tones sits and how far they reach.
+        val hist = IntArray(256)
+        for (v in y) hist[(v * 255f).toInt().coerceIn(0, 255)]++
+        fun quantile(q: Float): Float {
+            var acc = 0
+            val goal = (q * n).toInt()
+            for (b in 0 until 256) { acc += hist[b]; if (acc >= goal) return b / 255f }
+            return 1f
+        }
+        val median = quantile(0.5f)
+        val range = quantile(0.98f) - quantile(0.02f)
+        val mid = (1f - 2f * (kotlin.math.abs(median - 0.42f) - 0.12f).coerceAtLeast(0f)).coerceIn(0f, 1f)
+        val reach = (range / 0.6f).coerceIn(0.3f, 1f)
+        val light = (exposure * mid * reach).coerceIn(0f, 1f)
+        return Features(sharpness, exposure, print, colour, tiltOf(y, width, height), light)
     }
 
     /**
@@ -233,19 +252,24 @@ object PhotoCull {
         // a few others is still soft.
         val reference = sharp[kotlin.math.ceil((n - 1) * 0.9).toInt().coerceIn(0, n - 1)].coerceAtLeast(1e-6f)
         val top = sharp.last().coerceAtLeast(1e-6f)
-        val score = FloatArray(n) { i -> (0.75f * photos[i].sharpness / top + 0.25f * photos[i].exposure).coerceIn(0f, 1f) }
+        fun level(i: Int): Boolean { val t = photos[i].tilt; return t == null || abs(t) < CROOKED_DEGREES || abs(t) > 20f }
+        // Within its shot, a take is as good as it is sharp against the shot's sharpest, then by
+        // its light, then level.
+        val groupTop = HashMap<Int, Float>()
+        for (i in 0 until n) groupTop[group[i]] = maxOf(groupTop[group[i]] ?: 0f, photos[i].sharpness)
+        val score = FloatArray(n) { i ->
+            val sharpShare = photos[i].sharpness / (groupTop[group[i]] ?: top).coerceAtLeast(1e-6f)
+            (0.6f * sharpShare + 0.3f * photos[i].light + 0.1f * (if (level(i)) 1f else 0.4f)).coerceIn(0f, 1f)
+        }
         fun good(i: Int): Boolean {
             val p = photos[i]
-            val level = p.tilt == null || abs(p.tilt) < CROOKED_DEGREES || abs(p.tilt) > 20f
-            return eligible(i) && level && p.exposure >= 0.55f && p.sharpness >= SOFT * reference && p.sharpness >= 1f / BLURRED_EDGE
+            return eligible(i) && level(i) && p.exposure >= 0.55f && p.sharpness >= SOFT * reference && p.sharpness >= 1f / BLURRED_EDGE
         }
         val suggested = HashSet<Int>()
+        // One take per shot: its best, when that one is good enough (never several to choose from).
         for (members in (0 until n).groupBy { group[it] }.values) {
-            // Within a group, sharpness against the group's sharpest matters most.
-            val best = members.filter { good(it) }.maxByOrNull { score[it] } ?: continue
-            suggested += best
-            // Another take as good (a tie) is suggested too, to choose between.
-            members.filter { it != best && good(it) && score[it] >= score[best] - 0.02f }.forEach { suggested += it }
+            val best = members.filter { eligible(it) }.maxByOrNull { score[it] } ?: continue
+            if (good(best)) suggested += best
         }
         return Result(group, score, suggested)
     }

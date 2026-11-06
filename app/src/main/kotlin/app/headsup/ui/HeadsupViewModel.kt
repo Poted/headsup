@@ -168,6 +168,8 @@ data class ClipState(
     val suggested: Boolean = false,
     /** Which takes of one shot it is with (Auto pick); null before Auto pick looked. */
     val cullGroup: Int? = null,
+    /** Auto pick found it the best take of its shot. */
+    val cullBest: Boolean = false,
     /** Moments flagged in the file (file time): to find again, cut at, work on. */
     val flags: List<Long> = emptyList(),
     /** Played backwards: [meta] is then the reversed copy of [ReversedSource.original]'s cut. */
@@ -723,8 +725,8 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                             val g = groupOf[c.id] ?: return@map base
                             if (c.id in chosen && base.rating == 0) {
                                 starred++
-                                base.copy(cullGroup = g, rating = SUGGESTED_STARS, suggested = true)
-                            } else base.copy(cullGroup = g)
+                                base.copy(cullGroup = g, cullBest = true, rating = SUGGESTED_STARS, suggested = true)
+                            } else base.copy(cullGroup = g, cullBest = c.id in chosen)
                         },
                         messages = st.messages + "Auto pick: $starred suggested in ${result.group.toSet().size} shots. Nothing was removed.",
                     )
@@ -1330,7 +1332,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                 it.fadeInMs, it.fadeOutMs, it.soundLevel, it.rawDevelop, it.picked, it.speedCurve, it.retouch,
                 flags = it.flags,
                 reversed = it.reversed?.let { r -> SavedReverse(r.original.uri, r.startMs, r.endMs) },
-                rating = it.rating, suggested = it.suggested, cullGroup = it.cullGroup,
+                rating = it.rating, suggested = it.suggested, cullGroup = it.cullGroup, cullBest = it.cullBest,
                 gradeKeys = it.gradeKeys,
                 stabilize = it.stabilize,
             )
@@ -1475,6 +1477,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
             rating = c.rating,
             suggested = c.suggested,
             cullGroup = c.cullGroup,
+            cullBest = c.cullBest,
             gradeKeys = c.gradeKeys,
             stabilize = c.stabilize,
             groupId = c.groupId,

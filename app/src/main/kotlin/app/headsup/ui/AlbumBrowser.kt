@@ -91,7 +91,8 @@ fun AlbumBrowser(state: UiState, vm: HeadsupViewModel, onClose: () -> Unit) {
     // The photo looked at large (its place in [shown]), or null.
     var viewing by rememberSaveable { mutableStateOf<Int?>(null) }
     // Takes of one shot: how many there are and which of them each is.
-    val groupSizes = photos.mapNotNull { it.value.cullGroup }.groupingBy { it }.eachCount()
+    // Takes of one shot, in album order (to number them 1/4, 2/4…).
+    val takesOf = photos.filter { it.value.cullGroup != null }.groupBy({ it.value.cullGroup!! }, { it.value.id })
     androidx.activity.compose.BackHandler(enabled = viewing == null) { if (selecting) selecting = false else onClose() }
     Box(Modifier.fillMaxSize()) {
     FullScreenLayer(HeadsupColors.Background) {
@@ -143,17 +144,28 @@ fun AlbumBrowser(state: UiState, vm: HeadsupViewModel, onClose: () -> Unit) {
                         ) {
                             thumbs.version.intValue
                             GradedThumb(vm, c, thumbs.frame(c.meta.uri, 0L, 1L, photo = true), Modifier.matchParentSize())
-                            // Takes of one shot: which shot, and how many takes it has.
+                            // Takes of one shot: which take this is of how many, and the best one marked.
                             c.cullGroup?.let { g ->
-                                val n = groupSizes[g] ?: 1
-                                if (n > 1) {
+                                val takes = takesOf[g].orEmpty()
+                                if (takes.size > 1) {
+                                    val k = takes.indexOf(c.id) + 1
                                     Text(
-                                        "Shot ${g + 1} · $n",
+                                        if (c.cullBest) "★ Best · $k/${takes.size}" else "$k/${takes.size}",
                                         Modifier.align(Alignment.TopStart).padding(4.dp).clip(RoundedCornerShape(6.dp))
-                                            .background(Color.Black.copy(alpha = 0.6f)).padding(horizontal = 5.dp, vertical = 1.dp),
-                                        style = MaterialTheme.typography.labelSmall, color = Color.White,
+                                            .background(if (c.cullBest) HeadsupColors.Accent.copy(alpha = 0.9f) else Color.Black.copy(alpha = 0.6f))
+                                            .padding(horizontal = 5.dp, vertical = 1.dp),
+                                        style = MaterialTheme.typography.labelSmall, color = if (c.cullBest) HeadsupColors.OnAccent else Color.White,
                                     )
                                 }
+                            }
+                            // The photo open in the editor.
+                            if (selected) {
+                                Text(
+                                    "✎ editing",
+                                    Modifier.align(Alignment.BottomStart).padding(4.dp).clip(RoundedCornerShape(6.dp))
+                                        .background(Color.Black.copy(alpha = 0.6f)).padding(horizontal = 5.dp, vertical = 1.dp),
+                                    style = MaterialTheme.typography.labelSmall, color = HeadsupColors.Accent,
+                                )
                             }
                             if (selecting && c.picked) Box(Modifier.matchParentSize().background(HeadsupColors.Highlight.copy(alpha = 0.15f)))
                             // The mark: always tappable while selecting, shown when set.

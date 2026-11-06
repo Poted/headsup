@@ -55,6 +55,7 @@ data class SavedClip(
     val rating: Int = 0,
     val suggested: Boolean = false,
     val cullGroup: Int? = null,
+    val cullBest: Boolean = false,
     /** Corrections changing over the shot, file time. */
     val gradeKeys: List<app.headsup.core.color.GradeKey> = emptyList(),
     /** The shot steadied (its measured path and strength), or null. */
@@ -363,6 +364,7 @@ internal object Json {
         .put("rating", c.rating)
         .put("suggested", c.suggested)
         .apply { c.cullGroup?.let { put("cullGroup", it) } }
+        .put("cullBest", c.cullBest)
         .apply {
             c.stabilize?.let { p ->
                 val flat = JSONArray()
@@ -411,6 +413,7 @@ internal object Json {
         rating = o.optInt("rating", 0).coerceIn(0, 5),
         suggested = o.optBoolean("suggested", false),
         cullGroup = if (o.has("cullGroup")) o.optInt("cullGroup") else null,
+        cullBest = o.optBoolean("cullBest", false),
         stabilize = o.optJSONObject("stabilize")?.let { j ->
             val flat = j.optJSONArray("steps") ?: return@let null
             app.headsup.core.frame.Stabilizer.Path(

@@ -134,6 +134,16 @@ class PhotoCullTest {
     }
 
     @Test
+    fun oneTakePerShot() {
+        // Four nearly the same takes: one is suggested, not all of them.
+        val takes = listOf(f(scene(8)), f(scene(8, shift = 1)), f(scene(8, shift = 2)), f(scene(8, blur = 1)))
+        val r = PhotoCull.choose(takes)
+        assertEquals(1, r.group.toSet().size)
+        assertEquals(1, r.suggested.size)
+        assertTrue(3 !in r.suggested)
+    }
+
+    @Test
     fun nothingToChooseFrom() {
         assertTrue(PhotoCull.choose(emptyList()).suggested.isEmpty())
     }
