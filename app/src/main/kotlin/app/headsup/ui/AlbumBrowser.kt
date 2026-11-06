@@ -268,7 +268,7 @@ fun StarRow(rating: Int, suggested: Boolean, modifier: Modifier = Modifier, big:
  * double tap to zoom (dragged while zoomed), stars, a mark, and looks to try (shown on the photo
  * at once) and keep. Edit opens the photo in the editor.
  */
-@OptIn(ExperimentalFoundationApi::class)
+@OptIn(ExperimentalFoundationApi::class, ExperimentalLayoutApi::class)
 @Composable
 fun PhotoViewer(state: UiState, vm: HeadsupViewModel, indices: List<Int>, start: Int, onPage: (Int) -> Unit, onEdit: (Int) -> Unit, onClose: () -> Unit) {
     val pager = androidx.compose.foundation.pager.rememberPagerState(initialPage = start) { indices.size }
@@ -338,6 +338,7 @@ fun PhotoViewer(state: UiState, vm: HeadsupViewModel, indices: List<Int>, start:
     }
     FullScreenLayer(Color.Black) {
         androidx.compose.foundation.layout.BoxWithConstraints(Modifier.fillMaxSize()) {
+            val tall = maxHeight
             if (maxWidth > maxHeight) {
                 // Sideways: the photo as large as it goes, everything else in a column beside it.
                 Row(Modifier.fillMaxSize()) {
@@ -352,7 +353,7 @@ fun PhotoViewer(state: UiState, vm: HeadsupViewModel, indices: List<Int>, start:
                     header()
                     photo(Modifier.weight(1f).fillMaxWidth())
                     // Under the thumb; the looks scroll when they need more room.
-                    Column(Modifier.fillMaxWidth().heightIn(max = maxHeight * 0.45f).verticalScroll(androidx.compose.foundation.rememberScrollState())) { controls() }
+                    Column(Modifier.fillMaxWidth().heightIn(max = tall * 0.45f).verticalScroll(androidx.compose.foundation.rememberScrollState())) { controls() }
                 }
             }
         }
