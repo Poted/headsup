@@ -369,7 +369,9 @@ fun PhotoViewer(state: UiState, vm: HeadsupViewModel, indices: List<Int>, start:
 fun FullScreenLayer(background: Color, content: @Composable () -> Unit) {
     Box(
         Modifier.fillMaxSize().background(background)
-            .pointerInput(Unit) { awaitEachGesture { awaitFirstDown(requireUnconsumed = false); do { val e = awaitPointerEvent(androidx.compose.ui.input.pointer.PointerEventPass.Final); e.changes.forEach { it.consume() } } while (e.changes.any { it.pressed }) } }
+            // Only listens (consuming here would cancel the taps and swipes of what it holds): a
+            // layer with a pointer handler is where a touch lands, so nothing under it is reached.
+            .pointerInput(Unit) { awaitPointerEventScope { while (true) awaitPointerEvent() } }
             .windowInsetsPadding(androidx.compose.foundation.layout.WindowInsets.safeDrawing),
     ) { content() }
 }

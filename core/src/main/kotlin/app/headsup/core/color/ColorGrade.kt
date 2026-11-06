@@ -276,6 +276,9 @@ object LutBaker {
         }
         val k = (n - 1) / 255f
         val out = IntArray(argb.size)
+        // Strides of the flat table (no closures in the loop: millions of pixels).
+        val sr = n * n * 3
+        val sg = n * 3
         for (i in argb.indices) {
             val p = argb[i]
             val fr = ((p shr 16) and 0xFF) * k
@@ -287,13 +290,20 @@ object LutBaker {
             val dr = fr - r0
             val dg = fg - g0
             val db = fb - b0
+            val o000 = r0 * sr + g0 * sg + b0 * 3
+            val o100 = o000 + sr
+            val o010 = o000 + sg
+            val o110 = o100 + sg
+            val o001 = o000 + 3
+            val o101 = o100 + 3
+            val o011 = o010 + 3
+            val o111 = o110 + 3
             var v = 0
             for (ch in 0..2) {
-                fun at(r: Int, g: Int, b: Int) = flat[((r * n + g) * n + b) * 3 + ch]
-                val c00 = at(r0, g0, b0) + (at(r0 + 1, g0, b0) - at(r0, g0, b0)) * dr
-                val c10 = at(r0, g0 + 1, b0) + (at(r0 + 1, g0 + 1, b0) - at(r0, g0 + 1, b0)) * dr
-                val c01 = at(r0, g0, b0 + 1) + (at(r0 + 1, g0, b0 + 1) - at(r0, g0, b0 + 1)) * dr
-                val c11 = at(r0, g0 + 1, b0 + 1) + (at(r0 + 1, g0 + 1, b0 + 1) - at(r0, g0 + 1, b0 + 1)) * dr
+                val c00 = flat[o000 + ch] + (flat[o100 + ch] - flat[o000 + ch]) * dr
+                val c10 = flat[o010 + ch] + (flat[o110 + ch] - flat[o010 + ch]) * dr
+                val c01 = flat[o001 + ch] + (flat[o101 + ch] - flat[o001 + ch]) * dr
+                val c11 = flat[o011 + ch] + (flat[o111 + ch] - flat[o011 + ch]) * dr
                 val c0 = c00 + (c10 - c00) * dg
                 val c1 = c01 + (c11 - c01) * dg
                 val x = (c0 + (c1 - c0) * db + 0.5f).toInt().coerceIn(0, 255)
