@@ -310,6 +310,8 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
     // starts larger: no timeline under it); full screen hides everything else.
     var filmShare by rememberSaveable { mutableStateOf(0.32f) }
     var albumShare by rememberSaveable { mutableStateOf(0.5f) }
+    // How far the handle has been pulled up past its top (a share of the screen), on to full screen.
+    var pullPast by remember { mutableStateOf(0f) }
     // The album's thumbnails while editing a photo: folded by default.
     var showOriginal by remember { mutableStateOf(false) }
     // A finger held on the picture while a mask's corrections are edited: the picture without that mask only.
@@ -538,9 +540,16 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
                 // brings them back.
                 PreviewHandle(
                     onToggle = { if (!state.photoProject || tool != Tool.FILES) compact = !compact },
-                    onDragging = { handleDragging = it },
+                    onDragging = { handleDragging = it; if (!it) pullPast = 0f },
                 ) { dy ->
                     val d = dy / (configuration.screenHeightDp * density.density)
+                    val min = if (state.photoProject) 0.2f else 0.18f
+                    val now = if (state.photoProject) albumShare else filmShare
+                    // Pulled on up past the smallest the tools get: the picture goes full screen.
+                    if (now + d < min) {
+                        pullPast += min - (now + d)
+                        if (pullPast > 0.06f) { pullPast = 0f; fullscreen = true }
+                    }
                     if (state.photoProject) albumShare = (albumShare + d).coerceIn(0.2f, 0.75f) else filmShare = (filmShare + d).coerceIn(0.18f, 0.6f)
                 }
             }
@@ -554,8 +563,19 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
                 if (photoFolded) {
                     // Folded: sideways a small arrow brings the info row and the album back (or a
                     // swipe up); upright a double tap on the handle above does.
-                    if (wide) Box(Modifier.fillMaxWidth().clickable { compact = false }.padding(vertical = 2.dp), contentAlignment = Alignment.Center) {
-                        Icon(HeadsupIcons.ChevronUp, "Show the album", Modifier.size(20.dp), tint = HeadsupColors.TextMuted)
+                    if (wide) {
+                        // A handle, pulled up (or tapped), brings the album back, as the film's timeline.
+                        var pulled by remember { mutableStateOf(0f) }
+                        val drag = androidx.compose.foundation.gestures.rememberDraggableState { dy ->
+                            pulled += dy
+                            if (pulled < -with(density) { 24.dp.toPx() }) { pulled = 0f; compact = false }
+                        }
+                        Box(
+                            Modifier.fillMaxWidth().height(28.dp)
+                                .draggable(drag, Orientation.Vertical, onDragStopped = { pulled = 0f })
+                                .clickable { compact = false },
+                            contentAlignment = Alignment.Center,
+                        ) { Box(Modifier.width(40.dp).height(4.dp).clip(RoundedCornerShape(2.dp)).background(HeadsupColors.Outline)) }
                     }
                 } else if (state.clips.isNotEmpty()) {
                     // The album's photos are always shown (also on Export, where the marked ones
@@ -797,7 +817,7 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
             }
         }
         // The album over everything (the whole screen, either way the phone is held).
-        if (state.albumOpen && state.photoProject) AlbumBrowser(state, vm) { vm.closeAlbum() }
+        if (state.albumOpen && state.photoProject) AlbumBrowser(state, vm, onAdd = addPhotos) { vm.closeAlbum() }
     }
 }
 
@@ -1966,6 +1986,13 @@ private fun ProjectRow(state: UiState, vm: HeadsupViewModel, onOpen: () -> Unit,
                         .withNano(0).toString().replace('T', ' ') +
                         if (p.bytes > 0) " · " + formatBytes(p.bytes) else "",
                 )
+            }
+            // An album opens straight into its album view (stars, Auto pick) from here.
+            if (p.kind == ProjectKind.PHOTOS) {
+                Box(
+                    Modifier.size(36.dp).clip(CircleShape).clickable { vm.openAlbumOf(p.name); onOpen() },
+                    contentAlignment = Alignment.Center,
+                ) { Text("⊞", style = MaterialTheme.typography.titleMedium, color = HeadsupColors.Highlight) }
             }
             // Rename and delete behind ⋮, so the name has the row's width.
             Box {

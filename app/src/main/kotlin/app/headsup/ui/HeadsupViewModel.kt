@@ -740,6 +740,17 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
 
     fun openAlbum() = _state.update { it.copy(albumOpen = true) }
 
+    /** Opens the album [name] (from the projects list) straight into its album view. */
+    private var albumAfterOpen = false
+
+    fun openAlbumOf(name: String) {
+        if (name == _state.value.projectName) { openAlbum(); return }
+        albumAfterOpen = true
+        openProject(name)
+        // Read when the project has loaded; a later plain open goes to the editor.
+        viewModelScope.launch { kotlinx.coroutines.delay(30_000); albumAfterOpen = false }
+    }
+
     fun closeAlbum() = _state.update { it.copy(albumOpen = false) }
 
     /**
@@ -760,7 +771,11 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
         val clip = _state.value.clips.getOrNull(index) ?: return@withContext null
         val context = getApplication<Application>()
         runCatching {
-            if (clip.meta.isRaw) return@runCatching app.headsup.media.RawPhotos.decode(context, clip.meta.uri, clip.rawDevelop, maxSide)
+            if (clip.meta.isRaw) {
+                // Not developed differently yet: the camera's own preview in the file, at once.
+                if (clip.rawDevelop == app.headsup.core.raw.RawDevelop()) app.headsup.media.RawPhotos.preview(context, clip.meta.uri, maxSide / 2)?.let { return@runCatching it }
+                return@runCatching app.headsup.media.RawPhotos.decode(context, clip.meta.uri, clip.rawDevelop, maxSide)
+            }
             val side = maxOf(clip.meta.width, clip.meta.height)
             val opts = android.graphics.BitmapFactory.Options().apply { inSampleSize = Integer.highestOneBit((side / maxSide).coerceAtLeast(1)) }
             context.contentResolver.openInputStream(clip.meta.uri)?.use { android.graphics.BitmapFactory.decodeStream(it, null, opts) }
@@ -806,6 +821,9 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
     suspend fun viewerGraded(index: Int, look: TriedLook?, maxSide: Int): Bitmap? {
         val clip = _state.value.clips.getOrNull(index) ?: return null
         val base = viewerPictures.get(clip.id) ?: viewerPicture(index, maxSide)?.also { viewerPictures.put(clip.id, it) } ?: return null
+        // Untouched colours (and nothing tried): the picture as it is, no table to make.
+        val st = _state.value
+        if (look == null && (!clip.colorGrade || (st.lutFor(clip) == null && st.appliedGrade(clip).isNeutralColour && !clip.wideGamut))) return base
         val table = viewerTable(index, look) ?: return base
         return withContext(Dispatchers.Default) {
             val px = IntArray(base.width * base.height)
@@ -1401,6 +1419,9 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                         selectedAudio = null,
                         selectedClip = clips.indices.firstOrNull(),
                         highlights = null,
+                        // Opened from its album icon: straight into the album; else the editor.
+                        albumOpen = kind == ProjectKind.PHOTOS && albumAfterOpen,
+                        albumScope = AlbumScope.ALL,
                         defaultGrade = ColorGrade(),
                         defaultEffects = EffectSettings(),
                         defaultLut = null,

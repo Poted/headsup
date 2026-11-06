@@ -66,7 +66,7 @@ import androidx.compose.foundation.gestures.calculateZoom
  */
 @OptIn(ExperimentalFoundationApi::class, ExperimentalLayoutApi::class)
 @Composable
-fun AlbumBrowser(state: UiState, vm: HeadsupViewModel, onClose: () -> Unit) {
+fun AlbumBrowser(state: UiState, vm: HeadsupViewModel, onAdd: () -> Unit, onClose: () -> Unit) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val thumbs = remember { Filmstrip(context, scope) }
@@ -79,6 +79,12 @@ fun AlbumBrowser(state: UiState, vm: HeadsupViewModel, onClose: () -> Unit) {
     var selecting by rememberSaveable { mutableStateOf(false) }
     var confirmDelete by remember { mutableStateOf(false) }
     val markedCount = photos.count { it.value.picked }
+    // Marking a photo (held, or its tick) is selecting: taps then mark, the bar shows what to do.
+    val inSelection = selecting || markedCount > 0
+    fun clearSelection() {
+        state.clips.forEachIndexed { i, c -> if (c.picked) vm.togglePicked(i) }
+        selecting = false
+    }
     if (confirmDelete) {
         androidx.compose.material3.AlertDialog(
             onDismissRequest = { confirmDelete = false },
@@ -93,7 +99,7 @@ fun AlbumBrowser(state: UiState, vm: HeadsupViewModel, onClose: () -> Unit) {
     // Takes of one shot: how many there are and which of them each is.
     // Takes of one shot, in album order (to number them 1/4, 2/4…).
     val takesOf = photos.filter { it.value.cullGroup != null }.groupBy({ it.value.cullGroup!! }, { it.value.id })
-    androidx.activity.compose.BackHandler(enabled = viewing == null) { if (selecting) selecting = false else onClose() }
+    androidx.activity.compose.BackHandler(enabled = viewing == null) { if (inSelection) clearSelection() else onClose() }
     Box(Modifier.fillMaxSize()) {
     FullScreenLayer(HeadsupColors.Background) {
         Column(Modifier.fillMaxSize()) {
@@ -139,7 +145,7 @@ fun AlbumBrowser(state: UiState, vm: HeadsupViewModel, onClose: () -> Unit) {
                         Box(
                             Modifier.fillMaxWidth().aspectRatio(1f)
                                 .combinedClickable(onLongClick = { vm.togglePicked(i) }) {
-                                    if (selecting) vm.togglePicked(i) else viewing = shown.indexOfFirst { it.index == i }
+                                    if (inSelection) vm.togglePicked(i) else viewing = shown.indexOfFirst { it.index == i }
                                 },
                         ) {
                             thumbs.version.intValue
@@ -167,9 +173,9 @@ fun AlbumBrowser(state: UiState, vm: HeadsupViewModel, onClose: () -> Unit) {
                                     style = MaterialTheme.typography.labelSmall, color = HeadsupColors.Accent,
                                 )
                             }
-                            if (selecting && c.picked) Box(Modifier.matchParentSize().background(HeadsupColors.Highlight.copy(alpha = 0.15f)))
+                            if (inSelection && c.picked) Box(Modifier.matchParentSize().background(HeadsupColors.Highlight.copy(alpha = 0.15f)))
                             // The mark: always tappable while selecting, shown when set.
-                            if (c.picked || selecting) {
+                            if (c.picked || inSelection) {
                                 Box(Modifier.align(Alignment.TopEnd).padding(4.dp)) { MarkButton(c.picked, 26.dp) { vm.togglePicked(i) } }
                             }
                         }
@@ -191,28 +197,29 @@ fun AlbumBrowser(state: UiState, vm: HeadsupViewModel, onClose: () -> Unit) {
                         state.loadingProgress?.let { p -> LinearProgressIndicator(progress = { p }, modifier = Modifier.fillMaxWidth().padding(top = 6.dp)) }
                             ?: LinearProgressIndicator(Modifier.fillMaxWidth().padding(top = 6.dp))
                     }
-                    selecting -> Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text("$markedCount marked", Modifier.weight(1f), style = MaterialTheme.typography.labelLarge, maxLines = 1)
-                        // One toggle: all shown marked, or none.
-                        val allMarked = shown.isNotEmpty() && shown.all { it.value.picked }
-                        SmallAction(if (allMarked) "None" else "All", {
-                            if (allMarked) state.clips.forEachIndexed { i, c -> if (c.picked) vm.togglePicked(i) }
-                            else {
-                                val ids = shown.map { it.value.id }.toSet()
-                                state.clips.forEachIndexed { i, c -> if (c.meta.isPhoto && c.id in ids && !c.picked) vm.togglePicked(i) }
-                            }
+                    inSelection -> Row(verticalAlignment = Alignment.CenterVertically) {
+                        // Leaving: the marks go.
+                        SmallAction("✕", { clearSelection() })
+                        Text(" $markedCount", Modifier.weight(1f), style = MaterialTheme.typography.labelLarge, maxLines = 1)
+                        if (shown.any { !it.value.picked }) SmallAction("All", {
+                            val ids = shown.map { it.value.id }.toSet()
+                            state.clips.forEachIndexed { i, c -> if (c.meta.isPhoto && c.id in ids && !c.picked) vm.togglePicked(i) }
                         })
                         if (markedCount > 0) {
                             RateMarkedButton { stars -> vm.rateMarked(stars) }
                             SmallAction("Delete", { confirmDelete = true })
+                            Spacer(Modifier.width(4.dp))
+                            // The marked photos, and only they, to the editor.
+                            PillAction("✎", "Edit", { vm.setAlbumScope(AlbumScope.MARKED); onClose() }, selected = true)
                         }
-                        Spacer(Modifier.width(4.dp))
-                        PillAction("✓", "Done", { selecting = false }, selected = true)
                     }
                     else -> Row(verticalAlignment = Alignment.CenterVertically) {
                         AutoPickButton(enabled = photos.isNotEmpty(), suggested = photos.any { it.value.suggested }, onPick = vm::autoPick, onClear = vm::clearSuggestions)
                         Spacer(Modifier.width(6.dp))
                         PillAction("✓", "Select", { selecting = true })
+                        Spacer(Modifier.width(6.dp))
+                        // More photos into the album.
+                        SmallAction("+", onAdd)
                         Spacer(Modifier.weight(1f))
                         // The set shown becomes the one the editor works through.
                         PillAction("✎", if (filter == AlbumScope.ALL) "Edit all" else "Edit ${shown.size}", {
@@ -229,6 +236,7 @@ fun AlbumBrowser(state: UiState, vm: HeadsupViewModel, onClose: () -> Unit) {
         if (shown.isNotEmpty()) {
             PhotoViewer(
                 state, vm, shown.map { it.index }, start.coerceIn(0, shown.lastIndex),
+                thumbOf = { i -> state.clips.getOrNull(i)?.let { thumbs.frame(it.meta.uri, 0L, 1L, photo = true) } },
                 onPage = { viewing = it },
                 onEdit = { i -> vm.selectClip(i); viewing = null; onClose() },
             ) { viewing = null }
@@ -302,7 +310,7 @@ fun StarRow(rating: Int, suggested: Boolean, modifier: Modifier = Modifier, big:
  */
 @OptIn(ExperimentalFoundationApi::class, ExperimentalLayoutApi::class)
 @Composable
-fun PhotoViewer(state: UiState, vm: HeadsupViewModel, indices: List<Int>, start: Int, onPage: (Int) -> Unit, onEdit: (Int) -> Unit, onClose: () -> Unit) {
+fun PhotoViewer(state: UiState, vm: HeadsupViewModel, indices: List<Int>, start: Int, thumbOf: (Int) -> androidx.compose.ui.graphics.ImageBitmap?, onPage: (Int) -> Unit, onEdit: (Int) -> Unit, onClose: () -> Unit) {
     val pager = androidx.compose.foundation.pager.rememberPagerState(initialPage = start) { indices.size }
     var zoomed by remember { mutableStateOf(false) }
     // A look tried on the photo on screen (null: its own).
@@ -331,7 +339,7 @@ fun PhotoViewer(state: UiState, vm: HeadsupViewModel, indices: List<Int>, start:
                     alpha = 1f - 0.45f * away
                 },
             ) {
-                ViewerPage(vm, indices[p], state.clips.getOrNull(indices[p])?.let { listOf(it.grade, it.lutName, it.colorGrade) }, if (p == page) tried else null, onZoomed = { if (p == page) zoomed = it }, onDismiss = onClose)
+                ViewerPage(vm, indices[p], state.clips.getOrNull(indices[p])?.let { listOf(it.grade, it.lutName, it.colorGrade) }, if (p == page) tried else null, thumbOf(indices[p]), { pager.isScrollInProgress }, onZoomed = { if (p == page) zoomed = it }, onDismiss = onClose)
             }
         }
     }
@@ -429,11 +437,11 @@ fun FullScreenLayer(background: Color, content: @Composable () -> Unit) {
 
 /** One photo of the viewer, coloured as edited (or with the look tried), zoomable. */
 @Composable
-private fun ViewerPage(vm: HeadsupViewModel, index: Int, edit: Any?, tried: TriedLook?, onZoomed: (Boolean) -> Unit, onDismiss: () -> Unit) {
+private fun ViewerPage(vm: HeadsupViewModel, index: Int, edit: Any?, tried: TriedLook?, placeholder: androidx.compose.ui.graphics.ImageBitmap?, swiping: () -> Boolean, onZoomed: (Boolean) -> Unit, onDismiss: () -> Unit) {
     // Coloured once (in the background) for the photo, its edit and the look tried; until a
     // new one is ready the last one stays.
     val picture by androidx.compose.runtime.produceState<androidx.compose.ui.graphics.ImageBitmap?>(null, index, tried, edit) {
-        vm.viewerGraded(index, tried, 2048)?.let { value = it.asImageBitmap() }
+        vm.viewerGraded(index, tried, 1600)?.let { value = it.asImageBitmap() }
     }
     var zoom by remember { mutableStateOf(1f) }
     var offset by remember { mutableStateOf(androidx.compose.ui.geometry.Offset.Zero) }
@@ -471,7 +479,8 @@ private fun ViewerPage(vm: HeadsupViewModel, index: Int, edit: Any?, tried: Trie
                         // One finger going down (more than sideways) at 1×: pulling the viewer away.
                         if (!many && zoom <= 1f) {
                             val d = (event.changes.firstOrNull()?.position ?: down.position) - down.position
-                            if (!pulling && d.y > viewConfiguration.touchSlop && d.y > 2f * kotlin.math.abs(d.x)) pulling = true
+                            // Clearly down, not a swipe to the next photo going a little down.
+                            if (!pulling && !swiping() && d.y > 3f * viewConfiguration.touchSlop && d.y > 2.5f * kotlin.math.abs(d.x)) pulling = true
                             if (pulling) {
                                 motion.launch { pullAnim.snapTo(d.y.coerceAtLeast(0f)) }
                                 event.changes.forEach { it.consume() }
@@ -524,7 +533,9 @@ private fun ViewerPage(vm: HeadsupViewModel, index: Int, edit: Any?, tried: Trie
     ) {
         val img = picture
         if (img == null) {
-            androidx.compose.material3.CircularProgressIndicator(color = HeadsupColors.TextMuted)
+            // Until the photo is read: its thumbnail, or a spinner.
+            if (placeholder != null) Image(placeholder, contentDescription = null, contentScale = ContentScale.Fit, modifier = Modifier.fillMaxSize())
+            else androidx.compose.material3.CircularProgressIndicator(color = HeadsupColors.TextMuted)
         } else {
             Image(
                 img, contentDescription = null, contentScale = ContentScale.Fit,

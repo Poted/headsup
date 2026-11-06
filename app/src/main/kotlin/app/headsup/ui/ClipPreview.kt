@@ -623,7 +623,8 @@ fun ClipPreview(
     // The brush shown on the picture for a moment after its size is set.
     var ringOn by remember { mutableStateOf(false) }
     LaunchedEffect(brushRingAt) {
-        if (brushRingAt == 0L) return@LaunchedEffect
+        // Only just after the size was set (not when the preview is made again, e.g. leaving full screen).
+        if (brushRingAt == 0L || android.os.SystemClock.uptimeMillis() - brushRingAt > 1000L) return@LaunchedEffect
         ringOn = true
         delay(1400)
         ringOn = false
