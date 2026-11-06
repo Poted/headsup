@@ -2279,7 +2279,8 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun setLutForAllClips(name: String?) {
-        if (name != null) _state.update { it.copy(defaultLut = name) }
+        // New photos (clips) get it too; None takes it off them as well.
+        _state.update { it.copy(defaultLut = name) }
         _state.update { s -> s.copy(clips = s.clips.map { it.copy(lutName = name) }) }
         refreshPreview()
     }

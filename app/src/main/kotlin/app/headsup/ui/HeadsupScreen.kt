@@ -2949,7 +2949,7 @@ private fun ColourPage(
         // Blending in is from the clip before on the timeline: an album's photos have none.
         GradeTarget.CLIP -> (if (index > 0 && !album) Adjustment.entries else Adjustment.entries - Adjustment.BLEND) - maskOnly - Adjustment.CINE
         GradeTarget.GROUP -> Adjustment.entries - Adjustment.BLEND - Adjustment.CINE - Adjustment.MATCH - maskOnly
-        GradeTarget.GLOBAL -> Adjustment.entries - Adjustment.LUT - Adjustment.BLEND - Adjustment.CINE - Adjustment.MATCH - maskOnly
+        GradeTarget.GLOBAL -> Adjustment.entries - Adjustment.BLEND - Adjustment.CINE - Adjustment.MATCH - maskOnly
         GradeTarget.MASK -> Adjustment.entries - Adjustment.LUT - Adjustment.SKIN - Adjustment.VIGNETTE - Adjustment.BLEND -
             Adjustment.CINE - Adjustment.MATCH - Adjustment.LOOK
     }
@@ -3136,6 +3136,14 @@ private fun ColourPage(
         return
     }
     if (adjustment == Adjustment.LUT) {
+        if (target == GradeTarget.GLOBAL) {
+            // On all photos (clips) at once, and on those added later; the one they share is shown.
+            val shared = state.clips.map { it.lutName }.distinct().singleOrNull()
+            val mixed = state.clips.map { it.lutName }.distinct().size > 1
+            LutControls(state, shared, if (mixed) "None (now mixed)" else "None", { vm.setLutForAllClips(it) }, null, vm, onAddLut)
+            Hint(if (state.photoProject) "Set on every photo of the album, and on photos added later." else "Set on every clip, and on clips added later.")
+            return
+        }
         if (target == GradeTarget.GROUP && group != null) {
             LutControls(state, clip.lutName, "None", { vm.setGroupLut(group.id, it) }, null, vm, onAddLut)
         } else {
