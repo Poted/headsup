@@ -45,6 +45,8 @@ class GradeEffect(
     private val fromMasks: List<ColourMask> = emptyList(),
     private val fromMaskTables: List<Array<Array<IntArray>>> = emptyList(),
     private val fromMaskMs: Long = 0L,
+    /** Corrections with keys: the tables at a moment of the file ([GradeSetup.tablesAt]). */
+    private val tablesAt: ((Long) -> Pair<Array<Array<IntArray>>, List<Array<Array<IntArray>>>>)? = null,
 ) : GlEffect {
     override fun toGlShaderProgram(context: Context, useHdr: Boolean): GlShaderProgram = Program(context.applicationContext, useHdr)
 
@@ -104,6 +106,9 @@ class GradeEffect(
             return Size(inputWidth, inputHeight)
         }
 
+        /** Corrections with keys: the moment (file time, in [KEY_STEP_MS] steps) the tables are of, or -1. */
+        private var keyedMs = -1L
+
         /** Masks tracked with AI: the moment the brush atlas was last drawn for (file time), or -1. */
         private var brushMs = -1L
 
@@ -144,6 +149,17 @@ class GradeEffect(
                 val positionMs = (presentationTimeUs - firstUs) / 1000
                 // A mask tracked with AI has its own map for each moment.
                 if (changing && fileStartMs + positionMs != brushMs) uploadBrush(fileStartMs + positionMs)
+                // Corrections with keys: the tables of this moment (each 40 ms; a change of grade
+                // between two frames that close cannot be seen).
+                tablesAt?.let { at ->
+                    val step = (fileStartMs + positionMs) / KEY_STEP_MS * KEY_STEP_MS
+                    if (step != keyedMs) {
+                        keyedMs = step
+                        val (b, ms) = at(step)
+                        upload(textures[0], b)
+                        for (i in 0 until ColourMask.MAX_PER_CLIP) upload(textures[1 + i], ms.getOrNull(i) ?: b)
+                    }
+                }
                 program.use()
                 program.setSamplerTexIdUniform("uTexSampler", inputTexId, 0)
                 program.setSamplerTexIdUniform("uLut", textures[0], 1)
@@ -222,6 +238,9 @@ class GradeEffect(
     }
 
     private companion object {
+        /** Corrections with keys are worked out this often (ms of the file). */
+        const val KEY_STEP_MS = 40L
+
         /** As the preview's: the functions for one set of masks ([m]: their uniforms' prefix). */
         /** As the preview's: [picture] reads the picture at a point of the masks' own coordinates. */
         fun maskCode(sfx: String, m: String, brush: String, slot: String, count: String, picture: String = "source"): String = """

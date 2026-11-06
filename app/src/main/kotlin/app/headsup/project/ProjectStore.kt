@@ -55,6 +55,8 @@ data class SavedClip(
     val rating: Int = 0,
     val suggested: Boolean = false,
     val cullGroup: Int? = null,
+    /** Corrections changing over the shot, file time. */
+    val gradeKeys: List<app.headsup.core.color.GradeKey> = emptyList(),
 )
 
 /** A reversed clip's source: [originalUri] from [startMs] to [endMs], played backwards. */
@@ -359,6 +361,7 @@ internal object Json {
         .put("rating", c.rating)
         .put("suggested", c.suggested)
         .apply { c.cullGroup?.let { put("cullGroup", it) } }
+        .apply { if (c.gradeKeys.isNotEmpty()) put("gradeKeys", JSONArray(c.gradeKeys.map { k -> JSONObject().put("t", k.timeMs).put("grade", grade(k.grade)) })) }
         .put("raw", JSONObject().put("exposure", c.rawDevelop.exposure.toDouble()).put("highlights", c.rawDevelop.highlights.toDouble())
             .put("shadows", c.rawDevelop.shadows.toDouble()).put("temperature", c.rawDevelop.temperature.toDouble()).put("tint", c.rawDevelop.tint.toDouble())
             .put("sharpen", c.rawDevelop.sharpen.toDouble()).put("colourNoise", c.rawDevelop.colourNoise.toDouble()))
@@ -399,6 +402,7 @@ internal object Json {
         rating = o.optInt("rating", 0).coerceIn(0, 5),
         suggested = o.optBoolean("suggested", false),
         cullGroup = if (o.has("cullGroup")) o.optInt("cullGroup") else null,
+        gradeKeys = o.optJSONArray("gradeKeys").objects().map { k -> app.headsup.core.color.GradeKey(k.optLong("t"), grade(k.optJSONObject("grade"))) }.sortedBy { it.timeMs },
         rawDevelop = o.optJSONObject("raw")?.let { r ->
             RawDevelop(
                 r.optDouble("exposure", 0.0).toFloat(), r.optDouble("highlights", 0.0).toFloat(), r.optDouble("shadows", 0.0).toFloat(),

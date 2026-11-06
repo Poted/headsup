@@ -127,6 +127,11 @@ data class ClipState(
     val manualStart: LocalDateTime? = null,
     /** Colour corrections of this clip (applied before the LUT). */
     val grade: ColorGrade = ColorGrade(),
+    /**
+     * Corrections changing over the shot ([app.headsup.core.color.GradeKeys]), file time; empty:
+     * [grade] all through. With keys, [grade] is only what was last edited.
+     */
+    val gradeKeys: List<app.headsup.core.color.GradeKey> = emptyList(),
     /** Picture effects of this clip. */
     val effects: EffectSettings = EffectSettings(),
     /** Windows with their own corrections (graduated lines, ovals), at most [ColourMask.MAX_PER_CLIP]. */
@@ -205,6 +210,9 @@ data class ClipState(
 }
 
 /** What "Copy" takes from a clip and "Paste" gives to another: corrections, effects and LUT. */
+/** The clip's own corrections at [fileMs]: its keys there, or its one grade. */
+fun ClipState.gradeAt(fileMs: Long): ColorGrade = app.headsup.core.color.GradeKeys.at(gradeKeys, fileMs) ?: grade
+
 /** A set of the album's photos by their stars or marks: shown in the album, edited in the editor. */
 enum class AlbumScope(val label: String) {
     ALL("All"), STARRED("★ 1+"), FOUR("★ 4+"), FIVE("★ 5"), UNRATED("No stars"), MARKED("Marked");
@@ -425,6 +433,8 @@ data class UiState(
     val albumScope: AlbumScope = AlbumScope.ALL,
     /** The album is open over the editor (kept here, so turning the phone keeps it open). */
     val albumOpen: Boolean = false,
+    /** Where in its file the selected clip is shown (for corrections with keys). */
+    val playheadKeyMs: Long = 0L,
     val canRedo: Boolean = false,
     /** What the last undo or redo changed, shown for a moment over the picture, and when. */
     val notice: String? = null,
@@ -494,7 +504,7 @@ data class UiState(
             GradeTarget.GLOBAL -> globalGrade
             GradeTarget.GROUP -> selected?.let(::groupOf)?.grade ?: ColorGrade()
             GradeTarget.MASK -> selected?.masks?.getOrNull(selectedMask)?.grade ?: ColorGrade()
-            GradeTarget.CLIP -> selected?.grade ?: defaultGrade
+            GradeTarget.CLIP -> selected?.let { it.gradeAt(playheadKeyMs) } ?: defaultGrade
         }
 
     fun groupOf(clip: ClipState): ClipGroup? = clip.groupId?.let { id -> groups.firstOrNull { it.id == id } }
@@ -517,7 +527,7 @@ data class UiState(
 
     /** What is applied to [clip] outside its mask: its own corrections, its group's and the global node. */
     fun appliedGrade(clip: ClipState): ColorGrade =
-        shown(clip.grade, GradeTarget.CLIP, clip) +
+        shown(if (clip.gradeKeys.isEmpty()) clip.grade else clip.gradeAt(if (clip.id == selected?.id) playheadKeyMs else clip.trimStartMs), GradeTarget.CLIP, clip) +
             shown(groupOf(clip)?.grade ?: ColorGrade(), GradeTarget.GROUP, clip) +
             shown(globalGrade, GradeTarget.GLOBAL, clip)
 
@@ -1318,6 +1328,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                 flags = it.flags,
                 reversed = it.reversed?.let { r -> SavedReverse(r.original.uri, r.startMs, r.endMs) },
                 rating = it.rating, suggested = it.suggested, cullGroup = it.cullGroup,
+                gradeKeys = it.gradeKeys,
             )
         },
         groups = groups.map { SavedGroup(it.id, it.name, it.grade, it.lutName) },
@@ -1460,6 +1471,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
             rating = c.rating,
             suggested = c.suggested,
             cullGroup = c.cullGroup,
+            gradeKeys = c.gradeKeys,
             groupId = c.groupId,
         )
     }
@@ -3653,7 +3665,43 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
     /** Called with the preview's position in the clip (from its cut). */
     fun notePlayhead(clipMs: Long) {
         playheadFileMs = (_state.value.selected?.trimStartMs ?: 0L) + clipMs
+        // Corrections with keys follow the playhead (each 40 ms is plenty for the eye).
+        val s = _state.value
+        if (s.selected?.gradeKeys?.isNotEmpty() == true && kotlin.math.abs(s.playheadKeyMs - playheadFileMs) >= 40L) {
+            _state.update { it.copy(playheadKeyMs = playheadFileMs) }
+            refreshPreview()
+        }
     }
+
+    /** A key of the selected clip's corrections at the playhead, with what they are there now. */
+    fun addGradeKey() {
+        val s = _state.value
+        val index = s.selectedClip ?: return
+        val clip = s.selected?.takeIf { !it.meta.isPhoto } ?: return
+        val t = playheadFileMs.coerceIn(clip.trimStartMs, clip.trimEndMs)
+        updateClip(index) { it.copy(gradeKeys = app.headsup.core.color.GradeKeys.set(it.gradeKeys, t, it.gradeAt(t))) }
+        _state.update { it.copy(playheadKeyMs = t) }
+    }
+
+    /** Takes off the key at the playhead (the corrections there then come from the keys around). */
+    fun removeGradeKey() {
+        val s = _state.value
+        val index = s.selectedClip ?: return
+        updateClip(index) { c ->
+            val left = app.headsup.core.color.GradeKeys.remove(c.gradeKeys, playheadFileMs)
+            // The last key gone: what was there stays as the clip's one grade.
+            if (left.isEmpty()) c.copy(grade = c.gradeAt(playheadFileMs), gradeKeys = emptyList()) else c.copy(gradeKeys = left)
+        }
+    }
+
+    /** No keys: the corrections at the playhead stay, all through the clip. */
+    fun clearGradeKeys() {
+        val index = _state.value.selectedClip ?: return
+        updateClip(index) { c -> c.copy(grade = c.gradeAt(playheadFileMs), gradeKeys = emptyList()) }
+    }
+
+    /** The selected clip's key moments (file time) and whether the playhead is on one. */
+    fun gradeKeyAtPlayhead(): Boolean = _state.value.selected?.let { app.headsup.core.color.GradeKeys.keyAt(it.gradeKeys, playheadFileMs) } != null
 
     /** The playhead in the selected clip, from its cut (0 when it is elsewhere): where a new preview starts. */
     fun playheadInClip(): Long {
@@ -3973,7 +4021,17 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
         }
         _state.update { s ->
             val grade = transform(s.grade)
-            s.copy(defaultGrade = grade, clips = s.clips.mapIndexed { i, c -> if (i == s.selectedClip) c.copy(grade = grade) else c })
+            s.copy(
+                defaultGrade = grade,
+                clips = s.clips.mapIndexed { i, c ->
+                    when {
+                        i != s.selectedClip -> c
+                        // With keys, the edit is the key at the playhead (one is made there if none).
+                        c.gradeKeys.isNotEmpty() -> c.copy(grade = grade, gradeKeys = app.headsup.core.color.GradeKeys.set(c.gradeKeys, playheadFileMs.coerceIn(c.trimStartMs, c.trimEndMs), grade))
+                        else -> c.copy(grade = grade)
+                    }
+                },
+            )
         }
         gradeStore.saveGrade(_state.value.defaultGrade)
         refreshPreview()
@@ -4062,6 +4120,22 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
     private suspend fun bakeAlways(lutName: String?, grade: ColorGrade, wide: Boolean = false): Array<Array<IntArray>> {
         val lut = loadLut(lutName)
         return withContext(Dispatchers.Default) { LutBaker.bake(lut, grade, wideGamut = wide) }
+    }
+
+    /**
+     * For a clip with keyed corrections, the tables at a moment of its file (its own and its
+     * masks'), as the export needs them; null without keys. The LUT is read once, here.
+     */
+    private suspend fun keyedTables(s: UiState, clip: ClipState, lutName: String?, wide: Boolean): ((Long) -> Pair<Array<Array<IntArray>>, List<Array<Array<IntArray>>>>)? {
+        if (clip.gradeKeys.isEmpty()) return null
+        val lut = loadLut(lutName)
+        // Taken as they are now: later edits do not change an export under way.
+        val keyed = clip
+        val state = s
+        return { t ->
+            val at = keyed.copy(grade = keyed.gradeAt(t), gradeKeys = emptyList())
+            LutBaker.bake(lut, state.appliedGrade(at), wideGamut = wide) to state.maskedGrades(at).map { LutBaker.bake(lut, it, wideGamut = wide) }
+        }
     }
 
     private suspend fun loadLut(lutName: String?): CubeLut? = lutName?.let { name ->
@@ -4284,7 +4358,11 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                     style = s.style,
                     effects = clip.effects,
                     grade = s.framing(clip).warp.let { warp ->
-                        if (graded) GradeSetup(cube, applied.vignette, masks, maskCubes, fromCube, clip.transitionMs, applied.presence, warp, fromMasks = fromMasks, fromMaskCubes = fromMaskCubes, fromMaskMs = fromMaskMs)
+                        if (graded) GradeSetup(
+                            cube, applied.vignette, masks, maskCubes, fromCube, clip.transitionMs, applied.presence, warp,
+                            fromMasks = fromMasks, fromMaskCubes = fromMaskCubes, fromMaskMs = fromMaskMs,
+                            tablesAt = keyedTables(s, clip, lutName, wide),
+                        )
                         else if (cube != null || warp != null) GradeSetup(cube, 0f, warp = warp) else null
                     },
                     reframe = s.framing(clip),

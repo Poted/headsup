@@ -40,9 +40,14 @@ class GradeSetup(
     val fromMasks: List<ColourMask> = emptyList(),
     val fromMaskCubes: List<Array<Array<IntArray>>> = emptyList(),
     val fromMaskMs: Long = 0L,
+    /**
+     * Corrections with keys: the clip's table and its masks' tables at a moment of its file,
+     * made as they are needed (frames close together share them). Null: [cube] all through.
+     */
+    val tablesAt: ((fileMs: Long) -> Pair<Array<Array<IntArray>>, List<Array<Array<IntArray>>>>)? = null,
 ) {
     /** True when a single colour table is not enough. */
-    val needsGradeEffect: Boolean get() = masks.isNotEmpty() || (fromCube != null && transitionMs > 0) || !presence.isNeutral || warp != null
+    val needsGradeEffect: Boolean get() = masks.isNotEmpty() || (fromCube != null && transitionMs > 0) || !presence.isNeutral || warp != null || tablesAt != null
 }
 
 data class ExportRequest(

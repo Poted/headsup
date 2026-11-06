@@ -2718,7 +2718,10 @@ private fun AdjustHeader(
             }
             false
         }
-        else -> Layers(state, clip, vm, pictureSource, maskTools, onMaskTools)
+        else -> {
+            if (!clip.meta.isPhoto && state.target == GradeTarget.CLIP) GradeKeyRow(state, clip, vm)
+            Layers(state, clip, vm, pictureSource, maskTools, onMaskTools)
+        }
     }
 }
 
@@ -5373,6 +5376,30 @@ private fun PhotoStrip(state: UiState, vm: HeadsupViewModel, onAdd: () -> Unit, 
     if (arrange && i != null && i in state.clips.indices) {
         StarRow(state.clips[i].rating, state.clips[i].suggested) { stars -> vm.setRating(i, stars) }
     }
+}
+
+/**
+ * Keys of the clip's corrections over the shot: a key at the playhead (◆) holds the corrections
+ * there; between keys they change smoothly. With keys, an edit sets the key at the playhead.
+ */
+@Composable
+private fun GradeKeyRow(state: UiState, clip: ClipState, vm: HeadsupViewModel) {
+    val keys = clip.gradeKeys
+    val onKey = keys.any { kotlin.math.abs(it.timeMs - state.playheadKeyMs) <= app.headsup.core.color.GradeKeys.SAME_MS }
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        PillAction(if (onKey) "◆" else "◇", if (onKey) "Key here" else "Add key", { if (onKey) vm.removeGradeKey() else vm.addGradeKey() }, selected = onKey)
+        Spacer(Modifier.width(8.dp))
+        Text(
+            when {
+                keys.isEmpty() -> "Same all through"
+                keys.size == 1 -> "1 key"
+                else -> "${keys.size} keys: changes between them"
+            },
+            Modifier.weight(1f), style = MaterialTheme.typography.labelMedium, color = HeadsupColors.TextMuted, maxLines = 1,
+        )
+        if (keys.isNotEmpty()) SmallAction("Clear", { vm.clearGradeKeys() })
+    }
+    if (keys.isNotEmpty()) Hint(if (onKey) "Tap ◆ to take this key off. Edits now set this key." else "Edits now set a new key here; move the playhead to another moment for the next.")
 }
 
 /** An album photo's crop: its shape (or its own), zoom and straightening; drag the picture to place it. */

@@ -268,6 +268,7 @@ class ExportManager(private val context: Context) {
                 fromMasks = grade?.fromMasks.orEmpty(),
                 fromMaskTables = grade?.fromMaskCubes.orEmpty(),
                 fromMaskMs = grade?.fromMaskMs ?: 0L,
+                tablesAt = grade?.tablesAt,
             )
         } else {
             grade?.cube?.let { effects += SingleColorLut.createFromCube(it) }
