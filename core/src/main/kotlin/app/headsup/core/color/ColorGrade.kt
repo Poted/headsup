@@ -261,6 +261,50 @@ object LutBaker {
     }
 
     /**
+     * [argb] (pixels, alpha kept) coloured by [table] (as [bake] makes it), trilinear between its
+     * points: a whole picture at once, for showing a look without a shader.
+     */
+    fun applyTable(argb: IntArray, table: Array<Array<IntArray>>): IntArray {
+        val n = table.size
+        val flat = FloatArray(n * n * n * 3)
+        for (r in 0 until n) for (g in 0 until n) for (b in 0 until n) {
+            val c = table[r][g][b]
+            val o = ((r * n + g) * n + b) * 3
+            flat[o] = ((c shr 16) and 0xFF).toFloat()
+            flat[o + 1] = ((c shr 8) and 0xFF).toFloat()
+            flat[o + 2] = (c and 0xFF).toFloat()
+        }
+        val k = (n - 1) / 255f
+        val out = IntArray(argb.size)
+        for (i in argb.indices) {
+            val p = argb[i]
+            val fr = ((p shr 16) and 0xFF) * k
+            val fg = ((p shr 8) and 0xFF) * k
+            val fb = (p and 0xFF) * k
+            val r0 = fr.toInt().coerceAtMost(n - 2)
+            val g0 = fg.toInt().coerceAtMost(n - 2)
+            val b0 = fb.toInt().coerceAtMost(n - 2)
+            val dr = fr - r0
+            val dg = fg - g0
+            val db = fb - b0
+            var v = 0
+            for (ch in 0..2) {
+                fun at(r: Int, g: Int, b: Int) = flat[((r * n + g) * n + b) * 3 + ch]
+                val c00 = at(r0, g0, b0) + (at(r0 + 1, g0, b0) - at(r0, g0, b0)) * dr
+                val c10 = at(r0, g0 + 1, b0) + (at(r0 + 1, g0 + 1, b0) - at(r0, g0 + 1, b0)) * dr
+                val c01 = at(r0, g0, b0 + 1) + (at(r0 + 1, g0, b0 + 1) - at(r0, g0, b0 + 1)) * dr
+                val c11 = at(r0, g0 + 1, b0 + 1) + (at(r0 + 1, g0 + 1, b0 + 1) - at(r0, g0 + 1, b0 + 1)) * dr
+                val c0 = c00 + (c10 - c00) * dg
+                val c1 = c01 + (c11 - c01) * dg
+                val x = (c0 + (c1 - c0) * db + 0.5f).toInt().coerceIn(0, 255)
+                v = (v shl 8) or x
+            }
+            out[i] = (p and 0xFF000000.toInt()) or v
+        }
+        return out
+    }
+
+    /**
      * Transforms one colour in place (0..1 per channel). [wideGamut]: the footage is BT.2020 (e.g.
      * Samsung Log); without a LUT it is first shown in BT.709 as players do, while a LUT gets the
      * camera's own values (log LUTs do their own gamut conversion).

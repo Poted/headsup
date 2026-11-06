@@ -742,6 +742,25 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
         }.getOrNull()
     }
 
+    /** The album viewer's photos as decoded, by clip: the next and last stay ready. */
+    private val viewerPictures = android.util.LruCache<Long, Bitmap>(3)
+
+    /**
+     * Photo [index] for the album's viewer, coloured with its edit (outside masks) or with [look]
+     * tried on it, worked out once off the main thread: the viewer then shows a plain picture,
+     * so swiping and zooming stay smooth.
+     */
+    suspend fun viewerGraded(index: Int, look: TriedLook?, maxSide: Int): Bitmap? {
+        val clip = _state.value.clips.getOrNull(index) ?: return null
+        val base = viewerPictures.get(clip.id) ?: viewerPicture(index, maxSide)?.also { viewerPictures.put(clip.id, it) } ?: return null
+        val table = viewerTable(index, look) ?: return base
+        return withContext(Dispatchers.Default) {
+            val px = IntArray(base.width * base.height)
+            base.getPixels(px, 0, base.width, 0, 0, base.width, base.height)
+            Bitmap.createBitmap(app.headsup.core.color.LutBaker.applyTable(px, table), base.width, base.height, Bitmap.Config.ARGB_8888)
+        }
+    }
+
     /** What [look] does to photo [index] (its colours outside masks), as a table; null [look] its own look. */
     private fun triedGrade(clip: ClipState, look: TriedLook?): Pair<String?, ColorGrade> {
         val s = _state.value

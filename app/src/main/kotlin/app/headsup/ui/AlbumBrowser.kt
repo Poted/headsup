@@ -289,7 +289,7 @@ fun PhotoViewer(state: UiState, vm: HeadsupViewModel, indices: List<Int>, start:
             beyondViewportPageCount = 1,
             key = { indices[it] },
         ) { p ->
-            ViewerPage(vm, indices[p], state.clips.getOrNull(indices[p])?.let { listOf(it.grade, it.lutName, it.colorGrade) }, if (p == page) tried else null, onZoomed = { if (p == page) zoomed = it })
+            ViewerPage(vm, indices[p], state.clips.getOrNull(indices[p])?.let { listOf(it.grade, it.lutName, it.colorGrade) }, if (p == page) tried else null, onZoomed = { if (p == page) zoomed = it }, onDismiss = onClose)
         }
     }
     val header: @Composable () -> Unit = {
@@ -376,18 +376,15 @@ fun FullScreenLayer(background: Color, content: @Composable () -> Unit) {
 
 /** One photo of the viewer, coloured as edited (or with the look tried), zoomable. */
 @Composable
-private fun ViewerPage(vm: HeadsupViewModel, index: Int, edit: Any?, tried: TriedLook?, onZoomed: (Boolean) -> Unit) {
-    val picture by androidx.compose.runtime.produceState<androidx.compose.ui.graphics.ImageBitmap?>(null, index) {
-        value = vm.viewerPicture(index, 2048)?.asImageBitmap()
-    }
-    val shader = remember { if (android.os.Build.VERSION.SDK_INT >= 33) app.headsup.color.GradePreviewShader() else null }
-    var tableVersion by remember { mutableStateOf(0) }
-    androidx.compose.runtime.LaunchedEffect(index, tried, edit) {
-        val table = vm.viewerTable(index, tried)
-        shader?.setTables(app.headsup.color.GradeTables(table))
-        tableVersion++
+private fun ViewerPage(vm: HeadsupViewModel, index: Int, edit: Any?, tried: TriedLook?, onZoomed: (Boolean) -> Unit, onDismiss: () -> Unit) {
+    // Coloured once (in the background) for the photo, its edit and the look tried; until a
+    // new one is ready the last one stays.
+    val picture by androidx.compose.runtime.produceState<androidx.compose.ui.graphics.ImageBitmap?>(null, index, tried, edit) {
+        vm.viewerGraded(index, tried, 2048)?.let { value = it.asImageBitmap() }
     }
     var zoom by remember { mutableStateOf(1f) }
+    // Pulled down (not zoomed): the photo follows the finger; far enough, the viewer closes.
+    var pull by remember { mutableStateOf(0f) }
     var offset by remember { mutableStateOf(androidx.compose.ui.geometry.Offset.Zero) }
     Box(
         Modifier.fillMaxSize().clipToBounds()
@@ -399,11 +396,22 @@ private fun ViewerPage(vm: HeadsupViewModel, index: Int, edit: Any?, tried: Trie
                     val down = awaitFirstDown(requireUnconsumed = false)
                     var moved = false
                     var many = false
+                    var pulling = false
                     do {
                         val event = awaitPointerEvent()
                         val fingers = event.changes.count { it.pressed }
                         if (fingers >= 2) many = true
                         event.changes.firstOrNull()?.let { c -> if ((c.position - down.position).getDistance() > viewConfiguration.touchSlop) moved = true }
+                        // One finger going down (more than sideways) at 1×: pulling the viewer away.
+                        if (!many && zoom <= 1f) {
+                            val d = (event.changes.firstOrNull()?.position ?: down.position) - down.position
+                            if (!pulling && d.y > viewConfiguration.touchSlop && d.y > 2f * kotlin.math.abs(d.x)) pulling = true
+                            if (pulling) {
+                                pull = d.y.coerceAtLeast(0f)
+                                event.changes.forEach { it.consume() }
+                                continue
+                            }
+                        }
                         // Two fingers zoom; one moves the zoomed photo (at 1× it swipes to the next).
                         if (fingers >= 2 || zoom > 1f) {
                             val z = event.calculateZoom()
@@ -414,6 +422,10 @@ private fun ViewerPage(vm: HeadsupViewModel, index: Int, edit: Any?, tried: Trie
                             event.changes.forEach { it.consume() }
                         }
                     } while (event.changes.any { it.pressed })
+                    if (pulling) {
+                        if (pull > size.height * 0.18f) onDismiss() else pull = 0f
+                        return@awaitEachGesture
+                    }
                     // A tap; a second one soon after, near the first, zooms in there (or back out).
                     if (!moved && !many) {
                         val now = System.currentTimeMillis()
@@ -444,12 +456,12 @@ private fun ViewerPage(vm: HeadsupViewModel, index: Int, edit: Any?, tried: Trie
             Image(
                 img, contentDescription = null, contentScale = ContentScale.Fit,
                 modifier = Modifier.fillMaxSize().graphicsLayer {
-                    tableVersion
                     scaleX = zoom
                     scaleY = zoom
                     translationX = offset.x
-                    translationY = offset.y
-                    renderEffect = shader?.effect(app.headsup.render.EffectSettings(), false, 0f, size.width, size.height, emptyList(), 0f)
+                    translationY = offset.y + pull
+                    // Pulled away, it fades a little as it goes.
+                    alpha = 1f - (pull / size.height.coerceAtLeast(1f)).coerceIn(0f, 1f) * 0.6f
                 },
             )
         }

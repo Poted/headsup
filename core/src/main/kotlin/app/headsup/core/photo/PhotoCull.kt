@@ -37,6 +37,9 @@ object PhotoCull {
 
     private const val PRINT = 16
 
+    /** Edges this wide (pixels, at the size measured) are blurred whatever the rest of the album is like. */
+    const val BLURRED_EDGE = 8f
+
     /** A photo less sharp than this share of the album's sharp ones is soft. */
     const val SOFT = 0.7f
 
@@ -58,7 +61,8 @@ object PhotoCull {
             if (v >= 0.985f) bright++
             if (v <= 0.015f) dark++
         }
-        val exposure = (1f - 2.5f * bright / n - 1.5f * dark / n).coerceIn(0f, 1f)
+        // Some burnt-out sky or black clothes are fine; much of the picture lost is not.
+        val exposure = (1f - 4f * (bright.toFloat() / n - 0.05f).coerceAtLeast(0f) - 2f * (dark.toFloat() / n - 0.25f).coerceAtLeast(0f)).coerceIn(0f, 1f)
         // The coarse prints.
         val print = FloatArray(PRINT * PRINT)
         val pc = IntArray(PRINT * PRINT)
@@ -132,51 +136,74 @@ object PhotoCull {
     const val CROOKED_DEGREES = 1.5f
 
     /**
-     * How sharp the sharpest parts are, whatever their contrast: in each tile of a 6×6 grid the
-     * finest detail (second differences at full size) against the coarser detail of the same
-     * tile (at half size), in four directions, the weakest counting: shake blurs one direction
-     * and leaves the others, so it shows there. Focus or shake takes the fine detail first, so the
-     * ratio falls; a dim, soft-lit landscape in focus scores as well as a contrasty one. Tiles with
-     * hardly any structure (open sky, where only noise is fine) do not count; of the rest, the
-     * sharpest third does.
+     * How sharp the photo is, as 1 / the width (pixels) of its sharpest edges: across each clear
+     * edge (a rise of at least [EDGE_RISE]) the run over which the brightness keeps climbing is
+     * measured, along rows and along columns apart. The sharpest quarter of the edges count (a
+     * subject in focus before a soft background is sharp), and the worse of the two directions
+     * (shake smears edges one way only). It does not care about contrast (a dim landscape's
+     * edges are as narrow as a bright one's) nor about fine noise, which never makes a clear edge.
      */
-    private fun sharpnessOf(y: FloatArray, width: Int, height: Int): Float {
-        val hw = width / 2
-        val hh = height / 2
-        val half = FloatArray(hw * hh) { i ->
-            val x = (i % hw) * 2
-            val yy = (i / hw) * 2
-            (y[yy * width + x] + y[yy * width + x + 1] + y[(yy + 1) * width + x] + y[(yy + 1) * width + x + 1]) / 4f
+    fun sharpnessOf(y: FloatArray, width: Int, height: Int): Float {
+        val across = edgeWidths(y, width, height, 1, width, height, width)
+        val down = edgeWidths(y, width, height, width, height, width, 1)
+        val a = quarter(across)
+        val d = quarter(down)
+        val worst = when {
+            a == null && d == null -> return 0f
+            a == null -> d!!
+            d == null -> a
+            else -> maxOf(a, d)
         }
-        val grid = 6
-        val fine = energy(y, width, height, grid)
-        val coarse = energy(half, hw, hh, grid)
-        val tiles = (0 until grid * grid).filter { t -> coarse[t].average() > 0.012 }.ifEmpty { (0 until grid * grid).toList() }
-        val ratios = tiles.map { t -> (0 until 4).minOf { d -> fine[t][d] / (coarse[t][d] + 0.004f) } }.sortedDescending()
-        return ratios.take((ratios.size / 3).coerceAtLeast(1)).average().toFloat()
+        return 1f / worst
     }
 
-    /** Root mean square of the second differences across, down and along both diagonals, in each tile of a [grid]×[grid] split. */
-    private fun energy(y: FloatArray, width: Int, height: Int, grid: Int): Array<FloatArray> {
-        val sums = Array(grid * grid) { DoubleArray(4) }
-        val counts = IntArray(grid * grid)
-        for (yy in 1 until height - 1) for (xx in 1 until width - 1) {
-            val i = yy * width + xx
-            val c = 2f * y[i]
-            val h = c - y[i - 1] - y[i + 1]
-            val v = c - y[i - width] - y[i + width]
-            val d1 = c - y[i - width - 1] - y[i + width + 1]
-            val d2 = c - y[i - width + 1] - y[i + width - 1]
-            val t = (yy * grid / height) * grid + (xx * grid / width)
-            val s = sums[t]
-            s[0] += (h * h).toDouble()
-            s[1] += (v * v).toDouble()
-            // Diagonal steps are longer (√2): their differences scaled to match.
-            s[2] += (d1 * d1 / 2f).toDouble()
-            s[3] += (d2 * d2 / 2f).toDouble()
-            counts[t]++
+    /** A clear edge rises at least this much (of full brightness) from its foot to its top. */
+    const val EDGE_RISE = 0.06f
+
+    /** The width of the sharpest quarter's edges (the mean from 15 % to 35 % of [widths], sorted); null when there are too few to tell. */
+    private fun quarter(widths: MutableList<Int>): Float? {
+        if (widths.size < 40) return null
+        widths.sort()
+        val from = widths.size * 15 / 100
+        val to = (widths.size * 35 / 100).coerceAtLeast(from + 1)
+        return widths.subList(from, to).average().toFloat()
+    }
+
+    /**
+     * Edge widths along lines of the picture: [step] apart along a line of [length] pixels,
+     * [lines] lines [lineStep] apart. Each local peak of the slope is walked out both ways while
+     * the brightness keeps going the same way.
+     */
+    private fun edgeWidths(y: FloatArray, width: Int, height: Int, step: Int, length: Int, lines: Int, lineStep: Int): MutableList<Int> {
+        val out = ArrayList<Int>()
+        // Every other line is plenty.
+        for (line in 0 until lines step 2) {
+            val base = line * lineStep
+            fun v(k: Int) = y[base + k * step]
+            for (k in 2 until length - 2) {
+                val g = v(k + 1) - v(k - 1)
+                if (kotlin.math.abs(g) < 0.02f) continue
+                val gl = v(k) - v(k - 2)
+                val gr = v(k + 2) - v(k)
+                if (kotlin.math.abs(g) < kotlin.math.abs(gl) || kotlin.math.abs(g) <= kotlin.math.abs(gr)) continue
+                val up = g > 0f
+                var l = k
+                while (l > 0) {
+                    val d = v(l) - v(l - 1)
+                    if ((up && d <= 0.002f) || (!up && d >= -0.002f)) break
+                    l--
+                }
+                var r = k
+                while (r < length - 1) {
+                    val d = v(r + 1) - v(r)
+                    if ((up && d <= 0.002f) || (!up && d >= -0.002f)) break
+                    r++
+                }
+                if (kotlin.math.abs(v(r) - v(l)) < EDGE_RISE) continue
+                out += (r - l).coerceAtLeast(1)
+            }
         }
-        return Array(grid * grid) { t -> FloatArray(4) { d -> sqrt(sums[t][d] / counts[t].coerceAtLeast(1)).toFloat() } }
+        return out
     }
 
     /** How alike two photos look, 0..1: their brightness layout and their colours. */
@@ -210,7 +237,7 @@ object PhotoCull {
         fun good(i: Int): Boolean {
             val p = photos[i]
             val level = p.tilt == null || abs(p.tilt) < CROOKED_DEGREES || abs(p.tilt) > 20f
-            return eligible(i) && level && p.exposure >= 0.55f && p.sharpness >= SOFT * reference
+            return eligible(i) && level && p.exposure >= 0.55f && p.sharpness >= SOFT * reference && p.sharpness >= 1f / BLURRED_EDGE
         }
         val suggested = HashSet<Int>()
         for (members in (0 until n).groupBy { group[it] }.values) {
