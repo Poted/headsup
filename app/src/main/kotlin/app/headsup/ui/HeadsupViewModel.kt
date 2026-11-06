@@ -645,6 +645,12 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
         it.copy(rating = if (it.rating == r && !it.suggested) 0 else r, suggested = false)
     }
 
+    /** Gives every marked photo [stars] stars by hand (0 takes them off); the marks stay. */
+    fun rateMarked(stars: Int) = _state.update { s ->
+        val r = stars.coerceIn(0, 5)
+        s.copy(clips = s.clips.map { if (it.picked && it.meta.isPhoto) it.copy(rating = r, suggested = false) else it })
+    }
+
     /** Marks the album's photos with at least [stars] stars (for export, matching, moving together). */
     fun markRated(stars: Int) = _state.update { s ->
         s.copy(clips = s.clips.map { if (it.meta.isPhoto) it.copy(picked = it.rating >= stars && stars > 0) else it })

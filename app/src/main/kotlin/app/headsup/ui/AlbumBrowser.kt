@@ -180,13 +180,18 @@ fun AlbumBrowser(state: UiState, vm: HeadsupViewModel, onClose: () -> Unit) {
                             ?: LinearProgressIndicator(Modifier.fillMaxWidth().padding(top = 6.dp))
                     }
                     selecting -> Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text("$markedCount marked", Modifier.weight(1f), style = MaterialTheme.typography.labelLarge)
-                        if (shown.any { !it.value.picked }) SmallAction("All", {
-                            val ids = shown.map { it.value.id }.toSet()
-                            state.clips.forEachIndexed { i, c -> if (c.meta.isPhoto && c.id in ids && !c.picked) vm.togglePicked(i) }
+                        Text("$markedCount marked", Modifier.weight(1f), style = MaterialTheme.typography.labelLarge, maxLines = 1)
+                        // One toggle: all shown marked, or none.
+                        val allMarked = shown.isNotEmpty() && shown.all { it.value.picked }
+                        SmallAction(if (allMarked) "None" else "All", {
+                            if (allMarked) state.clips.forEachIndexed { i, c -> if (c.picked) vm.togglePicked(i) }
+                            else {
+                                val ids = shown.map { it.value.id }.toSet()
+                                state.clips.forEachIndexed { i, c -> if (c.meta.isPhoto && c.id in ids && !c.picked) vm.togglePicked(i) }
+                            }
                         })
                         if (markedCount > 0) {
-                            SmallAction("None", { state.clips.forEachIndexed { i, c -> if (c.picked) vm.togglePicked(i) } })
+                            RateMarkedButton { stars -> vm.rateMarked(stars) }
                             SmallAction("Delete", { confirmDelete = true })
                         }
                         Spacer(Modifier.width(4.dp))
@@ -217,6 +222,21 @@ fun AlbumBrowser(state: UiState, vm: HeadsupViewModel, onClose: () -> Unit) {
             ) { viewing = null }
         } else viewing = null
     }
+    }
+}
+
+/** Stars for all the marked photos at once (or none). */
+@Composable
+private fun RateMarkedButton(onRate: (Int) -> Unit) {
+    var menu by remember { mutableStateOf(false) }
+    Box {
+        SmallAction("★", { menu = true })
+        androidx.compose.material3.DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+            for (k in 5 downTo 1) {
+                androidx.compose.material3.DropdownMenuItem(text = { Text("★".repeat(k) + "☆".repeat(5 - k)) }, onClick = { menu = false; onRate(k) })
+            }
+            androidx.compose.material3.DropdownMenuItem(text = { Text("No stars") }, onClick = { menu = false; onRate(0) })
+        }
     }
 }
 
