@@ -98,6 +98,84 @@ object Cleaner {
         return patches
     }
 
+    /**
+     * Heals (or, [clone], copies over) what [hole] covers in [photo], each painted area from the
+     * place nearby whose surroundings match it best ([app.headsup.core.retouch.Heal]); [variant]
+     * takes the next best place instead (0 the best). Only a window around each area is read,
+     * never the whole photo at once. Returns the new patches, or empty when no place to copy
+     * from was found.
+     */
+    fun heal(
+        context: Context,
+        photo: Bitmap,
+        hole: FloatArray,
+        holeWidth: Int,
+        holeHeight: Int,
+        holeId: String?,
+        develop: String?,
+        clone: Boolean,
+        variant: Int,
+        onProgress: (Float) -> Unit = {},
+    ): List<RetouchPatch> {
+        val w = photo.width
+        val h = photo.height
+        val sharp = BooleanArray(w * h)
+        for (y in 0 until h) {
+            val hy = ((y + 0.5f) * holeHeight / h).toInt().coerceIn(0, holeHeight - 1)
+            for (x in 0 until w) {
+                val hx = ((x + 0.5f) * holeWidth / w).toInt().coerceIn(0, holeWidth - 1)
+                sharp[y * w + x] = hole[hy * holeWidth + hx] > 0.5f
+            }
+        }
+        // Past the painted edge by the hole map's own step, so nothing of the blemish stays.
+        val grow = max(2, (max(w, h).toFloat() / max(holeWidth, holeHeight)).roundToInt() + 1)
+        val grown = Retouch.dilate(sharp, w, h, grow)
+        val areas = Retouch.areas(grown, w, h, join = grow * 2)
+        val patches = ArrayList<RetouchPatch>()
+        for ((k, area) in areas.withIndex()) {
+            val size = max(area.width, area.height)
+            val ring = max(3, size / 4)
+            val feather = if (clone) max(2, size / 10) else 1
+            val reach = max(size * 3, 40) + ring + feather + 2
+            val win = PixelBox((area.x0 - reach).coerceAtLeast(0), (area.y0 - reach).coerceAtLeast(0), (area.x1 + reach).coerceAtMost(w), (area.y1 + reach).coerceAtMost(h))
+            val ww = win.width
+            val wh = win.height
+            val crop = Bitmap.createBitmap(photo, win.x0, win.y0, ww, wh).let { if (it.config == Bitmap.Config.ARGB_8888) it else it.copy(Bitmap.Config.ARGB_8888, false) }
+            val cropRgb = rgb(crop)
+            val cropHole = BooleanArray(ww * wh) { i -> grown[(win.y0 + i / ww) * w + win.x0 + i % ww] }
+            val local = PixelBox(area.x0 - win.x0, area.y0 - win.y0, area.x1 - win.x0, area.y1 - win.y0)
+            val found = app.headsup.core.retouch.Heal.sources(cropRgb, ww, wh, cropHole, local, ring)
+            if (found.isEmpty()) { onProgress((k + 1f) / areas.size); continue }
+            val source = found[variant.mod(found.size)]
+            // Cloned: copied a little past the edge too, and faded there; healed: the copy meets
+            // the photo by itself, so only the outermost pixel is softened.
+            val cover = if (clone) Retouch.dilate(cropHole, ww, wh, feather) else cropHole
+            val pad = feather + 1
+            val box = PixelBox((local.x0 - pad).coerceAtLeast(0), (local.y0 - pad).coerceAtLeast(0), (local.x1 + pad).coerceAtMost(ww), (local.y1 + pad).coerceAtMost(wh))
+            val fill = app.headsup.core.retouch.Heal.fill(cropRgb, ww, wh, cover, box, source, heal = !clone)
+            val bw = box.width
+            val bh = box.height
+            val holeInBox = BooleanArray(bw * bh) { i -> cropHole[(box.y0 + i / bw) * ww + box.x0 + i % bw] }
+            val alpha = Retouch.alpha(holeInBox, bw, bh, feather)
+            val pixels = IntArray(bw * bh)
+            for (i in 0 until bw * bh) {
+                val a = alpha[i]
+                if (a <= 0f) continue
+                fun c(ch: Int) = (fill[i * 3 + ch] * 255f + 0.5f).toInt().coerceIn(0, 255)
+                pixels[i] = ((a * 255f + 0.5f).toInt().coerceIn(0, 255) shl 24) or (c(0) shl 16) or (c(1) shl 8) or c(2)
+            }
+            val bmp = Bitmap.createBitmap(pixels, bw, bh, Bitmap.Config.ARGB_8888)
+            val x0 = win.x0 + box.x0
+            val y0 = win.y0 + box.y0
+            patches += RetouchPatch(
+                keep(context, bmp), x0.toFloat() / w, y0.toFloat() / h, (x0 + bw).toFloat() / w, (y0 + bh).toFloat() / h, holeId, develop,
+                method = if (clone) RetouchPatch.CLONE else RetouchPatch.HEAL, variant = variant,
+            )
+            onProgress((k + 1f) / areas.size)
+        }
+        return patches
+    }
+
     /** One area: the fill over [box] (pixels of [photo]), cut to where it shows. */
     private fun patch(context: Context, photo: Bitmap, hole: BooleanArray, box: PixelBox, feather: Int, random: Random): Pair<Bitmap, PixelBox>? {
         val w = photo.width

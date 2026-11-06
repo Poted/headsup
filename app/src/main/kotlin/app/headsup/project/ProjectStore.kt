@@ -343,7 +343,7 @@ internal object Json {
             JSONArray(
                 c.retouch.map {
                     JSONObject().put("id", it.id).put("l", it.left.toDouble()).put("t", it.top.toDouble()).put("r", it.right.toDouble()).put("b", it.bottom.toDouble())
-                        .put("hole", it.hole).put("develop", it.develop)
+                        .put("hole", it.hole).put("develop", it.develop).put("method", it.method).put("variant", it.variant)
                 },
             ),
         )
@@ -386,6 +386,7 @@ internal object Json {
             app.headsup.core.retouch.RetouchPatch(
                 it.optString("id"), it.optDouble("l").toFloat(), it.optDouble("t").toFloat(), it.optDouble("r").toFloat(), it.optDouble("b").toFloat(),
                 it.optStringOrNull("hole"), it.optStringOrNull("develop"),
+                it.optStringOrNull("method"), it.optInt("variant", 0),
             )
         },
         muteChangedSpeed = o.optBoolean("muteChangedSpeed", false),

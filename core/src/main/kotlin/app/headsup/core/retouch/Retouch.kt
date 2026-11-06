@@ -20,7 +20,16 @@ data class RetouchPatch(
     val bottom: Float,
     val hole: String? = null,
     val develop: String? = null,
-)
+    /** How it was made: null removed (filled by the model), [HEAL] or [CLONE] from another part of the photo. */
+    val method: String? = null,
+    /** Which of the places to copy from (0 the best match), for Heal and Clone. */
+    val variant: Int = 0,
+) {
+    companion object {
+        const val HEAL = "heal"
+        const val CLONE = "clone"
+    }
+}
 
 /** A rectangle of pixels, [x0]..[x1) × [y0]..[y1). */
 data class PixelBox(val x0: Int, val y0: Int, val x1: Int, val y1: Int) {

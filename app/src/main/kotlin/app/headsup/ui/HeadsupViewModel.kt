@@ -3462,8 +3462,11 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
         if (_state.value.selected?.masks?.getOrNull(m)?.kind == MaskKind.BRUSH) removeMask(m)
     }
 
-    /** Removes from the photo what the selected mask covers (filled from around it), and the mask with it. */
-    fun removeMaskArea() {
+    /** How what is painted over goes: filled by the model, healed or cloned from elsewhere in the photo. */
+    enum class RetouchMethod(val label: String) { REMOVE("Remove"), HEAL("Heal"), CLONE("Clone") }
+
+    /** Removes (or heals, clones over) what the selected mask covers, and the mask with it. */
+    fun removeMaskArea(method: RetouchMethod = RetouchMethod.REMOVE) {
         val s = _state.value
         val index = s.selectedClip ?: return
         val clip = s.selected?.takeIf { it.meta.isPhoto } ?: return
@@ -3472,7 +3475,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
         _state.update { it.copy(removing = false) }
         removeMask(maskIndex)
         val context: Application = getApplication()
-        cleanup(index, clip) { w, h ->
+        cleanup(index, clip, method) { w, h ->
             val refs = mask.strokes.mapNotNull { it.reference }.distinct()
                 .mapNotNull { id -> app.headsup.color.BrushReferences.get(context, id)?.let { id to it } }.toMap()
             val unmoved = app.headsup.core.color.BrushMask.rasterize(mask.strokes, w, h, mask.softness, refs)
@@ -3487,10 +3490,17 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
      * Removes from the photo at [index] what [holeOf] gives (0..1 over the picture, at the size it
      * is asked for), as new patches over it.
      */
-    private fun cleanup(index: Int, clip: ClipState, holeOf: suspend (width: Int, height: Int) -> FloatArray?) {
+    private fun cleanup(
+        index: Int,
+        clip: ClipState,
+        method: RetouchMethod = RetouchMethod.REMOVE,
+        variant: Int = 0,
+        keepHole: String? = null,
+        holeOf: suspend (width: Int, height: Int) -> FloatArray?,
+    ) {
         val context: Application = getApplication()
         val clipId = clip.id
-        _state.update { it.copy(busy = true, loadingMessage = "Removing", loadingProgress = null) }
+        _state.update { it.copy(busy = true, loadingMessage = when (method) { RetouchMethod.REMOVE -> "Removing"; RetouchMethod.HEAL -> "Healing"; RetouchMethod.CLONE -> "Cloning" }, loadingProgress = null) }
         loadJob = viewModelScope.launch {
             try {
                 val made = withContext(Dispatchers.Default) {
@@ -3499,17 +3509,20 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                     val hw = if (photo.width >= photo.height) side else (side * photo.width / photo.height).coerceAtLeast(1)
                     val hh = if (photo.width >= photo.height) (side * photo.height / photo.width).coerceAtLeast(1) else side
                     val hole = holeOf(hw, hh)?.takeIf { m -> m.any { it > 0.5f } } ?: return@withContext emptyList()
-                    val holeId = app.headsup.color.BrushReferences.create(context, hw, hh, hole, app.headsup.core.color.BrushMask.BASE)
+                    val holeId = keepHole ?: app.headsup.color.BrushReferences.create(context, hw, hh, hole, app.headsup.core.color.BrushMask.BASE)
                     val develop = if (clip.meta.isRaw) app.headsup.retouch.Cleaner.developKey(clip.rawDevelop) else null
                     val base = app.headsup.retouch.Cleaner.applyTo(context, photo, clip.retouch)
-                    app.headsup.retouch.Cleaner.remove(context, base, hole, hw, hh, holeId, develop) { p ->
+                    val progress: (Float) -> Unit = { p ->
                         // Stop takes effect between areas (one fill cannot be interrupted).
                         ensureActive()
                         _state.update { it.copy(loadingProgress = p) }
                     }
+                    if (method == RetouchMethod.REMOVE) app.headsup.retouch.Cleaner.remove(context, base, hole, hw, hh, holeId, develop, progress)
+                    else app.headsup.retouch.Cleaner.heal(context, base, hole, hw, hh, holeId, develop, clone = method == RetouchMethod.CLONE, variant = variant, onProgress = progress)
                 }
                 when {
                     made == null -> _state.update { it.copy(messages = it.messages + "Could not read the photo to clean it up.") }
+                    made.isEmpty() && method != RetouchMethod.REMOVE -> _state.update { it.copy(messages = it.messages + "No place nearby to copy from: paint a smaller area, or use Remove.") }
                     made.isEmpty() -> _state.update { it.copy(messages = it.messages + "Nothing found there to remove: tap the object's middle, or paint over it.") }
                     else -> {
                         // The picture changed: read again for the next tap.
@@ -3532,6 +3545,26 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
     fun clearCleanup() {
         val index = _state.value.selectedClip ?: return
         updateClip(index) { it.copy(retouch = emptyList()) }
+    }
+
+    /**
+     * The last thing healed or cloned on the selected photo done again from the next best place
+     * to copy from (after the last, the best again).
+     */
+    fun otherHealSource() {
+        val s = _state.value
+        val index = s.selectedClip ?: return
+        val clip = s.selected?.takeIf { it.meta.isPhoto } ?: return
+        val last = clip.retouch.lastOrNull()?.takeIf { it.method != null && it.hole != null } ?: return
+        val holeId = last.hole ?: return
+        val method = if (last.method == app.headsup.core.retouch.RetouchPatch.CLONE) RetouchMethod.CLONE else RetouchMethod.HEAL
+        val without = clip.copy(retouch = clip.retouch.filter { it.hole != holeId })
+        updateClip(index) { without }
+        val context: Application = getApplication()
+        cleanup(index, without, method, variant = last.variant + 1, keepHole = holeId) { _, _ ->
+            val ref = app.headsup.color.BrushReferences.get(context, holeId) ?: return@cleanup null
+            FloatArray(ref.width * ref.height) { ref.rgb[it * 3] }
+        }
     }
 
     /** Takes away the last thing removed from the selected photo. */
@@ -3566,7 +3599,10 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                         ensureActive()
                         val ref = holeId?.let { app.headsup.color.BrushReferences.get(context, it) } ?: continue
                         val hole = FloatArray(ref.width * ref.height) { ref.rgb[it * 3] }
-                        val made = app.headsup.retouch.Cleaner.remove(context, photo, hole, ref.width, ref.height, holeId, key)
+                        // Made again the way it was made (healed and cloned from the same place).
+                        val was = clip.retouch.first { it.hole == holeId }
+                        val made = if (was.method == null) app.headsup.retouch.Cleaner.remove(context, photo, hole, ref.width, ref.height, holeId, key)
+                        else app.headsup.retouch.Cleaner.heal(context, photo, hole, ref.width, ref.height, holeId, key, clone = was.method == app.headsup.core.retouch.RetouchPatch.CLONE, variant = was.variant)
                         photo = app.headsup.retouch.Cleaner.applyTo(context, photo, made)
                         out += made
                     }

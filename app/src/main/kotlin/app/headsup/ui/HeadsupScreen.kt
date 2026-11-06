@@ -2922,12 +2922,23 @@ private fun ColourPage(
     // picture change it); Done goes back to its corrections, which stay as they are.
     if (target == GradeTarget.MASK && maskTools && mask != null && (editingShape != null || mask.kind == MaskKind.RANGE)) {
         if (state.removing) {
+            // How it goes: the model fills it (things, people), or another part of the photo
+            // covers it (spots, dust, wires on sky or skin): healed to the light there, or cloned as is.
+            var method by rememberSaveable { mutableStateOf(HeadsupViewModel.RetouchMethod.REMOVE) }
             SectionCaption("Remove from the photo")
+            Segmented(HeadsupViewModel.RetouchMethod.entries.map { it.label }, method.ordinal, { method = HeadsupViewModel.RetouchMethod.entries[it] })
+            Hint(
+                when (method) {
+                    HeadsupViewModel.RetouchMethod.REMOVE -> "Select or paint what goes; it is filled from what is around it (best for things and people)."
+                    HeadsupViewModel.RetouchMethod.HEAL -> "Paint over a spot, dust or a wire; it is covered from the best matching place nearby, matched to the light and colour there."
+                    HeadsupViewModel.RetouchMethod.CLONE -> "Paint over what goes; it is covered with an exact copy of the best matching place nearby (for patterns and edges)."
+                },
+            )
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Hint("Select what goes.", Modifier.weight(1f))
+                Spacer(Modifier.weight(1f))
                 SmallAction("Cancel", { vm.cancelRemoval(); onMaskTools(false) })
                 Spacer(Modifier.width(6.dp))
-                Button(onClick = { vm.removeMaskArea(); onMaskTools(false) }, enabled = mask.strokes.isNotEmpty() && !state.busy) { Text("Remove") }
+                Button(onClick = { vm.removeMaskArea(method); onMaskTools(false) }, enabled = mask.strokes.isNotEmpty() && !state.busy) { Text(method.label) }
             }
         } else if (maskNeedsTracking(clip, mask)) {
             // On video, a painted mask not tracked since it changed stays where it is drawn: tracking
@@ -4023,7 +4034,9 @@ private fun Layers(
     val removed = clip.retouch.map { it.hole }.distinct().size
     if (clip.meta.isPhoto && removed > 0) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Text(if (removed == 1) "1 thing removed" else "$removed things removed", Modifier.weight(1f), style = MaterialTheme.typography.labelMedium, color = HeadsupColors.TextMuted)
+            Text(if (removed == 1) "1 fix" else "$removed fixes", Modifier.weight(1f), style = MaterialTheme.typography.labelMedium, color = HeadsupColors.TextMuted)
+            // Healed or cloned last: from the next best place instead.
+            if (clip.retouch.lastOrNull()?.method != null) SmallAction("Other source", { vm.otherHealSource() }, enabled = !state.busy)
             SmallAction("Undo last", { vm.undoLastCleanup() }, enabled = !state.busy)
             SmallAction("Restore all", { vm.clearCleanup() }, enabled = !state.busy)
         }
@@ -4056,7 +4069,7 @@ private fun Layers(
             item { CircleOption("◈", "Colour", selected = false, modified = false) { add { vm.addRangeMask(colour = true) } } }
             item { CircleOption("☼", "Light", selected = false, modified = false) { add { vm.addRangeMask(colour = false) } } }
             // Photos: select something as a mask is selected, and it is removed (filled from around it).
-            if (clip.meta.isPhoto) item { CircleOption("⌫", "Remove", selected = false, modified = false) { add { vm.startRemoval() } } }
+            if (clip.meta.isPhoto) item { CircleOption("⌫", "Retouch", selected = false, modified = false) { add { vm.startRemoval() } } }
         }
         Hint(
             "Object: tap what to correct (tap more of it to take it in, with Subtract what is not it), draw round it or split the picture with a line. Sky: the sky found at once (on video followed when tracked). " +
