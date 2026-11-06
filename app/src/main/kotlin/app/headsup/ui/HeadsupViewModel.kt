@@ -223,6 +223,9 @@ enum class AlbumScope(val label: String) {
 sealed interface TriedLook {
     data class Profile(val look: app.headsup.core.color.Look) : TriedLook
     data class Preset(val preset: app.headsup.project.SavedPreset) : TriedLook
+
+    /** The look taken off (the corrections stay). */
+    data object None : TriedLook
 }
 
 data class ClipLook(val grade: ColorGrade, val effects: EffectSettings, val lutName: String?, val masks: List<ColourMask> = emptyList())
@@ -802,6 +805,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
         return when (look) {
             null -> s.lutFor(clip) to s.appliedGrade(clip)
             is TriedLook.Profile -> s.lutFor(clip) to s.appliedGrade(clip.copy(grade = clip.grade.copy(look = look.look.name, lookAmount = 1f)))
+            TriedLook.None -> s.lutFor(clip) to s.appliedGrade(clip.copy(grade = clip.grade.copy(look = null)))
             is TriedLook.Preset -> (look.preset.lutName ?: s.lutFor(clip)) to s.appliedGrade(clip.copy(grade = look.preset.grade))
         }
     }
@@ -818,6 +822,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
         // The step is recorded with the others (recordHistory).
         when (look) {
             is TriedLook.Profile -> updateClip(index) { it.copy(grade = it.grade.copy(look = look.look.name, lookAmount = 1f)) }
+            TriedLook.None -> updateClip(index) { it.copy(grade = it.grade.copy(look = null)) }
             is TriedLook.Preset -> {
                 val e = look.preset.effects
                 updateClip(index) { c ->

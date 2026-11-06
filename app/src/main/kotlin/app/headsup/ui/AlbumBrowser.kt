@@ -355,13 +355,21 @@ fun PhotoViewer(state: UiState, vm: HeadsupViewModel, indices: List<Int>, start:
                     Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
                     horizontalArrangement = Arrangement.spacedBy(6.dp),
                 ) {
+                    // What the photo has (kept), unless another look is being tried on it.
+                    val kept: TriedLook = clip.grade.look?.let { app.headsup.core.color.Look.of(it) }?.let { TriedLook.Profile(it) }
+                        ?: state.presets.firstOrNull { it.grade == clip.grade && it.lutName == clip.lutName }?.let { TriedLook.Preset(it) }
+                        ?: TriedLook.None
+                    val shownLook = tried ?: kept
+                    // A tap tries a look; the one it has (or None) takes the try back.
+                    fun choose(t: TriedLook) { tried = if (t == kept) null else t }
+                    FilterChip(selected = shownLook == TriedLook.None, onClick = { choose(TriedLook.None) }, label = { Text("None") })
                     for (look in app.headsup.core.color.Look.entries) {
                         val t = TriedLook.Profile(look)
-                        FilterChip(selected = tried == t, onClick = { tried = if (tried == t) null else t }, label = { Text(look.label) })
+                        FilterChip(selected = shownLook == t, onClick = { choose(t) }, label = { Text(look.label) })
                     }
                     for (preset in state.presets) {
                         val t = TriedLook.Preset(preset)
-                        FilterChip(selected = tried == t, onClick = { tried = if (tried == t) null else t }, label = { Text("★ ${preset.name}") })
+                        FilterChip(selected = shownLook == t, onClick = { choose(t) }, label = { Text("★ ${preset.name}") })
                     }
                 }
             }
