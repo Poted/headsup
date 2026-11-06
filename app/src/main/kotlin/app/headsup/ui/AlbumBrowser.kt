@@ -416,6 +416,7 @@ private fun ViewerPage(vm: HeadsupViewModel, index: Int, edit: Any?, tried: Trie
         vm.viewerGraded(index, tried, 2048)?.let { value = it.asImageBitmap() }
     }
     var zoom by remember { mutableStateOf(1f) }
+    var offset by remember { mutableStateOf(androidx.compose.ui.geometry.Offset.Zero) }
     // Pulled down (not zoomed): the photo follows the finger; let go far enough, it slides away
     // and the viewer closes, else it springs back.
     val pullAnim = remember { androidx.compose.animation.core.Animatable(0f) }
@@ -431,7 +432,6 @@ private fun ViewerPage(vm: HeadsupViewModel, index: Int, edit: Any?, tried: Trie
             }
         }
     }
-    var offset by remember { mutableStateOf(androidx.compose.ui.geometry.Offset.Zero) }
     Box(
         Modifier.fillMaxSize().clipToBounds()
             .pointerInput(index) {
