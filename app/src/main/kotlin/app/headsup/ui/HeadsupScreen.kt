@@ -518,7 +518,7 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
                     // What an undo or redo just changed, for a moment.
                     if (!fullscreen) UndoNotice(state.notice, state.noticeAt, Modifier.align(Alignment.TopCenter).padding(top = 52.dp))
                     // Undo/redo tucked into the picture's corner, only when there is something to undo.
-                    if (!fullscreen) UndoRedo(state.canUndo, state.canRedo, vm::undo, vm::redo, vm::undoAll, vm::resetAllEdits, Modifier.align(Alignment.TopEnd).padding(top = 8.dp, end = 24.dp), canResetAll = state.clips.isNotEmpty(),
+                    if (!fullscreen) UndoRedo(state.canUndo, state.canRedo, vm::undo, vm::redo, vm::undoAll, vm::resetAllEdits, Modifier.align(Alignment.TopEnd).padding(top = 8.dp, end = 24.dp), canResetAll = state.clips.isNotEmpty(), album = state.photoProject,
                         milestones = state.milestones, onAddMilestone = vm::addMilestone, onBackToMilestone = vm::backToMilestone, onRemoveMilestone = vm::removeMilestone,
                     )
                     // Full screen: the picture alone, to see it as it will look.
@@ -887,7 +887,7 @@ private fun EmptyState(photoProject: Boolean) {
 @Composable
 private fun UndoRedo(
     canUndo: Boolean, canRedo: Boolean, onUndo: () -> Unit, onRedo: () -> Unit, onUndoAll: () -> Unit, onResetAll: () -> Unit,
-    modifier: Modifier, canResetAll: Boolean = false,
+    modifier: Modifier, canResetAll: Boolean = false, album: Boolean = false,
     milestones: List<Milestone> = emptyList(), onAddMilestone: () -> Unit = {}, onBackToMilestone: (Long) -> Unit = {}, onRemoveMilestone: (Long) -> Unit = {},
 ) {
     // Shown while there is something to undo, or edits to remove (holding undo works even when a tap would not).
@@ -902,8 +902,8 @@ private fun UndoRedo(
             text = {
                 Text(
                     "Since opened: back to how the project was when you opened it.\n\nEvery edit: colour, masks, " +
-                        "framing, effects, speed and cuts removed from every clip, however long ago they were made; " +
-                        "the files, sound and texts stay.\n\nEither way, undo brings the changes back.",
+                        (if (album) "framing and effects removed from every photo, however long ago they were made; the photos and texts stay."
+                        else "framing, effects, speed and cuts removed from every clip, however long ago they were made; the files, sound and texts stay.") + "\n\nEither way, undo brings the changes back.",
                 )
             },
             confirmButton = {
@@ -1410,19 +1410,19 @@ private fun EditPanel(
 @Composable
 private fun TimelineRate(state: UiState, vm: HeadsupViewModel) {
     val fps = state.effectiveTimelineFps
-    ValueHeader("Timeline frame rate", "${OutputSpec.formatFps(fps)} fps")
-    Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+    ToolSection(
+        "Timeline frame rate",
+        info = "Every clip is exported at this rate, like a project setting in DaVinci. Clips with more frames are thinned out (or can play slower with All frames); clips with fewer keep their own frames, each held longer. Auto takes the first clip's rate.",
+    ) {
+        ValueHeader("", "${OutputSpec.formatFps(fps)} fps")
+        val rates = listOf<Float?>(null) + ExportSettings.FRAME_RATES
         val auto = state.clips.firstOrNull()?.meta?.frameRate
-        FilterChip(
-            selected = state.timelineFps == null,
-            onClick = { vm.setTimelineFps(null) },
-            label = { Text("Auto" + (auto?.let { " (${OutputSpec.formatFps(it)})" } ?: "")) },
+        ChoiceGrid(
+            rates.map { r -> if (r == null) "Auto" + (auto?.let { " ${OutputSpec.formatFps(it)}" } ?: "") else OutputSpec.formatFps(r) },
+            rates.indexOf(state.timelineFps), { vm.setTimelineFps(rates[it]) }, minCell = 56.dp,
         )
-        for (f in ExportSettings.FRAME_RATES) {
-            FilterChip(selected = state.timelineFps == f, onClick = { vm.setTimelineFps(f) }, label = { Text(OutputSpec.formatFps(f)) })
-        }
+        RateNotes(state, fps)
     }
-    RateNotes(state, fps)
 }
 
 /** How each clip's frames fit [fps]: by its frame rate after its speed change. */
@@ -1450,14 +1450,17 @@ private fun CutTool(state: UiState, vm: HeadsupViewModel, playhead: LongState, o
     val clip = state.selected ?: return
     if (clip.meta.isPhoto) {
         // A photo has no cut: its length on the timeline is chosen here.
-        ValueHeader("Photo on screen", String.format(Locale.US, "%.1f s", clip.durationMs / 1000f))
-        RulerSlider(
-            clip.durationMs / 1000f, 1f..(ClipMetadataReader.PHOTO_MAX_MS / 1000f), 0.5f,
-            { v -> vm.setTrim(index, 0L, (v * 1000).toLong()) },
-            onReset = { vm.setTrim(index, 0L, HeadsupViewModel.PHOTO_DEFAULT_MS) },
-        )
-        SectionCaption("Clip")
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) { PanelAction("Delete clip", { vm.removeClip(index) }, Modifier.weight(1f), danger = true) }
+        ToolSection("Photo on screen", info = "How long the photo stays on the timeline. Double-tap the ruler for the usual length.") {
+            ValueHeader("", String.format(Locale.US, "%.1f s", clip.durationMs / 1000f))
+            RulerSlider(
+                clip.durationMs / 1000f, 1f..(ClipMetadataReader.PHOTO_MAX_MS / 1000f), 0.5f,
+                { v -> vm.setTrim(index, 0L, (v * 1000).toLong()) },
+                onReset = { vm.setTrim(index, 0L, HeadsupViewModel.PHOTO_DEFAULT_MS) },
+            )
+        }
+        ToolSection("Photo", info = "Delete takes the photo off the timeline (Undo brings it back).") {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) { PanelAction("Delete photo", { vm.removeClip(index) }, Modifier.weight(1f), danger = true) }
+        }
     } else {
         CutControls(
             clip = clip,
@@ -1469,39 +1472,34 @@ private fun CutTool(state: UiState, vm: HeadsupViewModel, playhead: LongState, o
         )
         ShotCut(state, vm, index, clip, playhead)
         // Backwards: a reversed copy of the cut is made once (it takes a while on long clips).
-        SectionCaption("Direction")
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            PillAction("⇆", if (clip.reversed != null) "Reversed" else "Reverse", { vm.reverseClip(index) }, selected = clip.reversed != null, enabled = !state.busy)
-            Spacer(Modifier.width(10.dp))
-            Hint(
-                if (clip.reversed != null) "Plays backwards, without its sound. Tap again to play it forwards."
-                else "Plays the clip backwards (without its sound). Its look and flags stay.",
-                Modifier.weight(1f),
-            )
+        ToolSection(
+            "Direction",
+            info = if (clip.reversed != null) "Plays backwards, without its sound. Tap again to play it forwards."
+            else "Plays the clip backwards (without its sound). Its look and flags stay. The reversed copy is made once; on long clips it takes a while.",
+        ) {
+            ChoiceGrid(listOf("Forwards", "Backwards"), if (clip.reversed != null) 1 else 0, { i ->
+                if ((i == 1) != (clip.reversed != null)) vm.reverseClip(index)
+            }, enabled = { !state.busy })
         }
         // Steadied: the shake taken out, the camera's own move kept.
-        SectionCaption("Steady")
         val steady = clip.stabilize
         val measuring = state.work.any { it.clipId == clip.id && it.maskIndex == null && it.label.startsWith("Steadying") }
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            PillAction("≋", if (steady != null) "Steadied" else "Steady", { if (steady == null) vm.stabilizeClip(index) else vm.removeStabilize(index) }, selected = steady != null, enabled = !measuring)
-            Spacer(Modifier.width(10.dp))
-            Hint(
-                when {
-                    measuring -> "Measuring the shake (in the background)…"
-                    steady != null -> "Tap again to show it as shot. Trimmed wider? Steady it again."
-                    else -> "Takes out handheld shake (pans and walks stay). The picture is zoomed in a little, at most 20 %."
-                },
-                Modifier.weight(1f),
-            )
-        }
-        if (steady != null) {
-            ValueHeader("Strength", String.format(Locale.US, "%.0f %%", steady.strength * 100))
-            RulerSlider(steady.strength, 0f..1f, 0.05f, { v -> vm.setStabilizeStrength(index, v) }, onReset = { vm.setStabilizeStrength(index, 0.7f) })
-            if (steady.startMs > clip.trimStartMs + 100 || steady.startMs + (steady.steps.size * steady.frameMs).toLong() < clip.trimEndMs - 100) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Hint("The cut is wider than what was measured.", Modifier.weight(1f))
-                    SmallAction("Measure again", { vm.stabilizeClip(index) }, enabled = !measuring)
+        ToolSection(
+            "Steady",
+            info = "Takes out handheld shake (pans and walks stay). The picture is zoomed in a little, at most 20 %. Measured once, in the background; trimmed wider later, measure again. Double-tap the ruler for the usual strength.",
+        ) {
+            ChoiceGrid(listOf("As shot", "Steadied"), if (steady != null) 1 else 0, { i ->
+                if (i == 1 && steady == null) vm.stabilizeClip(index) else if (i == 0 && steady != null) vm.removeStabilize(index)
+            }, enabled = { !measuring })
+            if (measuring) Hint("Measuring the shake…")
+            if (steady != null) {
+                ValueHeader("Strength", String.format(Locale.US, "%.0f %%", steady.strength * 100))
+                RulerSlider(steady.strength, 0f..1f, 0.05f, { v -> vm.setStabilizeStrength(index, v) }, onReset = { vm.setStabilizeStrength(index, 0.7f) })
+                if (steady.startMs > clip.trimStartMs + 100 || steady.startMs + (steady.steps.size * steady.frameMs).toLong() < clip.trimEndMs - 100) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Hint("The cut is wider than what was measured.", Modifier.weight(1f))
+                        SmallAction("Measure again", { vm.stabilizeClip(index) }, enabled = !measuring)
+                    }
                 }
             }
         }
@@ -1526,16 +1524,17 @@ private fun ShotCut(state: UiState, vm: HeadsupViewModel, index: Int, clip: Clip
         else -> index
     }
     var ask by remember { mutableStateOf(false) }
-    SectionCaption("Cut inside the shot")
-    Hint(
-        if (left == index) "This clip and the next are pieces of one shot. Move the cut to the playhead (each piece keeps its edits), or join them."
-        else "This clip and the one before are pieces of one shot. Move the cut to the playhead (each piece keeps its edits), or join them.",
-    )
-    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        PillAction("⇹", "Move cut here", { vm.moveCut(left, playheadMs) })
-        PillAction("⊕", "Join", {
-            if (vm.editedAlike(state.clips[left], state.clips[left + 1])) vm.joinWithNext(left, keepRight = false) else ask = true
-        })
+    ToolSection(
+        "Cut inside the shot",
+        info = (if (left == index) "This clip and the next" else "This clip and the one before") +
+            " are pieces of one shot. Move the cut to the playhead (each piece keeps its edits), or join them.",
+    ) {
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            PanelAction("Move cut here", { vm.moveCut(left, playheadMs) }, Modifier.weight(1f))
+            PanelAction("Join", {
+                if (vm.editedAlike(state.clips[left], state.clips[left + 1])) vm.joinWithNext(left, keepRight = false) else ask = true
+            }, Modifier.weight(1f))
+        }
     }
     if (ask) {
         AlertDialog(
@@ -1560,13 +1559,14 @@ private fun FlagList(state: UiState, vm: HeadsupViewModel, onFlag: (Int, Long) -
     val flags = state.clips.flatMapIndexed { i, c ->
         c.flags.filter { it >= c.trimStartMs && it <= c.trimEndMs }.map { f -> Triple(i, f, starts[i] + c.timelineOfSource(f - c.trimStartMs)) }
     }.sortedBy { it.third }
-    SectionCaption("Flags") {
-        Spacer(Modifier.width(8.dp))
-        if (flags.isNotEmpty()) SmallAction("Clear all", { vm.clearFlags() })
-    }
+    ToolSection(
+        "Flags",
+        info = "⚑ under the picture flags the moment at the playhead: a place to cut or to work on later. Lit, it is on a flag: tapped then, it takes the flag away. Tap a flag here to go there (Split cuts there); ✕ takes it away.",
+        onReset = if (flags.isNotEmpty()) ({ vm.clearFlags() }) else null,
+    ) {
     if (flags.isEmpty()) {
-        Hint("⚑ under the picture flags the moment at the playhead: a place to cut or to work on later. Lit, it is on a flag: tapped then, it takes the flag away.")
-        return
+        Text("No flags yet.", style = MaterialTheme.typography.bodySmall, color = HeadsupColors.TextMuted)
+        return@ToolSection
     }
     FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
         for ((i, f, t) in flags) {
@@ -1581,17 +1581,19 @@ private fun FlagList(state: UiState, vm: HeadsupViewModel, onFlag: (Int, Long) -
             }
         }
     }
-    Hint("Tap a flag to go there (Split cuts there); ✕ takes it away.")
+    }
 }
 
 /** Fades of the selected clip: picture, dashboard and sound together. */
 @Composable
 private fun FadeTool(clip: ClipState, index: Int, vm: HeadsupViewModel) {
     val maxS = (clip.timelineDurationMs / 1000f).coerceIn(0.5f, 10f)
-    ValueHeader("Fade in from black", fadeLabel(clip.fadeInMs))
-    RulerSlider(clip.fadeInMs / 1000f, 0f..maxS, 0.1f, { v -> vm.setFades(index, (v * 1000).toLong(), clip.fadeOutMs) }, onReset = { vm.setFades(index, 0L, clip.fadeOutMs) })
-    ValueHeader("Fade out to black", fadeLabel(clip.fadeOutMs))
-    RulerSlider(clip.fadeOutMs / 1000f, 0f..maxS, 0.1f, { v -> vm.setFades(index, clip.fadeInMs, (v * 1000).toLong()) }, onReset = { vm.setFades(index, clip.fadeInMs, 0L) })
+    ToolSection("Fades", info = "The picture, the dashboard and the sound fade together, from black at the start and to black at the end. Double-tap a ruler to turn its fade off.") {
+        ValueHeader("Fade in from black", fadeLabel(clip.fadeInMs))
+        RulerSlider(clip.fadeInMs / 1000f, 0f..maxS, 0.1f, { v -> vm.setFades(index, (v * 1000).toLong(), clip.fadeOutMs) }, onReset = { vm.setFades(index, 0L, clip.fadeOutMs) })
+        ValueHeader("Fade out to black", fadeLabel(clip.fadeOutMs))
+        RulerSlider(clip.fadeOutMs / 1000f, 0f..maxS, 0.1f, { v -> vm.setFades(index, clip.fadeInMs, (v * 1000).toLong()) }, onReset = { vm.setFades(index, clip.fadeInMs, 0L) })
+    }
 }
 
 /** Watch data for the selected clip: its start time, the match graph and a fine offset. */
@@ -1600,16 +1602,34 @@ private fun WatchSyncControls(state: UiState, vm: HeadsupViewModel, playhead: Lo
     val index = state.selectedClip
     val clip = state.selected
     if (index == null || clip == null) {
-        Hint("Select a clip.")
+        Hint(if (state.photoProject) "Select a photo." else "Select a clip.")
         return
     }
-    SyncSummary(clip, clip.sync?.let { state.activities.getOrNull(it.trackIndex) })
+    val photo = clip.meta.isPhoto
+    ToolSection(
+        "Watch data",
+        info = "How the ${if (photo) "photo's" else "clip's"} time was matched to the activity: from what the file says (its recording time, its name), with how sure the match is. If it is off, set the start by hand or shift the data below.",
+    ) {
+        SyncSummary(clip, clip.sync?.let { state.activities.getOrNull(it.trackIndex) })
+    }
     // A photo can take any moment of an activity, e.g. one taken on another day, or a summit.
-    if (clip.meta.isPhoto) state.activities.firstOrNull()?.let { a -> PhotoMoment(clip, a.track) { vm.setManualStart(index, it) } }
-    StartTimeControls(clip, state.activities) { vm.setManualStart(index, it) }
+    if (photo) state.activities.firstOrNull()?.let { a ->
+        ToolSection("Moment in the activity", info = "Drag to pick the moment whose data the photo shows (dashboard, text fields, the dot on the map). Double-tap the ruler to go back to the photo's own time.") {
+            PhotoMoment(clip, a.track) { vm.setManualStart(index, it) }
+        }
+    }
+    ToolSection("Recording start", info = "For a ${if (photo) "photo" else "clip"} whose file lost its time (an excerpt, an edited copy): enter the local time on the camera's clock when it begins. From file goes back to the file's own time.") {
+        StartTimeControls(clip, state.activities) { vm.setManualStart(index, it) }
+    }
     val activity = clip.sync?.let { state.activities.getOrNull(it.trackIndex) }
-    if (activity != null) SyncGraph(clip, activity.track, playhead) { vm.setManualOffset(index, clip.manualOffsetMs + it) }
-    OffsetControls(clip.manualOffsetMs) { vm.setManualOffset(index, it) }
+    if (activity != null) {
+        ToolSection("Sync from the graph", info = "Pause on a clear moment (a stop, a sprint), then tap the same moment on the graph; Apply shifts the data by the difference.") {
+            SyncGraph(clip, activity.track, playhead) { vm.setManualOffset(index, clip.manualOffsetMs + it) }
+        }
+    }
+    ToolSection("Data offset", info = "Shifts the activity data against the picture, in tenths of a second: + shows later data. Double-tap the ruler to remove the shift.") {
+        OffsetControls(clip.manualOffsetMs) { vm.setManualOffset(index, it) }
+    }
 }
 
 /** The project's sound files: music, ambience, effects. Placed on the audio tracks on the Audio page. */
@@ -1649,35 +1669,37 @@ private fun AudioPanel(
     val index = state.selectedClip
     val video = state.selected?.takeIf { clip == null && videoSelected && index != null }
     if (clip == null && video == null) {
-        ValueHeader("All clips' own sound", String.format(Locale.US, "%.0f %%", state.clipSound * 100))
-        RulerSlider(state.clipSound, 0f..1f, 0.02f, vm::setClipSound, onReset = { vm.setClipSound(1f) })
-        Hint("Double-tap a clip or a sound on the timeline for its own level and fades.")
+        ToolSection(
+            "Clips' own sound",
+            info = "The level of every clip's own sound under the music. Double-tap a clip or a sound on the timeline for its own level and fades; double-tap the ruler for full level.",
+        ) {
+            ValueHeader("", String.format(Locale.US, "%.0f %%", state.clipSound * 100))
+            RulerSlider(state.clipSound, 0f..1f, 0.02f, vm::setClipSound, onReset = { vm.setClipSound(1f) })
+        }
         AddSoundButton(onAddSound)
         return
     }
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        if (clip != null) {
-            val p = clip.piece
-            Column(Modifier.weight(1f)) {
-                Text(clip.name, style = MaterialTheme.typography.titleSmall, maxLines = 1)
-                Hint(listOfNotNull("${Formats.duration(p.startOnTimelineMs)}–${Formats.duration(p.endOnTimelineMs)}", state.audioAnalysis[clip.uri]?.rhythm?.bpm?.let { String.format(Locale.US, "≈ %.0f BPM", it) }).joinToString(" · "))
-            }
-        } else if (video != null) {
-            Column(Modifier.weight(1f)) {
-                Text(video.meta.name, style = MaterialTheme.typography.titleSmall, maxLines = 1)
-                Hint("This clip's own sound")
-            }
-        }
-    }
     if (clip != null) {
-        Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-            SmallAction("Split", { vm.splitAudio(clip.id, at()) })
-            SmallAction(if (slip) "Slip ✓" else "Slip", { onSlip(!slip) })
-            if (clip.piece.endOnTimelineMs > videoEnd + 50) {
-                SmallAction("Cut at end", { vm.updateAudio(clip.id) { it.with(it.piece.trimEnd(videoEnd - it.piece.endOnTimelineMs)) } })
+        val p = clip.piece
+        ToolSection(
+            clip.name,
+            info = "Split cuts the sound at the playhead. Slip: dragging the sound on the timeline moves what plays inside it, the piece stays in place. Cut at end trims what runs past the video. Delete takes it off its track.",
+        ) {
+            Text(
+                listOfNotNull("${Formats.duration(p.startOnTimelineMs)}–${Formats.duration(p.endOnTimelineMs)}", state.audioAnalysis[clip.uri]?.rhythm?.bpm?.let { String.format(Locale.US, "≈ %.0f BPM", it) }).joinToString(" · "),
+                style = MaterialTheme.typography.labelMedium.copy(fontFamily = GeistMonoFamily), color = HeadsupColors.TextMuted,
+            )
+            Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                SmallAction("Split", { vm.splitAudio(clip.id, at()) })
+                SmallAction(if (slip) "Slip ✓" else "Slip", { onSlip(!slip) })
+                if (clip.piece.endOnTimelineMs > videoEnd + 50) {
+                    SmallAction("Cut at end", { vm.updateAudio(clip.id) { it.with(it.piece.trimEnd(videoEnd - it.piece.endOnTimelineMs)) } })
+                }
+                SmallAction("Delete", { vm.removeAudio(clip.id) })
             }
-            SmallAction("Delete", { vm.removeAudio(clip.id) })
         }
+    } else if (video != null) {
+        ToolSection(video.meta.name, info = "This clip's own sound: its level and fades, apart from the music.") {}
     }
     val level = clip?.volume ?: video?.soundLevel ?: 1f
     val fadeIn = clip?.piece?.fadeIn ?: video?.fadeInMs ?: 0L
@@ -1687,37 +1709,45 @@ private fun AudioPanel(
         item { CircleOption("In", "Fade in", selected = tool == "In", modified = fadeIn > 0) { tool = "In" } }
         item { CircleOption("Out", "Fade out", selected = tool == "Out", modified = fadeOut > 0) { tool = "Out" } }
     }
-    if (clip != null) {
-        val p = clip.piece
-        val maxFade = (p.lengthMs / 1000f).coerceIn(0.5f, 20f)
-        when (tool) {
-            "In" -> {
-                ValueHeader("Fade in", fadeLabel(p.fadeIn))
-                RulerSlider(p.fadeIn / 1000f, 0f..maxFade, 0.1f, { v -> vm.updateAudio(clip.id) { it.copy(fadeInMs = (v * 1000).toLong().coerceAtMost(p.lengthMs - p.fadeOut)) } }, onReset = { vm.updateAudio(clip.id) { it.copy(fadeInMs = 0L) } })
+    val title = when (tool) { "In" -> "Fade in"; "Out" -> "Fade out"; else -> "Level" }
+    val info = when (tool) {
+        "In" -> "How long the sound takes to rise from silence at its start. Double-tap the ruler to turn the fade off."
+        "Out" -> "How long the sound takes to fall to silence at its end. Double-tap the ruler to turn the fade off."
+        else -> "How loud it plays. Double-tap the ruler for the usual level."
+    }
+    ToolSection(title, info = info) {
+        if (clip != null) {
+            val p = clip.piece
+            val maxFade = (p.lengthMs / 1000f).coerceIn(0.5f, 20f)
+            when (tool) {
+                "In" -> {
+                    ValueHeader("", fadeLabel(p.fadeIn))
+                    RulerSlider(p.fadeIn / 1000f, 0f..maxFade, 0.1f, { v -> vm.updateAudio(clip.id) { it.copy(fadeInMs = (v * 1000).toLong().coerceAtMost(p.lengthMs - p.fadeOut)) } }, onReset = { vm.updateAudio(clip.id) { it.copy(fadeInMs = 0L) } })
+                }
+                "Out" -> {
+                    ValueHeader("", fadeLabel(p.fadeOut))
+                    RulerSlider(p.fadeOut / 1000f, 0f..maxFade, 0.1f, { v -> vm.updateAudio(clip.id) { it.copy(fadeOutMs = (v * 1000).toLong().coerceAtMost(p.lengthMs - p.fadeIn)) } }, onReset = { vm.updateAudio(clip.id) { it.copy(fadeOutMs = 0L) } })
+                }
+                else -> {
+                    ValueHeader("", String.format(Locale.US, "%.0f %%", clip.volume * 100))
+                    RulerSlider(clip.volume, 0f..1f, 0.02f, { v -> vm.updateAudio(clip.id) { it.copy(volume = v) } }, onReset = { vm.updateAudio(clip.id) { it.copy(volume = 0.8f) } })
+                }
             }
-            "Out" -> {
-                ValueHeader("Fade out", fadeLabel(p.fadeOut))
-                RulerSlider(p.fadeOut / 1000f, 0f..maxFade, 0.1f, { v -> vm.updateAudio(clip.id) { it.copy(fadeOutMs = (v * 1000).toLong().coerceAtMost(p.lengthMs - p.fadeIn)) } }, onReset = { vm.updateAudio(clip.id) { it.copy(fadeOutMs = 0L) } })
-            }
-            else -> {
-                ValueHeader("Level", String.format(Locale.US, "%.0f %%", clip.volume * 100))
-                RulerSlider(clip.volume, 0f..1f, 0.02f, { v -> vm.updateAudio(clip.id) { it.copy(volume = v) } }, onReset = { vm.updateAudio(clip.id) { it.copy(volume = 0.8f) } })
-            }
-        }
-    } else if (video != null && index != null) {
-        val maxS = (video.timelineDurationMs / 1000f).coerceIn(0.5f, 10f)
-        when (tool) {
-            "In" -> {
-                ValueHeader("Fade in", fadeLabel(video.fadeInMs))
-                RulerSlider(video.fadeInMs / 1000f, 0f..maxS, 0.1f, { v -> vm.setFades(index, (v * 1000).toLong(), video.fadeOutMs) }, onReset = { vm.setFades(index, 0L, video.fadeOutMs) })
-            }
-            "Out" -> {
-                ValueHeader("Fade out", fadeLabel(video.fadeOutMs))
-                RulerSlider(video.fadeOutMs / 1000f, 0f..maxS, 0.1f, { v -> vm.setFades(index, video.fadeInMs, (v * 1000).toLong()) }, onReset = { vm.setFades(index, video.fadeInMs, 0L) })
-            }
-            else -> {
-                ValueHeader("Level", String.format(Locale.US, "%.0f %%", video.soundLevel * 100))
-                RulerSlider(video.soundLevel, 0f..1f, 0.02f, { v -> vm.setSoundLevel(index, v) }, onReset = { vm.setSoundLevel(index, 1f) })
+        } else if (video != null && index != null) {
+            val maxS = (video.timelineDurationMs / 1000f).coerceIn(0.5f, 10f)
+            when (tool) {
+                "In" -> {
+                    ValueHeader("", fadeLabel(video.fadeInMs))
+                    RulerSlider(video.fadeInMs / 1000f, 0f..maxS, 0.1f, { v -> vm.setFades(index, (v * 1000).toLong(), video.fadeOutMs) }, onReset = { vm.setFades(index, 0L, video.fadeOutMs) })
+                }
+                "Out" -> {
+                    ValueHeader("", fadeLabel(video.fadeOutMs))
+                    RulerSlider(video.fadeOutMs / 1000f, 0f..maxS, 0.1f, { v -> vm.setFades(index, video.fadeInMs, (v * 1000).toLong()) }, onReset = { vm.setFades(index, video.fadeInMs, 0L) })
+                }
+                else -> {
+                    ValueHeader("", String.format(Locale.US, "%.0f %%", video.soundLevel * 100))
+                    RulerSlider(video.soundLevel, 0f..1f, 0.02f, { v -> vm.setSoundLevel(index, v) }, onReset = { vm.setSoundLevel(index, 1f) })
+                }
             }
         }
     }
@@ -1775,28 +1805,19 @@ private fun HighlightControls(state: UiState, vm: HeadsupViewModel, onShow: (Fou
     // Search by one metric (e.g. only heart-rate peaks) or all of them.
     var metric by rememberSaveable { mutableStateOf<Metric?>(null) }
     val metrics = HighlightKind.entries.map { it.metric }.distinct().filter { m -> state.activities.any { it.track.has(m) } }
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        Label("Highlights")
-        Spacer(Modifier.weight(1f))
-        SmallAction(
+    ToolSection(
+        "Highlights",
+        info = "Finds the best moments from your activity data (speed, descents, climbs, peaks) in the clips. Pick one kind or all; tap a moment to show it, its circle to take it in or out of the reel.",
+    ) {
+        val kinds = listOf<Metric?>(null) + metrics
+        ChoiceGrid(kinds.map { it?.let(::metricLabel) ?: "All" }, kinds.indexOf(metric), { i -> metric = kinds[i]; vm.findHighlights(kinds[i]) })
+        PanelAction(
             if (found == null) "Find" else "Search again", { vm.findHighlights(metric) },
-            enabled = state.clips.any { it.sync != null } && !state.busy,
+            Modifier.fillMaxWidth(), enabled = state.clips.any { it.sync != null } && !state.busy,
         )
+        if (found != null && found.isEmpty()) Hint("Nothing stands out in the parts with video.")
     }
-    LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        item { FilterChip(selected = metric == null, onClick = { metric = null; vm.findHighlights(null) }, label = { Text("All") }) }
-        items(metrics) { m ->
-            FilterChip(selected = metric == m, onClick = { metric = m; vm.findHighlights(m) }, label = { Text(metricLabel(m)) })
-        }
-    }
-    if (found == null) {
-        Hint("Finds the best moments from your activity data (speed, descents, climbs, peaks) in the clips.")
-        return
-    }
-    if (found.isEmpty()) {
-        Hint("Nothing stands out in the parts with video.")
-        return
-    }
+    if (found.isNullOrEmpty()) return
     for (f in found) {
         val on = f in picked
         Row(
@@ -1823,17 +1844,15 @@ private fun HighlightControls(state: UiState, vm: HeadsupViewModel, onShow: (Fou
             }
         }
     }
-    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-        for ((ms, label) in listOf(5_000L to "5 s", 8_000L to "8 s", 12_000L to "12 s")) {
-            FilterChip(selected = lengthMs == ms, onClick = { lengthMs = ms }, label = { Text(label) })
-        }
+    ToolSection("Highlight reel", info = "Creates a new project with these moments as clips, ready to export; this project stays saved.") {
+        val lengths = listOf(5_000L to "5 s", 8_000L to "8 s", 12_000L to "12 s")
+        LabeledChoice("Each moment", lengths.map { it.second }, { lengths[it].first == lengthMs }, { lengthMs = lengths[it].first })
+        Button(
+            onClick = { vm.makeHighlightReel(found.filter { it in picked }, lengthMs) },
+            enabled = picked.isNotEmpty(),
+            modifier = Modifier.fillMaxWidth(),
+        ) { Text("Make highlight reel (${picked.size})") }
     }
-    Button(
-        onClick = { vm.makeHighlightReel(found.filter { it in picked }, lengthMs) },
-        enabled = picked.isNotEmpty(),
-        modifier = Modifier.fillMaxWidth(),
-    ) { Text("Make highlight reel (${picked.size})") }
-    Hint("Creates a new project with these moments as clips, ready to export; this project stays saved.")
 }
 
 private fun metricLabel(m: Metric) = when (m) {
@@ -2036,15 +2055,22 @@ private fun ProjectRow(state: UiState, vm: HeadsupViewModel, onOpen: () -> Unit,
 @Composable
 private fun SpeedPanel(clip: ClipState, index: Int, timelineFps: Float, vm: HeadsupViewModel, playhead: LongState) {
     var ramp by rememberSaveable(clip.id) { mutableStateOf(clip.speedCurve.isNotEmpty()) }
-    ChoiceGrid(listOf("Constant", "Variable"), if (ramp) 1 else 0, { ramp = it == 1 })
-    Hint(Formats.duration(clip.timelineDurationMs) + " on the timeline")
-    if (ramp) {
-        SpeedRamp(clip, timelineFps, playhead, onPreset = { vm.applySpeedRamp(index, it) }, onCurve = { vm.setSpeedCurve(index, it) })
-    } else {
-        SpeedControls(clip, timelineFps) { vm.setSteadySpeed(index, it) }
+    ToolSection(
+        "Speed",
+        info = "Constant: one speed for the whole clip. Variable: the speed changes along the clip on a curve (ready-made ones, or your own points). Real slow motion needs footage shot at a high frame rate; the notes below say when it will stutter.",
+    ) {
+        ChoiceGrid(listOf("Constant", "Variable"), if (ramp) 1 else 0, { ramp = it == 1 })
+        Text(Formats.duration(clip.timelineDurationMs) + " on the timeline", style = MaterialTheme.typography.labelMedium.copy(fontFamily = GeistMonoFamily), color = HeadsupColors.TextMuted)
+        if (ramp) {
+            SpeedRamp(clip, timelineFps, playhead, onPreset = { vm.applySpeedRamp(index, it) }, onCurve = { vm.setSpeedCurve(index, it) })
+        } else {
+            SpeedControls(clip, timelineFps) { vm.setSteadySpeed(index, it) }
+        }
     }
     if (clip.speedChanged) {
-        LabeledChoice("Sound", listOf("Stretched", "Mute"), { (it == 1) == clip.muteChangedSpeed }, { vm.setMuteChangedSpeed(index, it == 1) })
+        ToolSection("Sound", info = "Stretched: the clip's sound plays at its speed. Mute: the clip is silent while its speed is changed.") {
+            ChoiceGrid(listOf("Stretched", "Mute"), if (clip.muteChangedSpeed) 1 else 0, { vm.setMuteChangedSpeed(index, it == 1) })
+        }
     }
 }
 
@@ -2057,21 +2083,18 @@ private val SPEEDS = listOf(0.25f, 0.5f, 0.75f, 1f, 1.5f, 2f, 3f, 4f)
 @Composable
 private fun SpeedControls(clip: ClipState, timelineFps: Float, onSpeed: (Float) -> Unit) {
     val steady = clip.speedCurve.isEmpty()
-    Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        // Every frame of high-frame-rate footage at the timeline's rate (e.g. 120 fps on a 24 fps timeline: 0.2×).
-        val conform = clip.meta.frameRate?.takeIf { !clip.meta.isPhoto && it > timelineFps + 0.5f }?.let { timelineFps / it }
-        if (conform != null) {
-            FilterChip(
-                selected = steady && kotlin.math.abs(clip.speed - conform) < 0.0005f,
-                onClick = { onSpeed(conform) },
-                label = { Text("All frames · ${String.format(Locale.US, "%.3g", conform)}×") },
-            )
-        }
-        for (speed in SPEEDS) {
-            val label = if (speed % 1f == 0f) "${speed.toInt()}×" else "$speed×".replace("0.", ".")
-            FilterChip(selected = steady && clip.speed == speed, onClick = { onSpeed(speed) }, label = { Text(label) })
-        }
+    // Every frame of high-frame-rate footage at the timeline's rate (e.g. 120 fps on a 24 fps timeline: 0.2×).
+    val conform = clip.meta.frameRate?.takeIf { !clip.meta.isPhoto && it > timelineFps + 0.5f }?.let { timelineFps / it }
+    if (conform != null) {
+        ChoiceGrid(
+            listOf("All frames · ${String.format(Locale.US, "%.3g", conform)}×"),
+            if (steady && kotlin.math.abs(clip.speed - conform) < 0.0005f) 0 else -1, { onSpeed(conform) },
+        )
     }
+    ChoiceGrid(
+        SPEEDS.map { speed -> if (speed % 1f == 0f) "${speed.toInt()}×" else "$speed×".replace("0.", ".") },
+        if (steady) SPEEDS.indexOf(clip.speed) else -1, { onSpeed(SPEEDS[it]) }, minCell = 56.dp,
+    )
     if (!steady) {
         Hint("This clip has a variable speed. Picking a speed here replaces it with one constant speed.")
         return
@@ -2437,10 +2460,14 @@ private fun CutControls(
     var range by remember(clip.id, clip.trimStartMs, clip.trimEndMs) {
         mutableStateOf(clip.trimStartMs.toFloat()..clip.trimEndMs.toFloat())
     }
-    SectionCaption("Cut") {
-        Spacer(Modifier.width(10.dp))
-        Hint("${Formats.duration((range.endInclusive - range.start).toLong())} of ${Formats.duration(clip.meta.durationMs)}")
-    }
+    ToolSection(
+        "Cut",
+        info = "Drag the two ends to keep only part of the clip; the picture shows where each end is. The watch data follows every cut.",
+    ) {
+    Text(
+        "${Formats.duration((range.endInclusive - range.start).toLong())} of ${Formats.duration(clip.meta.durationMs)}",
+        style = MaterialTheme.typography.labelMedium.copy(fontFamily = GeistMonoFamily), color = HeadsupColors.TextMuted,
+    )
     RangeSlider(
         value = range,
         onValueChange = {
@@ -2459,18 +2486,21 @@ private fun CutControls(
         Spacer(Modifier.weight(1f))
         Hint(Formats.duration(range.endInclusive.toLong()))
     }
+    }
     // "Here" is the playhead; the watch data follows every cut automatically. In the order they
     // act along the clip: its start, a cut, its end.
-    SectionCaption("At the playhead")
-    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        PanelAction("Start here", { onTrim(clip.trimStartMs + playhead.longValue, clip.trimEndMs) }, Modifier.weight(1f))
-        PanelAction("Split", { onSplit(playhead.longValue) }, Modifier.weight(1f))
-        PanelAction("End here", { onTrim(clip.trimStartMs, clip.trimStartMs + playhead.longValue) }, Modifier.weight(1f))
+    ToolSection("At the playhead", info = "Start here and End here cut the clip at the playhead; Split cuts it in two there.") {
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            PanelAction("Start here", { onTrim(clip.trimStartMs + playhead.longValue, clip.trimEndMs) }, Modifier.weight(1f))
+            PanelAction("Split", { onSplit(playhead.longValue) }, Modifier.weight(1f))
+            PanelAction("End here", { onTrim(clip.trimStartMs, clip.trimStartMs + playhead.longValue) }, Modifier.weight(1f))
+        }
     }
-    SectionCaption("Clip")
-    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        PanelAction("Full clip", { onTrim(0L, clip.meta.durationMs) }, Modifier.weight(1f), enabled = clip.isTrimmed)
-        PanelAction("Delete clip", onDelete, Modifier.weight(1f), danger = true)
+    ToolSection("Clip", info = "Full clip takes the cut back to the whole recording. Delete takes the clip off the timeline (Undo brings it back).") {
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            PanelAction("Full clip", { onTrim(0L, clip.meta.durationMs) }, Modifier.weight(1f), enabled = clip.isTrimmed)
+            PanelAction("Delete clip", onDelete, Modifier.weight(1f), danger = true)
+        }
     }
 }
 
@@ -2498,7 +2528,6 @@ private fun StartTimeControls(clip: ClipState, activities: List<LoadedActivity>,
         ?: ZoneId.systemDefault().rules.getOffset(Instant.now()).totalSeconds
     Row(verticalAlignment = Alignment.CenterVertically) {
         Column(Modifier.weight(1f)) {
-            Label("Recording start")
             Hint(
                 when {
                     clip.manualStart != null -> "Entered by hand: ${clip.manualStart.toString().replace('T', ' ')}"
@@ -2637,12 +2666,8 @@ private fun SyncGraph(clip: ClipState, track: ActivityTrack, playhead: LongState
     val centre = clip.telemetryUtc(playhead.longValue) ?: return
     val series = track.series.getValue(metric.metric)
 
-    Label("Sync from the graph")
-    LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-        items(metrics) { m -> FilterChip(selected = m == metric, onClick = { chosen = m }, label = { Text(m.label) }) }
-        item { FilterChip(selected = windowMs == 30_000L, onClick = { windowMs = 30_000L; picked = null }, label = { Text("±30 s") }) }
-        item { FilterChip(selected = windowMs == 120_000L, onClick = { windowMs = 120_000L; picked = null }, label = { Text("±2 min") }) }
-    }
+    ChoiceGrid(metrics.map { it.label }, metrics.indexOf(metric), { chosen = metrics[it] })
+    ChoiceGrid(listOf("±30 s", "±2 min"), if (windowMs == 30_000L) 0 else if (windowMs == 120_000L) 1 else -1, { windowMs = if (it == 0) 30_000L else 120_000L; picked = null })
     val from = centre - windowMs
     val to = centre + windowMs
     var lo = java.util.Arrays.binarySearch(series.timesMs, from).let { if (it < 0) -it - 1 else it }
@@ -2688,18 +2713,14 @@ private fun SyncGraph(clip: ClipState, track: ActivityTrack, playhead: LongState
         }
     }
     Row(verticalAlignment = Alignment.CenterVertically) {
-        Hint(
-            picked?.let { String.format(Locale.US, "Shift %+.1f s", it / 1000.0) }
-                ?: "Pause on a clear moment, tap the same one on the graph.",
-            Modifier.weight(1f),
-        )
+        Hint(picked?.let { String.format(Locale.US, "Shift %+.1f s", it / 1000.0) } ?: "Tap the moment on the graph.", Modifier.weight(1f))
         picked?.let { d -> SmallAction("Apply", { onShift(d); picked = null }) }
     }
 }
 
 @Composable
 private fun OffsetControls(offsetMs: Long, onChange: (Long) -> Unit) {
-    ValueHeader("Data offset", String.format(Locale.US, "%+.1f s", offsetMs / 1000.0))
+    ValueHeader("", String.format(Locale.US, "%+.1f s", offsetMs / 1000.0))
     RulerSlider(
         value = offsetMs / 1000f,
         range = -600f..600f,
@@ -2977,20 +2998,21 @@ private fun ColourPage(
             // How it goes: the model fills it (things, people), or another part of the photo
             // covers it (spots, dust, wires on sky or skin): healed to the light there, or cloned as is.
             var method by rememberSaveable { mutableStateOf(HeadsupViewModel.RetouchMethod.REMOVE) }
-            SectionCaption("Remove from the photo")
-            Segmented(HeadsupViewModel.RetouchMethod.entries.map { it.label }, method.ordinal, { method = HeadsupViewModel.RetouchMethod.entries[it] })
-            Hint(
-                when (method) {
+            ToolSection(
+                "Retouch",
+                info = when (method) {
                     HeadsupViewModel.RetouchMethod.REMOVE -> "Select or paint what goes; it is filled from what is around it (best for things and people)."
                     HeadsupViewModel.RetouchMethod.HEAL -> "Paint over a spot, dust or a wire; it is covered from the best matching place nearby, matched to the light and colour there."
                     HeadsupViewModel.RetouchMethod.CLONE -> "Paint over what goes; it is covered with an exact copy of the best matching place nearby (for patterns and edges)."
                 },
-            )
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Spacer(Modifier.weight(1f))
-                SmallAction("Cancel", { vm.cancelRemoval(); onMaskTools(false) })
-                Spacer(Modifier.width(6.dp))
-                Button(onClick = { vm.removeMaskArea(method); onMaskTools(false) }, enabled = mask.strokes.isNotEmpty() && !state.busy) { Text(method.label) }
+            ) {
+                ChoiceGrid(HeadsupViewModel.RetouchMethod.entries.map { it.label }, method.ordinal, { method = HeadsupViewModel.RetouchMethod.entries[it] })
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Spacer(Modifier.weight(1f))
+                    SmallAction("Cancel", { vm.cancelRemoval(); onMaskTools(false) })
+                    Spacer(Modifier.width(6.dp))
+                    Button(onClick = { vm.removeMaskArea(method); onMaskTools(false) }, enabled = mask.strokes.isNotEmpty() && !state.busy) { Text(method.label) }
+                }
             }
         } else if (maskNeedsTracking(clip, mask)) {
             // On video, a painted mask not tracked since it changed stays where it is drawn: tracking
@@ -3008,12 +3030,12 @@ private fun ColourPage(
             }
             BrushControls(state, vm, pictureSource)
             // However exact the selection, some edges should fade (a ragged shore): a soft band.
-            SectionCaption("Feather")
-            ValueHeader("Feather", if (mask.feather <= 0f) "Off" else String.format(Locale.US, "%.0f %%", mask.feather * 100f))
-            RulerSlider(mask.feather, 0f..1f, 0.02f, { v -> vm.updateMask { it.copy(feather = v) } }, onReset = { vm.updateMask { it.copy(feather = 0f) } })
-            Hint("Makes the mask's edge a gradual band instead of a sharp cut, for edges no selection follows exactly. Off: the edge follows the picture's.")
+            ToolSection("Feather", info = "Makes the mask's edge a gradual band instead of a sharp cut, for edges no selection follows exactly. Off: the edge follows the picture's. Double-tap the ruler to turn it off.") {
+                ValueHeader("", if (mask.feather <= 0f) "Off" else String.format(Locale.US, "%.0f %%", mask.feather * 100f))
+                RulerSlider(mask.feather, 0f..1f, 0.02f, { v -> vm.updateMask { it.copy(feather = v) } }, onReset = { vm.updateMask { it.copy(feather = 0f) } })
+            }
             // A wide transition into the picture, where it lies set apart from how wide it is.
-            SectionCaption("Blend")
+            ToolSection("Blend", info = "Blend: how far the mask's change fades into the picture around what was selected, up to a third of the frame. Position: Outside keeps the full change on the selection and fades it out around it; Inside fades it within the selection, leaving the rest untouched; between, across the outline. Used in place of Feather.") {
             ValueHeader("Blend", if (mask.blend <= 0f) "Off" else String.format(Locale.US, "%.0f %%", mask.blend * 100f))
             RulerSlider(mask.blend, 0f..1f, 0.01f, { v -> vm.updateMask { it.copy(blend = v) } }, onReset = { vm.updateMask { it.copy(blend = 0f) } })
             if (mask.blend > 0f) {
@@ -3024,7 +3046,7 @@ private fun ColourPage(
                 })
                 RulerSlider(mask.blendPosition, -1f..1f, 0.02f, { v -> vm.updateMask { it.copy(blendPosition = v) } }, onReset = { vm.updateMask { it.copy(blendPosition = 1f) } })
             }
-            Hint("Blend: how far the mask's change fades into the picture around what was selected, up to a third of the frame. Position: Outside keeps the full change on the selection and fades it out around it; Inside fades it within the selection, leaving the rest untouched; between, across the outline. Used in place of Feather.")
+            }
         } else if (editingShape != null) {
             SmallAction(if (state.maskOverlay) "Overlay ✓" else "Overlay", { vm.toggleMaskOverlay() })
             LazyRow(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
@@ -3032,15 +3054,16 @@ private fun ColourPage(
             }
             // A moving mask is shown and edited as it is at the playhead.
             val here = vm.maskAtPlayhead(mask)
-            ValueHeader(editingShape.label, String.format(Locale.US, editingShape.format, editingShape.shown(here)))
-            RulerSlider(
-                value = editingShape.get(here),
-                range = editingShape.range,
-                step = editingShape.step,
-                onChange = { v -> vm.updateMask { editingShape.set(it, v) } },
-                onReset = { vm.updateMask { editingShape.set(it, editingShape.get(ColourMask(it.kind))) } },
-            )
-            Hint(if (mask.kind == MaskKind.LINEAR) "Drag the middle line to move the gradient, a dashed line to set where it starts or ends (the other stays); two fingers turn it." else "Drag the middle to move it, an end to stretch it (the other end stays); two fingers resize and turn it. Feather: how gradual it is, up to a gradient from the middle far out.")
+            ToolSection(editingShape.label, info = if (mask.kind == MaskKind.LINEAR) "Drag the middle line to move the gradient, a dashed line to set where it starts or ends (the other stays); two fingers turn it." else "Drag the middle to move it, an end to stretch it (the other end stays); two fingers resize and turn it. Feather: how gradual it is, up to a gradient from the middle far out." + " Double-tap the ruler to put it back.") {
+                ValueHeader("", String.format(Locale.US, editingShape.format, editingShape.shown(here)))
+                RulerSlider(
+                    value = editingShape.get(here),
+                    range = editingShape.range,
+                    step = editingShape.step,
+                    onChange = { v -> vm.updateMask { editingShape.set(it, v) } },
+                    onReset = { vm.updateMask { editingShape.set(it, editingShape.get(ColourMask(it.kind))) } },
+                )
+            }
         }
         // A line or an oval can be narrowed to a colour or a brightness; a range mask is only that.
         // A selected or painted mask is not (it follows what was selected; to narrow it, combine it
@@ -3053,11 +3076,8 @@ private fun ColourPage(
     // A mask joined to the one before it changes that layer's coverage; the layer has the corrections.
     if (target == GradeTarget.MASK && mask != null && state.selectedMask > 0 && mask.join != MaskJoin.NEW) {
         val layer = MaskRange.layerOf(clip.masks, state.selectedMask)
-        SectionCaption("${mask.join.label} · ${maskName(mask)}")
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Hint("Changes where mask ${layer + 1} (${maskName(clip.masks[layer])}) applies; its corrections are that mask's.", Modifier.weight(1f))
-            Spacer(Modifier.width(8.dp))
-            PillAction("→", "Mask ${layer + 1}", { vm.selectMask(layer) })
+        ToolSection("${mask.join.label} · ${maskName(mask)}", info = "Changes where mask ${layer + 1} (${maskName(clip.masks[layer])}) applies; its corrections are that mask's.") {
+            PanelAction("Go to mask ${layer + 1}", { vm.selectMask(layer) }, Modifier.fillMaxWidth())
         }
         return
     }
@@ -3123,8 +3143,9 @@ private fun ColourPage(
         return
     }
     if (adjustment == Adjustment.BLEND) {
-        ChoiceGrid(BLEND_LENGTHS.map { it.second }, BLEND_LENGTHS.indexOfFirst { it.first == clip.transitionMs }, { vm.setTransition(index, BLEND_LENGTHS[it].first) })
-        Hint("Starts with the previous clip's colours and changes to this clip's over the chosen time, e.g. after a split where the light changes.")
+        ToolSection("Blend in", info = "Starts with the previous clip's colours and changes to this clip's over the chosen time, e.g. after a split where the light changes.") {
+            ChoiceGrid(BLEND_LENGTHS.map { it.second }, BLEND_LENGTHS.indexOfFirst { it.first == clip.transitionMs }, { vm.setTransition(index, BLEND_LENGTHS[it].first) })
+        }
         return
     }
     if (adjustment == Adjustment.LUT) {
@@ -3132,17 +3153,19 @@ private fun ColourPage(
             // On all photos (clips) at once, and on those added later; the one they share is shown.
             val shared = state.clips.map { it.lutName }.distinct().singleOrNull()
             val mixed = state.clips.map { it.lutName }.distinct().size > 1
-            LutControls(state, shared, if (mixed) "None (now mixed)" else "None", { vm.setLutForAllClips(it) }, null, vm, onAddLut)
-            Hint(if (state.photoProject) "Set on every photo of the album, and on photos added later." else "Set on every clip, and on clips added later.")
+            LutControls(
+                state, shared, if (mixed) "None (now mixed)" else "None", { vm.setLutForAllClips(it) }, vm, onAddLut,
+                note = if (state.photoProject) "Set on every photo of the album, and on photos added later." else "Set on every clip, and on clips added later.",
+            )
             return
         }
         if (target == GradeTarget.GROUP && group != null) {
-            LutControls(state, clip.lutName, "None", { vm.setGroupLut(group.id, it) }, null, vm, onAddLut)
+            LutControls(state, clip.lutName, "None", { vm.setGroupLut(group.id, it) }, vm, onAddLut, note = "Set on every ${if (state.photoProject) "photo" else "clip"} of the group.")
         } else {
             val inherited = group?.lutName
             LutControls(
                 state, clip.lutName, if (inherited != null) "Group's (${app.headsup.core.color.CameraLog.labelOf(inherited)})" else "None", { vm.setClipLut(index, it) },
-                if (state.clips.size > 1) vm::setLutForAllClips else null, vm, onAddLut,
+                vm, onAddLut,
             )
         }
         return
@@ -3186,7 +3209,6 @@ private fun ColourPage(
     ToolSection(
         adjustment.label,
         info = adjustment.info + " Double-tap the ruler to reset it, hold it to see the picture without it.",
-        onReset = if (value != adjustment.neutral) ({ vm.updateGrade { adjustment.set(it, adjustment.neutral) } }) else null,
     ) {
         ValueHeader("", String.format(Locale.US, adjustment.format, value))
         RulerSlider(
@@ -3288,8 +3310,7 @@ private fun WheelControls(state: UiState, vm: HeadsupViewModel) {
     }
     ToolSection(
         "Balance",
-        info = "Where the shadows end and the highlights begin, for all three wheels.",
-        onReset = if (W.balance(wheels) != 0f) ({ set(9, 0f) }) else null,
+        info = "Where the shadows end and the highlights begin, for all three wheels. Double-tap the ruler to reset it.",
     ) {
     ValueHeader("", String.format(Locale.US, "%+.0f", W.balance(wheels) * 100))
     RulerSlider(
@@ -3570,8 +3591,7 @@ private fun BlackAndWhiteControls(state: UiState, vm: HeadsupViewModel) {
     var band by rememberSaveable { mutableStateOf(app.headsup.core.color.ColourMixer.Band.BLUE) }
     ToolSection(
         "Black & white",
-        info = "Turns the picture grey; then each colour can be made lighter or darker (a deep sky, bright skin).",
-        onReset = if (bw.drop(1).any { it != 0f }) ({ vm.updateGrade { g -> g.copy(bw = g.bw.toMutableList().also { for (k in 1 until it.size) it[k] = 0f }) } }) else null,
+        info = "Turns the picture grey; then each colour can be made lighter or darker (a deep sky, bright skin). Double-tap the ruler to reset a colour.",
     ) {
     ChoiceGrid(listOf("Colour", "Black & white"), if (B.on(bw)) 1 else 0, { i ->
         vm.updateGrade { g -> g.copy(bw = g.bw.toMutableList().also { it[0] = if (i == 1) 1f else 0f }) }
@@ -3761,7 +3781,7 @@ private fun LooksPanel(state: UiState, vm: HeadsupViewModel, frameSource: (() ->
         PillAction("⌕", if (stats == null) (if (clip.meta.isPhoto) "Analyse photo" else "Analyse clip") else "Again", { vm.analyseClip(frameSource) }, enabled = !state.busy)
     }
     if (stats != null) {
-        SectionCaption("Suggested for this clip")
+        SectionCaption(if (clip.meta.isPhoto) "Suggested for this photo" else "Suggested for this clip")
         val suggested = suggestedLooks(stats)
         ChoiceGrid(suggested.map { it.label }, suggested.indexOf(fast?.look), { choose(suggested[it]) })
     }
@@ -3781,8 +3801,11 @@ private fun LooksPanel(state: UiState, vm: HeadsupViewModel, frameSource: (() ->
             SmallAction("Done", { vm.closeFast(undo = false) })
         }
         Hint(
-            (if (stats != null) "Fitted to this clip. " else "Not fitted yet: Analyse clip fits it. ") +
-                "Hold the ruler to see the clip without it. Done keeps it as normal corrections and effects, adjustable afterwards.",
+            run {
+                val what = if (clip.meta.isPhoto) "photo" else "clip"
+                (if (stats != null) "Fitted to this $what. " else "Not fitted yet: Analyse $what fits it. ") +
+                    "Hold the ruler to see the $what without it. Done keeps it as normal corrections and effects, adjustable afterwards."
+            },
         )
     } else {
         Hint("A complete look: colour taken away rather than added, soft highlights, grain and light. Profiles: a starting rendering under your corrections.")
@@ -3877,7 +3900,7 @@ private fun FastEdit(state: UiState, vm: HeadsupViewModel) {
         Spacer(Modifier.weight(1f))
         SmallAction("Done", { vm.closeFast(undo = false) })
     }
-    Hint("Hold the ruler to see the clip without it. Done keeps it as normal corrections (Density, Roll-off, Tame…) and effects (Grain, Glow, Lens…).")
+    Hint("Hold the ruler to see the ${if (state.photoProject) "photo" else "clip"} without it. Done keeps it as normal corrections (Density, Roll-off, Tame…) and effects (Grain, Glow, Lens…).")
 }
 
 /**
@@ -3978,12 +4001,20 @@ private fun BrushControls(state: UiState, vm: HeadsupViewModel, pictureSource: (
             CircleOption(mode.symbol, mode.label, selected = brush.mode == mode, modified = false) { vm.updateBrush { it.copy(mode = mode) } }
         }
     }
+    val zoomNote = " Two fingers zoom the picture; View moves around it."
+    val modeInfo = when (brush.mode) {
+        BrushMode.SELECT -> "Tap an object to select it; tap other parts of it to take them in too, or with Subtract a part that is not it (the whole is found again each time). Tap the same place again for a smaller or larger part. You can also draw round it, or a line across to split the picture. Then fix what is wrong (Push), and finish below."
+        BrushMode.PUSH -> "Put a finger on the outline where it is wrong and move it where it should be: that part follows, the rest stays. Grip: how much of the outline moves with the finger."
+        BrushMode.SOFTEN -> "Soften makes the mask's edge gradual where you paint along it; elsewhere the cut stays sharp. Size: how wide the soft band is; Strength: how soft." + zoomNote
+        BrushMode.ERASE -> "Erase takes the mask's corrections away where you paint." + zoomNote
+        BrushMode.PAINT -> "Paint where the mask's corrections go. Softness: how gradual the brush's edge is, for the strokes you paint from now on (low for precise edges); what is painted stays as it is." + zoomNote
+        BrushMode.MOVE -> "One finger moves the mask; two turn and scale it."
+        BrushMode.VIEW -> "One finger moves around the zoomed picture, two zoom it, a double tap fits it again. Nothing is painted."
+    }
+    ToolSection(brush.mode.label, info = modeInfo) {
     when (brush.mode) {
         BrushMode.SELECT -> {
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                ChoiceGrid(listOf("Add", "Subtract"), if (brush.subtract) 1 else 0, { i -> vm.updateBrush { it.copy(subtract = i == 1) } }, Modifier.weight(1f))
-            }
-            Hint("Tap an object to select it; tap other parts of it to take them in too, or with Subtract a part that is not it (the whole is found again each time). Tap the same place again for a smaller or larger part. You can also draw round it, or a line across to split the picture. Then fix what is wrong (Push), and finish below.")
+            ChoiceGrid(listOf("Add", "Subtract"), if (brush.subtract) 1 else 0, { i -> vm.updateBrush { it.copy(subtract = i == 1) } })
         }
         BrushMode.PUSH -> {
             // Grab the outline and move it; then lay it onto the picture's edges if wanted.
@@ -3993,18 +4024,13 @@ private fun BrushControls(state: UiState, vm: HeadsupViewModel, pictureSource: (
                 onChange = { v -> vm.updateBrush { it.copy(radius = v) }; vm.showBrush() },
                 onReset = { vm.updateBrush { it.copy(radius = BrushSetting.SIZE.default) }; vm.showBrush() },
             )
-            Hint("Put a finger on the outline where it is wrong and move it where it should be: that part follows, the rest stays. Grip: how much of the outline moves with the finger.")
         }
         BrushMode.PAINT, BrushMode.ERASE, BrushMode.SOFTEN -> {
             // Strength only for Soften (how soft); painting is always at full strength.
             val settings = if (brush.mode == BrushMode.SOFTEN) listOf(BrushSetting.SIZE, BrushSetting.FLOW) else listOf(BrushSetting.SIZE, BrushSetting.SOFTNESS)
             var chosen by rememberSaveable { mutableStateOf(BrushSetting.SIZE) }
             val setting = chosen.takeIf { it in settings } ?: settings.first()
-            LazyRow(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
-                items(settings) { b ->
-                    CircleOption(b.symbol, b.label, selected = b == setting, modified = false) { chosen = b }
-                }
-            }
+            ChoiceGrid(settings.map { it.label }, settings.indexOf(setting), { chosen = settings[it] })
             val value = when (setting) {
                 BrushSetting.SIZE -> brush.radius
                 BrushSetting.SOFTNESS -> brush.softness
@@ -4022,35 +4048,29 @@ private fun BrushControls(state: UiState, vm: HeadsupViewModel, pictureSource: (
             }
             ValueHeader(setting.label, String.format(Locale.US, "%.0f %%", value * 100f))
             RulerSlider(value = value, range = setting.range, step = 0.005f, onChange = { set(it) }, onReset = { set(setting.default) })
-            Hint(
-                if (brush.mode == BrushMode.SOFTEN) "Soften makes the mask's edge gradual where you paint along it; elsewhere the cut stays sharp. Size: how wide the soft band is; Strength: how soft. Two fingers zoom the picture; View moves around it."
-                else if (brush.mode == BrushMode.ERASE) "Erase takes the mask's corrections away where you paint. Two fingers zoom the picture; View moves around it."
-                else "Paint where the mask's corrections go. Softness: how gradual the brush's edge is, for the strokes you paint from now on (low for precise edges); what is painted stays as it is. Two fingers zoom the picture; View moves around it.",
-            )
         }
-        BrushMode.MOVE -> Hint("One finger moves the mask; two turn and scale it.")
-        BrushMode.VIEW -> Hint("One finger moves around the zoomed picture, two zoom it, a double tap fits it again. Nothing is painted.")
+        BrushMode.MOVE, BrushMode.VIEW -> Unit
+    }
     }
     // The last steps, in the order they are taken: Select, fix it (Push, Paint, Erase), then lay it
     // onto the picture's edges, then take a little in or out.
     if (mask.strokes.isNotEmpty() || mask.sequence != null) {
-        SectionCaption("Finish")
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text("1", style = MaterialTheme.typography.labelLarge, color = HeadsupColors.TextMuted)
-            PillAction("⌁", "Fit to edges", { pictureSource?.let(vm::fitMaskToEdges) }, enabled = pictureSource != null && mask.strokes.isNotEmpty() && !state.busy)
-            Hint("lays the outline onto the picture's edges close to it", Modifier.weight(1f))
+        ToolSection(
+            "Finish",
+            info = "1 · Fit to edges lays the outline onto the picture's edges close to it. 2 · Edge takes in a little more by the outline (a rim, a halo) or a little less, only what looks like it, so the outline keeps the picture's shape. Double-tap the ruler to leave the edge as it is.",
+        ) {
+            PanelAction("1 · Fit to edges", { pictureSource?.let(vm::fitMaskToEdges) }, Modifier.fillMaxWidth(), enabled = pictureSource != null && mask.strokes.isNotEmpty() && !state.busy)
+            val e = mask.edge
+            ValueHeader(
+                "2 · Edge",
+                when {
+                    kotlin.math.abs(e) < 0.005f -> "As it is"
+                    e < 0f -> String.format(Locale.US, "Tighter %.0f %%", -e * 100f)
+                    else -> String.format(Locale.US, "Fuller %.0f %%", e * 100f)
+                },
+            )
+            RulerSlider(value = e, range = -1f..1f, step = 0.05f, onChange = { v -> vm.setMaskEdge(v, pictureSource) }, onReset = { vm.setMaskEdge(0f, pictureSource) })
         }
-        val e = mask.edge
-        ValueHeader(
-            "2 · Edge",
-            when {
-                kotlin.math.abs(e) < 0.005f -> "As it is"
-                e < 0f -> String.format(Locale.US, "Tighter %.0f %%", -e * 100f)
-                else -> String.format(Locale.US, "Fuller %.0f %%", e * 100f)
-            },
-        )
-        RulerSlider(value = e, range = -1f..1f, step = 0.05f, onChange = { v -> vm.setMaskEdge(v, pictureSource) }, onReset = { vm.setMaskEdge(0f, pictureSource) })
-        Hint("Edge takes in a little more by the outline (a rim, a halo) or a little less, only what looks like it, so the outline keeps the picture's shape.")
     }
 }
 
@@ -4139,7 +4159,12 @@ private fun Layers(
             action()
         }
         // What a new mask is: one list, what is found (an object, the sky) and what is drawn or picked.
-        SectionCaption("New mask")
+        ToolSection(
+            "New mask",
+            info = "Object: tap what to correct (tap more of it to take it in, with Subtract what is not it), draw round it or split the picture with a line. Sky: the sky found at once (on video followed when tracked). " +
+                "Brush: paint it. Linear: a gradient across the picture (drag its dashed lines to set where it starts and ends). Radial: a gradient round a point (a face, a light, a vignette of your own). Colour: everything of a colour you tap. Light: a range of brightness." +
+                if (clip.meta.isPhoto) " Retouch: select something and it is taken out of the photo, filled from what is around it." else "",
+        ) {
         LazyRow(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
             item { CircleOption("◎", "Object", selected = false, modified = false) { add { vm.addBrushMask(BrushMode.SELECT) } } }
             item {
@@ -4155,11 +4180,7 @@ private fun Layers(
             // Photos: select something as a mask is selected, and it is removed (filled from around it).
             if (clip.meta.isPhoto) item { CircleOption("⌫", "Retouch", selected = false, modified = false) { add { vm.startRemoval() } } }
         }
-        Hint(
-            "Object: tap what to correct (tap more of it to take it in, with Subtract what is not it), draw round it or split the picture with a line. Sky: the sky found at once (on video followed when tracked). " +
-                "Brush: paint it. Linear: a gradient across the picture (drag its dashed lines to set where it starts and ends). Radial: a gradient round a point (a face, a light, a vignette of your own). Colour: everything of a colour you tap. Light: a range of brightness." +
-                if (clip.meta.isPhoto) " Remove: select something and it is taken out of the photo, filled from what is around it." else "",
-        )
+        }
         return true
     }
     if (!onMask) {
@@ -4191,9 +4212,13 @@ private fun Layers(
 @Composable
 private fun MaskRanges(state: UiState, mask: ColourMask, vm: HeadsupViewModel) {
     val colour = mask.colour
-    SectionCaption("Colour range") {
-        if (colour != null) SmallAction("Remove", { vm.updateMask { it.copy(colour = null) } })
-    }
+    ToolSection(
+        "Colour range",
+        info = (if (mask.kind == MaskKind.RANGE) "The mask is every part of the picture in one colour, wherever it is: pick it on the picture (e.g. the sky's blue, a red jacket), then set how close a colour must be to count. Its corrections (Adjust) change only that colour."
+        else "Narrows this mask to one colour inside it: pick the colour on the picture; only that colour within the mask gets its corrections.") +
+            " Range: how far from the picked colour still counts. Low: only that very colour; high: its neighbours too. Hold a finger on the picture to see it without this mask. Reset takes the colour off.",
+        onReset = if (colour != null) ({ vm.updateMask { it.copy(colour = null) } }) else null,
+    ) {
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
         if (colour != null) {
             Box(
@@ -4205,14 +4230,7 @@ private fun MaskRanges(state: UiState, mask: ColourMask, vm: HeadsupViewModel) {
         PillAction("◈", if (colour == null) "Pick a colour" else "Pick again", { vm.setPickingColour(!state.pickingColour) }, selected = state.pickingColour)
     }
     if (state.pickingColour) Hint("Tap the colour on the picture (hold and slide to aim).")
-    if (colour == null && !state.pickingColour) {
-        Hint(
-            if (mask.kind == MaskKind.RANGE) "The mask is every part of the picture in one colour, wherever it is: pick it on the picture (e.g. the sky's blue, a red jacket), then set how close a colour must be to count. Its corrections (Adjust) change only that colour."
-            else "Narrows this mask to one colour inside it: pick the colour on the picture; only that colour within the mask gets its corrections.",
-        )
-    }
     if (colour != null) {
-        Hint("Range: how far from the picked colour still counts. Low: only that very colour; high: its neighbours too. Hold a finger on the picture to see it without this mask.")
         ValueHeader("Range", String.format(Locale.US, "%.0f %%", colour.tolerance * 100))
         RulerSlider(
             value = colour.tolerance,
@@ -4222,13 +4240,16 @@ private fun MaskRanges(state: UiState, mask: ColourMask, vm: HeadsupViewModel) {
             onReset = { vm.updateMask { m -> m.copy(colour = m.colour?.copy(tolerance = 0.35f)) } },
         )
     }
-    val luma = mask.luma
-    SectionCaption("Luminance range") {
-        if (luma != null) SmallAction("Remove", { vm.updateMask { it.copy(luma = null) } })
     }
+    val luma = mask.luma
+    ToolSection(
+        "Luminance range",
+        info = "Narrows the mask to a range of brightness: From and To are where it starts and ends, Softness how gradual its ends are. Reset takes the range off.",
+        onReset = if (luma != null) ({ vm.updateMask { it.copy(luma = null) } }) else null,
+    ) {
     if (luma == null) {
-        PillAction("☼", "Limit by brightness", { vm.updateMask { it.copy(luma = LumaRange()) } })
-        return
+        PanelAction("Limit by brightness", { vm.updateMask { it.copy(luma = LumaRange()) } }, Modifier.fillMaxWidth())
+        return@ToolSection
     }
     var part by rememberSaveable { mutableStateOf(0) }
     Segmented(listOf("From", "To", "Softness"), part, { part = it })
@@ -4255,18 +4276,19 @@ private fun MaskRanges(state: UiState, mask: ColourMask, vm: HeadsupViewModel) {
             vm.updateMask { m -> m.copy(luma = m.luma?.let { l -> when (part) { 0 -> l.copy(low = d.low); 1 -> l.copy(high = d.high); else -> l.copy(soft = d.soft) } }) }
         },
     )
+    }
 }
 
 /** How mask [index] works with the one before it: its own layer, or added to, taken from, or crossed with it. */
 @Composable
 private fun MaskJoinControls(clip: ClipState, index: Int, mask: ColourMask, vm: HeadsupViewModel) {
     val layer = MaskRange.layerOf(clip.masks.take(index), index - 1)
-    SectionCaption("Combine")
-    Segmented(MaskJoin.entries.map { if (it == MaskJoin.NEW) "Own" else it.label }, mask.join.ordinal, { vm.setMaskJoin(MaskJoin.entries[it]) })
-    Hint(
-        if (mask.join == MaskJoin.NEW) "Its own corrections. Add, Subtract or Intersect make it change where mask ${layer + 1} applies instead."
-        else "${mask.join.label} with mask ${layer + 1} (${maskName(clip.masks[layer])}), which keeps the corrections.",
-    )
+    ToolSection(
+        "Combine",
+        info = "Own: the mask has its own corrections. Add, Subtract or Intersect make it change where mask ${layer + 1} (${maskName(clip.masks[layer])}) applies instead; that mask keeps the corrections.",
+    ) {
+        ChoiceGrid(MaskJoin.entries.map { if (it == MaskJoin.NEW) "Own" else it.label }, mask.join.ordinal, { vm.setMaskJoin(MaskJoin.entries[it]) })
+    }
 }
 
 /**
@@ -4328,6 +4350,15 @@ private fun maskSymbol(m: ColourMask): String = m.strokes.filter { !it.erase && 
 @Composable
 private fun MaskMotion(state: UiState, clip: ClipState, mask: ColourMask, vm: HeadsupViewModel, playhead: LongState, onSeek: (Long) -> Unit) {
     if (clip.meta.isPhoto) return
+    ToolSection(
+        "Motion",
+        info = when {
+            mask.kind == MaskKind.BRUSH && mask.sequence != null -> "Found again on each frame by AI. Where it slips, go there, fix it (Select, Paint, Erase) and Track: the fix moves with the picture onto the frames before and after, up to the frames fixed earlier (${mask.anchors.size} so far), which stay as they are."
+            mask.kind == MaskKind.BRUSH -> "Track finds the mask again on each frame with AI (about a second a frame on a phone; Stop keeps what was found): it keeps the object's shape and ends when the object leaves the picture."
+            mask.keys.isEmpty() -> "Place the mask, then Track (it follows the picture both ways from here), or pause, + Key, and move the mask at a few moments."
+            else -> "Pause on a key (or tap its diamond) and move the mask to change it; between keys it glides."
+        },
+    ) {
     Row(verticalAlignment = Alignment.CenterVertically) {
         val stale = maskNeedsTracking(clip, mask)
         Text(
@@ -4367,14 +4398,7 @@ private fun MaskMotion(state: UiState, clip: ClipState, mask: ColourMask, vm: He
             onClear = vm::clearMaskKeys,
         )
     }
-    Hint(
-        when {
-            mask.kind == MaskKind.BRUSH && mask.sequence != null -> "Found again on each frame by AI. Where it slips, go there, fix it (Select, Paint, Erase) and Track: the fix moves with the picture onto the frames before and after, up to the frames fixed earlier (${mask.anchors.size} so far), which stay as they are."
-            mask.kind == MaskKind.BRUSH -> "Track finds the mask again on each frame with AI (about a second a frame on a phone; Stop keeps what was found): it keeps the object's shape and ends when the object leaves the picture."
-            mask.keys.isEmpty() -> "Place the mask, then Track (it follows the picture both ways from here), or pause, + Key, and move the mask at a few moments."
-            else -> "Pause on a key (or tap its diamond) and move the mask to change it; between keys it glides."
-        },
-    )
+    }
 }
 
 /** LUT library: the camera LUT is the last step, after all corrections. */
@@ -4384,31 +4408,41 @@ private fun LutControls(
     current: String?,
     noneLabel: String,
     onPick: (String?) -> Unit,
-    onAll: ((String?) -> Unit)?,
     vm: HeadsupViewModel,
     onAddLut: () -> Unit,
+    /** Where the choice goes, when it is more than this clip or photo (shown under ⓘ). */
+    note: String? = null,
 ) {
     val CL = app.headsup.core.color.CameraLog
-    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        FilterChip(selected = current == null, onClick = { onPick(null) }, label = { Text(noneLabel) })
-        for (name in state.luts) {
-            FilterChip(selected = current == name, onClick = { onPick(name) }, label = { Text(name) })
+    ToolSection(
+        "LUT",
+        info = "A colour table applied last, after all corrections. + .cube loads your own (from a camera maker or a colourist)." + (note?.let { " $it" } ?: ""),
+    ) {
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            FilterChip(selected = current == null, onClick = { onPick(null) }, label = { Text(noneLabel) })
+            for (name in state.luts) {
+                FilterChip(selected = current == name, onClick = { onPick(name) }, label = { Text(name) })
+            }
+            FilterChip(selected = false, onClick = onAddLut, label = { Text("+ .cube") })
         }
-        FilterChip(selected = false, onClick = onAddLut, label = { Text("+ .cube") })
+        current?.takeIf { CL.profileOf(it) == null }?.let { name ->
+            Row {
+                Spacer(Modifier.weight(1f))
+                SmallAction("Delete $name", { vm.deleteLut(name) })
+            }
+        }
     }
     // Built in: the cameras' log curves to Rec.709, from what their makers publish.
-    SectionCaption("Camera log → Rec.709")
-    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        for (p in app.headsup.core.color.CameraLog.Profile.entries) {
-            val name = CL.nameOf(p)
-            FilterChip(selected = current == name, onClick = { onPick(if (current == name) null else name) }, label = { Text(p.label) })
+    ToolSection(
+        "Camera log → Rec.709",
+        info = "Pick the camera's log profile and gamut as set when shooting. Made from the makers' published curves; for a profile without one (DJI D-Log M), load the maker's .cube.",
+    ) {
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            for (p in app.headsup.core.color.CameraLog.Profile.entries) {
+                val name = CL.nameOf(p)
+                FilterChip(selected = current == name, onClick = { onPick(if (current == name) null else name) }, label = { Text(p.label) })
+            }
         }
-    }
-    Hint("Pick the camera's log profile and gamut as set when shooting. Made from the makers' published curves; for a profile without one (DJI D-Log M), load the maker's .cube.")
-    Row {
-        if (onAll != null) SmallAction(if (state.photoProject) "Use for all photos" else "Use for all clips", { onAll(current) })
-        Spacer(Modifier.weight(1f))
-        current?.takeIf { CL.profileOf(it) == null }?.let { name -> SmallAction("Delete $name", { vm.deleteLut(name) }) }
     }
 }
 
@@ -4451,7 +4485,8 @@ private fun GroupControls(state: UiState, clip: ClipState, index: Int, group: Cl
         val running = state.work.any { it.clipId == clip.id && it.maskIndex == null }
         Row(verticalAlignment = Alignment.CenterVertically) {
             Hint(
-                "Matches every clip of the group in colour to this one (white balance, tint, saturation, skin), measured across each clip. Each keeps its own brightness.",
+                if (state.photoProject) "Matches every photo of the group in colour to this one (white balance, tint, saturation, skin). Each keeps its own brightness."
+                else "Matches every clip of the group in colour to this one (white balance, tint, saturation, skin), measured across each clip. Each keeps its own brightness.",
                 Modifier.weight(1f),
             )
             Spacer(Modifier.width(8.dp))
@@ -4467,7 +4502,7 @@ private fun GroupControls(state: UiState, clip: ClipState, index: Int, group: Cl
             ValueHeader("Match strength", String.format(Locale.US, "%.0f %%", session.strength * 100))
             RulerSlider(session.strength, 0f..1f, 0.02f, vm::setMatchStrength, onReset = { vm.setMatchStrength(1f) })
             // Each clip: in or out, how much of its change, and (selected) its own ruler.
-            SectionCaption("Clips matched")
+            SectionCaption(if (state.photoProject) "Photos matched" else "Clips matched")
             for ((id, delta) in session.memberDeltas) {
                 val i = state.clips.indexOfFirst { it.id == id }
                 val c = state.clips.getOrNull(i) ?: continue
@@ -4487,10 +4522,11 @@ private fun GroupControls(state: UiState, clip: ClipState, index: Int, group: Cl
             }
             session.memberDeltas[clip.id]?.let {
                 val share = session.memberStrength[clip.id] ?: 1f
-                ValueHeader("This clip", String.format(Locale.US, "%.0f %%", share * 100))
+                ValueHeader(if (state.photoProject) "This photo" else "This clip", String.format(Locale.US, "%.0f %%", share * 100))
                 RulerSlider(share, 0f..1f, 0.02f, { v -> vm.setMemberMatch(clip.id, v) }, onReset = { vm.setMemberMatch(clip.id, 1f) }, onHold = vm::compareMatchMember)
-                Hint("Hold the ruler to see this clip before the match. Tap a clip in the list to show it.")
-            } ?: Hint("Tap a clip in the list to show it and set how much of the match it takes.")
+                val what = if (state.photoProject) "photo" else "clip"
+                Hint("Hold the ruler to see this $what before the match. Tap a $what in the list to show it.")
+            } ?: Hint("Tap a ${if (state.photoProject) "photo" else "clip"} in the list to show it and set how much of the match it takes.")
             Row {
                 Spacer(Modifier.weight(1f))
                 SmallAction("Undo match", vm::undoMatch)
@@ -4681,9 +4717,12 @@ private fun EffectsPanel(state: UiState, vm: HeadsupViewModel, kind: EffectKind,
             }
             // On or off per clip (or photo); the layout and widgets are shared by the project.
             val on = style.enabled && effects.dashboard
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(if (state.photoProject) "Dashboard on this photo" else "Dashboard on this clip", Modifier.weight(1f), style = MaterialTheme.typography.labelLarge)
-                Switch(checked = on, onCheckedChange = { v ->
+            ToolSection(
+                "Dashboard",
+                info = "The activity's data burnt into the picture. On or off for each ${if (state.photoProject) "photo" else "clip"} (or all, above); its widgets, layout and type are the project's.",
+            ) {
+                ChoiceGrid(listOf("Off", "On"), if (on) 1 else 0, { i ->
+                    val v = i == 1
                     if (v && !style.enabled) updateStyle { it.copy(enabled = true) }
                     updateEffects { it.copy(dashboard = v) }
                 })
@@ -4692,35 +4731,27 @@ private fun EffectsPanel(state: UiState, vm: HeadsupViewModel, kind: EffectKind,
                 var tab by rememberSaveable { mutableStateOf(0) }
                 PillTabs(listOf("Widgets", "Layout", "Text", "Sync"), tab) { tab = it }
                 when (tab) {
-                    0 -> WidgetControls(style, activities, updateStyle)
-                    1 -> LayoutControls(style, updateStyle)
-                    2 -> TextControls(style, updateStyle)
+                    0 -> ToolSection("Widgets", info = "The values shown; only those the activity recorded are offered.") { WidgetControls(style, activities, updateStyle) }
+                    1 -> ToolSection("Layout", info = "Where the widgets sit. Drag widgets on the picture to place them by hand; picking a layout puts them all back. Double-tap the ruler for the usual size.") { LayoutControls(style, updateStyle) }
+                    2 -> ToolSection("Text", info = "The dashboard's type and how it stands out from the picture.") { TextControls(style, updateStyle) }
                     else -> WatchSyncControls(state, vm, playhead)
                 }
             }
         }
         EffectKind.GRAPH -> {
-            Hint("Activity profile along the bottom, with a moving marker.")
-            val available = GraphMetric.entries.filter { m -> activities.isEmpty() || activities.any { it.track.has(m.metric) } }
-            LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                item { FilterChip(selected = effects.graph == null, onClick = { updateEffects { it.copy(graph = null) } }, label = { Text("Off") }) }
-                items(available) { m ->
-                    FilterChip(selected = effects.graph == m, onClick = { updateEffects { it.copy(graph = m) } }, label = { Text(m.label) })
-                }
+            val available = listOf<GraphMetric?>(null) + GraphMetric.entries.filter { m -> activities.isEmpty() || activities.any { it.track.has(m.metric) } }
+            ToolSection("Graph", info = "The activity's profile along the bottom of the picture, with a marker moving along it.") {
+                ChoiceGrid(available.map { it?.label ?: "Off" }, available.indexOf(effects.graph), { i -> updateEffects { it.copy(graph = available[i]) } })
             }
         }
         EffectKind.GRAIN -> {
             // Film stocks as starting points: grain size and how much of it is in colour.
             val stocks = listOf(Triple("Fine", 0.7f, 0.15f), Triple("35 mm", 1f, 0.3f), Triple("16 mm", 1.8f, 0.4f), Triple("Super 8", 2.6f, 0.5f))
-            LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                items(stocks) { (label, size, colour) ->
-                    FilterChip(
-                        selected = effects.grainSize == size && effects.grainColour == colour,
-                        onClick = { updateEffects { it.copy(grainSize = size, grainColour = colour, grain = if (it.grain == 0f) 0.35f else it.grain) } },
-                        label = { Text(label) },
-                    )
-                }
-            }
+            ToolSection("Grain", info = "Clumps of grain, strongest in the midtones as on film; it also softens hard digital steps in gradients. A film stock sets its size and colour.") {
+            LabeledChoice("Film stock", stocks.map { it.first }, { stocks[it].second == effects.grainSize && stocks[it].third == effects.grainColour }, { i ->
+                val (_, size, colour) = stocks[i]
+                updateEffects { it.copy(grainSize = size, grainColour = colour, grain = if (it.grain == 0f) 0.35f else it.grain) }
+            })
             EffectRuler(
                 listOf(
                     EffectParam("Amount", effects.grain, 0f..1f, 0.02f, 0f, percent = true) { v -> updateEffects { it.copy(grain = v) } },
@@ -4728,9 +4759,9 @@ private fun EffectsPanel(state: UiState, vm: HeadsupViewModel, kind: EffectKind,
                     EffectParam("Colour", effects.grainColour, 0f..1f, 0.02f, 0.3f, percent = true) { v -> updateEffects { it.copy(grainColour = v) } },
                 ),
             )
-            Hint("Clumps of grain, strongest in the midtones as on film; it also softens hard digital steps in gradients.")
+            }
         }
-        EffectKind.GLOW -> {
+        EffectKind.GLOW -> ToolSection("Glow", info = "Light around what is brighter than the threshold. A small spread keeps it subtle; Colour: cool (−) to warm (+).") {
             EffectRuler(
                 listOf(
                     EffectParam("Glow", effects.glow, 0f..1f, 0.02f, 0f, percent = true) { v -> updateEffects { it.copy(glow = v) } },
@@ -4739,9 +4770,9 @@ private fun EffectsPanel(state: UiState, vm: HeadsupViewModel, kind: EffectKind,
                     EffectParam("Colour", effects.glowWarmth, -1f..1f, 0.02f, 0f, format = "%+.2f") { v -> updateEffects { it.copy(glowWarmth = v) } },
                 ),
             )
-            Hint("Light around what is brighter than the threshold. A small spread keeps it subtle; Colour: cool (−) to warm (+).")
+
         }
-        EffectKind.HALATION -> {
+        EffectKind.HALATION -> ToolSection("Halation", info = "Red-orange bleed around bright highlights, as on motion picture film. Threshold and spread are the glow's.") {
             EffectRuler(
                 listOf(
                     EffectParam("Halation", effects.halation, 0f..1f, 0.02f, 0f, percent = true) { v -> updateEffects { it.copy(halation = v) } },
@@ -4749,34 +4780,29 @@ private fun EffectsPanel(state: UiState, vm: HeadsupViewModel, kind: EffectKind,
                     EffectParam("Spread", effects.glowSpread, 0.5f..2.5f, 0.05f, 1f, format = "× %.2f") { v -> updateEffects { it.copy(glowSpread = v) } },
                 ),
             )
-            Hint("Red-orange bleed around bright highlights, as on motion picture film. Threshold and spread are the glow's.")
+
         }
-        EffectKind.LENS -> {
+        EffectKind.LENS -> ToolSection("Lens", info = "An older lens: colour fringes and softness that grow towards the corners; the middle stays sharp. A little goes a long way.") {
             EffectRuler(
                 listOf(
                     EffectParam("Fringes", effects.lensAberration, 0f..1f, 0.02f, 0f, percent = true) { v -> updateEffects { it.copy(lensAberration = v) } },
                     EffectParam("Soft corners", effects.lensSoftness, 0f..1f, 0.02f, 0f, percent = true) { v -> updateEffects { it.copy(lensSoftness = v) } },
                 ),
             )
-            Hint("An older lens: colour fringes and softness that grow towards the corners; the middle stays sharp. A little goes a long way.")
+
         }
-        EffectKind.BARS -> {
-            LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                item { FilterChip(selected = effects.barsRatio == null, onClick = { updateEffects { it.copy(barsRatio = null) } }, label = { Text("Off") }) }
-                items(listOf(2.39f to "2.39:1", 2.0f to "2:1", 1.85f to "1.85:1")) { (ratio, label) ->
-                    FilterChip(selected = effects.barsRatio == ratio, onClick = { updateEffects { it.copy(barsRatio = ratio) } }, label = { Text(label) })
-                }
-            }
+        EffectKind.BARS -> ToolSection(
+            "Bars",
+            info = "Black bars top and bottom for a cinema shape." +
+                if (state.timelineAspect < 16f / 9f - 0.01f) " On this frame they take as much of the height as they would on 16:9, for the same look." else "",
+        ) {
+            val ratios = listOf<Float?>(null, 2.39f, 2.0f, 1.85f)
+            ChoiceGrid(ratios.map { r -> when (r) { null -> "Off"; 2.39f -> "2.39:1"; 2.0f -> "2:1"; else -> "1.85:1" } }, ratios.indexOf(effects.barsRatio), { i -> updateEffects { it.copy(barsRatio = ratios[i]) } }, minCell = 60.dp)
             // Sliding in and out is in time: a photo has none.
             if (effects.barsRatio != null && !state.photoProject && state.selected?.meta?.isPhoto != true) {
-                Row(Modifier.horizontalScroll(rememberScrollState()), verticalAlignment = Alignment.CenterVertically) {
-                    for (m in app.headsup.render.BarsMotion.entries) {
-                        FilterChip(selected = effects.barsMotion == m, onClick = { updateEffects { it.copy(barsMotion = m) } }, label = { Text(m.label) })
-                        Spacer(Modifier.width(8.dp))
-                    }
-                }
+                val motions = app.headsup.render.BarsMotion.entries
+                LabeledChoice("Motion", motions.map { it.label }, { motions[it] == effects.barsMotion }, { i -> updateEffects { it.copy(barsMotion = motions[i]) } })
             }
-            if (state.timelineAspect < 16f / 9f - 0.01f) Hint("On this frame the bars take as much of the height as they would on 16:9, for the same look.")
         }
     }
 }
@@ -4814,7 +4840,6 @@ private fun WidgetControls(style: DashboardStyle, activities: List<LoadedActivit
 
 @Composable
 private fun LayoutControls(style: DashboardStyle, update: ((DashboardStyle) -> DashboardStyle) -> Unit) {
-    Hint("Drag widgets on the picture to place them by hand.")
     // Picking a layout puts every widget back into it, including dragged ones.
     val presets = LayoutPreset.entries
     ChoiceGrid(presets.map { it.label }, if (style.placements.isEmpty()) presets.indexOf(style.preset) else -1, { i ->
@@ -4833,20 +4858,13 @@ private fun LayoutControls(style: DashboardStyle, update: ((DashboardStyle) -> D
 
 @Composable
 private fun TextControls(style: DashboardStyle, update: ((DashboardStyle) -> DashboardStyle) -> Unit) {
-    LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        items(DashboardFont.entries) { font ->
-            FilterChip(selected = style.font == font, onClick = { update { it.copy(font = font) } }, label = { Text(font.label) })
-        }
-    }
+    val fonts = DashboardFont.entries
+    LabeledChoice("Font", fonts.map { it.label }, { fonts[it] == style.font }, { i -> update { it.copy(font = fonts[i]) } })
     ColorRow("Values", style.valueColor) { c -> update { it.copy(valueColor = c) } }
     ColorRow("Labels", style.labelColor) { c -> update { it.copy(labelColor = c) } }
     ColorRow("Units", style.unitColor) { c -> update { it.copy(unitColor = c) } }
-    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-        Text("Edge", style = MaterialTheme.typography.labelLarge)
-        for (effect in TextEffect.entries) {
-            FilterChip(selected = style.effect == effect, onClick = { update { it.copy(effect = effect) } }, label = { Text(effect.label) })
-        }
-    }
+    val edges = TextEffect.entries
+    LabeledChoice("Edge", edges.map { it.label }, { edges[it] == style.effect }, { i -> update { it.copy(effect = edges[i]) } })
 }
 private val SWATCHES = listOf(
     android.graphics.Color.WHITE,
@@ -5026,10 +5044,10 @@ private fun PhotoExport(state: UiState, vm: HeadsupViewModel) {
             Hint("Mark photos for export: hold a thumbnail (double-tap a marked one for its menu), or Mark under the photos.")
         }
         if (selectedPhoto && photoCount > 1) {
-            OutlinedButton(onClick = { vm.exportPhotos(HeadsupViewModel.PhotoSet.CURRENT) }, enabled = !state.busy, modifier = Modifier.fillMaxWidth()) { Text("Export this photo (JPEG)") }
+            OutlinedButton(onClick = { vm.exportPhotos(HeadsupViewModel.PhotoSet.CURRENT) }, enabled = !state.busy, modifier = Modifier.fillMaxWidth()) { Text("Export this photo (${settings.photoFormat.label})") }
         }
         OutlinedButton(onClick = { vm.exportPhotos() }, enabled = !state.busy, modifier = Modifier.fillMaxWidth()) {
-            Text(if (photoCount == 1) "Export the photo (JPEG)" else "Export all $photoCount photos (JPEG)")
+            Text(if (photoCount == 1) "Export the photo (${settings.photoFormat.label})" else "Export all $photoCount photos (${settings.photoFormat.label})")
         }
     }
 }
@@ -5131,17 +5149,19 @@ private fun TextPanel(state: UiState, vm: HeadsupViewModel, at: () -> Long) {
         }
     }
     if (item == null) {
-        if (state.texts.isEmpty()) {
-            Hint(
-                if (state.photoProject) "Adds a text to the photo. Drag it on the picture to place it."
-                else "Adds a text at the playhead. Drag it on the picture to place it; its bar on the timeline moves it in time.",
-            )
-        } else {
-            Hint(if (state.photoProject) "Tap a text below to edit it." else "Tap a text's bar on the timeline to edit it.")
-            Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                val photoNow = state.selected
-                val shown = if (state.photoProject && photoNow != null) state.texts.filter { it.showsOn(photoNow.id, photoNow.groupId) } else state.texts
-                for (t in shown) FilterChip(selected = false, onClick = { vm.selectText(t.id) }, label = { Text(t.text.replace('\n', ' ').take(18)) })
+        ToolSection(
+            "Texts",
+            info = (if (state.photoProject) "+ Text adds a text to the photo. Drag it on the picture to place it. Tap a text below to edit it."
+            else "+ Text adds a text at the playhead. Drag it on the picture to place it; its bar on the timeline moves it in time. Tap a text's bar on the timeline, or a text below, to edit it."),
+        ) {
+            val photoNow = state.selected
+            val shown = if (state.photoProject && photoNow != null) state.texts.filter { it.showsOn(photoNow.id, photoNow.groupId) } else state.texts
+            if (shown.isEmpty()) {
+                Text("No texts yet.", style = MaterialTheme.typography.bodySmall, color = HeadsupColors.TextMuted)
+            } else {
+                Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    for (t in shown) FilterChip(selected = false, onClick = { vm.selectText(t.id) }, label = { Text(t.text.replace('\n', ' ').take(18)) })
+                }
             }
         }
         return
@@ -5149,20 +5169,22 @@ private fun TextPanel(state: UiState, vm: HeadsupViewModel, at: () -> Long) {
     val update: ((TextItem) -> TextItem) -> Unit = { vm.updateText(item.id, it) }
     // In an album: which photos the text is on.
     val photo = state.selected
-    if (state.photoProject && photo != null) {
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-            Text("On", style = MaterialTheme.typography.labelMedium, color = HeadsupColors.TextMuted)
-            FilterChip(selected = item.onlyClip != null, onClick = { update { it.copy(onlyClip = photo.id, onlyGroup = null) } }, label = { Text("This photo") })
-            FilterChip(selected = item.onlyClip == null && item.onlyGroup == null, onClick = { update { it.copy(onlyClip = null, onlyGroup = null) } }, label = { Text("All photos") })
+    ToolSection("Text", info = if (state.photoProject) "The text, and which photos it is on." else "The text. Its look, data, font and timing are in the tools below.") {
+        if (state.photoProject && photo != null) {
+            ChoiceGrid(
+                listOf("This photo", "All photos"),
+                when { item.onlyClip != null -> 0; item.onlyGroup == null -> 1; else -> -1 },
+                { i -> update { if (i == 0) it.copy(onlyClip = photo.id, onlyGroup = null) else it.copy(onlyClip = null, onlyGroup = null) } },
+            )
         }
+        OutlinedTextField(
+            value = item.text,
+            onValueChange = { v -> update { it.copy(text = v) } },
+            modifier = Modifier.fillMaxWidth(),
+            maxLines = 3,
+            textStyle = MaterialTheme.typography.bodyLarge,
+        )
     }
-    OutlinedTextField(
-        value = item.text,
-        onValueChange = { v -> update { it.copy(text = v) } },
-        modifier = Modifier.fillMaxWidth(),
-        maxLines = 3,
-        textStyle = MaterialTheme.typography.bodyLarge,
-    )
     LazyRow(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
         items(TextTool.entries.filter { !state.photoProject || it !in setOf(TextTool.IN, TextTool.OUT, TextTool.TIME) }) { t ->
             val modified = when (t) {
@@ -5174,16 +5196,22 @@ private fun TextPanel(state: UiState, vm: HeadsupViewModel, at: () -> Long) {
             CircleOption(t.symbol, t.label, selected = t == tool, modified = modified) { tool = t }
         }
     }
+    val toolInfo = when (tool) {
+        TextTool.LOOK -> "A ready-made style: font, size, colour, glow" + (if (state.photoProject) "." else " and animation.") + " Everything stays adjustable after."
+        TextTool.DATA -> "Fields show as {name} in the text; type around them, e.g. \"↑ {ascent} · {distance}\". Values come from the selected ${if (state.photoProject) "photo" else "clip"}; tap one to add it."
+        TextTool.FONT -> "The typeface, and Left (from the frame's left margin) or Centre."
+        TextTool.COLOUR -> "The text's colour."
+        TextTool.SIZE -> "How large the text is, against the frame's height. Double-tap the ruler for the usual size."
+        TextTool.GLOW -> "Light round the letters, and a soft shadow under them to lift the text off the picture. Double-tap the ruler to turn the glow off."
+        TextTool.IN, TextTool.OUT -> "How the text comes in or goes out. Type and HUD write it a letter every ${TextAnimation.CHAR_MS} ms; Fade, Rise and Pop take the time on the ruler."
+        TextTool.TIME -> "How long the text stays. Start here and End here set it at the playhead; double-tap the ruler for 3 seconds."
+    }
+    ToolSection(tool.label, info = toolInfo) {
     when (tool) {
-        TextTool.LOOK -> FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        TextTool.LOOK -> {
             // On photos the looks keep the text still.
-            for (look in TextLook.entries) {
-                FilterChip(
-                    selected = false,
-                    onClick = { update { look.apply(it).let { l -> if (state.photoProject) l.copy(animIn = TextAnim.NONE, animOut = TextAnim.NONE) else l } } },
-                    label = { Text(look.label) },
-                )
-            }
+            val looks = TextLook.entries
+            ChoiceGrid(looks.map { it.label }, -1, { i -> update { looks[i].apply(it).let { l -> if (state.photoProject) l.copy(animIn = TextAnim.NONE, animOut = TextAnim.NONE) else l } } })
         }
         TextTool.DATA -> {
             // Values from the watch and the photo, written into the text as {field}; tap to add one.
@@ -5204,17 +5232,14 @@ private fun TextPanel(state: UiState, vm: HeadsupViewModel, at: () -> Long) {
                     }
                 }
             }
-            Hint("Fields show as {name} in the text; type around them, e.g. \"↑ {ascent} · {distance}\". Values come from the selected clip or photo.")
         }
         TextTool.FONT -> {
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                for (f in TextFont.entries) FilterChip(selected = item.font == f, onClick = { update { it.copy(font = f) } }, label = { Text(f.label) })
-            }
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                // Left starts at the frame's left margin, centre sits in the middle.
-                FilterChip(selected = item.align == TextAlign.LEFT, onClick = { update { it.copy(align = TextAlign.LEFT, x = 0.08f) } }, label = { Text("Left") })
-                FilterChip(selected = item.align == TextAlign.CENTER, onClick = { update { it.copy(align = TextAlign.CENTER, x = 0.5f) } }, label = { Text("Centre") })
-            }
+            val fonts = TextFont.entries
+            LabeledChoice("Font", fonts.map { it.label }, { fonts[it] == item.font }, { i -> update { it.copy(font = fonts[i]) } })
+            // Left starts at the frame's left margin, centre sits in the middle.
+            LabeledChoice("Align", listOf("Left", "Centre"), { (it == 0) == (item.align == TextAlign.LEFT) && (it == 1) == (item.align == TextAlign.CENTER) }, { i ->
+                update { if (i == 0) it.copy(align = TextAlign.LEFT, x = 0.08f) else it.copy(align = TextAlign.CENTER, x = 0.5f) }
+            })
         }
         TextTool.COLOUR -> Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             for (c in TEXT_COLOURS) {
@@ -5223,22 +5248,19 @@ private fun TextPanel(state: UiState, vm: HeadsupViewModel, at: () -> Long) {
                         .size(32.dp)
                         .clip(CircleShape)
                         .background(Color(c))
-                        .border(if (item.colour == c) 3.dp else 1.dp, if (item.colour == c) HeadsupColors.Accent else HeadsupColors.Outline, CircleShape)
+                        .border(if (item.colour == c) 3.dp else 1.dp, if (item.colour == c) HeadsupColors.AccentInk else HeadsupColors.ControlEdge, CircleShape)
                         .clickable { update { it.copy(colour = c) } },
                 )
             }
         }
         TextTool.SIZE -> {
-            ValueHeader("Size", String.format(Locale.US, "%.0f %%", item.size * 100))
+            ValueHeader("", String.format(Locale.US, "%.0f %%", item.size * 100))
             RulerSlider(item.size, 0.02f..0.25f, 0.005f, { v -> update { it.copy(size = v) } }, onReset = { update { it.copy(size = 0.07f) } })
         }
         TextTool.GLOW -> {
             ValueHeader("Glow", String.format(Locale.US, "%.2f", item.glow))
             RulerSlider(item.glow, 0f..1f, 0.02f, { v -> update { it.copy(glow = v) } }, onReset = { update { it.copy(glow = 0f) } })
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("Shadow", Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
-                Switch(checked = item.shadow, onCheckedChange = { on -> update { it.copy(shadow = on) } })
-            }
+            LabeledChoice("Shadow", listOf("Off", "On"), { (it == 1) == item.shadow }, { i -> update { it.copy(shadow = i == 1) } })
         }
         TextTool.IN, TextTool.OUT -> {
             val current = if (tool == TextTool.IN) item.animIn else item.animOut
@@ -5250,24 +5272,23 @@ private fun TextPanel(state: UiState, vm: HeadsupViewModel, at: () -> Long) {
             if (current == TextAnim.FADE || current == TextAnim.RISE || current == TextAnim.POP) {
                 ValueHeader("Animation", String.format(Locale.US, "%.1f s", item.animMs / 1000f))
                 RulerSlider(item.animMs / 1000f, 0.1f..3f, 0.1f, { v -> update { it.copy(animMs = (v * 1000).toLong()) } }, onReset = { update { it.copy(animMs = 500L) } })
-            } else if (current == TextAnim.TYPE || current == TextAnim.HUD) {
-                Hint("Types one letter every ${TextAnimation.CHAR_MS} ms.")
             }
         }
         TextTool.TIME -> {
             val end = state.clips.sumOf { it.timelineDurationMs }
-            ValueHeader("On screen", String.format(Locale.US, "%.1f s", item.lengthMs / 1000f))
+            ValueHeader("", String.format(Locale.US, "%.1f s", item.lengthMs / 1000f))
             RulerSlider(
                 item.lengthMs / 1000f, 0.5f..(((end - item.startMs) / 1000f).coerceAtLeast(0.5f)), 0.1f,
                 { v -> update { it.copy(lengthMs = (v * 1000).toLong()) } },
                 onReset = { update { it.copy(lengthMs = 3_000L.coerceAtMost((end - it.startMs).coerceAtLeast(500L))) } },
             )
+            Text("From ${Formats.duration(item.startMs)} to ${Formats.duration(item.endMs)}", style = MaterialTheme.typography.labelMedium.copy(fontFamily = GeistMonoFamily), color = HeadsupColors.TextMuted)
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                SmallAction("Start here", { val t = at(); update { it.copy(startMs = t.coerceIn(0L, (end - it.lengthMs).coerceAtLeast(0L))) } })
-                SmallAction("End here", { val t = at(); update { it.copy(lengthMs = (t - it.startMs).coerceAtLeast(500L)) } })
+                PanelAction("Start here", { val t = at(); update { it.copy(startMs = t.coerceIn(0L, (end - it.lengthMs).coerceAtLeast(0L))) } }, Modifier.weight(1f))
+                PanelAction("End here", { val t = at(); update { it.copy(lengthMs = (t - it.startMs).coerceAtLeast(500L)) } }, Modifier.weight(1f))
             }
-            Hint("From ${Formats.duration(item.startMs)} to ${Formats.duration(item.endMs)}.")
         }
+    }
     }
 }
 
@@ -5447,8 +5468,7 @@ private fun PhotoCrop(state: UiState, clip: ClipState, vm: HeadsupViewModel) {
     val presets = Reframe.PRESETS
     ToolSection(
         "Aspect",
-        info = "The shape the photo is cut to. Drag the picture to choose what stays, pinch to zoom.",
-        onReset = if (r.aspect != null) ({ vm.updateReframe { it.copy(aspect = null) } }) else null,
+        info = "The shape the photo is cut to; Original keeps the photo's own. Drag the picture to choose what stays, pinch to zoom.",
     ) {
         ChoiceGrid(
             presets.map { it.second },
@@ -5469,7 +5489,6 @@ private fun GeometrySections(r: Reframe, vm: HeadsupViewModel) {
     ToolSection(
         "Geometry",
         info = "Zoom into the picture, and turn it level (double-tap a ruler to reset it, hold it to compare).",
-        onReset = if (r.zoom != 1f || r.angleDegrees != 0f) ({ vm.updateReframe { it.copy(zoom = 1f, angleDegrees = 0f) } }) else null,
     ) {
         ValueHeader("Zoom", String.format(Locale.US, "%.2f×", r.zoom))
         RulerSlider(r.zoom, 1f..4f, 0.02f, { v -> vm.updateReframe { it.copy(zoom = v) } }, onReset = { vm.updateReframe { it.copy(zoom = 1f) } })
@@ -5478,8 +5497,7 @@ private fun GeometrySections(r: Reframe, vm: HeadsupViewModel) {
     }
     ToolSection(
         "Perspective",
-        info = "Vertical straightens a building's sides when the camera looked up or down; Horizontal the same sideways. The picture zooms in just enough to hide the empty corners.",
-        onReset = if (r.vertical != 0f || r.horizontal != 0f) ({ vm.updateReframe { it.copy(vertical = 0f, horizontal = 0f) } }) else null,
+        info = "Vertical straightens a building's sides when the camera looked up or down; Horizontal the same sideways. The picture zooms in just enough to hide the empty corners. Double-tap a ruler to reset it.",
     ) {
         ValueHeader("Vertical", String.format(Locale.US, "%+.0f", r.vertical * 100))
         RulerSlider(r.vertical, -1f..1f, 0.01f, { v -> vm.updateReframe { it.copy(vertical = v) } }, onReset = { vm.updateReframe { it.copy(vertical = 0f) } })
@@ -5489,8 +5507,7 @@ private fun GeometrySections(r: Reframe, vm: HeadsupViewModel) {
     // The lens: its distortion and its darker corners (a raw photo's lens profile is applied already).
     ToolSection(
         "Lens",
-        info = "Distortion: + pulls in a wide lens's bulge (straight lines bowing out, a drone's horizon), − pushes out a pinch. Lens vignette: + brightens the corners a lens darkens. Raw photos already get their lens's own correction.",
-        onReset = if (r.distortion != 0f || r.lensVignette != 0f) ({ vm.updateReframe { it.copy(distortion = 0f, lensVignette = 0f) } }) else null,
+        info = "Distortion: + pulls in a wide lens's bulge (straight lines bowing out, a drone's horizon), − pushes out a pinch. Lens vignette: + brightens the corners a lens darkens. Raw photos already get their lens's own correction. Double-tap a ruler to reset it.",
     ) {
         ValueHeader("Distortion", String.format(Locale.US, "%+.0f", r.distortion * 100))
         RulerSlider(r.distortion, -1f..1f, 0.01f, { v -> vm.updateReframe { it.copy(distortion = v) } }, onReset = { vm.updateReframe { it.copy(distortion = 0f) } })
@@ -5504,35 +5521,36 @@ private fun GeometrySections(r: Reframe, vm: HeadsupViewModel) {
 private fun RouteMapControls(state: UiState, vm: HeadsupViewModel) {
     val map = state.routeMap
     val hasRoute = state.activities.any { it.track.has(app.headsup.core.track.Metric.LATITUDE) }
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        Text("Route map", Modifier.weight(1f), style = MaterialTheme.typography.labelLarge)
-        Switch(checked = map.enabled, onCheckedChange = { on -> vm.updateRouteMap { it.copy(enabled = on) } }, enabled = hasRoute)
-    }
-    if (!hasRoute) {
-        Hint("Needs a FIT file with GPS (Project → Activity).")
-        return
-    }
-    if (!map.enabled) return
-    ValueHeader("Size", String.format(Locale.US, "%.0f %%", map.size * 100))
-    RulerSlider(map.size, 0.12f..0.6f, 0.01f, { v -> vm.updateRouteMap { it.copy(size = v) } }, onReset = { vm.updateRouteMap { it.copy(size = 0.3f) } })
-    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-        for (c in TEXT_COLOURS) {
-            Box(
-                Modifier
-                    .size(28.dp)
-                    .clip(CircleShape)
-                    .background(Color(c))
-                    .border(if (map.colour == c) 3.dp else 1.dp, if (map.colour == c) HeadsupColors.Accent else HeadsupColors.Outline, CircleShape)
-                    .clickable { vm.updateRouteMap { it.copy(colour = c) } },
-            )
+    ToolSection(
+        "Route map",
+        info = "The activity's route over the picture. Drag on the picture to place it. The dot shows where the " +
+            (if (state.photoProject) "photo was taken: its own GPS, or the activity's position at that moment." else "clip is: the activity's position at that moment.") +
+            " Double-tap the ruler for the usual size.",
+    ) {
+        ChoiceGrid(listOf("Off", "On"), if (map.enabled) 1 else 0, { i -> vm.updateRouteMap { it.copy(enabled = i == 1) } }, enabled = { hasRoute })
+        if (!hasRoute) {
+            Hint("Needs a FIT file with GPS (Project → Activity).")
+            return@ToolSection
         }
+        if (!map.enabled) return@ToolSection
+        ValueHeader("Size", String.format(Locale.US, "%.0f %%", map.size * 100))
+        RulerSlider(map.size, 0.12f..0.6f, 0.01f, { v -> vm.updateRouteMap { it.copy(size = v) } }, onReset = { vm.updateRouteMap { it.copy(size = 0.3f) } })
+        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            for (c in TEXT_COLOURS) {
+                Box(
+                    Modifier
+                        .size(28.dp)
+                        .clip(CircleShape)
+                        .background(Color(c))
+                        .border(if (map.colour == c) 3.dp else 1.dp, if (map.colour == c) HeadsupColors.AccentInk else HeadsupColors.ControlEdge, CircleShape)
+                        .clickable { vm.updateRouteMap { it.copy(colour = c) } },
+                )
+            }
+        }
+        LabeledChoice("Show", listOf("Background", "Where it is"), { if (it == 0) map.background else map.marker }, { i ->
+            vm.updateRouteMap { if (i == 0) it.copy(background = !it.background) else it.copy(marker = !it.marker) }
+        })
     }
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        FilterChip(selected = map.background, onClick = { vm.updateRouteMap { it.copy(background = !it.background) } }, label = { Text("Background") })
-        Spacer(Modifier.width(8.dp))
-        FilterChip(selected = map.marker, onClick = { vm.updateRouteMap { it.copy(marker = !it.marker) } }, label = { Text("Where it is") })
-    }
-    Hint("Drag on the picture to place it. The dot shows where the clip or photo is: the photo's GPS, or the activity's position at that moment.")
 }
 
 /** Draws the route map for [clip] at a position in it (the marker follows the clip). */
@@ -5610,12 +5628,11 @@ private fun PhotoMoment(clip: ClipState, track: app.headsup.core.track.ActivityT
     val clock = Formats.clock(atMs, offset).take(5)
     val distance = sample[app.headsup.core.track.Metric.DISTANCE]?.let { String.format(Locale.US, " · %.2f %s", app.headsup.render.Units.distance(it), app.headsup.render.Units.distanceUnit) }.orEmpty()
     val altitude = sample[app.headsup.core.track.Metric.ALTITUDE]?.let { " · ${app.headsup.render.Units.height(it).toInt()} ${app.headsup.render.Units.heightUnit}" }.orEmpty()
-    ValueHeader("Moment in the activity", clock + distance + altitude)
+    ValueHeader("", clock + distance + altitude)
     RulerSlider(
         minutes, 0f..totalMin, (totalMin / 400f).coerceAtLeast(0.05f),
         { v -> onSet(LocalDateTime.ofInstant(Instant.ofEpochMilli(track.startMs + (v * 60_000).toLong()), zone)) },
         onReset = { onSet(null) },
     )
-    Hint("Drag to pick the moment whose data the photo shows (dashboard, text fields, the dot on the map). Double-tap the ruler to go back to the photo's own time.")
 }
 
