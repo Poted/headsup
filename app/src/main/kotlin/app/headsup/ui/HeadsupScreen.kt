@@ -2026,55 +2026,60 @@ private fun ProjectRow(state: UiState, vm: HeadsupViewModel, onOpen: () -> Unit,
     }
     // In an order that does not change with what is open: starred first, then the latest changed.
     val listed = state.projects.filter { it.kind == kindShown }.sortedWith(compareByDescending<ProjectInfo> { it.starred }.thenByDescending { it.modifiedMs })
-    if (listed.isEmpty()) Hint(if (kindShown == ProjectKind.PHOTOS) "No albums yet. An album is saved once it has photos." else "No films yet. A film is saved once it has files.")
-    for (p in listed) {
-        val current = p.name == state.projectName
-        Row(
-            Modifier
-                .fillMaxWidth()
-                .clip(RoundedCornerShape(12.dp))
-                .background(if (current) HeadsupColors.SurfaceHigh else Color.Transparent)
-                // Opening one (or tapping the open one) goes on to its files.
-                .clickable {
-                    if (!current) vm.openProject(p.name)
-                    onOpen()
-                }
-                .padding(horizontal = 8.dp, vertical = 6.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            // The star: tap to mark the project (starred ones come first).
-            Text(
-                if (p.starred) "★" else "☆",
+    ToolSection(
+        if (kindShown == ProjectKind.PHOTOS) "Albums" else "Films",
+        info = "Tap a project to open it. ★ puts it first." + (if (kindShown == ProjectKind.PHOTOS) " ⊞ opens the album straight in its album view (stars, Auto pick)." else "") +
+            " ⋮ renames or deletes it. Each project keeps its own copies of its files; deleting one frees that space (Settings › Storage shows it). The gallery is never touched.",
+    ) {
+        if (listed.isEmpty()) Hint(if (kindShown == ProjectKind.PHOTOS) "No albums yet. An album is saved once it has photos." else "No films yet. A film is saved once it has files.")
+        for (p in listed) {
+            val current = p.name == state.projectName
+            Row(
                 Modifier
-                    .clip(RoundedCornerShape(50))
-                    .clickable { vm.setProjectStarred(p.name, !p.starred) }
-                    .padding(horizontal = 8.dp, vertical = 4.dp),
-                style = MaterialTheme.typography.titleLarge,
-                color = if (p.starred) HeadsupColors.Accent else HeadsupColors.TextMuted,
-            )
-            Column(Modifier.weight(1f)) {
-                Text(p.name, style = MaterialTheme.typography.bodyMedium, maxLines = 2)
-                Hint(
-                    Instant.ofEpochMilli(p.modifiedMs).atZone(ZoneId.systemDefault()).toLocalDateTime()
-                        .withNano(0).toString().replace('T', ' ') +
-                        if (p.bytes > 0) " · " + formatBytes(p.bytes) else "",
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(if (current) HeadsupColors.SurfaceHigh else Color.Transparent)
+                    // Opening one (or tapping the open one) goes on to its files.
+                    .clickable {
+                        if (!current) vm.openProject(p.name)
+                        onOpen()
+                    }
+                    .padding(horizontal = 8.dp, vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                // The star: tap to mark the project (starred ones come first).
+                Text(
+                    if (p.starred) "★" else "☆",
+                    Modifier
+                        .clip(RoundedCornerShape(50))
+                        .clickable { vm.setProjectStarred(p.name, !p.starred) }
+                        .padding(horizontal = 8.dp, vertical = 4.dp),
+                    style = MaterialTheme.typography.titleLarge,
+                    color = if (p.starred) HeadsupColors.Accent else HeadsupColors.TextMuted,
                 )
-            }
-            // Rename and delete behind ⋮, so the name has the row's width.
-            Box {
-                var open by remember { mutableStateOf(false) }
-                Box(
-                    Modifier.size(36.dp).clip(CircleShape).clickable { open = true },
-                    contentAlignment = Alignment.Center,
-                ) { Icon(HeadsupIcons.More, "More", Modifier.size(20.dp), tint = HeadsupColors.TextMuted) }
-                DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
-                    DropdownMenuItem(text = { Text("Rename") }, onClick = { open = false; renamingOther = p.name })
-                    DropdownMenuItem(text = { Text("Delete") }, onClick = { open = false; deletingOther = p.name })
+                Column(Modifier.weight(1f)) {
+                    Text(p.name, style = MaterialTheme.typography.bodyMedium, maxLines = 2)
+                    Hint(
+                        Instant.ofEpochMilli(p.modifiedMs).atZone(ZoneId.systemDefault()).toLocalDateTime()
+                            .withNano(0).toString().replace('T', ' ') +
+                            if (p.bytes > 0) " · " + formatBytes(p.bytes) else "",
+                    )
+                }
+                // Rename and delete behind ⋮, so the name has the row's width.
+                Box {
+                    var open by remember { mutableStateOf(false) }
+                    Box(
+                        Modifier.size(36.dp).clip(CircleShape).clickable { open = true },
+                        contentAlignment = Alignment.Center,
+                    ) { Icon(HeadsupIcons.More, "More", Modifier.size(20.dp), tint = HeadsupColors.TextMuted) }
+                    DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+                        DropdownMenuItem(text = { Text("Rename") }, onClick = { open = false; renamingOther = p.name })
+                        DropdownMenuItem(text = { Text("Delete") }, onClick = { open = false; deletingOther = p.name })
+                    }
                 }
             }
         }
     }
-    if (state.projects.isNotEmpty()) Hint("Projects keep their own copies of their files; deleting one frees that space (Settings › Storage shows it all). The gallery is never touched.")
     deletingOther?.let { name ->
         AlertDialog(
             onDismissRequest = { deletingOther = null },
@@ -3972,7 +3977,7 @@ private fun ShotMatchPanel(state: UiState, clip: ClipState, vm: HeadsupViewModel
     var wholeGroup by rememberSaveable(group?.id) { mutableStateOf(group != null) }
     ToolSection(
         "Shot match",
-        info = "Pause on a good frame of the clip whose colours you like and set it as the reference; then on another clip pause on a similar frame and match: exposure, contrast, white balance and saturation are set so both look alike (skin hue too when both show skin). In a group, Group matches the camera's colour for every clip of it, each keeping its own brightness. Hold the ruler to compare.",
+        info = "Makes one clip look like another. Set a good frame of the clip you like as the reference, then on another clip pause on a similar frame and Match: exposure, contrast, white balance, saturation (and skin, when both show it). Hold the ruler to compare.",
     ) {
     // Where you are in the two steps: shown, not behind ⓘ.
     Hint(
@@ -4202,7 +4207,7 @@ private fun Layers(
             "New mask",
             info = "Object: tap what to correct (tap more of it to take it in, with Subtract what is not it), draw round it or split the picture with a line. Sky: the sky found at once (on video followed when tracked). " +
                 "Brush: paint it. Linear: a gradient across the picture (drag its dashed lines to set where it starts and ends). Radial: a gradient round a point (a face, a light, a vignette of your own). Colour: everything of a colour you tap. Light: a range of brightness." +
-                if (clip.meta.isPhoto) " Retouch: select something and it is taken out of the photo, filled from what is around it." else "",
+                if (clip.meta.isPhoto) " Retouch: paint what should go; Remove fills it from what is around it, Heal and Clone cover it from a matching place nearby." else "",
         ) {
         LazyRow(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
             item { CircleOption("◎", "Object", selected = false, modified = false) { add { vm.addBrushMask(BrushMode.SELECT) } } }
@@ -5491,7 +5496,7 @@ private fun PhotoStrip(state: UiState, vm: HeadsupViewModel, onAdd: () -> Unit, 
 private fun GradeKeyRow(state: UiState, clip: ClipState, vm: HeadsupViewModel, playhead: LongState, onSeek: (Long) -> Unit) {
     ToolSection(
         "Keys",
-        info = "Corrections that change over the shot (walking out of shade into sun). + Key keeps the corrections at the playhead; between keys they change smoothly. Tap a diamond to go there and change that key; ◀ ▶ step between keys; Move here takes the chosen key to the playhead. With keys, every edit sets the key at the playhead (one is made there if none).",
+        info = "Corrections that change over the shot, e.g. walking from shade into sun. + Key keeps the corrections at the playhead; between keys they change smoothly. Tap a diamond to go there and edit it; ◀ ▶ step between keys; Move here takes the chosen key to the playhead. With keys, an edit always sets the key at the playhead.",
     ) {
         if (clip.gradeKeys.isEmpty()) {
             Row(verticalAlignment = Alignment.CenterVertically) {
