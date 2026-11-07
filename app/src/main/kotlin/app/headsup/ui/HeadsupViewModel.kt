@@ -3845,6 +3845,26 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    /** Takes off the key at [timeMs] (file time). */
+    fun removeGradeKeyAt(timeMs: Long) {
+        val index = _state.value.selectedClip ?: return
+        updateClip(index) { c ->
+            val left = c.gradeKeys.filter { it.timeMs != timeMs }
+            if (left.isEmpty()) c.copy(grade = c.gradeAt(timeMs), gradeKeys = emptyList()) else c.copy(gradeKeys = left)
+        }
+    }
+
+    /** Moves the key at [fromMs] (file time) to the playhead, with the corrections it holds. */
+    fun moveGradeKey(fromMs: Long) {
+        val index = _state.value.selectedClip ?: return
+        updateClip(index) { c ->
+            val key = c.gradeKeys.firstOrNull { it.timeMs == fromMs } ?: return@updateClip c
+            val to = playheadFileMs.coerceIn(c.trimStartMs, c.trimEndMs)
+            c.copy(gradeKeys = app.headsup.core.color.GradeKeys.set(c.gradeKeys.filter { it !== key }, to, key.grade))
+        }
+        _state.update { it.copy(playheadKeyMs = playheadFileMs) }
+    }
+
     /** No keys: the corrections at the playhead stay, all through the clip. */
     fun clearGradeKeys() {
         val index = _state.value.selectedClip ?: return

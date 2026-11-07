@@ -2778,6 +2778,8 @@ private fun AdjustHeader(
     clip: ClipState,
     index: Int,
     vm: HeadsupViewModel,
+    playhead: LongState,
+    onSeek: (Long) -> Unit,
     pictureSource: ((Int) -> Bitmap?)?,
     maskTools: Boolean,
     onMaskTools: (Boolean) -> Unit,
@@ -2811,7 +2813,7 @@ private fun AdjustHeader(
             false
         }
         else -> {
-            if (!clip.meta.isPhoto && state.target == GradeTarget.CLIP) GradeKeyRow(state, clip, vm)
+            if (!clip.meta.isPhoto && state.target == GradeTarget.CLIP) GradeKeyRow(state, clip, vm, playhead, onSeek)
             Layers(state, clip, vm, pictureSource, maskTools, onMaskTools)
         }
     }
@@ -2964,7 +2966,7 @@ private fun ColourPage(
     LaunchedEffect(target, selectedMask == null) { if (target == GradeTarget.MASK && selectedMask == null) vm.setTarget(GradeTarget.CLIP) }
     // While something is removed from a photo only that shows; otherwise the scope and layers stay
     // at the top in both of a mask's modes (Mask and Adjust).
-    if (!(target == GradeTarget.MASK && state.removing && selectedMask != null) && AdjustHeader(state, clip, index, vm, pictureSource, maskTools, onMaskTools)) return
+    if (!(target == GradeTarget.MASK && state.removing && selectedMask != null) && AdjustHeader(state, clip, index, vm, playhead, onSeek, pictureSource, maskTools, onMaskTools)) return
     if (target != GradeTarget.GLOBAL && !clip.colorGrade) {
         // HDR files (already graded, e.g. Mimo exports) start with their own colours.
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -5465,23 +5467,30 @@ private fun PhotoStrip(state: UiState, vm: HeadsupViewModel, onAdd: () -> Unit, 
  * there; between keys they change smoothly. With keys, an edit sets the key at the playhead.
  */
 @Composable
-private fun GradeKeyRow(state: UiState, clip: ClipState, vm: HeadsupViewModel) {
-    val keys = clip.gradeKeys
-    val onKey = keys.any { kotlin.math.abs(it.timeMs - state.playheadKeyMs) <= app.headsup.core.color.GradeKeys.SAME_MS }
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        PillAction(if (onKey) "◆" else "◇", if (onKey) "Key here" else "Add key", { if (onKey) vm.removeGradeKey() else vm.addGradeKey() }, selected = onKey)
-        Spacer(Modifier.width(8.dp))
-        Text(
-            when {
-                keys.isEmpty() -> "Same all through"
-                keys.size == 1 -> "1 key"
-                else -> "${keys.size} keys: changes between them"
-            },
-            Modifier.weight(1f), style = MaterialTheme.typography.labelMedium, color = HeadsupColors.TextMuted, maxLines = 1,
-        )
-        if (keys.isNotEmpty()) SmallAction("Clear", { vm.clearGradeKeys() })
+private fun GradeKeyRow(state: UiState, clip: ClipState, vm: HeadsupViewModel, playhead: LongState, onSeek: (Long) -> Unit) {
+    ToolSection(
+        "Keys",
+        info = "Corrections that change over the shot (walking out of shade into sun). + Key keeps the corrections at the playhead; between keys they change smoothly. Tap a diamond to go there and change that key; ◀ ▶ step between keys; Move here takes the chosen key to the playhead. With keys, every edit sets the key at the playhead (one is made there if none).",
+    ) {
+        if (clip.gradeKeys.isEmpty()) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("Same all through", Modifier.weight(1f), style = MaterialTheme.typography.labelMedium, color = HeadsupColors.TextMuted)
+                SmallAction("+ Key", { vm.addGradeKey() })
+            }
+        } else {
+            KeyStrip(
+                times = clip.gradeKeys.map { it.timeMs },
+                cutStartMs = clip.trimStartMs,
+                cutEndMs = clip.trimEndMs,
+                playhead = playhead,
+                onSeek = onSeek,
+                onAdd = { vm.addGradeKey() },
+                onDelete = { t -> vm.removeGradeKeyAt(t) },
+                onClear = { vm.clearGradeKeys() },
+                onMove = { from -> vm.moveGradeKey(from) },
+            )
+        }
     }
-    if (keys.isNotEmpty()) Hint(if (onKey) "Edits now set this key; tap ◆ to take it off." else "Edits now set a new key here.")
 }
 
 /** An album photo's crop: its shape (or its own), zoom and straightening; drag the picture to place it. */
