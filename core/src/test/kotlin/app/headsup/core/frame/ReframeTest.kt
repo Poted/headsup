@@ -99,4 +99,13 @@ class ReframeTest {
         assertEquals(2, Reframe().turned(2).quarterTurns)
         assertEquals(-1, Reframe().turned(3).quarterTurns)
     }
+
+    @Test
+    fun mirroredShowsTheLeftOnTheRight() {
+        val r = Reframe(mirrored = true)
+        val (sx, sy) = r.sourceOf(0f, 50f, 100f, 100f)
+        assertEquals(100f, sx, 1e-3f)
+        assertEquals(50f, sy, 1e-3f)
+        assertEquals(false, Reframe().mirroredLeftRight().mirroredLeftRight().mirrored)
+    }
 }

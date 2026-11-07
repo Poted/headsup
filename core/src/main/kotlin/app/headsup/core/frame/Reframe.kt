@@ -37,9 +37,11 @@ data class Reframe(
     val distortion: Float = 0f,
     /** The lens's darker corners brightened (+) or darkened (−), −1..1 ([Lens]). */
     val lensVignette: Float = 0f,
+    /** Mirrored left to right (before it is turned); a flip upside down is this and half a turn. */
+    val mirrored: Boolean = false,
 ) {
     val isIdentity: Boolean get() = zoom == 1f && centerX == 0.5f && centerY == 0.5f && angleDegrees == 0f && aspect == null && vertical == 0f && horizontal == 0f &&
-        distortion == 0f && lensVignette == 0f
+        distortion == 0f && lensVignette == 0f && !mirrored
 
     /**
      * Where each point of the corrected picture comes from ([Perspective.sourceOf]), row by row, 3×3;
@@ -66,6 +68,12 @@ data class Reframe(
         val turns = if (q == 3) -1 else q
         return copy(angleDegrees = straighten + 90f * turns, centerX = 0.5f, centerY = 0.5f)
     }
+
+    /** Mirrored left to right, or back. */
+    fun mirroredLeftRight(): Reframe = copy(mirrored = !mirrored, centerX = 1f - centerX)
+
+    /** Flipped upside down, or back: mirrored and turned half round. */
+    fun flippedUpsideDown(): Reframe = mirroredLeftRight().turned(2)
 
     /** Output frame size for a [srcW]×[srcH] clip, in its pixels: inside the picture (fill) or around it (fit). */
     fun outputSize(srcW: Float, srcH: Float): Pair<Float, Float> {
@@ -127,7 +135,9 @@ data class Reframe(
         val dx = (x - outW / 2f) / scale
         val dy = (y - outH / 2f) / scale
         // Undo the clockwise rotation (screen coordinates, y down).
-        val sx = (dx * cos(a) + dy * sin(a)).toFloat()
+        val ux = (dx * cos(a) + dy * sin(a)).toFloat()
+        // Mirrored: the picture's left is on the right.
+        val sx = if (mirrored) -ux else ux
         val sy = (-dx * sin(a) + dy * cos(a)).toFloat()
         return (r.centerX * srcW + sx) to (r.centerY * srcH + sy)
     }

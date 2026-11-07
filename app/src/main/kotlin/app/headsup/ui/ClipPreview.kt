@@ -277,6 +277,8 @@ fun ClipPreview(
      */
     compactTransport: Boolean = false,
     onCompact: ((Boolean) -> Unit)? = null,
+    /** Whether the view is zoomed in on the picture (the screen's swipes then leave the finger alone). */
+    onViewZoomed: (Boolean) -> Unit = {},
 ) {
     val context = LocalContext.current
     // Two players: one shows the clip, the other holds the next one ready (a different shape or
@@ -884,7 +886,8 @@ fun ClipPreview(
         return Triple(c, r, a)
     }
     // The frame takes the reframe's shape; the picture is laid out under it, just covering it.
-    val frameAspect = reframe.aspect ?: sourceAspect
+    // Turned a quarter, the photo's own shape stands the other way (as Reframe.outputSize has it).
+    val frameAspect = reframe.aspect ?: if (reframe.quarterTurns % 2 != 0) 1f / sourceAspect else sourceAspect
     // Painted masks as one picture for the shaders, drawn again when a stroke changes. While a
     // finger paints, each drawing finishes and the next starts from the latest strokes (a new
     // stroke point must not cancel the drawing, or nothing would show until the finger lifts).
@@ -923,6 +926,9 @@ fun ClipPreview(
     // The view's zoom applies while looking at a photo closely or painting a mask.
     val viewZoomed = inspect || zoomForPainting
     var viewZoom by remember(clip.id) { mutableStateOf(1f) }
+    val zoomedNow = viewZoom > 1.01f
+    val tellZoomed by rememberUpdatedState(onViewZoomed)
+    LaunchedEffect(zoomedNow) { tellZoomed(zoomedNow) }
     var viewPan by remember(clip.id) { mutableStateOf(Offset.Zero) }
     /**
      * The view zoomed by [factor] around [at] (where the fingers are, in a [w]×[h] area) and moved
@@ -1175,7 +1181,7 @@ fun ClipPreview(
                         val t = reframeTransform(reframe, geometry)
                         // Steadied: the frame's correction on the picture before it is framed.
                         val c = if (steady != null && steadyCorrections != null && !photo) app.headsup.core.frame.Stabilizer.at(steady, steadyCorrections, fileMs) else null
-                        scaleX = t.zoom * (c?.zoom ?: 1f)
+                        scaleX = t.zoom * (c?.zoom ?: 1f) * if (reframe.mirrored) -1f else 1f
                         scaleY = t.zoom * (c?.zoom ?: 1f)
                         rotationZ = reframe.angleDegrees + (c?.degrees ?: 0f)
                         translationX = t.translation.x + (c?.let { it.dx * size.width * t.zoom } ?: 0f)
@@ -1243,7 +1249,7 @@ fun ClipPreview(
                                     val t = reframeTransform(r, g)
                                     // Steadied (the selected clip's own player).
                                     val c = if (fresh && (pictureClip[i] == null || pictureClip[i] == clip.id) && steady != null && steadyCorrections != null) app.headsup.core.frame.Stabilizer.at(steady, steadyCorrections, fileMs) else null
-                                    scaleX = t.zoom * (c?.zoom ?: 1f)
+                                    scaleX = t.zoom * (c?.zoom ?: 1f) * if (r.mirrored) -1f else 1f
                                     scaleY = t.zoom * (c?.zoom ?: 1f)
                                     rotationZ = r.angleDegrees + (c?.degrees ?: 0f)
                                     translationX = t.translation.x + (c?.let { it.dx * this.size.width * t.zoom } ?: 0f)
@@ -1269,7 +1275,7 @@ fun ClipPreview(
                                         val z = r.clamped(g.boxW, g.boxH, w, h).effectiveZoom(g.boxW, g.boxH, w, h)
                                         // A finger moving right shows more of the left: undo rotation and zoom.
                                         val a = Math.toRadians(r.angleDegrees.toDouble())
-                                        val dx = (pan.x * kotlin.math.cos(a) + pan.y * kotlin.math.sin(a)).toFloat() / z
+                                        val dx = (pan.x * kotlin.math.cos(a) + pan.y * kotlin.math.sin(a)).toFloat() / z * if (r.mirrored) -1f else 1f
                                         val dy = (-pan.x * kotlin.math.sin(a) + pan.y * kotlin.math.cos(a)).toFloat() / z
                                         reframer?.invoke(
                                             r.copy(zoom = r.zoom * zoomChange, centerX = r.centerX - dx / w, centerY = r.centerY - dy / h),
@@ -1460,7 +1466,7 @@ fun ClipPreview(
                         withTransform({
                             translate((geometry.boxW - geometry.pictureW) / 2f + t.translation.x, (geometry.boxH - geometry.pictureH) / 2f + t.translation.y)
                             rotate(reframe.angleDegrees, o)
-                            scale(t.zoom, t.zoom, o)
+                            scale(t.zoom * if (reframe.mirrored) -1f else 1f, t.zoom, o)
                         }) {
                             // The mask is kept on the original picture: drawn through the perspective
                             // correction, so it shows where it applies.
@@ -1522,7 +1528,7 @@ fun ClipPreview(
                         withTransform({
                             translate((geometry.boxW - geometry.pictureW) / 2f + t.translation.x, (geometry.boxH - geometry.pictureH) / 2f + t.translation.y)
                             rotate(reframe.angleDegrees, o)
-                            scale(t.zoom, t.zoom, o)
+                            scale(t.zoom * if (reframe.mirrored) -1f else 1f, t.zoom, o)
                         }) {
                             val path = androidx.compose.ui.graphics.Path()
                             paintPath.chunked(2).forEachIndexed { k, (x, y) ->
@@ -1864,7 +1870,8 @@ internal fun reframeTransform(reframe: Reframe, g: FrameGeometry): ReframeTransf
     val z = r.effectiveZoom(g.boxW, g.boxH, width, height)
     val a = Math.toRadians(r.angleDegrees.toDouble())
     // T = z·R(θ)·(O − C), clockwise rotation with y down; the picture is already centred in the frame.
-    val vx = width / 2f - r.centerX * width
+    // Mirrored: the layer is flipped about the picture's middle, so the centre's side turns round.
+    val vx = (width / 2f - r.centerX * width) * if (r.mirrored) -1f else 1f
     val vy = height / 2f - r.centerY * height
     val tx = z * (vx * kotlin.math.cos(a) - vy * kotlin.math.sin(a)).toFloat()
     val ty = z * (vx * kotlin.math.sin(a) + vy * kotlin.math.cos(a)).toFloat()

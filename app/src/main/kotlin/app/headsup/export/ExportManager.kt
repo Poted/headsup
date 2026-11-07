@@ -204,6 +204,8 @@ class ExportManager(private val context: Context) {
         val matrix = Matrix().apply {
             // Source NDC → source pixels around the chosen centre (y up) → turned and scaled → frame NDC.
             postTranslate(-(2f * r.centerX - 1f), -(1f - 2f * r.centerY))
+            // Mirrored about the chosen centre, before it is turned (as in the preview).
+            if (r.mirrored) postScale(-1f, 1f)
             postScale(w / 2f, h / 2f)
             // Clockwise on screen is a negative angle with y pointing up.
             postRotate(-r.angleDegrees)

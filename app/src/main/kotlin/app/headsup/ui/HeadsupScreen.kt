@@ -374,6 +374,8 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
     }
 
     // The picture, its transport and the timeline.
+    // The photo zoomed in on (its own view zoom): a finger then moves it, no screen swipe.
+    var photoZoomed by remember { mutableStateOf(false) }
     // What a swipe on an album's photo does (set below, where the screen's swipes are handled).
     val photoSwipe = remember { arrayOf<(Swipe) -> Unit>({}) }
     val pictureAndTimeline: @Composable ColumnScope.() -> Unit = {
@@ -398,7 +400,7 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
                     contentAlignment = Alignment.Center,
                 ) { Hint("Preview paused while exporting") }
                 // An album's photo: its swipes watched here, on the photo (never on the album under it).
-                else -> Box(if (state.photoProject && !fullscreen) Modifier.observedSwipe(pictureFree) { photoSwipe[0](it) } else Modifier) {
+                else -> Box(if (state.photoProject && !fullscreen) Modifier.observedSwipe(pictureFree && !photoZoomed) { photoSwipe[0](it) } else Modifier) {
                     ClipPreview(
                         clip = selected,
                         activity = selected.sync?.let { state.activities.getOrNull(it.trackIndex) },
@@ -436,7 +438,9 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
                         effects = if (showOriginal) app.headsup.render.EffectSettings(dashboard = false) else state.compareEffects ?: state.effects,
                         // Held on the picture: without this mask while a mask is adjusted, else the original.
                         // (Not while the finger shapes a mask or measures a colour.)
-                        onHoldOriginal = if (tool == Tool.COLOUR && !measuring && !shaping && !pickingColour) { held ->
+                        // On every page where a finger on the picture has nothing else to do (not
+                        // while framing, writing, shaping a mask or measuring a colour).
+                        onHoldOriginal = if (!measuring && !shaping && !pickingColour && !framing && !editingTexts) { held ->
                             if (editingMasks) hideMask = held else showOriginal = held
                         } else null,
                         showingOriginal = showOriginal || hideMask,
@@ -482,6 +486,7 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
                         showTransport = fullscreenFilm || (!fullscreen && (!state.photoProject || tool == Tool.EDIT || tool == Tool.COLOUR)),
                         compactTransport = folded || fullscreenFilm || photoFolded,
                         onCompact = if (!fullscreen) { c -> compact = c } else null,
+                        onViewZoomed = { photoZoomed = it },
                         // Read here so arriving place names redraw the texts.
                         textValues = state.placesVersion.let { _ -> { pos -> vm.textValues(state, selected, pos) } },
                         routeOverlay = if (state.routeMap.enabled) routeOverlayFor(vm, state, selected) else null,
@@ -779,7 +784,7 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
                         .background(HeadsupColors.Picture)
                         .graphicsLayer { scaleX = settle.value; scaleY = settle.value; alpha = 0.4f + 0.6f * ((settle.value - 0.96f) / 0.04f) }
                         .then(
-                            if (state.photoProject) Modifier.observedSwipe(pictureFree) { if (it == Swipe.DOWN || (wide && mirrored(it) == Swipe.LEFT)) fullscreen = false }
+                            if (state.photoProject) Modifier.observedSwipe(pictureFree && !photoZoomed) { if (it == Swipe.DOWN || (wide && mirrored(it) == Swipe.LEFT)) fullscreen = false }
                             else Modifier.freeSwipe(pictureFree) { if (it == Swipe.DOWN || (wide && mirrored(it) == Swipe.LEFT)) fullscreen = false },
                         ),
                     verticalArrangement = Arrangement.Center,
@@ -1163,6 +1168,8 @@ private fun Modifier.observedSwipe(enabled: Boolean, onSwipe: (Swipe) -> Unit): 
     val call by rememberUpdatedState(onSwipe)
     pointerInput(Unit) {
         val distance = 56.dp.toPx()
+        // Sideways a deliberate stroke (a third more), so moving a little is never full screen.
+        val sideways = 96.dp.toPx()
         awaitEachGesture {
             val down = awaitFirstDown(requireUnconsumed = false, pass = androidx.compose.ui.input.pointer.PointerEventPass.Initial)
             while (true) {
@@ -1174,7 +1181,7 @@ private fun Modifier.observedSwipe(enabled: Boolean, onSwipe: (Swipe) -> Unit): 
                 val d = change.position - down.position
                 if (d.getDistance() < distance) continue
                 val swipe = when {
-                    abs(d.x) > 2 * abs(d.y) -> if (d.x > 0) Swipe.RIGHT else Swipe.LEFT
+                    abs(d.x) > 2 * abs(d.y) -> if (abs(d.x) < sideways) continue else if (d.x > 0) Swipe.RIGHT else Swipe.LEFT
                     abs(d.y) > 2 * abs(d.x) -> if (d.y > 0) Swipe.DOWN else Swipe.UP
                     else -> null
                 }
@@ -5586,16 +5593,28 @@ private fun PhotoCrop(state: UiState, clip: ClipState, vm: HeadsupViewModel) {
 private fun GeometrySections(r: Reframe, vm: HeadsupViewModel) {
     ToolSection(
         "Rotate",
-        info = "Turns the picture a quarter to the left or right (a photo or clip shot sideways); its frame turns with it. Straightening below stays as set.",
+        info = "Left and Right turn the picture a quarter (a photo or clip shot sideways); its frame turns with it. Mirror swaps left and right, Flip top and bottom. Straightening below stays as set.",
     ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            PillAction("⟲", "Left", { vm.updateReframe { it.turned(-1) } })
-            Spacer(Modifier.width(8.dp))
-            PillAction("⟳", "Right", { vm.updateReframe { it.turned(1) } })
-            Spacer(Modifier.width(12.dp))
-            val deg = ((r.quarterTurns % 4 + 4) % 4) * 90
-            Text(if (deg == 0) "Upright" else "$deg°", style = MaterialTheme.typography.labelMedium, color = HeadsupColors.TextMuted)
-        }
+        val deg = ((r.quarterTurns % 4 + 4) % 4) * 90
+        ChoiceGrid(
+            listOf("Left", "Right", "Mirror", "Flip"),
+            isOn = { i -> i == 2 && r.mirrored },
+            onSelect = { i ->
+                vm.updateReframe {
+                    when (i) {
+                        0 -> it.turned(-1)
+                        1 -> it.turned(1)
+                        2 -> it.mirroredLeftRight()
+                        else -> it.flippedUpsideDown()
+                    }
+                }
+            },
+            glyph = { i, on -> Text(listOf("⟲", "⟳", "⇋", "⇵")[i], style = MaterialTheme.typography.titleMedium, color = if (on) HeadsupColors.OnHighlight else HeadsupColors.Ink) },
+        )
+        Text(
+            (if (deg == 0) "Upright" else "Turned $deg°") + if (r.mirrored) " · mirrored" else "",
+            style = MaterialTheme.typography.labelMedium, color = HeadsupColors.TextMuted,
+        )
     }
     ToolSection(
         "Geometry",
