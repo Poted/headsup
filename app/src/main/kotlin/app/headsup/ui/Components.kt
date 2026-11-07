@@ -156,7 +156,7 @@ fun RulerSlider(
 @Composable
 fun ValueHeader(label: String, value: String, modifier: Modifier = Modifier) {
     Row(modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.Bottom) {
-        Text("$label  ", style = MaterialTheme.typography.bodyMedium, color = HeadsupColors.TextMuted)
+        if (label.isNotEmpty()) Text("$label  ", style = MaterialTheme.typography.bodyMedium, color = HeadsupColors.TextMuted)
         Text(value, style = MaterialTheme.typography.headlineSmall.copy(fontWeight = FontWeight.Light))
     }
 }
@@ -480,5 +480,162 @@ fun CineLoader(message: String, modifier: Modifier = Modifier, progress: Float? 
             androidx.compose.foundation.layout.Spacer(Modifier.width(4.dp))
             SmallAction("Cancel", onCancel)
         }
+    }
+}
+
+/**
+ * A section of a panel as a card: its [title] top left, then (top right, always in these places)
+ * ⓘ when it has an [info] text and Reset when [onReset] is given, and its controls under them.
+ * Every panel is built of these, in the same order (scope, picker, sections, panel actions), so a
+ * new panel reads like the ones already known. Reset resets everything in the card.
+ */
+@Composable
+fun ToolSection(
+    title: String,
+    modifier: Modifier = Modifier,
+    info: String? = null,
+    onReset: (() -> Unit)? = null,
+    content: @Composable androidx.compose.foundation.layout.ColumnScope.() -> Unit,
+) {
+    var showInfo by androidx.compose.runtime.saveable.rememberSaveable(title) { androidx.compose.runtime.mutableStateOf(false) }
+    val shape = MaterialTheme.shapes.medium
+    Column(
+        modifier
+            .fillMaxWidth()
+            .clip(shape)
+            .background(HeadsupColors.CardGradient)
+            .border(1.dp, HeadsupColors.Outline, shape)
+            .padding(start = 14.dp, end = 8.dp, top = 6.dp, bottom = 12.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Row(Modifier.fillMaxWidth().height(36.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                title.uppercase(),
+                Modifier.weight(1f),
+                style = MaterialTheme.typography.labelSmall.copy(letterSpacing = 1.2.sp, fontWeight = FontWeight.Medium),
+                color = HeadsupColors.TextMuted,
+                maxLines = 1,
+            )
+            if (info != null) InfoButton(showInfo) { showInfo = !showInfo }
+            if (onReset != null) SmallAction("Reset", onReset, Modifier.padding(start = 4.dp))
+        }
+        androidx.compose.animation.AnimatedVisibility(visible = showInfo && info != null) {
+            Text(
+                info.orEmpty(),
+                Modifier.padding(end = 6.dp),
+                style = MaterialTheme.typography.bodySmall,
+                color = HeadsupColors.TextMuted,
+            )
+        }
+        Column(Modifier.padding(end = 6.dp), verticalArrangement = Arrangement.spacedBy(8.dp), content = content)
+    }
+}
+
+/** ⓘ: shows or hides a card's explanation; filled while it shows. 48 dp to touch, 26 dp drawn. */
+@Composable
+fun InfoButton(open: Boolean, onClick: () -> Unit) {
+    Box(
+        Modifier
+            .size(36.dp)
+            .clip(CircleShape)
+            .clickable(onClickLabel = if (open) "Hide explanation" else "Explain", onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        Box(
+            Modifier
+                .size(22.dp)
+                .clip(CircleShape)
+                .background(if (open) HeadsupColors.Highlight else Color.Transparent)
+                .border(1.dp, if (open) HeadsupColors.Highlight else HeadsupColors.ControlEdge, CircleShape),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(
+                "i",
+                style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.SemiBold),
+                color = if (open) HeadsupColors.OnHighlight else HeadsupColors.Ink,
+            )
+        }
+    }
+}
+
+/**
+ * A choice of a few options as a grid of equal cells across the whole width, in rows of equal
+ * length (6 options: 3 + 3, never 5 + 1); the chosen one light. [selected] may be none (-1).
+ * [glyph] draws a small mark before an option's text (e.g. the shape of a crop).
+ */
+@Composable
+fun ChoiceGrid(
+    options: List<String>,
+    selected: Int,
+    onSelect: (Int) -> Unit,
+    modifier: Modifier = Modifier,
+    minCell: androidx.compose.ui.unit.Dp = 76.dp,
+    glyph: (@Composable (index: Int, on: Boolean) -> Unit)? = null,
+) {
+    if (options.isEmpty()) return
+    androidx.compose.foundation.layout.BoxWithConstraints(modifier.fillMaxWidth()) {
+        val gap = 6.dp
+        val fit = ((maxWidth + gap) / (minCell + gap)).toInt().coerceIn(1, options.size)
+        val rows = (options.size + fit - 1) / fit
+        val columns = (options.size + rows - 1) / rows
+        Column(verticalArrangement = Arrangement.spacedBy(gap)) {
+            for (r in 0 until rows) {
+                Row(horizontalArrangement = Arrangement.spacedBy(gap)) {
+                    for (c in 0 until columns) {
+                        val i = r * columns + c
+                        if (i >= options.size) {
+                            Spacer(Modifier.weight(1f))
+                            continue
+                        }
+                        val on = i == selected
+                        Row(
+                            Modifier
+                                .weight(1f)
+                                .height(40.dp)
+                                .clip(MaterialTheme.shapes.small)
+                                .background(if (on) HeadsupColors.Highlight else HeadsupColors.SurfaceHigh)
+                                .clickable { onSelect(i) }
+                                .padding(horizontal = 6.dp),
+                            horizontalArrangement = Arrangement.Center,
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            if (glyph != null) {
+                                glyph(i, on)
+                                Spacer(Modifier.width(6.dp))
+                            }
+                            Text(
+                                options[i],
+                                style = MaterialTheme.typography.labelLarge,
+                                color = if (on) HeadsupColors.OnHighlight else HeadsupColors.Ink,
+                                maxLines = 1,
+                                softWrap = false,
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** A crop's shape as a small outlined rectangle ([aspect] width / height; null: the picture's own, drawn dashed). */
+@Composable
+fun AspectGlyph(aspect: Float?, on: Boolean) {
+    val ink = if (on) HeadsupColors.OnHighlight else HeadsupColors.Ink
+    Canvas(Modifier.size(16.dp)) {
+        val a = aspect ?: 1.5f
+        val w = if (a >= 1f) size.width else size.height * a
+        val h = if (a >= 1f) size.width / a else size.height
+        val stroke = 1.3.dp.toPx()
+        drawRoundRect(
+            ink,
+            Offset((size.width - w) / 2f + stroke / 2f, (size.height - h) / 2f + stroke / 2f),
+            androidx.compose.ui.geometry.Size(w - stroke, h - stroke),
+            androidx.compose.ui.geometry.CornerRadius(2.dp.toPx()),
+            style = androidx.compose.ui.graphics.drawscope.Stroke(
+                stroke,
+                pathEffect = if (aspect == null) androidx.compose.ui.graphics.PathEffect.dashPathEffect(floatArrayOf(2.dp.toPx(), 1.5.dp.toPx())) else null,
+            ),
+        )
     }
 }

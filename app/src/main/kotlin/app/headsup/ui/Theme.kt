@@ -362,6 +362,22 @@ object HeadsupIcons {
         }
     }
 
+    /** A gear: the app's settings. */
+    val Settings = icon("settings") {
+        stroke {
+            // The wheel and its hub.
+            moveTo(12f, 5.5f); arcTo(6.5f, 6.5f, 0f, true, true, 12f, 18.5f); arcTo(6.5f, 6.5f, 0f, true, true, 12f, 5.5f)
+            moveTo(12f, 9.5f); arcTo(2.5f, 2.5f, 0f, true, true, 12f, 14.5f); arcTo(2.5f, 2.5f, 0f, true, true, 12f, 9.5f)
+            // Eight teeth round it.
+            for (k in 0 until 8) {
+                val a = Math.toRadians(k * 45.0)
+                val c = kotlin.math.cos(a).toFloat()
+                val s = kotlin.math.sin(a).toFloat()
+                moveTo(12f + 6.5f * c, 12f + 6.5f * s); lineTo(12f + 9f * c, 12f + 9f * s)
+            }
+        }
+    }
+
     /** Watch: activity files. */
     val Watch = icon("watch") {
         stroke {

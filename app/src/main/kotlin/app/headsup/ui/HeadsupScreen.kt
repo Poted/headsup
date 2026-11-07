@@ -1871,6 +1871,8 @@ private fun ProjectHeader(state: UiState, vm: HeadsupViewModel, onBack: () -> Un
     Row(verticalAlignment = Alignment.CenterVertically) {
         SmallAction("‹ Projects", onBack)
         Spacer(Modifier.weight(1f))
+        // An open album's album view (stars, Auto pick): from the album itself, not the list.
+        if (state.photoProject && state.clips.isNotEmpty()) SmallAction("⊞ Album", { vm.openAlbumOf(state.projectName) })
         SmallAction("Rename", { renaming = true })
     }
     Row(verticalAlignment = Alignment.CenterVertically) {
@@ -1899,11 +1901,10 @@ private fun ProjectHeader(state: UiState, vm: HeadsupViewModel, onBack: () -> Un
 
 /** The header of the projects page: films or albums, each with how many there are. */
 @Composable
-private fun KindHeader(shown: ProjectKind, films: Int, albums: Int, onShow: (ProjectKind) -> Unit) {
+private fun KindHeader(shown: ProjectKind, films: Int, albums: Int, modifier: Modifier = Modifier, onShow: (ProjectKind) -> Unit) {
     val shape = RoundedCornerShape(24.dp)
     Row(
-        Modifier
-            .fillMaxWidth()
+        modifier
             .clip(shape)
             .background(HeadsupColors.SurfaceHigh)
             .border(1.dp, HeadsupColors.Outline, shape)
@@ -1936,7 +1937,16 @@ private fun KindHeader(shown: ProjectKind, films: Int, albums: Int, onShow: (Pro
 private fun ProjectRow(state: UiState, vm: HeadsupViewModel, onOpen: () -> Unit, onNew: (ProjectKind) -> Unit) {
     // Films and albums kept apart: a header to switch between them, each with its own New and list.
     var kindShown by rememberSaveable { mutableStateOf(if (state.photoProject) ProjectKind.PHOTOS else ProjectKind.VIDEO) }
-    KindHeader(kindShown, films = state.projects.count { it.kind == ProjectKind.VIDEO }, albums = state.projects.count { it.kind == ProjectKind.PHOTOS }) { kindShown = it }
+    // The app's settings live here, on the one page that is about no project in particular.
+    var settings by rememberSaveable { mutableStateOf(false) }
+    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        KindHeader(
+            kindShown, films = state.projects.count { it.kind == ProjectKind.VIDEO }, albums = state.projects.count { it.kind == ProjectKind.PHOTOS },
+            Modifier.weight(1f),
+        ) { kindShown = it }
+        RoundIconButton(HeadsupIcons.Settings, "Settings", { settings = true })
+    }
+    if (settings) SettingsSheet(onDismiss = { settings = false })
     // A project from the list being renamed, or about to be deleted.
     var renamingOther by remember { mutableStateOf<String?>(null) }
     var deletingOther by remember { mutableStateOf<String?>(null) }
@@ -1989,13 +1999,6 @@ private fun ProjectRow(state: UiState, vm: HeadsupViewModel, onOpen: () -> Unit,
                         .withNano(0).toString().replace('T', ' ') +
                         if (p.bytes > 0) " · " + formatBytes(p.bytes) else "",
                 )
-            }
-            // An album opens straight into its album view (stars, Auto pick) from here.
-            if (p.kind == ProjectKind.PHOTOS) {
-                Box(
-                    Modifier.size(36.dp).clip(CircleShape).clickable { vm.openAlbumOf(p.name); onOpen() },
-                    contentAlignment = Alignment.Center,
-                ) { Text("⊞", style = MaterialTheme.typography.titleMedium, color = HeadsupColors.Highlight) }
             }
             // Rename and delete behind ⋮, so the name has the row's width.
             Box {
@@ -3191,18 +3194,56 @@ private fun ColourPage(
         return
     }
     if (adjustment == Adjustment.SKIN) SkinToneTool(state.scope, onMatch = vm::matchSkinLine)
+    // The correction being changed, as a section: its name, ⓘ and Reset in their usual places.
     // Double-tap the ruler to reset, hold it to see the picture without this correction.
-    ValueHeader(adjustment.label, String.format(Locale.US, adjustment.format, adjustment.get(state.grade)))
-    RulerSlider(
-        value = adjustment.get(state.grade),
-        range = adjustment.range,
-        step = adjustment.step,
-        onChange = { v -> vm.updateGrade { adjustment.set(it, v) } },
-        onReset = { vm.updateGrade { adjustment.set(it, adjustment.neutral) } },
-        onHold = { held -> vm.setCompareGrade(if (held) adjustment.set(state.grade, adjustment.neutral) else null) },
-    )
-    if (adjustment == Adjustment.DEFRINGE) Hint("Takes out the purple and green fringes a lens leaves along hard, contrasty edges (branches against the sky, window frames). Only those edges change; zoom in on one to see it.")
+    val value = adjustment.get(state.grade)
+    ToolSection(
+        adjustment.label,
+        info = adjustment.info + " Double-tap the ruler to reset it, hold it to see the picture without it.",
+        onReset = if (value != adjustment.neutral) ({ vm.updateGrade { adjustment.set(it, adjustment.neutral) } }) else null,
+    ) {
+        ValueHeader("", String.format(Locale.US, adjustment.format, value))
+        RulerSlider(
+            value = value,
+            range = adjustment.range,
+            step = adjustment.step,
+            onChange = { v -> vm.updateGrade { adjustment.set(it, v) } },
+            onReset = { vm.updateGrade { adjustment.set(it, adjustment.neutral) } },
+            onHold = { held -> vm.setCompareGrade(if (held) adjustment.set(state.grade, adjustment.neutral) else null) },
+        )
+    }
 }
+
+/** What a correction on a ruler does, for its section's ⓘ. */
+private val Adjustment.info: String
+    get() = when (this) {
+        Adjustment.EXPOSURE -> "The whole picture brighter or darker, as if more or less light came in, in stops."
+        Adjustment.BRIGHTNESS -> "Lifts or lowers the middle tones; the darkest and brightest parts stay where they are."
+        Adjustment.CONTRAST -> "Spreads the tones apart (+) or draws them together (−) around the middle."
+        Adjustment.HIGHLIGHTS -> "Only the bright parts: − brings back a sky or a lit face, + makes them glow."
+        Adjustment.SHADOWS -> "Only the dark parts: + opens them to show detail, − deepens them."
+        Adjustment.WHITES -> "Where the brightest tones end: + to white, − to keep them below it."
+        Adjustment.BLACKS -> "Where the darkest tones end: − to deep black, + to a softer, faded black."
+        Adjustment.ROLLOFF -> "How gently the brightest parts reach white, like film rather than a hard clip."
+        Adjustment.SATURATION -> "All colours stronger or paler, equally."
+        Adjustment.VIBRANCE -> "Mostly the muted colours stronger or paler; colours already strong are spared."
+        Adjustment.DENSITY -> "Saturated colours deeper and darker (+) or paler (−), as film does."
+        Adjustment.TEMPERATURE -> "The white balance between blue (cool, −) and yellow (warm, +)."
+        Adjustment.TINT -> "The white balance between green (−) and magenta (+)."
+        Adjustment.SKIN -> "Turns skin tones towards yellow or red; greys and other colours (sky, foliage) stay."
+        Adjustment.VIGNETTE -> "Darkens the corners, drawing the eye to the middle."
+        Adjustment.SPLIT -> "How strongly the shadows and the lights take their own hues (set under Shadow hue and Light hue)."
+        Adjustment.SHADOW_HUE -> "The hue the shadows take with Split tone."
+        Adjustment.HIGHLIGHT_HUE -> "The hue the lights take with Split tone."
+        Adjustment.TAME -> "Calms loud colours (strong greens and blues most), sparing skin."
+        Adjustment.TEXTURE -> "Fine detail (skin, foliage, fabric) crisper (+) or smoother (−)."
+        Adjustment.CLARITY -> "Contrast in the middle tones at a larger scale: more punch (+) or a softer look (−)."
+        Adjustment.DEHAZE -> "Takes haze out of a distant view (+), or adds it (−)."
+        Adjustment.DEFRINGE -> "Takes out the purple and green fringes a lens leaves along hard, contrasty edges (branches against the sky, window frames). Only those edges change; zoom in on one to see it."
+        Adjustment.GLOW -> "Light spreading from what is bright inside the mask."
+        Adjustment.HALATION -> "A warm red halo round bright edges inside the mask, as on film."
+        else -> label + "."
+    }
 
 /** Colour grading: a wheel per range (drag to the hue, outwards for more), its brightness, and the balance. */
 @Composable
@@ -4554,49 +4595,40 @@ private fun FramePanel(state: UiState, vm: HeadsupViewModel) {
         return
     }
     // The timeline's frame: one shape for the whole project, like a DaVinci timeline's resolution.
-    Label("Timeline frame")
     val first = state.clips.firstOrNull()?.meta
-    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        for ((aspect, label) in Reframe.PRESETS) {
-            val text = if (aspect == null) "First clip" + (first?.let { " (${it.width}×${it.height})" } ?: "") else label
-            FilterChip(selected = state.frameAspect == aspect, onClick = { vm.setFrameAspect(aspect) }, label = { Text(text) })
-        }
+    val presets = Reframe.PRESETS
+    ToolSection(
+        "Timeline frame",
+        info = "One shape for the whole film. First clip takes the shape of the first clip on the timeline." +
+            (vm.outputPreview(state)?.let { " Exported at ${it.width}×${it.height}." } ?: ""),
+    ) {
+        ChoiceGrid(
+            presets.map { (aspect, label) -> if (aspect == null) "First clip" else label },
+            presets.indexOfFirst { it.first == state.frameAspect },
+            { vm.setFrameAspect(presets[it].first) },
+            glyph = { i, on -> AspectGlyph(presets[i].first ?: first?.let { m -> m.width.toFloat() / m.height.coerceAtLeast(1) }, on) },
+        )
+        vm.outputPreview(state)?.let { Text("${it.width} × ${it.height}", style = MaterialTheme.typography.labelSmall, color = HeadsupColors.TextMuted) }
     }
-    vm.outputPreview(state)?.let { Hint("Exported at ${it.width}×${it.height}.") }
 
-    Label("This clip in the frame")
     val r = state.framing(clip)
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        FilterChip(selected = !r.fit, onClick = { vm.updateReframe { it.copy(fit = false) } }, label = { Text("Fill") })
-        Spacer(Modifier.width(8.dp))
-        FilterChip(selected = r.fit, onClick = { vm.updateReframe { it.copy(fit = true) } }, label = { Text("Fit") })
-        Spacer(Modifier.weight(1f))
-        if (clip.reframe != Reframe(aspect = clip.reframe.aspect, fit = r.fit)) SmallAction("Reset", { vm.updateReframe { Reframe(fit = it.fit) } })
-    }
-    if (r.fit) {
-        // What fills the bars: black, or the picture itself blurred behind it (as social apps do).
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text("Bars", Modifier.padding(end = 12.dp), style = MaterialTheme.typography.labelLarge, color = HeadsupColors.TextMuted)
-            // For the whole film: one look for every fitted clip.
-            FilterChip(selected = !r.blur, onClick = { vm.setBlurBars(false) }, label = { Text("Black") })
-            Spacer(Modifier.width(8.dp))
-            FilterChip(selected = r.blur, onClick = { vm.setBlurBars(true) }, label = { Text("Blur") })
-        }
-    }
-    Hint(
-        if (r.fit && r.blur) "The whole picture inside the frame, the bars filled with it blurred (every fitted clip of the film); zoom in to fill more."
+    ToolSection(
+        "This clip in the frame",
+        info = if (r.fit && r.blur) "The whole picture inside the frame, the bars filled with it blurred (every fitted clip of the film); zoom in to fill more."
         else if (r.fit) "The whole picture inside the frame, black bars where the shapes differ; zoom in to fill more."
         else "The picture fills the frame; drag it to choose what stays, pinch to zoom. The grid shows the thirds.",
-    )
-    ValueHeader("Zoom", String.format(Locale.US, "%.2f×", r.zoom))
-    RulerSlider(r.zoom, 1f..4f, 0.02f, { v -> vm.updateReframe { it.copy(zoom = v) } }, onReset = { vm.updateReframe { it.copy(zoom = 1f) } })
-    ValueHeader("Straighten", String.format(Locale.US, "%+.1f°", r.angleDegrees))
-    RulerSlider(
-        r.angleDegrees, -15f..15f, 0.1f, { v -> vm.updateReframe { it.copy(angleDegrees = v) } },
-        onReset = { vm.updateReframe { it.copy(angleDegrees = 0f) } },
-    )
-    PerspectiveRulers(r, vm)
+        onReset = if (clip.reframe != Reframe(aspect = clip.reframe.aspect, fit = r.fit)) ({ vm.updateReframe { Reframe(fit = it.fit) } }) else null,
+    ) {
+        ChoiceGrid(listOf("Fill", "Fit"), if (r.fit) 1 else 0, { i -> vm.updateReframe { it.copy(fit = i == 1) } })
+        if (r.fit) {
+            // What fills the bars: black, or the picture itself blurred behind it (as social apps do); for the whole film.
+            Text("Bars", style = MaterialTheme.typography.labelMedium, color = HeadsupColors.TextMuted)
+            ChoiceGrid(listOf("Black", "Blur"), if (r.blur) 1 else 0, { vm.setBlurBars(it == 1) })
+        }
+    }
+    GeometrySections(r, vm)
     if (state.clips.size > 1) {
+        // The panel's own action: at its bottom, as on every panel.
         Row {
             Spacer(Modifier.weight(1f))
             SmallAction(if (r.fit) "Fit all clips" else "Fill all clips", { vm.setFitForAll(r.fit, r.blur) })
@@ -5487,37 +5519,59 @@ private fun GradeKeyRow(state: UiState, clip: ClipState, vm: HeadsupViewModel) {
 @Composable
 private fun PhotoCrop(state: UiState, clip: ClipState, vm: HeadsupViewModel) {
     val r = clip.reframe
-    Label("Crop")
-    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        FilterChip(selected = r.aspect == null, onClick = { vm.updateReframe { it.copy(aspect = null) } }, label = { Text("Original") })
-        for ((aspect, label) in Reframe.PRESETS) {
-            if (aspect == null) continue
-            FilterChip(selected = r.aspect == aspect, onClick = { vm.updateReframe { it.copy(aspect = aspect) } }, label = { Text(label) })
-        }
+    val presets = Reframe.PRESETS
+    ToolSection(
+        "Aspect",
+        info = "The shape the photo is cut to. Drag the picture to choose what stays, pinch to zoom.",
+        onReset = if (r.aspect != null) ({ vm.updateReframe { it.copy(aspect = null) } }) else null,
+    ) {
+        ChoiceGrid(
+            presets.map { it.second },
+            presets.indexOfFirst { it.first == r.aspect },
+            { i -> vm.updateReframe { it.copy(aspect = presets[i].first) } },
+            glyph = { i, on -> AspectGlyph(presets[i].first ?: clip.meta.let { m -> m.width.toFloat() / m.height.coerceAtLeast(1) }, on) },
+        )
     }
-    Hint("Drag the picture to choose what stays, pinch to zoom.")
-    ValueHeader("Zoom", String.format(Locale.US, "%.2f×", r.zoom))
-    RulerSlider(r.zoom, 1f..4f, 0.02f, { v -> vm.updateReframe { it.copy(zoom = v) } }, onReset = { vm.updateReframe { it.copy(zoom = 1f) } })
-    ValueHeader("Straighten", String.format(Locale.US, "%+.1f°", r.angleDegrees))
-    RulerSlider(r.angleDegrees, -15f..15f, 0.1f, { v -> vm.updateReframe { it.copy(angleDegrees = v) } }, onReset = { vm.updateReframe { it.copy(angleDegrees = 0f) } })
-    PerspectiveRulers(r, vm)
+    GeometrySections(r, vm)
 }
 
-/** Perspective correction: lines leaning together (a building shot from below) set straight. */
+/**
+ * The picture's geometry, the same for a photo and a clip: zoom and straighten, perspective
+ * (lines leaning together set straight) and the lens, each a section of its own.
+ */
 @Composable
-private fun PerspectiveRulers(r: Reframe, vm: HeadsupViewModel) {
-    ValueHeader("Vertical", String.format(Locale.US, "%+.0f", r.vertical * 100))
-    RulerSlider(r.vertical, -1f..1f, 0.01f, { v -> vm.updateReframe { it.copy(vertical = v) } }, onReset = { vm.updateReframe { it.copy(vertical = 0f) } })
-    ValueHeader("Horizontal", String.format(Locale.US, "%+.0f", r.horizontal * 100))
-    RulerSlider(r.horizontal, -1f..1f, 0.01f, { v -> vm.updateReframe { it.copy(horizontal = v) } }, onReset = { vm.updateReframe { it.copy(horizontal = 0f) } })
-    Hint("Vertical straightens a building's sides when the camera looked up or down; Horizontal the same sideways. The picture zooms in just enough to hide the empty corners.")
+private fun GeometrySections(r: Reframe, vm: HeadsupViewModel) {
+    ToolSection(
+        "Geometry",
+        info = "Zoom into the picture, and turn it level (double-tap a ruler to reset it, hold it to compare).",
+        onReset = if (r.zoom != 1f || r.angleDegrees != 0f) ({ vm.updateReframe { it.copy(zoom = 1f, angleDegrees = 0f) } }) else null,
+    ) {
+        ValueHeader("Zoom", String.format(Locale.US, "%.2f×", r.zoom))
+        RulerSlider(r.zoom, 1f..4f, 0.02f, { v -> vm.updateReframe { it.copy(zoom = v) } }, onReset = { vm.updateReframe { it.copy(zoom = 1f) } })
+        ValueHeader("Straighten", String.format(Locale.US, "%+.1f°", r.angleDegrees))
+        RulerSlider(r.angleDegrees, -15f..15f, 0.1f, { v -> vm.updateReframe { it.copy(angleDegrees = v) } }, onReset = { vm.updateReframe { it.copy(angleDegrees = 0f) } })
+    }
+    ToolSection(
+        "Perspective",
+        info = "Vertical straightens a building's sides when the camera looked up or down; Horizontal the same sideways. The picture zooms in just enough to hide the empty corners.",
+        onReset = if (r.vertical != 0f || r.horizontal != 0f) ({ vm.updateReframe { it.copy(vertical = 0f, horizontal = 0f) } }) else null,
+    ) {
+        ValueHeader("Vertical", String.format(Locale.US, "%+.0f", r.vertical * 100))
+        RulerSlider(r.vertical, -1f..1f, 0.01f, { v -> vm.updateReframe { it.copy(vertical = v) } }, onReset = { vm.updateReframe { it.copy(vertical = 0f) } })
+        ValueHeader("Horizontal", String.format(Locale.US, "%+.0f", r.horizontal * 100))
+        RulerSlider(r.horizontal, -1f..1f, 0.01f, { v -> vm.updateReframe { it.copy(horizontal = v) } }, onReset = { vm.updateReframe { it.copy(horizontal = 0f) } })
+    }
     // The lens: its distortion and its darker corners (a raw photo's lens profile is applied already).
-    SectionCaption("Lens")
-    ValueHeader("Distortion", String.format(Locale.US, "%+.0f", r.distortion * 100))
-    RulerSlider(r.distortion, -1f..1f, 0.01f, { v -> vm.updateReframe { it.copy(distortion = v) } }, onReset = { vm.updateReframe { it.copy(distortion = 0f) } })
-    ValueHeader("Lens vignette", String.format(Locale.US, "%+.0f", r.lensVignette * 100))
-    RulerSlider(r.lensVignette, -1f..1f, 0.01f, { v -> vm.updateReframe { it.copy(lensVignette = v) } }, onReset = { vm.updateReframe { it.copy(lensVignette = 0f) } })
-    Hint("Distortion: + pulls in a wide lens's bulge (straight lines bowing out, a drone's horizon), − pushes out a pinch. Lens vignette: + brightens the corners a lens darkens. Raw photos already get their lens's own correction.")
+    ToolSection(
+        "Lens",
+        info = "Distortion: + pulls in a wide lens's bulge (straight lines bowing out, a drone's horizon), − pushes out a pinch. Lens vignette: + brightens the corners a lens darkens. Raw photos already get their lens's own correction.",
+        onReset = if (r.distortion != 0f || r.lensVignette != 0f) ({ vm.updateReframe { it.copy(distortion = 0f, lensVignette = 0f) } }) else null,
+    ) {
+        ValueHeader("Distortion", String.format(Locale.US, "%+.0f", r.distortion * 100))
+        RulerSlider(r.distortion, -1f..1f, 0.01f, { v -> vm.updateReframe { it.copy(distortion = v) } }, onReset = { vm.updateReframe { it.copy(distortion = 0f) } })
+        ValueHeader("Lens vignette", String.format(Locale.US, "%+.0f", r.lensVignette * 100))
+        RulerSlider(r.lensVignette, -1f..1f, 0.01f, { v -> vm.updateReframe { it.copy(lensVignette = v) } }, onReset = { vm.updateReframe { it.copy(lensVignette = 0f) } })
+    }
 }
 
 /** The activity's route over the picture: on or off, size, colour, background and the "you are here" dot. */
