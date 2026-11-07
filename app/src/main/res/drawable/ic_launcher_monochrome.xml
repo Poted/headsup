@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Themed-icon layer: the same mark in one ink; the launcher tints it. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- The curve, with a ring cut out round the point (the rectangle minus a circle). -->
+    <group>
+        <clip-path android:pathData="M0,0 H108 V108 H0 Z M67.778,44.727 A7.875,7.875 0 1,0 52.028,44.727 A7.875,7.875 0 1,0 67.778,44.727 Z" />
+        <path
+            android:pathData="M29,79 C48,79 60,29 79,29"
+            android:strokeColor="#FFFFFFFF"
+            android:strokeWidth="3.5"
+            android:strokeLineCap="round" />
+    </group>
+    <!-- The point, at the golden ratio along the curve. -->
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M65.153,44.727 A5.250,5.250 0 1,1 54.653,44.727 A5.250,5.250 0 1,1 65.153,44.727 Z" />
+</vector>

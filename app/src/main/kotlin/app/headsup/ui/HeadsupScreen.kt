@@ -763,15 +763,18 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
         // No title bar: the picture starts at the top, adding files lives in the Project tool.
         if (fullscreen) {
             // The picture alone on black, centred, whichever way the phone is held; a swipe down leaves.
-            Column(
-                Modifier
-                    .fillMaxSize()
-                    .background(Color.Black)
-                    .graphicsLayer { scaleX = settle.value; scaleY = settle.value; alpha = 0.4f + 0.6f * ((settle.value - 0.96f) / 0.04f) }
-                    .freeSwipe(pictureFree) { if (it == Swipe.DOWN || (wide && it == Swipe.LEFT)) fullscreen = false },
-                verticalArrangement = Arrangement.Center,
-                content = pictureAndTimeline,
-            )
+            // On black the controls are those of the dark theme, in light mode too.
+            HeadsupTheme(dark = true) {
+                Column(
+                    Modifier
+                        .fillMaxSize()
+                        .background(HeadsupColors.Picture)
+                        .graphicsLayer { scaleX = settle.value; scaleY = settle.value; alpha = 0.4f + 0.6f * ((settle.value - 0.96f) / 0.04f) }
+                        .freeSwipe(pictureFree) { if (it == Swipe.DOWN || (wide && it == Swipe.LEFT)) fullscreen = false },
+                    verticalArrangement = Arrangement.Center,
+                    content = pictureAndTimeline,
+                )
+            }
         } else if (wide) {
             androidx.compose.foundation.layout.BoxWithConstraints(Modifier.fillMaxSize().systemBarsPadding().padding(top = 8.dp)) {
                 val total = constraints.maxWidth.toFloat().coerceAtLeast(1f)
@@ -1021,7 +1024,7 @@ private fun Modifier.scrollBar(state: androidx.compose.foundation.ScrollState): 
         val y = inset + (track - barH) * state.value / max
         val x = size.width - 5.dp.toPx()
         drawLine(
-            Color.White.copy(alpha = if (state.isScrollInProgress) 0.55f else 0.22f),
+            HeadsupColors.Ink.copy(alpha = if (state.isScrollInProgress) 0.55f else 0.22f),
             Offset(x, y), Offset(x, y + barH),
             strokeWidth = 3.dp.toPx(), cap = androidx.compose.ui.graphics.StrokeCap.Round,
         )
@@ -1151,9 +1154,9 @@ private fun ScrubLine(totalMs: Long, playheadMs: () -> Long, onScrub: (Long?) ->
             .drawBehind {
                 val y = size.height / 2
                 val f = if (totalMs > 0) (playheadMs().toFloat() / totalMs).coerceIn(0f, 1f) else 0f
-                drawLine(Color.White.copy(alpha = 0.25f), Offset(0f, y), Offset(size.width, y), strokeWidth = 3.dp.toPx(), cap = androidx.compose.ui.graphics.StrokeCap.Round)
+                drawLine(HeadsupColors.Ink.copy(alpha = 0.25f), Offset(0f, y), Offset(size.width, y), strokeWidth = 3.dp.toPx(), cap = androidx.compose.ui.graphics.StrokeCap.Round)
                 drawLine(accent, Offset(0f, y), Offset(size.width * f, y), strokeWidth = 3.dp.toPx(), cap = androidx.compose.ui.graphics.StrokeCap.Round)
-                drawCircle(Color.White, radius = 7.dp.toPx(), center = Offset(size.width * f, y))
+                drawCircle(HeadsupColors.Ink, radius = 7.dp.toPx(), center = Offset(size.width * f, y))
             },
     )
 }
@@ -1902,7 +1905,7 @@ private fun KindHeader(shown: ProjectKind, films: Int, albums: Int, onShow: (Pro
         Modifier
             .fillMaxWidth()
             .clip(shape)
-            .background(Color.Black.copy(alpha = 0.3f))
+            .background(HeadsupColors.SurfaceHigh)
             .border(1.dp, HeadsupColors.Outline, shape)
             .padding(4.dp),
     ) {
@@ -1918,11 +1921,11 @@ private fun KindHeader(shown: ProjectKind, films: Int, albums: Int, onShow: (Pro
                 horizontalArrangement = Arrangement.Center,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Icon(if (kind == ProjectKind.VIDEO) HeadsupIcons.Video else HeadsupIcons.Colour, null, Modifier.size(18.dp), tint = if (on) Color.Black else HeadsupColors.TextMuted)
+                Icon(if (kind == ProjectKind.VIDEO) HeadsupIcons.Video else HeadsupIcons.Colour, null, Modifier.size(18.dp), tint = if (on) HeadsupColors.OnAccent else HeadsupColors.TextMuted)
                 Spacer(Modifier.width(8.dp))
-                Text(title, style = MaterialTheme.typography.titleSmall, color = if (on) Color.Black else Color.White)
+                Text(title, style = MaterialTheme.typography.titleSmall, color = if (on) HeadsupColors.OnAccent else HeadsupColors.Ink)
                 Spacer(Modifier.width(6.dp))
-                Text("$n", style = MaterialTheme.typography.labelMedium, color = if (on) Color.Black.copy(alpha = 0.6f) else HeadsupColors.TextMuted)
+                Text("$n", style = MaterialTheme.typography.labelMedium, color = if (on) HeadsupColors.OnAccent.copy(alpha = 0.7f) else HeadsupColors.TextMuted)
             }
         }
     }
@@ -2220,7 +2223,7 @@ private fun SpeedRamp(clip: ClipState, timelineFps: Float, playhead: LongState, 
             .fillMaxWidth()
             .height(190.dp)
             .clip(RoundedCornerShape(12.dp))
-            .background(Color.Black.copy(alpha = 0.35f))
+            .background(HeadsupColors.Instrument)
             .pointerInput(Unit) {
                 var lastTap = 0L
                 awaitEachGesture {
@@ -2584,8 +2587,8 @@ private fun SyncSummary(clip: ClipState, activity: LoadedActivity?) {
         Text(
             sync.confidence.name,
             color = when (sync.confidence) {
-                Confidence.HIGH -> Color(0xFF4CAF50)
-                Confidence.MEDIUM -> Color(0xFFFFB300)
+                Confidence.HIGH -> HeadsupColors.Good
+                Confidence.MEDIUM -> HeadsupColors.Warn
                 Confidence.LOW -> MaterialTheme.colorScheme.error
             },
             style = MaterialTheme.typography.labelLarge,
@@ -2683,9 +2686,9 @@ private fun SyncGraph(clip: ClipState, track: ActivityTrack, playhead: LongState
                 val y = pad + (1f - ((series.values[i] - min) / span).toFloat()) * (size.height - 2 * pad)
                 if (i == lo) path.moveTo(x, y) else path.lineTo(x, y)
             }
-            drawPath(path, Color.White.copy(alpha = 0.85f), style = Stroke(1.5.dp.toPx()))
+            drawPath(path, HeadsupColors.Ink.copy(alpha = 0.85f), style = Stroke(1.5.dp.toPx()))
         }
-        drawLine(Color.White.copy(alpha = 0.4f), Offset(size.width / 2, 0f), Offset(size.width / 2, size.height), 1.dp.toPx())
+        drawLine(HeadsupColors.Ink.copy(alpha = 0.4f), Offset(size.width / 2, 0f), Offset(size.width / 2, size.height), 1.dp.toPx())
         picked?.let { d ->
             val x = xOf(centre + d)
             drawLine(accent, Offset(x, 0f), Offset(x, size.height), 2.dp.toPx())
@@ -3316,7 +3319,7 @@ private fun CurveControls(state: UiState, vm: HeadsupViewModel) {
             .fillMaxWidth()
             .aspectRatio(1.4f)
             .clip(RoundedCornerShape(12.dp))
-            .background(Color.Black.copy(alpha = 0.35f))
+            .background(HeadsupColors.Instrument)
             // One handler for touching, dragging and double-tapping, working on its own copy of the
             // points (the stored ones arrive a frame later) and taking every move, so the page
             // does not scroll instead.
@@ -3416,7 +3419,7 @@ private fun HueCurveControls(state: UiState, vm: HeadsupViewModel) {
             .fillMaxWidth()
             .aspectRatio(2f)
             .clip(RoundedCornerShape(12.dp))
-            .background(Color.Black.copy(alpha = 0.35f))
+            .background(HeadsupColors.Instrument)
             .pointerInput(channel) {
                 var lastTap = 0L
                 awaitEachGesture {
@@ -3547,7 +3550,7 @@ private fun BlackAndWhiteControls(state: UiState, vm: HeadsupViewModel) {
                     .size(34.dp)
                     .clip(CircleShape)
                     .background(Color(b.swatch))
-                    .border(if (b == band) 3.dp else if (changed) 1.dp else 0.dp, Color.White, CircleShape)
+                    .border(if (b == band) 3.dp else if (changed) 1.dp else 0.dp, HeadsupColors.Ink, CircleShape)
                     .clickable { band = b },
             )
         }
@@ -3606,7 +3609,7 @@ private fun MixerControls(state: UiState, vm: HeadsupViewModel) {
                     .size(38.dp)
                     .clip(CircleShape)
                     .background(Color(b.swatch))
-                    .border(if (b == band) 3.dp else 1.dp, if (b == band) Color.White else HeadsupColors.Outline, CircleShape)
+                    .border(if (b == band) 3.dp else 1.dp, if (b == band) HeadsupColors.Ink else HeadsupColors.Outline, CircleShape)
                     .clickable { band = b },
                 contentAlignment = Alignment.Center,
             ) { if (changed) Box(Modifier.size(7.dp).clip(CircleShape).background(Color.White)) }
@@ -4463,7 +4466,7 @@ private fun GroupControls(state: UiState, clip: ClipState, index: Int, group: Cl
                         Text("${i + 1}. ${c.meta.name}", style = MaterialTheme.typography.bodyMedium, maxLines = 1)
                         Hint(String.format(Locale.US, "warmth %+.2f · tint %+.2f · saturation %+.2f%s", delta.temperature, delta.tint, delta.saturation, if (delta.skinHue != 0f) String.format(Locale.US, " · skin %+.0f°", delta.skinHue) else ""))
                     }
-                    Text(String.format(Locale.US, "%.0f %%", share * 100), style = MaterialTheme.typography.labelLarge, color = if (share > 0f) Color.White else HeadsupColors.TextMuted)
+                    Text(String.format(Locale.US, "%.0f %%", share * 100), style = MaterialTheme.typography.labelLarge, color = if (share > 0f) HeadsupColors.Ink else HeadsupColors.TextMuted)
                 }
             }
             session.memberDeltas[clip.id]?.let {
@@ -5103,7 +5106,7 @@ private fun JobRow(job: ExportJob) {
                     )
                     Hint("${job.progress}%")
                 }
-                JobStatus.DONE -> Text("Done", color = Color(0xFF4CAF50), style = MaterialTheme.typography.bodySmall)
+                JobStatus.DONE -> Text("Done", color = HeadsupColors.Good, style = MaterialTheme.typography.bodySmall)
                 JobStatus.FAILED -> Text("Failed", color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
                 JobStatus.CANCELLED -> Hint("Cancelled")
             }

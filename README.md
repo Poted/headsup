@@ -21,5 +21,5 @@ HEADSUP_FIT_SAMPLES=/path/to/fit/files ./gradlew :core:test --tests '*LocalSampl
 
 ## Third-party fonts
 
-Barlow Condensed, Oswald, Rajdhani and Orbitron are bundled under the SIL Open Font License 1.1;
-the licence texts are in `app/src/main/assets/licenses/`.
+Barlow Condensed, Oswald, Rajdhani and Orbitron (the dashboard) and Geist and Geist Mono (the interface)
+are bundled under the SIL Open Font License 1.1; the licence texts are in `app/src/main/assets/licenses/`.

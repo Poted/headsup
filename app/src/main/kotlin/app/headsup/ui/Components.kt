@@ -39,7 +39,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
@@ -133,7 +132,7 @@ fun RulerSlider(
             val fade = (1f - abs(x - cx) / cx).coerceIn(0.1f, 1f)
             val major = (i - zero) % 5 == 0
             val h = (if (i == zero) 24.dp else if (major) 16.dp else 9.dp).toPx()
-            val color = if (i == zero) HeadsupColors.AccentSoft else Color.White
+            val color = if (i == zero) HeadsupColors.ZeroTick else HeadsupColors.Ink
             drawLine(
                 color.copy(alpha = fade * if (major) 0.85f else 0.45f),
                 Offset(x, bottom - h),
@@ -142,20 +141,14 @@ fun RulerSlider(
                 cap = StrokeCap.Round,
             )
         }
-        drawLine(
-            Brush.horizontalGradient(listOf(Color.Transparent, HeadsupColors.Accent.copy(alpha = 0.7f), Color.Transparent)),
-            Offset(0f, bottom + 3.dp.toPx()),
-            Offset(size.width, bottom + 3.dp.toPx()),
-            strokeWidth = 1.dp.toPx(),
-        )
         val marker = Path().apply {
             moveTo(cx - 5.dp.toPx(), 0f)
             lineTo(cx + 5.dp.toPx(), 0f)
             lineTo(cx, 7.dp.toPx())
             close()
         }
-        drawPath(marker, HeadsupColors.Accent)
-        drawLine(HeadsupColors.Accent, Offset(cx, 10.dp.toPx()), Offset(cx, bottom), strokeWidth = 2.dp.toPx(), cap = StrokeCap.Round)
+        drawPath(marker, HeadsupColors.AccentInk)
+        drawLine(HeadsupColors.AccentInk, Offset(cx, 10.dp.toPx()), Offset(cx, bottom), strokeWidth = 2.dp.toPx(), cap = StrokeCap.Round)
     }
 }
 
@@ -180,10 +173,10 @@ fun CircleOption(symbol: String, caption: String, selected: Boolean, modified: B
                 .size(44.dp)
                 .clip(CircleShape)
                 .background(if (selected) HeadsupColors.SurfaceHigh else Color.Transparent)
-                .border(1.dp, if (selected) HeadsupColors.Accent else HeadsupColors.Outline, CircleShape),
+                .border(1.dp, if (selected) HeadsupColors.AccentInk else HeadsupColors.ControlEdge, CircleShape),
             contentAlignment = Alignment.Center,
         ) {
-            Text(symbol, style = MaterialTheme.typography.labelLarge, color = if (selected) HeadsupColors.Accent else Color.White)
+            Text(symbol, style = MaterialTheme.typography.labelLarge, color = if (selected) HeadsupColors.AccentInk else HeadsupColors.Ink)
             if (modified) {
                 Box(Modifier.align(Alignment.TopEnd).padding(5.dp).size(6.dp).background(HeadsupColors.Accent, CircleShape))
             }
@@ -200,16 +193,16 @@ fun RoundIconButton(icon: ImageVector, description: String, onClick: () -> Unit,
             .size(42.dp)
             .clip(CircleShape)
             .background(HeadsupColors.Surface)
-            .border(1.dp, HeadsupColors.Outline, CircleShape)
+            .border(1.dp, HeadsupColors.ControlEdge, CircleShape)
             .clickable(onClick = onClick),
         contentAlignment = Alignment.Center,
     ) {
-        Icon(icon, contentDescription = description, Modifier.size(20.dp), tint = Color.White)
+        Icon(icon, contentDescription = description, Modifier.size(20.dp), tint = HeadsupColors.Ink)
         if (badge) {
             Box(
                 Modifier.align(Alignment.BottomEnd).padding(4.dp).size(14.dp).clip(CircleShape).background(HeadsupColors.Accent),
                 contentAlignment = Alignment.Center,
-            ) { Icon(HeadsupIcons.Add, contentDescription = null, Modifier.size(10.dp), tint = Color.Black) }
+            ) { Icon(HeadsupIcons.Add, contentDescription = null, Modifier.size(10.dp), tint = HeadsupColors.OnAccent) }
         }
     }
 }
@@ -294,15 +287,15 @@ fun LayerChip(symbol: String, label: String, selected: Boolean, modified: Boolea
             .height(34.dp)
             .clip(CircleShape)
             .background(if (selected) HeadsupColors.SurfaceHigh else Color.Transparent)
-            .border(1.dp, if (selected) HeadsupColors.Accent else HeadsupColors.Outline, CircleShape)
+            .border(1.dp, if (selected) HeadsupColors.AccentInk else HeadsupColors.ControlEdge, CircleShape)
             .clickable(onClick = onClick)
             .padding(horizontal = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text(symbol, style = MaterialTheme.typography.labelLarge, color = if (selected) HeadsupColors.Accent else Color.White)
+        Text(symbol, style = MaterialTheme.typography.labelLarge, color = if (selected) HeadsupColors.AccentInk else HeadsupColors.Ink)
         if (label.isNotEmpty()) {
             Spacer(Modifier.width(6.dp))
-            Text(label, style = MaterialTheme.typography.labelMedium, color = if (selected) Color.White else HeadsupColors.TextMuted, maxLines = 1)
+            Text(label, style = MaterialTheme.typography.labelMedium, color = if (selected) HeadsupColors.Ink else HeadsupColors.TextMuted, maxLines = 1)
         }
         if (modified) {
             Spacer(Modifier.width(6.dp))
@@ -372,7 +365,7 @@ fun PanelAction(text: String, onClick: () -> Unit, modifier: Modifier = Modifier
             .height(44.dp)
             .clip(shape)
             .background(HeadsupColors.SurfaceHigh)
-            .border(1.dp, if (danger) Color(0x55FF6B5E) else HeadsupColors.Outline, shape)
+            .border(1.dp, if (danger) HeadsupColors.Bad.copy(alpha = 0.45f) else HeadsupColors.Outline, shape)
             .clickable(enabled = enabled, onClick = onClick)
             .padding(horizontal = 8.dp),
         contentAlignment = Alignment.Center,
@@ -382,8 +375,8 @@ fun PanelAction(text: String, onClick: () -> Unit, modifier: Modifier = Modifier
             style = MaterialTheme.typography.labelLarge,
             color = when {
                 !enabled -> HeadsupColors.TextMuted.copy(alpha = 0.5f)
-                danger -> Color(0xFFFF8A80)
-                else -> Color.White
+                danger -> HeadsupColors.Bad
+                else -> HeadsupColors.Ink
             },
             maxLines = 1,
         )
@@ -470,7 +463,7 @@ fun CineLoader(message: String, modifier: Modifier = Modifier, progress: Float? 
             Text(
                 if (progress != null) String.format(java.util.Locale.US, "%.0f%%", progress * 100)
                 else String.format(java.util.Locale.US, "%02d:%02d:%02d:%02d", total / 90000, total / 1500 % 60, total / 25 % 60, total % 25),
-                style = MaterialTheme.typography.labelSmall.copy(fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace),
+                style = MaterialTheme.typography.labelSmall.copy(fontFamily = GeistMonoFamily),
                 color = HeadsupColors.TextMuted,
             )
             if (progress != null) {

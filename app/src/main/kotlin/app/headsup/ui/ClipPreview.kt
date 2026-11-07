@@ -77,7 +77,6 @@ import androidx.compose.foundation.gestures.waitForUpOrCancellation
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.isSpecified
 import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.graphics.graphicsLayer
 import app.headsup.color.BrushAtlas
 import app.headsup.color.GradePreviewShader
@@ -1632,7 +1631,7 @@ fun ClipPreview(
                         Text(
                             "  " + timecode(timelineOffsetMs + clipTimelineMs, clip.meta.frameRate) + "  /  " + Formats.duration(timelineTotalMs),
                             Modifier.clip(RoundedCornerShape(8.dp)).background(Color.Black.copy(alpha = 0.4f)).padding(horizontal = 6.dp, vertical = 2.dp),
-                            style = MaterialTheme.typography.labelMedium.copy(fontFamily = FontFamily.Monospace),
+                            style = MaterialTheme.typography.labelMedium.copy(fontFamily = GeistMonoFamily),
                             color = Color.White,
                             maxLines = 1,
                         )
@@ -1707,12 +1706,12 @@ fun ClipPreview(
                     "${m.width}×${m.height}",
                     m.bytes?.let { b -> if (b >= 1_000_000) String.format(java.util.Locale.US, "%.1f MB", b / 1e6) else "${b / 1000} kB" },
                 ).joinToString("  ·  ")
-                Text("  $info", Modifier.weight(1f), style = MaterialTheme.typography.labelMedium.copy(fontFamily = FontFamily.Monospace), maxLines = 1)
+                Text("  $info", Modifier.weight(1f), style = MaterialTheme.typography.labelMedium.copy(fontFamily = GeistMonoFamily), maxLines = 1)
             } else Text(
                 "  " + (if (scrubbing) timecode(playerMs, clip.meta.frameRate) else timecode(timelineOffsetMs + clipTimelineMs, clip.meta.frameRate)) +
                     "  /  " + Formats.duration(timelineTotalMs),
                 Modifier.weight(1f),
-                style = MaterialTheme.typography.labelMedium.copy(fontFamily = FontFamily.Monospace),
+                style = MaterialTheme.typography.labelMedium.copy(fontFamily = GeistMonoFamily),
                 maxLines = 1,
             )
             // The shown clip's own frame rate (the export's is chosen on the Export page).
