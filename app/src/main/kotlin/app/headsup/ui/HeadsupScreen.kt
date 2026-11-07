@@ -329,7 +329,7 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
     var compact by rememberSaveable { mutableStateOf(false) }
     val folded = compact && !fullscreen && !state.photoProject
     // An album's photo with its info row and the album folded away (any way the phone is held).
-    val photoFolded = compact && state.photoProject && !fullscreen && tool != Tool.FILES
+    val photoFolded = compact && state.photoProject && !fullscreen
     // Full screen keeps a line to scrub along under a film's picture, and play on it.
     val fullscreenFilm = fullscreen && !state.photoProject && state.clips.isNotEmpty()
     // The picture grows and shrinks smoothly when the transport folds or full screen changes.
@@ -395,7 +395,8 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
                     Modifier.padding(horizontal = 16.dp).fillMaxWidth().height(120.dp).clip(RoundedCornerShape(20.dp)).background(HeadsupColors.Surface),
                     contentAlignment = Alignment.Center,
                 ) { Hint("Preview paused while exporting") }
-                else -> Box {
+                // An album's photo: its swipes watched here, on the photo (never on the album under it).
+                else -> Box(if (state.photoProject && !fullscreen) Modifier.observedSwipe(pictureFree) { onScreenSwipe(mirrored(it), true) } else Modifier) {
                     ClipPreview(
                         clip = selected,
                         activity = selected.sync?.let { state.activities.getOrNull(it.trackIndex) },
@@ -540,7 +541,7 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
                 // A double tap on it folds the transport and the timeline (or the album) away and
                 // brings them back.
                 PreviewHandle(
-                    onToggle = { if (!state.photoProject || tool != Tool.FILES) compact = !compact },
+                    onToggle = { compact = !compact },
                     onDragging = { handleDragging = it; if (!it) pullPast = 0f },
                 ) { dy ->
                     val d = dy / (configuration.screenHeightDp * density.density)
@@ -750,7 +751,7 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
             when (swipe) {
                 Swipe.RIGHT -> fullscreen = true
                 Swipe.UP -> compact = false
-                Swipe.DOWN -> if (tool != Tool.FILES) compact = true
+                Swipe.DOWN -> compact = true
                 else -> Unit
             }
             return
@@ -774,7 +775,10 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
                         .fillMaxSize()
                         .background(HeadsupColors.Picture)
                         .graphicsLayer { scaleX = settle.value; scaleY = settle.value; alpha = 0.4f + 0.6f * ((settle.value - 0.96f) / 0.04f) }
-                        .freeSwipe(pictureFree) { if (it == Swipe.DOWN || (wide && mirrored(it) == Swipe.LEFT)) fullscreen = false },
+                        .then(
+                            if (state.photoProject) Modifier.observedSwipe(pictureFree) { if (it == Swipe.DOWN || (wide && mirrored(it) == Swipe.LEFT)) fullscreen = false }
+                            else Modifier.freeSwipe(pictureFree) { if (it == Swipe.DOWN || (wide && mirrored(it) == Swipe.LEFT)) fullscreen = false },
+                        ),
                     verticalArrangement = Arrangement.Center,
                     content = pictureAndTimeline,
                 )
@@ -798,7 +802,8 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
                                 .fillMaxHeight()
                                 .clipToBounds()
                                 .graphicsLayer { scaleX = settle.value; scaleY = settle.value }
-                                .zonedSwipe(pictureFree) { swipe, upper -> onScreenSwipe(mirrored(swipe), upper) },
+                                // An album's swipes are watched on the photo itself (below).
+                                .then(if (state.photoProject) Modifier else Modifier.zonedSwipe(pictureFree) { swipe, upper -> onScreenSwipe(mirrored(swipe), upper) }),
                             content = pictureAndTimeline,
                         )
                     }
@@ -820,7 +825,7 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
         } else {
             Column(Modifier.fillMaxSize().systemBarsPadding().padding(top = 8.dp)) {
                 // Upright, a swipe up on the picture goes full screen (down in full screen leaves it).
-                Column(Modifier.zonedSwipe(pictureFree, ::onScreenSwipe), content = pictureAndTimeline)
+                Column(if (state.photoProject) Modifier else Modifier.zonedSwipe(pictureFree, ::onScreenSwipe), content = pictureAndTimeline)
                 // In an album, a swipe down over the tools folds the photo's info row and the album
                 // away (more room for the photo), up brings them back.
                 Column(
@@ -1143,6 +1148,38 @@ private fun Modifier.zonedSwipe(upperFree: Boolean, onSwipe: (Swipe, Boolean) ->
         }
     }
 }
+}
+
+/**
+ * Swipes over an album's photo, read before anything under the finger uses it (the photo's
+ * zoom, the hold for the original, a double tap): only watched, never taken, so those still work,
+ * and a clear swipe (one finger, mostly one way, at least 56 dp) is always seen. Off while the
+ * finger shapes a mask, frames or writes ([enabled] false).
+ */
+private fun Modifier.observedSwipe(enabled: Boolean, onSwipe: (Swipe) -> Unit): Modifier = if (!enabled) this else composed {
+    val call by rememberUpdatedState(onSwipe)
+    pointerInput(Unit) {
+        val distance = 56.dp.toPx()
+        awaitEachGesture {
+            val down = awaitFirstDown(requireUnconsumed = false, pass = androidx.compose.ui.input.pointer.PointerEventPass.Initial)
+            while (true) {
+                val event = awaitPointerEvent(androidx.compose.ui.input.pointer.PointerEventPass.Initial)
+                // Two fingers: a pinch, not a swipe.
+                if (event.changes.count { it.pressed } > 1) break
+                val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                if (!change.pressed) break
+                val d = change.position - down.position
+                if (d.getDistance() < distance) continue
+                val swipe = when {
+                    abs(d.x) > 2 * abs(d.y) -> if (d.x > 0) Swipe.RIGHT else Swipe.LEFT
+                    abs(d.y) > 2 * abs(d.x) -> if (d.y > 0) Swipe.DOWN else Swipe.UP
+                    else -> null
+                }
+                if (swipe != null) call(swipe)
+                break
+            }
+        }
+    }
 }
 
 /** The tools' narrowest, held sideways: three circles of a tool row, with the panel's margins. */
