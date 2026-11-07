@@ -22,6 +22,8 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.Icon
+import androidx.compose.material3.minimumInteractiveComponentSize
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -346,6 +348,8 @@ fun PillAction(symbol: String, text: String, onClick: () -> Unit, selected: Bool
 fun SmallAction(text: String, onClick: () -> Unit, modifier: Modifier = Modifier, enabled: Boolean = true) {
     Box(
         modifier
+            // 48 dp to touch (as Material's chips), 32 dp drawn.
+            .minimumInteractiveComponentSize()
             // A little room around it, so pills side by side never touch.
             .padding(horizontal = 2.dp)
             .height(32.dp)
@@ -519,7 +523,7 @@ fun ToolSection(
             .padding(start = 14.dp, end = 8.dp, top = 6.dp, bottom = 12.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        Row(Modifier.fillMaxWidth().height(36.dp), verticalAlignment = Alignment.CenterVertically) {
+        Row(Modifier.fillMaxWidth().heightIn(min = 36.dp), verticalAlignment = Alignment.CenterVertically) {
             Text(
                 title.uppercase(),
                 Modifier.weight(1f),
@@ -542,11 +546,12 @@ fun ToolSection(
     }
 }
 
-/** ⓘ: shows or hides a card's explanation; filled while it shows. 48 dp to touch, 26 dp drawn. */
+/** ⓘ: shows or hides a card's explanation; filled while it shows. 48 dp to touch, 22 dp drawn. */
 @Composable
 fun InfoButton(open: Boolean, onClick: () -> Unit) {
     Box(
         Modifier
+            .minimumInteractiveComponentSize()
             .size(36.dp)
             .clip(CircleShape)
             .clickable(onClickLabel = if (open) "Hide explanation" else "Explain", onClick = onClick),

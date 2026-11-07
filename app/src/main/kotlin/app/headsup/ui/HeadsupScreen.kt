@@ -389,7 +389,7 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
             // The picture stays on screen while any tool below is being used.
             val selected = state.selected
             when {
-                selected == null -> EmptyState(state.photoProject)
+                selected == null -> EmptyState(state.photoProject, state.clips.isNotEmpty(), if (state.photoProject) addPhotos else addVideos)
                 exporting -> Box(
                     Modifier.padding(horizontal = 16.dp).fillMaxWidth().height(120.dp).clip(RoundedCornerShape(20.dp)).background(HeadsupColors.Surface),
                     contentAlignment = Alignment.Center,
@@ -871,12 +871,27 @@ private fun BottomToolbar(selected: Tool, tools: List<Tool>, labelOf: (Tool) -> 
     }
 }
 @Composable
-private fun EmptyState(photoProject: Boolean) {
-    Box(
-        Modifier.padding(horizontal = 16.dp).fillMaxWidth().height(120.dp).clip(RoundedCornerShape(20.dp)).background(HeadsupColors.Surface).padding(20.dp),
-        contentAlignment = Alignment.Center,
+private fun EmptyState(photoProject: Boolean, hasFiles: Boolean, onAdd: () -> Unit) {
+    // Where the picture will be: the mark, what to do, and the one action that starts it.
+    Column(
+        Modifier
+            .padding(horizontal = 16.dp)
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(20.dp))
+            .background(HeadsupColors.Surface)
+            .border(1.dp, HeadsupColors.Outline, RoundedCornerShape(20.dp))
+            .padding(vertical = 24.dp, horizontal = 20.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        Hint(if (photoProject) "Add photos below to start the album." else "Add videos or photos below to start the film.")
+        SweetSpotMark(size = 44.dp)
+        if (hasFiles) {
+            Text(if (photoProject) "Select a photo to edit it." else "Select a clip on the timeline.", style = MaterialTheme.typography.bodyMedium, color = HeadsupColors.TextMuted)
+        } else {
+            Text(if (photoProject) "Start the album" else "Start the film", style = MaterialTheme.typography.titleMedium)
+            Button(onClick = onAdd) { Text(if (photoProject) "Add photos" else "Add videos or photos") }
+            Text("Copied into the project; the gallery is never changed.", style = MaterialTheme.typography.labelSmall, color = HeadsupColors.TextMuted)
+        }
     }
 }
 
@@ -1288,12 +1303,17 @@ private fun FilesPanel(
     when (section) {
         "Sound" -> {
             AddTile(HeadsupIcons.Music, "Sound", onAddSound, Modifier.fillMaxWidth())
-            SoundLibrary(state, vm)
+            ToolSection("Sounds", info = "Music, ambience, effects (from Downloads or Music): copied into the project, then placed on the Audio page.") {
+                if (state.audioFiles.isEmpty()) Text("No sounds yet.", style = MaterialTheme.typography.bodySmall, color = HeadsupColors.TextMuted)
+                SoundLibrary(state, vm)
+            }
         }
         "FIT" -> {
             AddTile(HeadsupIcons.Watch, "FIT file", onAddFit, Modifier.fillMaxWidth())
-            if (state.activities.isEmpty()) Hint("The .FIT file(s) of the activity, from a watch, a band or a chest strap: for the dashboard, the data texts and the map.")
-            state.activities.forEachIndexed { i, a -> ActivityRow(a, onRemove = { vm.removeActivity(i) }) }
+            ToolSection("Activities", info = "The .FIT file(s) of the activity, from a watch, a band or a chest strap: for the dashboard, the data texts and the map. Each is matched to the ${if (state.photoProject) "photos" else "clips"} by time.") {
+                if (state.activities.isEmpty()) Text("No activity yet.", style = MaterialTheme.typography.bodySmall, color = HeadsupColors.TextMuted)
+                state.activities.forEachIndexed { i, a -> ActivityRow(a, onRemove = { vm.removeActivity(i) }) }
+            }
         }
         else -> VideoFiles(state, vm, if (state.photoProject) onAddPhotos else onAddVideos, onShowClip)
     }
@@ -1302,8 +1322,12 @@ private fun FilesPanel(
 @Composable
 private fun VideoFiles(state: UiState, vm: HeadsupViewModel, onAdd: () -> Unit, onShowClip: (Int) -> Unit) {
     AddTile(HeadsupIcons.Video, if (state.photoProject) "Photos" else "Videos and photos", onAdd, Modifier.fillMaxWidth())
-    run {
-        if (state.clips.isEmpty()) Hint("From the gallery or the cloud; copied into the project.")
+    ToolSection(
+        if (state.photoProject) "Photos" else "Files",
+        info = "From the gallery or the cloud; copied into the project, so the gallery is never changed. Tap a file to show it." +
+            if (state.photoProject) "" else " Large clips (above 1080p) play from a light 1080p copy in the preview; the export always uses the original.",
+    ) {
+        if (state.clips.isEmpty()) Text(if (state.photoProject) "No photos yet." else "No files yet.", style = MaterialTheme.typography.bodySmall, color = HeadsupColors.TextMuted)
         // One row per file, however many times it is cut on the timeline.
         val files = state.clips.withIndex().groupBy { it.value.meta.uri }
         for ((uri, uses) in files) {
@@ -1635,7 +1659,6 @@ private fun WatchSyncControls(state: UiState, vm: HeadsupViewModel, playhead: Lo
 /** The project's sound files: music, ambience, effects. Placed on the audio tracks on the Audio page. */
 @Composable
 private fun SoundLibrary(state: UiState, vm: HeadsupViewModel) {
-    if (state.audioFiles.isEmpty()) Hint("Music, ambience, effects (from Downloads or Music): copied into the project, then placed on the Audio page.")
     for (f in state.audioFiles) {
         val uses = state.audioClips.count { it.uri == f.uri }
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -2033,7 +2056,7 @@ private fun ProjectRow(state: UiState, vm: HeadsupViewModel, onOpen: () -> Unit,
             }
         }
     }
-    if (state.projects.isNotEmpty()) Hint("Projects keep their own copies of their files. Deleting a project frees that space; the gallery is never touched.")
+    if (state.projects.isNotEmpty()) Hint("Projects keep their own copies of their files; deleting one frees that space (Settings › Storage shows it all). The gallery is never touched.")
     deletingOther?.let { name ->
         AlertDialog(
             onDismissRequest = { deletingOther = null },
@@ -2782,9 +2805,11 @@ private fun AdjustHeader(
         }
         2 -> {
             // As everywhere on this page: what it does, then its actions in a row on the left.
-            Hint(if (album) "A change is set on every photo: each shows it under This photo." else "A change is set on every clip: each shows it under This clip.")
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                PillAction("↺", "Reset all", { vm.resetSyncedPhotos() })
+            ToolSection(
+                if (album) "All photos" else "All clips",
+                info = if (album) "A change is set on every photo: each shows it under This photo. Reset all takes these shared changes off." else "A change is set on every clip: each shows it under This clip. Reset all takes these shared changes off.",
+            ) {
+                PanelAction("Reset all", { vm.resetSyncedPhotos() }, Modifier.fillMaxWidth())
             }
             false
         }
@@ -3712,12 +3737,13 @@ private const val SKIN_SHARE = 0.08f
 private fun PresetControls(state: UiState, vm: HeadsupViewModel) {
     LaunchedEffect(Unit) { vm.loadPresets() }
     var naming by remember { mutableStateOf(false) }
-    SectionCaption("My presets") {
-        Spacer(Modifier.width(8.dp))
-        SmallAction("Save this look", { naming = true })
-    }
+    val what = if (state.photoProject) "photo" else "clip"
+    ToolSection(
+        "My presets",
+        info = "Save the look of a $what you like (its corrections, LUT, grain, glow…) and put it on others in any project with one tap. Masks and framing stay each $what's own. Tap a preset to put its look on this $what; ✕ deletes it.",
+    ) {
     if (state.presets.isEmpty()) {
-        Hint("Save the look of a clip or photo you like (its corrections, LUT, grain, glow…) and put it on others in any project with one tap. Masks and framing stay each clip's own.")
+        Text("No presets yet.", style = MaterialTheme.typography.bodySmall, color = HeadsupColors.TextMuted)
     } else {
         FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             for (p in state.presets) {
@@ -3731,7 +3757,8 @@ private fun PresetControls(state: UiState, vm: HeadsupViewModel) {
                 }
             }
         }
-        Hint("Tap a preset to put its look on this ${if (state.photoProject) "photo" else "clip"}; ✕ deletes it.")
+    }
+    PanelAction("Save this look", { naming = true }, Modifier.fillMaxWidth())
     }
     if (naming) {
         RenameDialog("Preset ${state.presets.size + 1}", onDismiss = { naming = false }, title = "Preset name") { vm.savePreset(it); naming = false }
@@ -3765,10 +3792,15 @@ private fun LooksPanel(state: UiState, vm: HeadsupViewModel, frameSource: (() ->
     val stats = state.lookStats?.takeIf { it.first == clip.id }?.second
     val fast = state.fast?.takeIf { it.clipId == clip.id }
     fun choose(look: app.headsup.color.FastLook) = vm.applyFastLook(look, fast?.strength ?: 1f)
+    val what = if (clip.meta.isPhoto) "photo" else "clip"
     // The clip measured: what was found, and the looks that suit it.
+    ToolSection(
+        "Cinematic",
+        info = "A complete look: colour taken away rather than added, soft highlights, grain and light. Analyse the $what and looks that suit it are suggested, and every look is fitted to it. Hold the ruler to see the $what without it; Done keeps it as normal corrections and effects, adjustable afterwards.",
+    ) {
     Row(verticalAlignment = Alignment.CenterVertically) {
         Hint(
-            if (stats == null) (if (clip.meta.isPhoto) "Analyse the photo" else "Analyse the clip") + ": looks that suit it are suggested, and every look is fitted to it."
+            if (stats == null) "Not analysed yet."
             else String.format(
                 Locale.US, "Mid-tones %.0f %% · %.1f %% clipped · %s%s",
                 stats.median * 100, stats.clipped * 100,
@@ -3781,11 +3813,9 @@ private fun LooksPanel(state: UiState, vm: HeadsupViewModel, frameSource: (() ->
         PillAction("⌕", if (stats == null) (if (clip.meta.isPhoto) "Analyse photo" else "Analyse clip") else "Again", { vm.analyseClip(frameSource) }, enabled = !state.busy)
     }
     if (stats != null) {
-        SectionCaption(if (clip.meta.isPhoto) "Suggested for this photo" else "Suggested for this clip")
         val suggested = suggestedLooks(stats)
-        ChoiceGrid(suggested.map { it.label }, suggested.indexOf(fast?.look), { choose(suggested[it]) })
+        LabeledChoice("Suggested for this $what", suggested.map { it.label }, { suggested[it] == fast?.look }, { choose(suggested[it]) })
     }
-    SectionCaption("Cinematic")
     val cinematic = app.headsup.color.FastLook.entries
     ChoiceGrid(cinematic.map { it.label }, cinematic.indexOf(fast?.look), { choose(cinematic[it]) })
     // The look being tried: its strength, then keep it or put the clip back.
@@ -3800,15 +3830,8 @@ private fun LooksPanel(state: UiState, vm: HeadsupViewModel, frameSource: (() ->
             Spacer(Modifier.weight(1f))
             SmallAction("Done", { vm.closeFast(undo = false) })
         }
-        Hint(
-            run {
-                val what = if (clip.meta.isPhoto) "photo" else "clip"
-                (if (stats != null) "Fitted to this $what. " else "Not fitted yet: Analyse $what fits it. ") +
-                    "Hold the ruler to see the $what without it. Done keeps it as normal corrections and effects, adjustable afterwards."
-            },
-        )
-    } else {
-        Hint("A complete look: colour taken away rather than added, soft highlights, grain and light. Profiles: a starting rendering under your corrections.")
+        Hint(if (stats != null) "Fitted to this $what." else "Not fitted yet: Analyse $what fits it.")
+    }
     }
 }
 
@@ -3816,6 +3839,7 @@ private fun LooksPanel(state: UiState, vm: HeadsupViewModel, frameSource: (() ->
 private fun LookControls(state: UiState, vm: HeadsupViewModel) {
     val current = app.headsup.core.color.Look.of(state.grade.look)
     val looks = listOf<app.headsup.core.color.Look?>(null) + app.headsup.core.color.Look.entries
+    ToolSection("Profiles", info = "A profile is the starting rendering; your corrections go on top of it. Amount sets how much of it; hold the ruler to see without it, double-tap it for the full amount.") {
     ChoiceGrid(looks.map { it?.label ?: "None" }, looks.indexOf(current), { i -> vm.updateGrade { it.copy(look = looks[i]?.name) } })
     if (current != null) {
         ValueHeader("Amount", String.format(Locale.US, "%.0f %%", state.grade.lookAmount * 100))
@@ -3827,8 +3851,7 @@ private fun LookControls(state: UiState, vm: HeadsupViewModel) {
             onReset = { vm.updateGrade { it.copy(lookAmount = 1f) } },
             onHold = { held -> vm.setCompareGrade(if (held) state.grade.copy(look = null) else null) },
         )
-    } else {
-        Hint("A look is the starting point; your corrections go on top of it.")
+    }
     }
 }
 
@@ -3840,17 +3863,19 @@ private fun LookControls(state: UiState, vm: HeadsupViewModel) {
 private fun CinePanel(state: UiState, vm: HeadsupViewModel, frameSource: (() -> Bitmap?)?) {
     val session = state.cine
     if (session == null) FastEdit(state, vm)
+    val cineInfo = "Pause on a typical frame. The assistant measures its tones and colours and suggests a film grade in a few styles. Hold the ruler to see the picture without it; Done keeps it as normal corrections (roll-off, split tone, tame colours…), adjustable afterwards."
     if (session == null) {
-        SectionCaption("Cine assistant")
-        Hint("Pause on a typical frame. The assistant measures its tones and colours and suggests a film grade.")
-        Button(
-            onClick = { frameSource?.invoke()?.let(vm::analyseForCine) },
-            enabled = frameSource != null,
-            modifier = Modifier.fillMaxWidth(),
-        ) { Text("Analyse this frame") }
+        ToolSection("Cine assistant", info = cineInfo) {
+            Button(
+                onClick = { frameSource?.invoke()?.let(vm::analyseForCine) },
+                enabled = frameSource != null,
+                modifier = Modifier.fillMaxWidth(),
+            ) { Text("Analyse this frame") }
+        }
         return
     }
     val s = session.stats
+    ToolSection("Cine assistant", info = cineInfo) {
     Hint(
         String.format(
             Locale.US, "Mid-tones %.0f %% · %.1f %% clipped · %s%s",
@@ -3868,14 +3893,13 @@ private fun CinePanel(state: UiState, vm: HeadsupViewModel, frameSource: (() -> 
             onReset = { vm.applyCine(style, 1f) },
             onHold = vm::compareCine,
         )
-        Hint("Hold the ruler to see the picture without the cine look.")
     }
     Row {
         SmallAction("Undo", { vm.closeCine(undo = true) })
         Spacer(Modifier.weight(1f))
         SmallAction("Done", { vm.closeCine(undo = false) }, enabled = style != null)
     }
-    if (style != null) Hint("Done keeps it as normal corrections: roll-off, split tone, tame colours and the rest stay adjustable.")
+    }
 }
 
 /**
@@ -3886,13 +3910,14 @@ private fun CinePanel(state: UiState, vm: HeadsupViewModel, frameSource: (() -> 
 private fun FastEdit(state: UiState, vm: HeadsupViewModel) {
     val clip = state.selected ?: return
     val fast = state.fast?.takeIf { it.clipId == clip.id }
-    SectionCaption("Fast edit")
+    val what = if (state.photoProject) "photo" else "clip"
+    ToolSection(
+        "Fast edit",
+        info = "A whole look at once: colour taken away rather than added, soft highlights, grain and light. Hold the ruler to see the $what without it. Done keeps it as normal corrections (Density, Roll-off, Tame…) and effects (Grain, Glow, Lens…), adjustable afterwards.",
+    ) {
     val fastLooks = app.headsup.color.FastLook.entries
     ChoiceGrid(fastLooks.map { it.label }, fastLooks.indexOf(fast?.look), { vm.applyFastLook(fastLooks[it], fast?.strength ?: 1f) })
-    if (fast == null) {
-        Hint("A whole look at once: colour taken away rather than added, soft highlights, grain and light. Everything stays adjustable afterwards.")
-        return
-    }
+    if (fast == null) return@ToolSection
     ValueHeader("Strength", String.format(Locale.US, "%.0f %%", fast.strength * 100))
     RulerSlider(fast.strength, 0f..1f, 0.02f, { v -> vm.applyFastLook(fast.look, v) }, onReset = { vm.applyFastLook(fast.look, 1f) }, onHold = vm::compareFast)
     Row(verticalAlignment = Alignment.CenterVertically) {
@@ -3900,7 +3925,7 @@ private fun FastEdit(state: UiState, vm: HeadsupViewModel) {
         Spacer(Modifier.weight(1f))
         SmallAction("Done", { vm.closeFast(undo = false) })
     }
-    Hint("Hold the ruler to see the ${if (state.photoProject) "photo" else "clip"} without it. Done keeps it as normal corrections (Density, Roll-off, Tame…) and effects (Grain, Glow, Lens…).")
+    }
 }
 
 /**
@@ -3914,9 +3939,10 @@ private fun ShotMatchPanel(state: UiState, clip: ClipState, vm: HeadsupViewModel
     if (state.photoProject) {
         // An album: the marked photos matched to the one shown, all at once.
         val marked = state.clips.count { it.picked && it.id != clip.id }
-        Hint("Mark the photos to match in the album (hold a photo to mark it), then show the photo whose colours you like and match them to it: white balance, tint, saturation and skin; each keeps its own brightness.")
-        Button(onClick = vm::matchMarkedTo, enabled = marked > 0 && !state.busy, modifier = Modifier.fillMaxWidth()) {
-            Text(if (marked == 0) "No photos marked" else "Match $marked marked photo${if (marked == 1) "" else "s"} to this one", maxLines = 1)
+        ToolSection("Shot match", info = "Mark the photos to match in the album (hold a photo to mark it), then show the photo whose colours you like and match them to it: white balance, tint, saturation and skin; each keeps its own brightness.") {
+            Button(onClick = vm::matchMarkedTo, enabled = marked > 0 && !state.busy, modifier = Modifier.fillMaxWidth()) {
+                Text(if (marked == 0) "No photos marked" else "Match $marked marked photo${if (marked == 1) "" else "s"} to this one", maxLines = 1)
+            }
         }
         return
     }
@@ -3924,13 +3950,15 @@ private fun ShotMatchPanel(state: UiState, clip: ClipState, vm: HeadsupViewModel
     val group = state.groupOf(clip)
     // A camera group is matched as a whole by default: colour character only, brightness per shot.
     var wholeGroup by rememberSaveable(group?.id) { mutableStateOf(group != null) }
+    ToolSection(
+        "Shot match",
+        info = "Pause on a good frame of the clip whose colours you like and set it as the reference; then on another clip pause on a similar frame and match: exposure, contrast, white balance and saturation are set so both look alike (skin hue too when both show skin). In a group, Group matches the camera's colour for every clip of it, each keeping its own brightness. Hold the ruler to compare.",
+    ) {
+    // Where you are in the two steps: shown, not behind ⓘ.
     Hint(
         when {
-            reference == null && state.photoProject -> "1. Select the photo whose colours you like and set it as the reference."
-            reference == null -> "1. Pause on a good frame of the clip whose colours you like and set it as the reference."
-            reference.clipId == clip.id && state.photoProject -> "Reference set. Now select another photo and match."
+            reference == null -> "1. Set a reference."
             reference.clipId == clip.id -> "Reference set. Now select another clip, pause on a similar frame and match."
-            state.photoProject -> "Reference: ${reference.clipName}. Match this photo to it."
             else -> "Reference: ${reference.clipName}. Pause on a similar frame and match this clip to it."
         },
     )
@@ -3947,17 +3975,7 @@ private fun ShotMatchPanel(state: UiState, clip: ClipState, vm: HeadsupViewModel
         ) { Text(if (state.matching) "Matching…" else "Match", maxLines = 1) }
     }
     if (group != null) {
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            FilterChip(selected = wholeGroup, onClick = { wholeGroup = true }, label = { Text("Group: ${group.name}") })
-            FilterChip(selected = !wholeGroup, onClick = { wholeGroup = false }, label = { Text(if (state.photoProject) "This photo" else "This clip") })
-        }
-        Hint(
-            if (wholeGroup) {
-                "Matches the camera's colour (white balance, tint, saturation, skin) for every ${if (state.photoProject) "photo" else "clip"} in ${group.name}; each keeps its own brightness."
-            } else {
-                "Matches this ${if (state.photoProject) "photo" else "clip"} completely, brightness included."
-            },
-        )
+        ChoiceGrid(listOf("Group: ${group.name}", "This clip"), if (wholeGroup) 0 else 1, { wholeGroup = it == 0 })
     }
     val session = state.matchSession
     if (session != null && (session.clipId == clip.id || (session.groupId != null && session.groupId == clip.groupId))) {
@@ -3977,6 +3995,7 @@ private fun ShotMatchPanel(state: UiState, clip: ClipState, vm: HeadsupViewModel
             onReset = { vm.setMatchStrength(MATCH_STRENGTH) },
             onHold = if (session.groupId == null) vm::compareMatch else null,
         )
+    }
     }
 }
 
@@ -4453,12 +4472,11 @@ private fun LutControls(
 @Composable
 private fun GroupControls(state: UiState, clip: ClipState, index: Int, group: ClipGroup?, vm: HeadsupViewModel) {
     var renaming by remember { mutableStateOf(false) }
-    if (group == null) {
-        Hint(
-            if (state.photoProject) "Photos shot the same way (e.g. drone) get the same LUT and corrections: a change here is set on each photo of the group."
-            else "Clips shot the same way (e.g. drone) get the same LUT and corrections: a change here is set on each clip of the group.",
-        )
-    }
+    val what = if (state.photoProject) "photo" else "clip"
+    ToolSection(
+        "Group",
+        info = "${what.replaceFirstChar { it.uppercase() }}s shot the same way (e.g. drone) get the same LUT and corrections: a change here is set on each $what of the group. Tap a group to put this $what in it, again to take it out. Reset group takes the group's corrections off.",
+    ) {
     FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         for (g in state.groups) {
             val count = state.clips.count { it.groupId == g.id }
@@ -4478,20 +4496,20 @@ private fun GroupControls(state: UiState, clip: ClipState, index: Int, group: Cl
             Spacer(Modifier.weight(1f))
             SmallAction("Reset group", { vm.resetSyncedPhotos() })
         }
+    }
+    }
+    if (group != null) {
         if (renaming) RenameDialog(group.name, onDismiss = { renaming = false }) { vm.renameGroup(group.id, it); renaming = false }
         // One look across the group: no clip greener or warmer than the others.
-        SectionCaption("Make the group alike")
         val session = state.matchSession?.takeIf { it.groupId == group.id && it.memberDeltas.isNotEmpty() }
         val running = state.work.any { it.clipId == clip.id && it.maskIndex == null }
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Hint(
-                if (state.photoProject) "Matches every photo of the group in colour to this one (white balance, tint, saturation, skin). Each keeps its own brightness."
-                else "Matches every clip of the group in colour to this one (white balance, tint, saturation, skin), measured across each clip. Each keeps its own brightness.",
-                Modifier.weight(1f),
-            )
-            Spacer(Modifier.width(8.dp))
-            PillAction("≈", "Match to this", { vm.matchGroupTo() }, enabled = !running)
-        }
+        ToolSection(
+            "Make the group alike",
+            info = (if (state.photoProject) "Matches every photo of the group in colour to this one (white balance, tint, saturation, skin). Each keeps its own brightness."
+            else "Matches every clip of the group in colour to this one (white balance, tint, saturation, skin), measured across each clip. Each keeps its own brightness.") +
+                " Then choose what is matched, how strongly, and for each $what how much of its change it takes (tap one in the list to show it, hold its ruler to see it before the match).",
+        ) {
+        PanelAction("Match to this $what", { vm.matchGroupTo() }, Modifier.fillMaxWidth(), enabled = !running)
         if (session != null) {
             // What is matched.
             val parts = MatchPart.entries
@@ -4524,13 +4542,12 @@ private fun GroupControls(state: UiState, clip: ClipState, index: Int, group: Cl
                 val share = session.memberStrength[clip.id] ?: 1f
                 ValueHeader(if (state.photoProject) "This photo" else "This clip", String.format(Locale.US, "%.0f %%", share * 100))
                 RulerSlider(share, 0f..1f, 0.02f, { v -> vm.setMemberMatch(clip.id, v) }, onReset = { vm.setMemberMatch(clip.id, 1f) }, onHold = vm::compareMatchMember)
-                val what = if (state.photoProject) "photo" else "clip"
-                Hint("Hold the ruler to see this $what before the match. Tap a $what in the list to show it.")
-            } ?: Hint("Tap a ${if (state.photoProject) "photo" else "clip"} in the list to show it and set how much of the match it takes.")
+            }
             Row {
                 Spacer(Modifier.weight(1f))
                 SmallAction("Undo match", vm::undoMatch)
             }
+        }
         }
     }
 }
@@ -4550,6 +4567,10 @@ private fun RenameDialog(initial: String, onDismiss: () -> Unit, title: String =
 /** Vectorscope with the skin line, as in DaVinci Resolve, and the measurement of the tapped point. */
 @Composable
 private fun SkinToneTool(scope: ScopeResult?, onMatch: () -> Unit) {
+    ToolSection(
+        "Skin line",
+        info = "On a vectorscope, skin of every complexion falls close to one line. Tap a face on the picture to measure it; Match line turns the skin tones onto that line, leaving greys and other colours alone.",
+    ) {
     Row(verticalAlignment = Alignment.CenterVertically) {
         VectorscopeView(scope, Modifier.size(140.dp))
         Spacer(Modifier.width(14.dp))
@@ -4566,6 +4587,7 @@ private fun SkinToneTool(scope: ScopeResult?, onMatch: () -> Unit) {
             }
             Button(onClick = onMatch, enabled = measured != null) { Text("Match line") }
         }
+    }
     }
 }
 
@@ -4985,19 +5007,16 @@ private fun ExportControls(
             (if (!tenBit && tenBitBlocker == null && state.clips.any { it.meta.format?.transfer == "HLG" }) "HDR (HLG) clips are always exported in 10-bit." else "")
         if (clipNote.isNotEmpty()) Hint(clipNote.trim())
     }
-    SectionCaption("Export")
-    Button(onClick = onExportVideos, enabled = state.clips.isNotEmpty(), modifier = Modifier.fillMaxWidth()) {
-        Text(if (settings.wholeTimeline) "Export timeline" else "Export ${state.clips.size} clips")
+    ToolSection("Export", info = "Colour, effects, framing, speed; the dashboard where there is activity data. Saved to ${MediaStoreOutput.VIDEO_FOLDER}.") {
+        Button(onClick = onExportVideos, enabled = state.clips.isNotEmpty(), modifier = Modifier.fillMaxWidth()) {
+            Text(if (settings.wholeTimeline) "Export timeline" else "Export ${state.clips.size} clips")
+        }
     }
-    Hint("Colour, effects, framing, speed; the dashboard where there is activity data. → ${MediaStoreOutput.VIDEO_FOLDER}")
-
-    Label("Dashboard")
     val canOverlay = state.clips.any { it.sync != null }
-    OutlinedButton(onClick = onExportOverlays, enabled = canOverlay, modifier = Modifier.fillMaxWidth()) { Text("Export dashboard only (PNG)") }
-    Hint(
-        if (canOverlay) "Transparent PNG frames (ZIP) per clip, for DaVinci → ${MediaStoreOutput.OVERLAY_FOLDER}"
-        else "Needs a FIT file matched to the clips.",
-    )
+    ToolSection("Dashboard only", info = "Transparent PNG frames (ZIP) per clip, to lay over the video in DaVinci. Saved to ${MediaStoreOutput.OVERLAY_FOLDER}.") {
+        OutlinedButton(onClick = onExportOverlays, enabled = canOverlay, modifier = Modifier.fillMaxWidth()) { Text("Export dashboard only (PNG)") }
+        if (!canOverlay) Hint("Needs a FIT file matched to the clips.")
+    }
     if (state.clips.any { it.meta.isPhoto }) PhotoExport(state, vm)
 
     if (jobs.isNotEmpty()) {
@@ -5018,21 +5037,24 @@ private fun ExportControls(
 private fun PhotoExport(state: UiState, vm: HeadsupViewModel) {
     val settings = state.exportSettings
     val photoCount = state.clips.count { it.meta.isPhoto }
-    Label("Photos")
-    run {
+    val formatInfo = when (settings.photoFormat) {
+        app.headsup.export.PhotoFormat.ULTRA_HDR -> " Ultra HDR: a JPEG with a gain map; on HDR screens (and in Google Photos) the brightest parts shine up to 2 stops brighter, elsewhere it looks like the JPEG."
+        app.headsup.export.PhotoFormat.TIFF16 -> " TIFF: 16 bits per colour, uncompressed, for further editing (Lightroom, Photoshop, DaVinci). Large files."
+        else -> ""
+    }
+    ToolSection(
+        "Photos",
+        info = "Each photo at its own resolution (or the size chosen), with its edits." + formatInfo +
+            (if (photoCount > 1) " Mark photos for export: hold a thumbnail (double-tap a marked one for its menu), or Mark under the photos." else ""),
+    ) {
         val sizes = ExportSettings.PHOTO_SIZES
         LabeledChoice("Photo size", sizes.map { it.second }, { sizes[it].first == settings.photoLongSide }, { i -> vm.updateExportSettings { it.copy(photoLongSide = sizes[i].first) } })
         // Ultra HDR needs Android 14.
         val formats = app.headsup.export.PhotoFormat.entries.filter { it != app.headsup.export.PhotoFormat.ULTRA_HDR || android.os.Build.VERSION.SDK_INT >= 34 }
         LabeledChoice("Format", formats.map { it.label }, { formats[it] == settings.photoFormat }, { i -> vm.updateExportSettings { it.copy(photoFormat = formats[i]) } }, minCell = 96.dp)
-        if (settings.photoFormat == app.headsup.export.PhotoFormat.ULTRA_HDR) {
-            Hint("A JPEG with a gain map: on HDR screens (and in Google Photos) the brightest parts shine up to 2 stops brighter; elsewhere it looks like the JPEG.")
-        }
         if (settings.photoFormat != app.headsup.export.PhotoFormat.TIFF16) {
             val qualities = ExportSettings.PHOTO_QUALITIES
             LabeledChoice("JPEG", qualities.map { it.second }, { qualities[it].first == settings.photoQuality }, { i -> vm.updateExportSettings { it.copy(photoQuality = qualities[i].first) } })
-        } else {
-            Hint("16 bits per colour, uncompressed: for further editing (Lightroom, Photoshop, DaVinci). Large files.")
         }
         val selectedPhoto = state.selected?.meta?.isPhoto == true
         val picked = state.clips.count { it.meta.isPhoto && it.picked }
@@ -5040,8 +5062,6 @@ private fun PhotoExport(state: UiState, vm: HeadsupViewModel) {
             Button(onClick = { vm.exportPhotos(HeadsupViewModel.PhotoSet.PICKED) }, enabled = !state.busy, modifier = Modifier.fillMaxWidth()) {
                 Text("Export the marked photos ($picked)")
             }
-        } else if (photoCount > 1) {
-            Hint("Mark photos for export: hold a thumbnail (double-tap a marked one for its menu), or Mark under the photos.")
         }
         if (selectedPhoto && photoCount > 1) {
             OutlinedButton(onClick = { vm.exportPhotos(HeadsupViewModel.PhotoSet.CURRENT) }, enabled = !state.busy, modifier = Modifier.fillMaxWidth()) { Text("Export this photo (${settings.photoFormat.label})") }
@@ -5314,15 +5334,21 @@ private fun RawControls(clip: ClipState, index: Int, vm: HeadsupViewModel) {
             CircleOption(c.symbol, c.label, selected = c == control, modified = c.get(develop) != c.neutral) { control = c }
         }
     }
-    ValueHeader(control.label, String.format(Locale.US, control.format, control.get(develop)))
-    RulerSlider(
-        value = control.get(develop),
-        range = control.range,
-        step = control.step,
-        onChange = { v -> vm.updateRawDevelop(index) { control.set(it, v) } },
-        onReset = { vm.updateRawDevelop(index) { control.set(it, control.neutral) } },
-    )
-    if (control == RawControl.SHARPEN || control == RawControl.NOISE) Hint("Judge these zoomed in: the export applies them at the photo's full size.")
+    ToolSection(
+        control.label,
+        info = "Raw development, on the sensor's data before the colour corrections." +
+            (if (control == RawControl.SHARPEN || control == RawControl.NOISE) " Judge this zoomed in: the export applies it at the photo's full size." else "") +
+            " Double-tap the ruler to reset it.",
+    ) {
+        ValueHeader("", String.format(Locale.US, control.format, control.get(develop)))
+        RulerSlider(
+            value = control.get(develop),
+            range = control.range,
+            step = control.step,
+            onChange = { v -> vm.updateRawDevelop(index) { control.set(it, v) } },
+            onReset = { vm.updateRawDevelop(index) { control.set(it, control.neutral) } },
+        )
+    }
     app.headsup.media.RawPhotos.lastError?.let { Hint("Developed by Android instead: $it") }
         ?: app.headsup.media.RawPhotos.infoOf(clip.meta.uri)?.takeIf { it.isNotEmpty() }?.let { Hint(it) }
 }
@@ -5458,7 +5484,7 @@ private fun GradeKeyRow(state: UiState, clip: ClipState, vm: HeadsupViewModel) {
         )
         if (keys.isNotEmpty()) SmallAction("Clear", { vm.clearGradeKeys() })
     }
-    if (keys.isNotEmpty()) Hint(if (onKey) "Tap ◆ to take this key off. Edits now set this key." else "Edits now set a new key here; move the playhead to another moment for the next.")
+    if (keys.isNotEmpty()) Hint(if (onKey) "Edits now set this key; tap ◆ to take it off." else "Edits now set a new key here.")
 }
 
 /** An album photo's crop: its shape (or its own), zoom and straightening; drag the picture to place it. */
