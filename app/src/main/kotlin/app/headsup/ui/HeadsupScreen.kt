@@ -5543,7 +5543,8 @@ private fun PhotoStrip(state: UiState, vm: HeadsupViewModel, onAdd: () -> Unit, 
 private fun GradeKeyRow(state: UiState, clip: ClipState, vm: HeadsupViewModel, playhead: LongState, onSeek: (Long) -> Unit) {
     ToolSection(
         "Keys",
-        info = "Corrections that change over the shot, e.g. walking from shade into sun. + Key keeps the corrections at the playhead; between keys they change smoothly. Tap a diamond to go there and edit it; ◀ ▶ step between keys; Move here takes the chosen key to the playhead. With keys, an edit always sets the key at the playhead.",
+        info = "Corrections that change during the shot. For example, walking from shade into sun: put the playhead at the start, correct for the shade (Exposure +1) and tap + Key; move the playhead to the end and correct for the sun (Exposure 0): a second key is made by itself, and between the two the exposure goes smoothly from +1 to 0. " +
+            "Diamonds show the keys: tap one to go there and change it; ◀ ▶ step between keys; Move here takes the chosen key to the playhead. With no key, one correction holds for the whole clip.",
     ) {
         if (clip.gradeKeys.isEmpty()) {
             Row(verticalAlignment = Alignment.CenterVertically) {
