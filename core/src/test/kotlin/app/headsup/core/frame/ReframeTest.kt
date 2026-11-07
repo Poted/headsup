@@ -73,4 +73,30 @@ class ReframeTest {
         val (x, _) = fit.sourceOf(ow / 2f - 540f, oh / 2f, ow, oh, 1080f, 1920f)
         assertEquals(0f, x, 0.5f)
     }
+
+    @Test
+    fun aQuarterTurnStandsThePictureTheOtherWay() {
+        val r = Reframe().turned(1)
+        assertEquals(1, r.quarterTurns)
+        assertEquals(90f, r.angleDegrees, 1e-4f)
+        val (w, h) = r.outputSize(4000f, 3000f)
+        assertEquals(3000f, w, 1e-3f)
+        assertEquals(4000f, h, 1e-3f)
+        // The turned picture covers its own frame exactly: no zoom needed.
+        assertEquals(1f, Reframe.baseScale(w, h, 4000f, 3000f) * r.effectiveZoom(w, h, 4000f, 3000f), 1e-3f)
+        // The frame's top-left corner shows the picture's bottom-left (turned right).
+        val (sx, sy) = r.sourceOf(0f, 0f, w, h, 4000f, 3000f)
+        assertEquals(0f, sx, 1f)
+        assertEquals(3000f, sy, 1f)
+    }
+
+    @Test
+    fun turnsComeRoundAndKeepTheStraightening() {
+        val r = Reframe(angleDegrees = 2.5f).turned(-1)
+        assertEquals(-1, r.quarterTurns)
+        assertEquals(2.5f, r.straighten, 1e-4f)
+        assertEquals(0, r.turned(1).quarterTurns)
+        assertEquals(2, Reframe().turned(2).quarterTurns)
+        assertEquals(-1, Reframe().turned(3).quarterTurns)
+    }
 }

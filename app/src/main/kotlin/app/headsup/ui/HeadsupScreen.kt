@@ -729,7 +729,7 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
             // A dot on Adjust when it works on more than this clip (its scope row says what).
             BottomToolbar(
                 tool, tools,
-                labelOf = { t -> if (state.photoProject && t == Tool.EDIT) "Crop" else t.label },
+                labelOf = { t -> if (state.photoProject && t == Tool.EDIT) "Geometry" else t.label },
                 badgeOf = { t -> t == Tool.COLOUR && (state.target == GradeTarget.GROUP || state.target == GradeTarget.GLOBAL) },
             ) { tool = it }
     }
@@ -5572,7 +5572,7 @@ private fun PhotoCrop(state: UiState, clip: ClipState, vm: HeadsupViewModel) {
             presets.map { it.second },
             presets.indexOfFirst { it.first == r.aspect },
             { i -> vm.updateReframe { it.copy(aspect = presets[i].first) } },
-            glyph = { i, on -> AspectGlyph(presets[i].first ?: clip.meta.let { m -> m.width.toFloat() / m.height.coerceAtLeast(1) }, on) },
+            glyph = { i, on -> AspectGlyph(presets[i].first ?: clip.meta.let { m -> if (r.quarterTurns % 2 != 0) m.height.toFloat() / m.width.coerceAtLeast(1) else m.width.toFloat() / m.height.coerceAtLeast(1) }, on) },
         )
     }
     GeometrySections(r, vm)
@@ -5585,13 +5585,28 @@ private fun PhotoCrop(state: UiState, clip: ClipState, vm: HeadsupViewModel) {
 @Composable
 private fun GeometrySections(r: Reframe, vm: HeadsupViewModel) {
     ToolSection(
+        "Rotate",
+        info = "Turns the picture a quarter to the left or right (a photo or clip shot sideways); its frame turns with it. Straightening below stays as set.",
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            PillAction("⟲", "Left", { vm.updateReframe { it.turned(-1) } })
+            Spacer(Modifier.width(8.dp))
+            PillAction("⟳", "Right", { vm.updateReframe { it.turned(1) } })
+            Spacer(Modifier.width(12.dp))
+            val deg = ((r.quarterTurns % 4 + 4) % 4) * 90
+            Text(if (deg == 0) "Upright" else "$deg°", style = MaterialTheme.typography.labelMedium, color = HeadsupColors.TextMuted)
+        }
+    }
+    ToolSection(
         "Geometry",
         info = "Zoom into the picture, and turn it level (double-tap a ruler to reset it, hold it to compare).",
     ) {
         ValueHeader("Zoom", String.format(Locale.US, "%.2f×", r.zoom))
         RulerSlider(r.zoom, 1f..4f, 0.02f, { v -> vm.updateReframe { it.copy(zoom = v) } }, onReset = { vm.updateReframe { it.copy(zoom = 1f) } })
-        ValueHeader("Straighten", String.format(Locale.US, "%+.1f°", r.angleDegrees))
-        RulerSlider(r.angleDegrees, -15f..15f, 0.1f, { v -> vm.updateReframe { it.copy(angleDegrees = v) } }, onReset = { vm.updateReframe { it.copy(angleDegrees = 0f) } })
+        // Straightening: the angle besides the quarter turns.
+        val turns = r.quarterTurns
+        ValueHeader("Straighten", String.format(Locale.US, "%+.1f°", r.straighten))
+        RulerSlider(r.straighten, -15f..15f, 0.1f, { v -> vm.updateReframe { it.copy(angleDegrees = 90f * turns + v) } }, onReset = { vm.updateReframe { it.copy(angleDegrees = 90f * turns) } })
     }
     ToolSection(
         "Perspective",

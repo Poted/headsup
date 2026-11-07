@@ -52,8 +52,31 @@ data class Reframe(
         return (m ?: doubleArrayOf(1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0)) + doubleArrayOf(Lens.k(distortion).toDouble(), lensVignette.toDouble())
     }
 
+    /**
+     * Quarter turns in [angleDegrees] (the picture turned by 90° steps; −1 a turn to the left), and
+     * what is left of the angle besides them (straightening, within ±45°).
+     */
+    val quarterTurns: Int get() = Math.round(angleDegrees / 90f)
+    val straighten: Float get() = angleDegrees - 90f * quarterTurns
+
+    /** This with the picture turned a further quarter to the right ([steps] > 0) or left. */
+    fun turned(steps: Int): Reframe {
+        val q = ((quarterTurns + steps) % 4 + 4) % 4
+        // Kept within −90…180 so the angle never grows round and round.
+        val turns = if (q == 3) -1 else q
+        return copy(angleDegrees = straighten + 90f * turns, centerX = 0.5f, centerY = 0.5f)
+    }
+
     /** Output frame size for a [srcW]×[srcH] clip, in its pixels: inside the picture (fill) or around it (fit). */
     fun outputSize(srcW: Float, srcH: Float): Pair<Float, Float> {
+        // Turned a quarter (or three): the picture stands the other way, its own shape too.
+        val odd = quarterTurns % 2 != 0
+        val w = if (odd) srcH else srcW
+        val h = if (odd) srcW else srcH
+        return outputSizeUpright(w, h)
+    }
+
+    private fun outputSizeUpright(srcW: Float, srcH: Float): Pair<Float, Float> {
         val a = aspect ?: return srcW to srcH
         val wider = a > srcW / srcH
         return if (fit) {
@@ -77,7 +100,10 @@ data class Reframe(
             return zoom * inside
         }
         val cover = max((outW * c + outH * s) / (s0 * srcW), (outW * s + outH * c) / (s0 * srcH))
-        return max(zoom, cover)
+        // Turned a quarter, zoom 1 is the turned picture just covering the frame (the base scale
+        // is the upright picture's, so it is put right here).
+        val upright = if (quarterTurns % 2 != 0) baseScale(outW, outH, srcH, srcW) / s0 else 1f
+        return max(zoom * upright, cover)
     }
 
     /** [centerX]/[centerY] limited so the output stays inside the picture. */
