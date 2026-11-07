@@ -374,6 +374,8 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
     }
 
     // The picture, its transport and the timeline.
+    // What a swipe on an album's photo does (set below, where the screen's swipes are handled).
+    val photoSwipe = remember { arrayOf<(Swipe) -> Unit>({}) }
     val pictureAndTimeline: @Composable ColumnScope.() -> Unit = {
             if (state.busy) {
                 CineLoader(
@@ -396,7 +398,7 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
                     contentAlignment = Alignment.Center,
                 ) { Hint("Preview paused while exporting") }
                 // An album's photo: its swipes watched here, on the photo (never on the album under it).
-                else -> Box(if (state.photoProject && !fullscreen) Modifier.observedSwipe(pictureFree) { onScreenSwipe(mirrored(it), true) } else Modifier) {
+                else -> Box(if (state.photoProject && !fullscreen) Modifier.observedSwipe(pictureFree) { photoSwipe[0](it) } else Modifier) {
                     ClipPreview(
                         clip = selected,
                         activity = selected.sync?.let { state.activities.getOrNull(it.trackIndex) },
@@ -764,6 +766,7 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
             else -> Unit
         }
     }
+    photoSwipe[0] = { onScreenSwipe(mirrored(it), true) }
     Box(Modifier.fillMaxSize().background(HeadsupColors.BackgroundGradient)) {
         // No title bar: the picture starts at the top, adding files lives in the Project tool.
         if (fullscreen) {
