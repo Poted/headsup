@@ -19,21 +19,21 @@ object Formats {
 
     fun heartRate(bpm: Double?) = Reading(bpm?.roundToInt()?.toString() ?: UNKNOWN, "bpm")
 
-    fun speed(mps: Double?) = Reading(mps?.let { String.format(Locale.US, "%.1f", it * 3.6) } ?: UNKNOWN, "km/h")
+    fun speed(mps: Double?) = Reading(mps?.let { String.format(Locale.US, "%.1f", Units.speed(it)) } ?: UNKNOWN, Units.speedUnit)
 
     /** Pace is meaningless when standing still, so very low speeds show as unknown. */
     fun pace(mps: Double?): Reading {
-        if (mps == null || mps < 0.5) return Reading(UNKNOWN, "/km")
-        val secondsPerKm = (1000.0 / mps).roundToLong()
-        if (secondsPerKm >= 60 * 60) return Reading(UNKNOWN, "/km")
-        return Reading(String.format(Locale.US, "%d:%02d", secondsPerKm / 60, secondsPerKm % 60), "/km")
+        if (mps == null || mps < 0.5) return Reading(UNKNOWN, Units.paceUnit)
+        val seconds = (Units.paceMetres / mps).roundToLong()
+        if (seconds >= 60 * 60) return Reading(UNKNOWN, Units.paceUnit)
+        return Reading(String.format(Locale.US, "%d:%02d", seconds / 60, seconds % 60), Units.paceUnit)
     }
 
-    fun altitude(m: Double?) = Reading(m?.roundToInt()?.toString() ?: UNKNOWN, "m")
+    fun altitude(m: Double?) = Reading(m?.let { Units.height(it).roundToInt().toString() } ?: UNKNOWN, Units.heightUnit)
 
-    fun distance(m: Double?) = Reading(m?.let { String.format(Locale.US, "%.2f", it / 1000.0) } ?: UNKNOWN, "km")
+    fun distance(m: Double?) = Reading(m?.let { String.format(Locale.US, "%.2f", Units.distance(it)) } ?: UNKNOWN, Units.distanceUnit)
 
-    fun ascent(m: Double?) = Reading(m?.roundToInt()?.toString() ?: UNKNOWN, "m")
+    fun ascent(m: Double?) = Reading(m?.let { Units.height(it).roundToInt().toString() } ?: UNKNOWN, Units.heightUnit)
 
     fun grade(percent: Double?) = Reading(
         percent?.let { String.format(Locale.US, "%.1f", if (abs(it) < 0.05) 0.0 else it) } ?: UNKNOWN,
@@ -45,7 +45,7 @@ object Formats {
 
     fun power(w: Double?) = Reading(w?.roundToInt()?.toString() ?: UNKNOWN, "W")
 
-    fun temperature(c: Double?) = Reading(c?.roundToInt()?.toString() ?: UNKNOWN, "°C")
+    fun temperature(c: Double?) = Reading(c?.let { Units.temperature(it).roundToInt().toString() } ?: UNKNOWN, Units.temperatureUnit)
 
     fun clock(utcMs: Long, offsetSeconds: Int): String =
         clock.format(Instant.ofEpochMilli(utcMs).atOffset(ZoneOffset.ofTotalSeconds(offsetSeconds)))

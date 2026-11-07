@@ -486,9 +486,9 @@ fun Timeline(
                     val top = g.videoTop + 2.dp.toPx()
                     val selected = item.id == state.selectedText
                     drawRoundRect(accent.copy(alpha = 0.9f), Offset(l, top), Size(r - l, g.textH), CornerRadius(4.dp.toPx()))
-                    if (selected) drawRoundRect(Color.White, Offset(l, top), Size(r - l, g.textH), CornerRadius(4.dp.toPx()), style = Stroke(2.dp.toPx()))
+                    if (selected) drawRoundRect(HeadsupColors.Ink, Offset(l, top), Size(r - l, g.textH), CornerRadius(4.dp.toPx()), style = Stroke(2.dp.toPx()))
                     clipRect(l.coerceAtLeast(0f), top, r.coerceAtMost(size.width), top + g.textH) {
-                        drawLabel(text, "T  " + item.text.replace('\n', ' '), Offset(l + 4.dp.toPx(), top + 1.dp.toPx()), TextStyle(color = Color.Black, fontSize = 10.sp))
+                        drawLabel(text, "T  " + item.text.replace('\n', ' '), Offset(l + 4.dp.toPx(), top + 1.dp.toPx()), TextStyle(color = HeadsupColors.OnAccent, fontSize = 10.sp))
                     }
                 }
                 // The sound tracks, scrolled, kept below the clips.
@@ -499,7 +499,7 @@ fun Timeline(
                     val total = lanes * g.laneH
                     val barH = area * area / total
                     val barTop = g.lanesTop + (area - barH) * (laneScroll / (total - area).coerceAtLeast(1f))
-                    drawRoundRect(Color.White.copy(alpha = 0.5f), Offset(size.width - 4.dp.toPx(), barTop), Size(3.dp.toPx(), barH), CornerRadius(2.dp.toPx()))
+                    drawRoundRect(HeadsupColors.Ink.copy(alpha = 0.5f), Offset(size.width - 4.dp.toPx(), barTop), Size(3.dp.toPx(), barH), CornerRadius(2.dp.toPx()))
                 }
                 // Strong accents of the selected sound run up through the clips, for cutting on them.
                 state.audioClips.firstOrNull { it.id == state.selectedAudio }?.let { s ->
@@ -514,21 +514,21 @@ fun Timeline(
                 }
                 // Past the end of the video nothing is exported.
                 val endX = g.x(videoEnd)
-                if (endX < size.width) drawRect(Color.Black.copy(alpha = 0.35f), Offset(endX.coerceAtLeast(0f), g.lanesTop), Size(size.width - endX.coerceAtLeast(0f), size.height - g.lanesTop))
+                if (endX < size.width) drawRect(Color.Black.copy(alpha = if (HeadsupColors.palette.isDark) 0.35f else 0.07f), Offset(endX.coerceAtLeast(0f), g.lanesTop), Size(size.width - endX.coerceAtLeast(0f), size.height - g.lanesTop))
                 // The playhead.
                 val mid = size.width / 2f
-                drawLine(Color.White, Offset(mid, 0f), Offset(mid, size.height), strokeWidth = 2.dp.toPx())
-                drawPath(Path().apply { moveTo(mid - 6.dp.toPx(), 0f); lineTo(mid + 6.dp.toPx(), 0f); lineTo(mid, 7.dp.toPx()); close() }, Color.White)
+                drawLine(HeadsupColors.Ink, Offset(mid, 0f), Offset(mid, size.height), strokeWidth = 2.dp.toPx())
+                drawPath(Path().apply { moveTo(mid - 6.dp.toPx(), 0f); lineTo(mid + 6.dp.toPx(), 0f); lineTo(mid, 7.dp.toPx()); close() }, HeadsupColors.Ink)
                 // Where in the whole film the playhead is, beside it on the ruler.
                 run {
                     val ms = tNow.coerceAtLeast(0L)
                     val label = String.format(java.util.Locale.US, "%d:%04.1f", ms / 60_000L, (ms % 60_000L) / 1000f)
-                    val style = TextStyle(color = Color.Black, fontSize = 10.sp)
+                    val style = TextStyle(color = HeadsupColors.OnHighlight, fontSize = 10.sp)
                     val m = text.measure(label, style)
                     val pad = 4.dp.toPx()
                     val left = (mid + 8.dp.toPx()).coerceAtMost(size.width - m.size.width - 2 * pad)
                     val top = ((g.rulerH - m.size.height) / 2f).coerceAtLeast(0f)
-                    drawRoundRect(Color.White, Offset(left, top), Size(m.size.width + 2 * pad, m.size.height.toFloat()), CornerRadius(4.dp.toPx()))
+                    drawRoundRect(HeadsupColors.Highlight, Offset(left, top), Size(m.size.width + 2 * pad, m.size.height.toFloat()), CornerRadius(4.dp.toPx()))
                     drawText(m, topLeft = Offset(left + pad, top))
                 }
             }
@@ -799,12 +799,12 @@ private fun DrawScope.drawVideo(
         // The clip under the playhead is outlined; the selected one gets handles.
         run {
             val selected = videoSelected
-            drawRoundRect(if (selected) Color.White else HeadsupColors.Accent, Offset(l, top), Size(r - l, h), radius, style = Stroke((if (selected) 2.5f else 1.5f).dp.toPx()))
+            drawRoundRect(if (selected) HeadsupColors.Highlight else HeadsupColors.Accent, Offset(l, top), Size(r - l, h), radius, style = Stroke((if (selected) 2.5f else 1.5f).dp.toPx()))
             if (selected) {
                 for ((x, left) in listOf(l to true, r to false)) {
                     val hx = if (left) x - g.handle else x
-                    drawRoundRect(Color.White, Offset(hx, top), Size(g.handle, h), CornerRadius(4.dp.toPx()))
-                    drawLine(Color.Black.copy(alpha = 0.6f), Offset(hx + g.handle / 2f, top + h * 0.3f), Offset(hx + g.handle / 2f, top + h * 0.7f), strokeWidth = 2.dp.toPx())
+                    drawRoundRect(HeadsupColors.Highlight, Offset(hx, top), Size(g.handle, h), CornerRadius(4.dp.toPx()))
+                    drawLine(HeadsupColors.OnHighlight.copy(alpha = 0.6f), Offset(hx + g.handle / 2f, top + h * 0.3f), Offset(hx + g.handle / 2f, top + h * 0.7f), strokeWidth = 2.dp.toPx())
                 }
             }
             // Keys of the mask being edited.
@@ -873,28 +873,28 @@ private fun DrawScope.drawAudio(g: Geometry, state: UiState, text: androidx.comp
             analysis?.rhythm?.let { rh ->
                 for (b in rh.beats) {
                     val x = g.x(p.startOnTimelineMs + (b - p.sourceStartMs))
-                    if (x in l..r) drawLine(Color.White.copy(alpha = 0.2f), Offset(x, top + h - 5.dp.toPx()), Offset(x, top + h), strokeWidth = 1f)
+                    if (x in l..r) drawLine(HeadsupColors.Ink.copy(alpha = 0.2f), Offset(x, top + h - 5.dp.toPx()), Offset(x, top + h), strokeWidth = 1f)
                 }
                 for (a in rh.accents) {
                     val x = g.x(p.startOnTimelineMs + (a.ms - p.sourceStartMs))
-                    if (x in l..r) drawLine(Color.White.copy(alpha = 0.3f + 0.6f * a.strength), Offset(x, top), Offset(x, top + (5 + 6 * a.strength).dp.toPx()), strokeWidth = 2f)
+                    if (x in l..r) drawLine(HeadsupColors.Ink.copy(alpha = 0.3f + 0.6f * a.strength), Offset(x, top), Offset(x, top + (5 + 6 * a.strength).dp.toPx()), strokeWidth = 2f)
                 }
             }
-            drawLabel(text, c.name, Offset(l.coerceAtLeast(0f) + 5.dp.toPx(), top + 2.dp.toPx()), TextStyle(color = Color.White.copy(alpha = 0.85f), fontSize = 10.sp))
+            drawLabel(text, c.name, Offset(l.coerceAtLeast(0f) + 5.dp.toPx(), top + 2.dp.toPx()), TextStyle(color = HeadsupColors.Ink.copy(alpha = 0.85f), fontSize = 10.sp))
         }
         if (selected) {
-            drawRoundRect(Color.White, Offset(l, top), Size((r - l).coerceAtLeast(2f), h), CornerRadius(5.dp.toPx()), style = Stroke(2.dp.toPx()))
+            drawRoundRect(HeadsupColors.Highlight, Offset(l, top), Size((r - l).coerceAtLeast(2f), h), CornerRadius(5.dp.toPx()), style = Stroke(2.dp.toPx()))
             for ((x, left) in listOf(l to true, r to false)) {
                 val hx = if (left) x - g.handle else x
-                drawRoundRect(Color.White, Offset(hx, top), Size(g.handle, h), CornerRadius(4.dp.toPx()))
-                drawLine(Color.Black.copy(alpha = 0.6f), Offset(hx + g.handle / 2f, top + h * 0.3f), Offset(hx + g.handle / 2f, top + h * 0.7f), strokeWidth = 2.dp.toPx())
+                drawRoundRect(HeadsupColors.Highlight, Offset(hx, top), Size(g.handle, h), CornerRadius(4.dp.toPx()))
+                drawLine(HeadsupColors.OnHighlight.copy(alpha = 0.6f), Offset(hx + g.handle / 2f, top + h * 0.3f), Offset(hx + g.handle / 2f, top + h * 0.7f), strokeWidth = 2.dp.toPx())
             }
             val dotY = top + 5.dp.toPx()
             val inX = g.x(p.startOnTimelineMs + p.fadeIn)
             val outX = g.x(p.endOnTimelineMs - p.fadeOut)
-            drawPath(Path().apply { moveTo(l, top + h); lineTo(inX, dotY); lineTo(outX, dotY); lineTo(r, top + h) }, Color.White.copy(alpha = 0.55f), style = Stroke(1.dp.toPx()))
-            drawCircle(Color.White, 5.dp.toPx(), Offset(inX, dotY))
-            drawCircle(Color.White, 5.dp.toPx(), Offset(outX, dotY))
+            drawPath(Path().apply { moveTo(l, top + h); lineTo(inX, dotY); lineTo(outX, dotY); lineTo(r, top + h) }, HeadsupColors.Ink.copy(alpha = 0.55f), style = Stroke(1.dp.toPx()))
+            drawCircle(HeadsupColors.Ink, 5.dp.toPx(), Offset(inX, dotY))
+            drawCircle(HeadsupColors.Ink, 5.dp.toPx(), Offset(outX, dotY))
         }
     }
 }

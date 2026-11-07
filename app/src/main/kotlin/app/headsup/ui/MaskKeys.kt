@@ -81,10 +81,10 @@ fun MaskKeyStrip(
                 val diamond = Path().apply {
                     moveTo(cx, mid - r); lineTo(cx + r, mid); lineTo(cx, mid + r); lineTo(cx - r, mid); close()
                 }
-                drawPath(diamond, if (k.timeMs == current) Color.White else accent)
+                drawPath(diamond, if (k.timeMs == current) HeadsupColors.Ink else accent)
             }
             val px = x(cutStartMs + playhead.longValue)
-            drawLine(Color.White, Offset(px, 2f), Offset(px, size.height - 2f), strokeWidth = 2.dp.toPx())
+            drawLine(HeadsupColors.Ink, Offset(px, 2f), Offset(px, size.height - 2f), strokeWidth = 2.dp.toPx())
         }
         Row(verticalAlignment = Alignment.CenterVertically) {
             val here = cutStartMs + playhead.longValue

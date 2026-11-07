@@ -188,6 +188,19 @@ project's files), the preview resized left/right when held sideways, Edit called
 5. **Formats (last):** camera raws that are not DNG (CR3, NEF, ARW, RAF, …) through LibRaw,
    GoPro GPR (VC-5), lossy DNG.
 
+## Pro features (proposed with the redesign, 2026-11)
+
+- [ ] Before / after with a split line across the picture, dragged left and right (today only
+      holding the picture shows the original).
+- [ ] Layers: an image (PNG, logo, photo) over a photo or video; a second video as picture in
+      picture (also under Later above).
+- [ ] Mask edges at full resolution in export (masks are kept at 640 px today).
+- [ ] Stabilisation from the camera's gyro (GoPro GPMF, DJI and phone metadata), alongside the
+      watch data already used.
+- [ ] Field theme switching itself on in bright light (the phone's light sensor).
+- [ ] Translations: the texts are written in the code (no string resources yet); a Polish version
+      first needs them moved to resources.
+
 ## Ideas
 
 - **A guide agent** – ask it "how do I make this clip cinematic?" and it shows the way step by

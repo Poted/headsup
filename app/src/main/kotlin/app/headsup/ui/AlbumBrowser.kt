@@ -395,7 +395,7 @@ fun PhotoViewer(state: UiState, vm: HeadsupViewModel, indices: List<Int>, start:
             }
         }
     }
-    FullScreenLayer(Color.Black) {
+    FullScreenLayer(HeadsupColors.Picture) {
         androidx.compose.foundation.layout.BoxWithConstraints(Modifier.fillMaxSize()) {
             val tall = maxHeight
             if (maxWidth > maxHeight) {
@@ -426,6 +426,12 @@ fun PhotoViewer(state: UiState, vm: HeadsupViewModel, indices: List<Int>, start:
  */
 @Composable
 fun FullScreenLayer(background: Color, content: @Composable () -> Unit) {
+    // The photo viewer, on black, keeps the dark theme's controls in light mode too.
+    if (background == HeadsupColors.Picture) HeadsupTheme(AppSettings.current(androidx.compose.foundation.isSystemInDarkTheme()).onPicture) { FullScreenBox(HeadsupColors.Picture, content) } else FullScreenBox(background, content)
+}
+
+@Composable
+private fun FullScreenBox(background: Color, content: @Composable () -> Unit) {
     Box(
         Modifier.fillMaxSize().background(background)
             // Only listens (consuming here would cancel the taps and swipes of what it holds): a

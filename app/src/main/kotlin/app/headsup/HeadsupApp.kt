@@ -18,6 +18,10 @@ class HeadsupApp : Application() {
         // The raw reader's own process (see RawService) reports nothing: when it runs out of
         // memory the app carries on and says so.
         if (Build.VERSION.SDK_INT >= 28 && Application.getProcessName() != packageName) return
+        // The app's settings (units among them) for everything in this process, exports too.
+        app.headsup.ui.AppSettings.load(this)
+        // How the app ended last time, kept in Settings › Reports (not shown over the editor).
+        takeCrashReport()?.let { app.headsup.ui.Reports.add(this, it) }
         // Keep the stack trace of a crash so it can be shown (and sent) on the next start.
         val previous = Thread.getDefaultUncaughtExceptionHandler()
         Thread.setDefaultUncaughtExceptionHandler { thread, error ->
@@ -33,7 +37,7 @@ class HeadsupApp : Application() {
      * a Kotlin/Java crash, otherwise the system's reason (native crash, out of memory, ...).
      * Each report is returned once.
      */
-    fun takeCrashReport(): String? {
+    private fun takeCrashReport(): String? {
         val trace = crashFile.takeIf { it.exists() }?.let { f -> f.readText().also { f.delete() } }
         var exit: String? = null
         if (Build.VERSION.SDK_INT >= 30) {
@@ -56,6 +60,6 @@ class HeadsupApp : Application() {
             }
         }
         if (trace == null && exit == null) return null
-        return listOfNotNull("The app stopped unexpectedly last time. Please send this text:", exit, trace).joinToString("\n")
+        return listOfNotNull("SweetSpot stopped unexpectedly.", exit, trace).joinToString("\n")
     }
 }
