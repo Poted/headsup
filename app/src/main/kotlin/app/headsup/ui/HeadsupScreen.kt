@@ -729,7 +729,7 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
             // A dot on Adjust when it works on more than this clip (its scope row says what).
             BottomToolbar(
                 tool, tools,
-                labelOf = { t -> if (state.photoProject && t == Tool.EDIT) "Geometry" else t.label },
+                labelOf = { t -> if (state.photoProject && t == Tool.EDIT) "Crop" else t.label },
                 badgeOf = { t -> t == Tool.COLOUR && (state.target == GradeTarget.GROUP || state.target == GradeTarget.GLOBAL) },
             ) { tool = it }
     }
