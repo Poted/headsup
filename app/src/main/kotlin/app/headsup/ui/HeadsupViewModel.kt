@@ -1011,6 +1011,9 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
 
     /** The project as it was when opened: kept apart, as the history drops its oldest steps. */
     private var historyBase: EditSnapshot? = null
+
+    /** The project as it was when opened in this session: where "Since opened" goes back to. */
+    private var openedSnapshot: EditSnapshot? = null
     private var historyStartsAgain = true
     private var historyIndex = -1
 
@@ -1042,6 +1045,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
             history.clear()
             history += snapshot
             historyBase = snapshot
+            openedSnapshot = snapshot
             historyIndex = 0
         } else {
             while (history.size > historyIndex + 1) history.removeAt(history.lastIndex)
@@ -1106,6 +1110,8 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
         history += steps
         historyIndex = saved.index
         historyBase = saved.base?.let { withContext(Dispatchers.Default) { snapshotOf(it) } } ?: steps.first()
+        // The earlier sessions' steps can be undone one by one; "Since opened" stops here.
+        openedSnapshot = steps[saved.index]
         historyStartsAgain = false
         updateHistoryFlags()
         // A step recorded while this was read would otherwise be saved over it.
@@ -1215,7 +1221,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun undoAll() {
-        val base = historyBase ?: return
+        val base = openedSnapshot ?: historyBase ?: return
         record(_state.value.snapshot())
         if (history.getOrNull(historyIndex) == base) return
         restore(base)
