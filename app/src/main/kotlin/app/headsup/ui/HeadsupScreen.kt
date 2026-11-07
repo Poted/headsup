@@ -5209,6 +5209,9 @@ private enum class TextTool(val symbol: String, val label: String) {
     TIME("⏱", "Time"),
 }
 
+/** What a logo has of a text's tools: its size (and opacity) and its timing. */
+private val LOGO_TOOLS = setOf(TextTool.SIZE, TextTool.IN, TextTool.OUT, TextTool.TIME)
+
 /** Ready looks: one tap sets font, colour, glow, placement and animations. */
 private enum class TextLook(val label: String, val apply: (TextItem) -> TextItem) {
     TITLE("Title", { it.copy(font = TextFont.SANS, colour = 0xFFFFFFFF.toInt(), size = 0.09f, glow = 0f, shadow = true, align = TextAlign.CENTER, x = 0.5f, y = 0.5f, animIn = TextAnim.POP, animOut = TextAnim.FADE) }),
@@ -5233,8 +5236,12 @@ private val TEXT_COLOURS = listOf(
 private fun TextPanel(state: UiState, vm: HeadsupViewModel, at: () -> Long) {
     var tool by rememberSaveable { mutableStateOf(TextTool.LOOK) }
     val item = state.texts.firstOrNull { it.id == state.selectedText }
+    // A logo: any picture from the gallery (a PNG keeps its transparency).
+    val logoPicker = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri -> uri?.let(vm::addLogo) }
+    LaunchedEffect(item?.id) { if (item?.isLogo == true && tool !in LOGO_TOOLS) tool = TextTool.SIZE }
     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
         SmallAction("+ Text", { vm.addText(at()) })
+        SmallAction("+ Logo", { logoPicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) })
         if (item != null) {
             SmallAction("Delete", { vm.removeText(item.id) })
             SmallAction("Done", { vm.selectText(null) })
@@ -5244,7 +5251,8 @@ private fun TextPanel(state: UiState, vm: HeadsupViewModel, at: () -> Long) {
         ToolSection(
             "Texts",
             info = (if (state.photoProject) "+ Text adds a text to the photo. Drag it on the picture to place it. Tap a text below to edit it."
-            else "+ Text adds a text at the playhead. Drag it on the picture to place it; its bar on the timeline moves it in time. Tap a text's bar on the timeline, or a text below, to edit it."),
+            else "+ Text adds a text at the playhead. Drag it on the picture to place it; its bar on the timeline moves it in time. Tap a text's bar on the timeline, or a text below, to edit it.") +
+                " + Logo puts a picture of your own (a PNG keeps its transparency) in the corner of " + (if (state.photoProject) "every photo" else "the whole film") + ", like a camera app's mark; drag it to place it, Size and Opacity set it.",
         ) {
             val photoNow = state.selected
             val shown = if (state.photoProject && photoNow != null) state.texts.filter { it.showsOn(photoNow.id, photoNow.groupId) } else state.texts
@@ -5252,7 +5260,7 @@ private fun TextPanel(state: UiState, vm: HeadsupViewModel, at: () -> Long) {
                 Text("No texts yet.", style = MaterialTheme.typography.bodySmall, color = HeadsupColors.TextMuted)
             } else {
                 Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    for (t in shown) FilterChip(selected = false, onClick = { vm.selectText(t.id) }, label = { Text(t.text.replace('\n', ' ').take(18)) })
+                    for (t in shown) FilterChip(selected = false, onClick = { vm.selectText(t.id) }, label = { Text(if (t.isLogo) "◩ Logo" else t.text.replace('\n', ' ').take(18)) })
                 }
             }
         }
@@ -5261,7 +5269,7 @@ private fun TextPanel(state: UiState, vm: HeadsupViewModel, at: () -> Long) {
     val update: ((TextItem) -> TextItem) -> Unit = { vm.updateText(item.id, it) }
     // In an album: which photos the text is on.
     val photo = state.selected
-    ToolSection("Text", info = if (state.photoProject) "The text, and which photos it is on." else "The text. Its look, data, font and timing are in the tools below.") {
+    ToolSection(if (item.isLogo) "Logo" else "Text", info = if (item.isLogo) (if (state.photoProject) "Which photos the logo is on. Drag it on the picture to place it." else "Drag the logo on the picture to place it; Size, Opacity and its timing are below.") else if (state.photoProject) "The text, and which photos it is on." else "The text. Its look, data, font and timing are in the tools below.") {
         if (state.photoProject && photo != null) {
             ChoiceGrid(
                 listOf("This photo", "All photos"),
@@ -5269,7 +5277,7 @@ private fun TextPanel(state: UiState, vm: HeadsupViewModel, at: () -> Long) {
                 { i -> update { if (i == 0) it.copy(onlyClip = photo.id, onlyGroup = null) else it.copy(onlyClip = null, onlyGroup = null) } },
             )
         }
-        OutlinedTextField(
+        if (!item.isLogo) OutlinedTextField(
             value = item.text,
             onValueChange = { v -> update { it.copy(text = v) } },
             modifier = Modifier.fillMaxWidth(),
@@ -5278,7 +5286,7 @@ private fun TextPanel(state: UiState, vm: HeadsupViewModel, at: () -> Long) {
         )
     }
     LazyRow(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
-        items(TextTool.entries.filter { !state.photoProject || it !in setOf(TextTool.IN, TextTool.OUT, TextTool.TIME) }) { t ->
+        items(TextTool.entries.filter { (!state.photoProject || it !in setOf(TextTool.IN, TextTool.OUT, TextTool.TIME)) && (!item.isLogo || it in LOGO_TOOLS) }) { t ->
             val modified = when (t) {
                 TextTool.GLOW -> item.glow > 0f
                 TextTool.IN -> item.animIn != TextAnim.NONE
@@ -5293,7 +5301,7 @@ private fun TextPanel(state: UiState, vm: HeadsupViewModel, at: () -> Long) {
         TextTool.DATA -> "Fields show as {name} in the text; type around them, e.g. \"↑ {ascent} · {distance}\". Values come from the selected ${if (state.photoProject) "photo" else "clip"}; tap one to add it."
         TextTool.FONT -> "The typeface, and Left (from the frame's left margin) or Centre."
         TextTool.COLOUR -> "The text's colour."
-        TextTool.SIZE -> "How large the text is, against the frame's height. Double-tap the ruler for the usual size."
+        TextTool.SIZE -> if (item.isLogo) "How wide the logo is, and how see-through (Opacity). Double-tap a ruler for the usual." else "How large the text is, against the frame's height. Double-tap the ruler for the usual size."
         TextTool.GLOW -> "Light round the letters, and a soft shadow under them to lift the text off the picture. Double-tap the ruler to turn the glow off."
         TextTool.IN, TextTool.OUT -> "How the text comes in or goes out. Type and HUD write it a letter every ${TextAnimation.CHAR_MS} ms; Fade, Rise and Pop take the time on the ruler."
         TextTool.TIME -> "How long the text stays. Start here and End here set it at the playhead; double-tap the ruler for 3 seconds."
@@ -5346,8 +5354,12 @@ private fun TextPanel(state: UiState, vm: HeadsupViewModel, at: () -> Long) {
             }
         }
         TextTool.SIZE -> {
-            ValueHeader("", String.format(Locale.US, "%.0f %%", item.size * 100))
+            ValueHeader(if (item.isLogo) "Size" else "", String.format(Locale.US, "%.0f %%", item.size * 100))
             RulerSlider(item.size, 0.02f..0.25f, 0.005f, { v -> update { it.copy(size = v) } }, onReset = { update { it.copy(size = 0.07f) } })
+            if (item.isLogo) {
+                ValueHeader("Opacity", String.format(Locale.US, "%.0f %%", item.opacity * 100))
+                RulerSlider(item.opacity, 0.1f..1f, 0.02f, { v -> update { it.copy(opacity = v) } }, onReset = { update { it.copy(opacity = 1f) } })
+            }
         }
         TextTool.GLOW -> {
             ValueHeader("Glow", String.format(Locale.US, "%.2f", item.glow))

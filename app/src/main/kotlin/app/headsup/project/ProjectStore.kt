@@ -273,6 +273,7 @@ internal object Json {
         .put("font", t.font.name).put("colour", t.colour).put("glow", t.glow.toDouble()).put("shadow", t.shadow)
         .put("align", t.align.name).put("animIn", t.animIn.name).put("animOut", t.animOut.name).put("animMs", t.animMs)
         .putOpt("onlyClip", t.onlyClip).putOpt("onlyGroup", t.onlyGroup)
+        .putOpt("image", t.image).put("opacity", t.opacity.toDouble())
 
     private fun text(o: JSONObject) = TextItem(
         id = o.optLong("id"),
@@ -292,6 +293,8 @@ internal object Json {
         animMs = o.optLong("animMs", 500L),
         onlyClip = if (o.has("onlyClip")) o.getLong("onlyClip") else null,
         onlyGroup = if (o.has("onlyGroup")) o.getLong("onlyGroup") else null,
+        image = o.optStringOrNull("image"),
+        opacity = o.optDouble("opacity", 1.0).toFloat(),
     )
 
     private fun audioClip(c: AudioClip) = JSONObject()

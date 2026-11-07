@@ -48,7 +48,15 @@ data class TextItem(
     /** In an album: shown only on this photo, or on the photos of this group (both null: on all). */
     val onlyClip: Long? = null,
     val onlyGroup: Long? = null,
+    /**
+     * A logo instead of letters: the picture kept at this path (a PNG keeps its transparency),
+     * its width [size] × 3 of the frame's short side, its [opacity] 0..1. Null: a text.
+     */
+    val image: String? = null,
+    val opacity: Float = 1f,
 ) {
+    val isLogo: Boolean get() = image != null
+
     /** Whether it shows on the photo [clipId] in group [groupId]. */
     fun showsOn(clipId: Long, groupId: Long?): Boolean = when {
         onlyClip != null -> onlyClip == clipId

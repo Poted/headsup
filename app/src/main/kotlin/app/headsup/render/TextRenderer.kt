@@ -53,7 +53,31 @@ object TextRenderer {
         return sb.toString()
     }
 
+    /** Logos, read once per file (the preview and an export draw them on every frame). */
+    private val logos = android.util.LruCache<String, android.graphics.Bitmap>(6)
+
+    private fun logo(path: String): android.graphics.Bitmap? = logos.get(path) ?: runCatching {
+        val bounds = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        android.graphics.BitmapFactory.decodeFile(path, bounds)
+        // At most 1024 px across: plenty for a corner of a 4K frame.
+        var sample = 1
+        while (maxOf(bounds.outWidth, bounds.outHeight) / (sample * 2) >= 1024) sample *= 2
+        android.graphics.BitmapFactory.decodeFile(path, android.graphics.BitmapFactory.Options().apply { inSampleSize = sample })
+    }.getOrNull()?.also { logos.put(path, it) }
+
+    /** A logo: its picture at the text's place and timing, as wide as size × 3 of the frame's short side. */
+    private fun drawLogo(canvas: Canvas, w: Float, h: Float, item: TextItem, f: TextFrame) {
+        val bmp = logo(item.image ?: return) ?: return
+        val width = item.size * 3f * minOf(w, h) * f.scale
+        val height = width * bmp.height / bmp.width.coerceAtLeast(1)
+        val cx = item.x * w
+        val cy = item.y * h - f.offset * height
+        val paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG).apply { alpha = (255f * f.alpha * item.opacity).toInt().coerceIn(0, 255) }
+        canvas.drawBitmap(bmp, null, android.graphics.RectF(cx - width / 2f, cy - height / 2f, cx + width / 2f, cy + height / 2f), paint)
+    }
+
     private fun drawItem(canvas: Canvas, w: Float, h: Float, item: TextItem, f: TextFrame) {
+        if (item.isLogo) { drawLogo(canvas, w, h, item, f); return }
         val size = item.size * minOf(w, h)
         val text = shownText(item, f)
         // Laid out for the whole text, so typing does not move what is already there.

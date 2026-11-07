@@ -988,6 +988,37 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
         s.copy(texts = s.texts + item, selectedText = id)
     }
 
+    /**
+     * A logo from [uri] (a PNG keeps its transparency) over the whole film or album, in the
+     * bottom right corner as a camera app puts its mark; copied into the app, so it stays.
+     */
+    fun addLogo(uri: Uri) {
+        val context = getApplication<Application>()
+        viewModelScope.launch {
+            val path = withContext(Dispatchers.IO) {
+                runCatching {
+                    val dir = java.io.File(context.filesDir, "logos").apply { mkdirs() }
+                    val file = java.io.File(dir, java.util.UUID.randomUUID().toString())
+                    context.contentResolver.openInputStream(uri)?.use { input -> file.outputStream().use { input.copyTo(it) } } ?: return@runCatching null
+                    file.absolutePath
+                }.getOrNull()
+            }
+            if (path == null) {
+                _state.update { it.copy(messages = it.messages + "Could not read that picture.") }
+                return@launch
+            }
+            _state.update { s ->
+                val end = s.clips.sumOf { it.timelineDurationMs }.coerceAtLeast(500L)
+                val id = (s.texts.maxOfOrNull { it.id } ?: 0L) + 1
+                val item = TextItem(
+                    id = id, text = "Logo", startMs = 0L, lengthMs = end, x = 0.86f, y = 0.9f, size = 0.07f,
+                    animIn = TextAnim.NONE, animOut = TextAnim.NONE, image = path, shadow = false,
+                )
+                s.copy(texts = s.texts + item, selectedText = id)
+            }
+        }
+    }
+
     fun selectText(id: Long?) = _state.update { it.copy(selectedText = id) }
 
     fun updateText(id: Long, transform: (TextItem) -> TextItem) =
