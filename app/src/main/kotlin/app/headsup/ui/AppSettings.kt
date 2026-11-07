@@ -66,11 +66,16 @@ object AppSettings {
     var haptics by mutableStateOf(true)
         private set
 
+    /** Held sideways, the picture on the right and the tools on the left (for the left hand). */
+    var pictureRight by mutableStateOf(false)
+        private set
+
     fun load(context: Context) {
         val p = context.getSharedPreferences(FILE, Context.MODE_PRIVATE)
         theme = Theme.entries.firstOrNull { it.name == p.getString("theme", null) }
         reduceMotion = p.getBoolean("reduceMotion", false)
         haptics = p.getBoolean("haptics", true)
+        pictureRight = p.getBoolean("pictureRight", false)
         Units.imperial = p.getBoolean("imperial", false)
     }
 
@@ -90,6 +95,11 @@ object AppSettings {
     fun setHaptics(context: Context, value: Boolean) {
         haptics = value
         save(context) { putBoolean("haptics", value) }
+    }
+
+    fun setPictureRight(context: Context, value: Boolean) {
+        pictureRight = value
+        save(context) { putBoolean("pictureRight", value) }
     }
 
     fun setImperial(context: Context, value: Boolean) {
@@ -172,6 +182,12 @@ fun SettingsSheet(vm: HeadsupViewModel, onDismiss: () -> Unit) {
             ) {
                 SettingSwitch("Reduce animations", "Everything appears at once.", AppSettings.reduceMotion) { AppSettings.setReduceMotion(context, it) }
                 SettingSwitch("Ruler clicks", "A light tap on every step.", AppSettings.haptics) { AppSettings.setHaptics(context, it) }
+            }
+            ToolSection(
+                "Layout",
+                info = "Held sideways the picture is on the left and the tools on the right. Left-handed: the tools on the left, under the left thumb, and the picture on the right. A swipe towards the tools' side still goes full screen.",
+            ) {
+                ChoiceGrid(listOf("Tools on the right", "Tools on the left"), if (AppSettings.pictureRight) 1 else 0, { AppSettings.setPictureRight(context, it == 1) })
             }
             ToolSection(
                 "Units",
