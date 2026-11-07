@@ -54,6 +54,19 @@ class MediaLibrary(context: Context) {
     fun sizeOf(uris: Collection<Uri>): Long = uris.distinct().filter(::isInLibrary).sumOf { File(it.path!!).length() }
 
     /** Deletes library copies that none of [inUse] refers to. */
+    /** Bytes of the copies no project uses (what [deleteUnused] would free), and of all copies. */
+    fun bytes(inUse: Set<Uri>): Pair<Long, Long> {
+        val keep = inUse.filter(::isInLibrary).mapNotNull { it.path?.let(::File)?.parentFile?.absolutePath }.toSet()
+        var unused = 0L
+        var all = 0L
+        dir.listFiles()?.filter { it.isDirectory }?.forEach { d ->
+            val n = d.walkTopDown().filter { it.isFile }.sumOf { it.length() }
+            all += n
+            if (d.absolutePath !in keep) unused += n
+        }
+        return unused to all
+    }
+
     fun deleteUnused(inUse: Set<Uri>) {
         val keep = inUse.filter(::isInLibrary).mapNotNull { it.path?.let(::File)?.parentFile?.absolutePath }.toSet()
         dir.listFiles()?.filter { it.isDirectory && it.absolutePath !in keep }?.forEach { it.deleteRecursively() }

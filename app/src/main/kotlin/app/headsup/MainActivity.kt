@@ -3,35 +3,56 @@ package app.headsup
 import android.graphics.drawable.ColorDrawable
 import android.os.Bundle
 import androidx.activity.ComponentActivity
-import androidx.activity.compose.setContent
 import androidx.activity.SystemBarStyle
+import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.isSystemInDarkTheme
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.foundation.layout.Box
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.Recomposer
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.platform.AndroidUiDispatcher
+import androidx.lifecycle.DefaultLifecycleObserver
+import androidx.lifecycle.LifecycleOwner
+import androidx.lifecycle.lifecycleScope
+import app.headsup.ui.AppMotion
 import app.headsup.ui.AppSettings
-import app.headsup.ui.DarkPalette
 import app.headsup.ui.HeadsupScreen
-import app.headsup.ui.LightPalette
 import app.headsup.ui.HeadsupTheme
+import app.headsup.ui.Palette
 import app.headsup.ui.SplashOverlay
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
+    private lateinit var motion: AppMotion
+    private lateinit var recomposer: Recomposer
+
     override fun onCreate(savedInstanceState: Bundle?) {
         AppSettings.load(this)
         val systemDark = (resources.configuration.uiMode and android.content.res.Configuration.UI_MODE_NIGHT_MASK) == android.content.res.Configuration.UI_MODE_NIGHT_YES
-        bars(AppSettings.dark(systemDark))
+        bars(AppSettings.current(systemDark).palette)
         super.onCreate(savedInstanceState)
-        setContent {
-            // The appearance chosen in Settings (System, Light or Dark), applied at once.
-            val dark = AppSettings.dark(isSystemInDarkTheme())
-            LaunchedEffect(dark) { bars(dark) }
-            HeadsupTheme(dark = dark) {
+        // The app's own recomposer, so its animations take the app's pace: the phone's animation
+        // scale, or none with Settings › Reduce animations. Like the window's own, it rests while
+        // the app is not on screen.
+        motion = AppMotion(this)
+        val context = AndroidUiDispatcher.Main + motion
+        recomposer = Recomposer(context)
+        lifecycleScope.launch(context, start = CoroutineStart.UNDISPATCHED) { recomposer.runRecomposeAndApplyChanges() }
+        lifecycle.addObserver(object : DefaultLifecycleObserver {
+            override fun onStart(owner: LifecycleOwner) = recomposer.resumeCompositionFrameClock()
+            override fun onStop(owner: LifecycleOwner) = recomposer.pauseCompositionFrameClock()
+        })
+        setContent(parent = recomposer) {
+            // The theme chosen in Settings (or Studio / Paper as the phone is set), applied at once.
+            val palette = AppSettings.current(isSystemInDarkTheme()).palette
+            LaunchedEffect(palette) { bars(palette) }
+            HeadsupTheme(palette) {
                 // The logo animation plays once per launch, not on rotation.
                 var splash by rememberSaveable { mutableStateOf(savedInstanceState == null) }
                 // The editor is built once the logo is complete, so building it does not eat the animation's frames.
@@ -44,15 +65,21 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    /** System bars and the window behind the app for the light or dark appearance. */
-    private fun bars(dark: Boolean) {
-        val light = android.graphics.Color.TRANSPARENT
+    override fun onDestroy() {
+        recomposer.cancel()
+        motion.release()
+        super.onDestroy()
+    }
+
+    /** System bars and the window behind the app for the theme. */
+    private fun bars(palette: Palette) {
+        val dark = palette.isDark
+        val clear = android.graphics.Color.TRANSPARENT
         enableEdgeToEdge(
-            statusBarStyle = SystemBarStyle.auto(light, light) { dark },
+            statusBarStyle = SystemBarStyle.auto(clear, clear) { dark },
             navigationBarStyle = SystemBarStyle.auto(LIGHT_SCRIM, DARK_SCRIM) { dark },
         )
-        val ground = if (dark) DarkPalette.background else LightPalette.background
-        window.setBackgroundDrawable(ColorDrawable(ground.toArgb()))
+        window.setBackgroundDrawable(ColorDrawable(palette.background.toArgb()))
     }
 
     private companion object {

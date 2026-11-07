@@ -188,7 +188,7 @@ fun SplashOverlay(onRevealed: () -> Unit = {}, onFinished: () -> Unit) {
     val fade = remember { Animatable(1f) }
     val context = LocalContext.current
     val still = remember {
-        Settings.Global.getFloat(context.contentResolver, Settings.Global.ANIMATOR_DURATION_SCALE, 1f) == 0f
+        AppSettings.reduceMotion || Settings.Global.getFloat(context.contentResolver, Settings.Global.ANIMATOR_DURATION_SCALE, 1f) == 0f
     }
     LaunchedEffect(Unit) {
         withContext(RealTime) {
@@ -196,7 +196,7 @@ fun SplashOverlay(onRevealed: () -> Unit = {}, onFinished: () -> Unit) {
                 listOf(frame, line, search, dot, word).forEach { it.snapTo(1f) }
                 onRevealed()
                 delay(600)
-                fade.animateTo(0f, tween(300))
+                if (AppSettings.reduceMotion) fade.snapTo(0f) else fade.animateTo(0f, tween(300))
                 onFinished()
                 return@withContext
             }

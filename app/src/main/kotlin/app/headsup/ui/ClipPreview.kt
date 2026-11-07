@@ -938,7 +938,7 @@ fun ClipPreview(
     }
     Column(Modifier.padding(horizontal = if (edgeToEdge) 0.dp else 16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Box(
-            Modifier.fillMaxWidth().clip(RoundedCornerShape(if (edgeToEdge) 0.dp else 20.dp)).background(Color.Black).then(
+            Modifier.fillMaxWidth().clip(RoundedCornerShape(if (edgeToEdge) 0.dp else 20.dp)).background(HeadsupColors.Picture).then(
                 // Holding a finger still shows the original until it lifts; moving or a second
                 // finger (zoom) is left to the other gestures.
                 if (onHoldOriginal != null) {

@@ -77,6 +77,15 @@ fun RulerSlider(
     val reset by rememberUpdatedState(onReset)
     val tickSpacing = 9.dp
     fun snap(v: Float) = ((v / step).roundToInt() * step).coerceIn(range.start, range.endInclusive)
+    // A light click on each step, a firmer one on reaching zero, like a camera's dial (Settings › Ruler clicks).
+    val view = androidx.compose.ui.platform.LocalView.current
+    fun click(atZero: Boolean) {
+        if (!AppSettings.haptics) return
+        view.performHapticFeedback(
+            if (atZero) (if (android.os.Build.VERSION.SDK_INT >= 30) android.view.HapticFeedbackConstants.CONFIRM else android.view.HapticFeedbackConstants.VIRTUAL_KEY)
+            else android.view.HapticFeedbackConstants.CLOCK_TICK,
+        )
+    }
 
     Canvas(
         modifier
@@ -93,7 +102,9 @@ fun RulerSlider(
                     val ticks = (travelled / px).toInt()
                     if (ticks != 0) {
                         travelled -= ticks * px
+                        val before = dragValue
                         dragValue = snap(dragValue + ticks * step)
+                        if (dragValue != before) click(atZero = dragValue == 0f)
                         emit(dragValue)
                     }
                 }
@@ -137,7 +148,7 @@ fun RulerSlider(
                 color.copy(alpha = fade * if (major) 0.85f else 0.45f),
                 Offset(x, bottom - h),
                 Offset(x, bottom),
-                strokeWidth = 1.dp.toPx(),
+                strokeWidth = 1.dp.toPx() * HeadsupColors.StrokeScale,
                 cap = StrokeCap.Round,
             )
         }
@@ -571,6 +582,19 @@ fun ChoiceGrid(
     modifier: Modifier = Modifier,
     minCell: androidx.compose.ui.unit.Dp = 76.dp,
     glyph: (@Composable (index: Int, on: Boolean) -> Unit)? = null,
+    enabled: (Int) -> Boolean = { true },
+) = ChoiceGrid(options, { it == selected }, onSelect, modifier, minCell, glyph, enabled)
+
+/** As above, for a choice of several at once: [isOn] says which are on; a tap toggles one. */
+@Composable
+fun ChoiceGrid(
+    options: List<String>,
+    isOn: (Int) -> Boolean,
+    onSelect: (Int) -> Unit,
+    modifier: Modifier = Modifier,
+    minCell: androidx.compose.ui.unit.Dp = 76.dp,
+    glyph: (@Composable (index: Int, on: Boolean) -> Unit)? = null,
+    enabled: (Int) -> Boolean = { true },
 ) {
     if (options.isEmpty()) return
     androidx.compose.foundation.layout.BoxWithConstraints(modifier.fillMaxWidth()) {
@@ -587,14 +611,15 @@ fun ChoiceGrid(
                             Spacer(Modifier.weight(1f))
                             continue
                         }
-                        val on = i == selected
+                        val on = isOn(i)
+                        val usable = enabled(i)
                         Row(
                             Modifier
                                 .weight(1f)
                                 .height(40.dp)
                                 .clip(MaterialTheme.shapes.small)
                                 .background(if (on) HeadsupColors.Highlight else HeadsupColors.SurfaceHigh)
-                                .clickable { onSelect(i) }
+                                .clickable(enabled = usable) { onSelect(i) }
                                 .padding(horizontal = 6.dp),
                             horizontalArrangement = Arrangement.Center,
                             verticalAlignment = Alignment.CenterVertically,
@@ -606,9 +631,10 @@ fun ChoiceGrid(
                             Text(
                                 options[i],
                                 style = MaterialTheme.typography.labelLarge,
-                                color = if (on) HeadsupColors.OnHighlight else HeadsupColors.Ink,
+                                color = (if (on) HeadsupColors.OnHighlight else HeadsupColors.Ink).copy(alpha = if (usable) 1f else 0.4f),
                                 maxLines = 1,
                                 softWrap = false,
+                                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
                             )
                         }
                     }
@@ -637,5 +663,21 @@ fun AspectGlyph(aspect: Float?, on: Boolean) {
                 pathEffect = if (aspect == null) androidx.compose.ui.graphics.PathEffect.dashPathEffect(floatArrayOf(2.dp.toPx(), 1.5.dp.toPx())) else null,
             ),
         )
+    }
+}
+
+/** A named choice inside a section: its name (muted) over its grid, as "Resolution" over Source · 4K · 1080p. */
+@Composable
+fun LabeledChoice(
+    label: String,
+    options: List<String>,
+    isOn: (Int) -> Boolean,
+    onSelect: (Int) -> Unit,
+    minCell: androidx.compose.ui.unit.Dp = 76.dp,
+    enabled: (Int) -> Boolean = { true },
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Text(label, style = MaterialTheme.typography.labelMedium, color = HeadsupColors.TextMuted)
+        ChoiceGrid(options, isOn, onSelect, minCell = minCell, enabled = enabled)
     }
 }

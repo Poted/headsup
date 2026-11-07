@@ -764,7 +764,7 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
         if (fullscreen) {
             // The picture alone on black, centred, whichever way the phone is held; a swipe down leaves.
             // On black the controls are those of the dark theme, in light mode too.
-            HeadsupTheme(dark = true) {
+            HeadsupTheme(AppSettings.current(androidx.compose.foundation.isSystemInDarkTheme()).onPicture) {
                 Column(
                     Modifier
                         .fillMaxSize()
@@ -1849,7 +1849,7 @@ private fun highlightValue(f: FoundHighlight): String {
     fun Reading.text() = "$value $unit"
     return when (h.kind) {
         HighlightKind.TOP_SPEED -> Formats.speed(h.value).text()
-        HighlightKind.ACCELERATION -> String.format(Locale.US, "+%.0f km/h in %d s", h.value * 3.6, HighlightFinder.ACCEL_WINDOW_S)
+        HighlightKind.ACCELERATION -> String.format(Locale.US, "+%.0f %s in %d s", app.headsup.render.Units.speed(h.value), app.headsup.render.Units.speedUnit, HighlightFinder.ACCEL_WINDOW_S)
         HighlightKind.FAST_DESCENT, HighlightKind.STEEP_CLIMB -> String.format(Locale.US, "%.1f m/s vertical", h.value)
         HighlightKind.SUMMIT -> Formats.altitude(h.value).text()
         HighlightKind.PEAK_HEART_RATE -> Formats.heartRate(h.value).text()
@@ -1946,7 +1946,7 @@ private fun ProjectRow(state: UiState, vm: HeadsupViewModel, onOpen: () -> Unit,
         ) { kindShown = it }
         RoundIconButton(HeadsupIcons.Settings, "Settings", { settings = true })
     }
-    if (settings) SettingsSheet(onDismiss = { settings = false })
+    if (settings) SettingsSheet(vm, onDismiss = { settings = false })
     // A project from the list being renamed, or about to be deleted.
     var renamingOther by remember { mutableStateOf<String?>(null) }
     var deletingOther by remember { mutableStateOf<String?>(null) }
@@ -2036,25 +2036,15 @@ private fun ProjectRow(state: UiState, vm: HeadsupViewModel, onOpen: () -> Unit,
 @Composable
 private fun SpeedPanel(clip: ClipState, index: Int, timelineFps: Float, vm: HeadsupViewModel, playhead: LongState) {
     var ramp by rememberSaveable(clip.id) { mutableStateOf(clip.speedCurve.isNotEmpty()) }
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        FilterChip(selected = !ramp, onClick = { ramp = false }, label = { Text("Constant") })
-        Spacer(Modifier.width(8.dp))
-        FilterChip(selected = ramp, onClick = { ramp = true }, label = { Text("Variable") })
-        Spacer(Modifier.weight(1f))
-        Hint(Formats.duration(clip.timelineDurationMs) + " on the timeline")
-    }
+    ChoiceGrid(listOf("Constant", "Variable"), if (ramp) 1 else 0, { ramp = it == 1 })
+    Hint(Formats.duration(clip.timelineDurationMs) + " on the timeline")
     if (ramp) {
         SpeedRamp(clip, timelineFps, playhead, onPreset = { vm.applySpeedRamp(index, it) }, onCurve = { vm.setSpeedCurve(index, it) })
     } else {
         SpeedControls(clip, timelineFps) { vm.setSteadySpeed(index, it) }
     }
     if (clip.speedChanged) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text("Sound", Modifier.weight(1f), style = MaterialTheme.typography.labelMedium, color = HeadsupColors.TextMuted)
-            FilterChip(selected = !clip.muteChangedSpeed, onClick = { vm.setMuteChangedSpeed(index, false) }, label = { Text("Stretched") })
-            Spacer(Modifier.width(8.dp))
-            FilterChip(selected = clip.muteChangedSpeed, onClick = { vm.setMuteChangedSpeed(index, true) }, label = { Text("Mute") })
-        }
+        LabeledChoice("Sound", listOf("Stretched", "Mute"), { (it == 1) == clip.muteChangedSpeed }, { vm.setMuteChangedSpeed(index, it == 1) })
     }
 }
 
@@ -2292,7 +2282,7 @@ private fun SpeedRamp(clip: ClipState, timelineFps: Float, playhead: LongState, 
             // Speed lines with their ratios on the left; 1× stronger.
             for (f in listOf(0.25f, 1f, 4f, 16f, 64f)) {
                 val y = yOf(f) * h
-                drawLine(Color.White.copy(alpha = if (f == 1f) 0.35f else 0.1f), Offset(0f, y), Offset(w, y))
+                drawLine(HeadsupColors.InstrumentInk.copy(alpha = if (f == 1f) 0.35f else 0.1f), Offset(0f, y), Offset(w, y))
                 c.nativeCanvas.drawText(speedText(f), 6.dp.toPx(), (y - 3.dp.toPx()).coerceAtLeast(11.dp.toPx()), paint)
             }
             // The footage's frame rates shown each second, on the right: its own, half, quarter… down to the timeline's.
@@ -2303,7 +2293,7 @@ private fun SpeedRamp(clip: ClipState, timelineFps: Float, playhead: LongState, 
                     val y = yOf(fps / sourceFps) * h
                     val every = kotlin.math.abs(fps - timelineFps) < timelineFps * 0.05f
                     val label = "${OutputSpec.formatFps(fps)} fps" + if (every) " · every frame" else ""
-                    if (kotlin.math.abs(fps / sourceFps - 1f) > 0.01f) drawLine(Color.White.copy(alpha = 0.08f), Offset(w * 0.55f, y), Offset(w, y))
+                    if (kotlin.math.abs(fps / sourceFps - 1f) > 0.01f) drawLine(HeadsupColors.InstrumentInk.copy(alpha = 0.08f), Offset(w * 0.55f, y), Offset(w, y))
                     c.nativeCanvas.drawText(label, w - paint.measureText(label) - 6.dp.toPx(), y + 11.dp.toPx(), paint)
                     fps /= 2f
                     k++
@@ -2350,7 +2340,7 @@ private fun SpeedRamp(clip: ClipState, timelineFps: Float, playhead: LongState, 
             val accentInt = android.graphics.Color.argb(230, (accent.red * 255).toInt(), (accent.green * 255).toInt(), (accent.blue * 255).toInt())
             ticks(timelineMs / 1000f, { s -> SC.sourceAt(shares, s * 1000f / timelineMs.coerceAtLeast(1L)) * w }, h + row, "timeline", accentInt)
         }
-        drawLine(Color.White.copy(alpha = 0.45f), Offset(0f, h), Offset(w, h), strokeWidth = 1.dp.toPx())
+        drawLine(HeadsupColors.InstrumentInk.copy(alpha = 0.45f), Offset(0f, h), Offset(w, h), strokeWidth = 1.dp.toPx())
         // The clip's flags: where a ramp should start or end (points snap to them).
         for (u in flagsU) {
             val x = u * w
@@ -2363,7 +2353,7 @@ private fun SpeedRamp(clip: ClipState, timelineFps: Float, playhead: LongState, 
         }
         // Where the picture is now.
         val now = playhead.longValue.toFloat() / span
-        if (now in 0f..1f) drawLine(Color.White.copy(alpha = 0.7f), Offset(now * w, 0f), Offset(now * w, h), strokeWidth = 1.5.dp.toPx())
+        if (now in 0f..1f) drawLine(HeadsupColors.InstrumentInk.copy(alpha = 0.7f), Offset(now * w, 0f), Offset(now * w, h), strokeWidth = 1.5.dp.toPx())
         // The curve.
         val flat = points.flatMap { listOf(it.first, it.second) }
         val path = androidx.compose.ui.graphics.Path()
@@ -2377,7 +2367,7 @@ private fun SpeedRamp(clip: ClipState, timelineFps: Float, playhead: LongState, 
         if (clip.speedCurve.isNotEmpty()) {
             for ((u, f) in points) {
                 val o = Offset(u * w, yOf(base * f) * h)
-                drawCircle(Color.White, 5.dp.toPx(), o)
+                drawCircle(HeadsupColors.InstrumentInk, 5.dp.toPx(), o)
                 drawCircle(HeadsupColors.Accent, 2.5.dp.toPx(), o)
             }
         }
@@ -3133,11 +3123,7 @@ private fun ColourPage(
         return
     }
     if (adjustment == Adjustment.BLEND) {
-        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            for ((ms, label) in BLEND_LENGTHS) {
-                FilterChip(selected = clip.transitionMs == ms, onClick = { vm.setTransition(index, ms) }, label = { Text(label) })
-            }
-        }
+        ChoiceGrid(BLEND_LENGTHS.map { it.second }, BLEND_LENGTHS.indexOfFirst { it.first == clip.transitionMs }, { vm.setTransition(index, BLEND_LENGTHS[it].first) })
         Hint("Starts with the previous clip's colours and changes to this clip's over the chosen time, e.g. after a split where the light changes.")
         return
     }
@@ -3251,23 +3237,22 @@ private fun WheelControls(state: UiState, vm: HeadsupViewModel) {
     val W = app.headsup.core.color.ColourWheels
     var range by rememberSaveable { mutableStateOf(app.headsup.core.color.ColourWheels.Range.MIDTONES) }
     val wheels = state.grade.wheels
-    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        for (rg in app.headsup.core.color.ColourWheels.Range.entries) {
-            val changed = W.saturation(wheels, rg) != 0f || W.luminance(wheels, rg) != 0f
-            FilterChip(selected = rg == range, onClick = { range = rg }, label = { Text(rg.label + if (changed) " •" else "") })
-        }
-    }
+    val ranges = app.headsup.core.color.ColourWheels.Range.entries
+    ChoiceGrid(
+        ranges.map { rg -> rg.label + if (W.saturation(wheels, rg) != 0f || W.luminance(wheels, rg) != 0f) " •" else "" },
+        ranges.indexOf(range), { range = ranges[it] },
+    )
     val hue = W.hue(wheels, range)
     val sat = W.saturation(wheels, range)
     fun set(index: Int, v: Float) = vm.updateGrade { it.copy(wheels = W.with(it.wheels, index, v)) }
     val hueIndex = range.ordinal * 3
     // The range's values above, the wheel under them, not wider than the panel allows.
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        Hint(String.format(Locale.US, "%s: %.0f°, %.0f %%", range.label, hue, sat * 100), Modifier.weight(1f))
-        if (sat != 0f || W.luminance(wheels, range) != 0f) {
-            SmallAction("Reset", { vm.updateGrade { g -> g.copy(wheels = W.with(W.with(W.with(g.wheels, hueIndex, 0f), hueIndex + 1, 0f), hueIndex + 2, 0f)) } })
-        }
-    }
+    ToolSection(
+        range.label,
+        info = "Drag on the wheel towards a hue, further out for more of it; the ruler under it makes the range lighter or darker. Reset puts this range back.",
+        onReset = if (sat != 0f || W.luminance(wheels, range) != 0f) ({ vm.updateGrade { g -> g.copy(wheels = W.with(W.with(W.with(g.wheels, hueIndex, 0f), hueIndex + 1, 0f), hueIndex + 2, 0f)) } }) else null,
+    ) {
+    Text(String.format(Locale.US, "%.0f° · %.0f %%", hue, sat * 100), style = MaterialTheme.typography.labelMedium.copy(fontFamily = GeistMonoFamily), color = HeadsupColors.TextMuted)
     androidx.compose.foundation.layout.BoxWithConstraints(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
         androidx.compose.foundation.Canvas(
             Modifier
@@ -3292,7 +3277,7 @@ private fun WheelControls(state: UiState, vm: HeadsupViewModel) {
             drawCircle(androidx.compose.ui.graphics.Brush.radialGradient(listOf(Color(0xFF8A8A8A), Color.Transparent), center, radius), radius)
             val a = Math.toRadians(hue.toDouble())
             val dot = Offset(center.x + (kotlin.math.cos(a) * sat * radius).toFloat(), center.y - (kotlin.math.sin(a) * sat * radius).toFloat())
-            drawCircle(Color.White, 7.dp.toPx(), dot, style = androidx.compose.ui.graphics.drawscope.Stroke(2.dp.toPx()))
+            drawCircle(HeadsupColors.InstrumentInk, 7.dp.toPx(), dot, style = androidx.compose.ui.graphics.drawscope.Stroke(2.dp.toPx()))
         }
     }
     ValueHeader("${range.label} brightness", String.format(Locale.US, "%+.0f", W.luminance(wheels, range) * 100))
@@ -3300,11 +3285,18 @@ private fun WheelControls(state: UiState, vm: HeadsupViewModel) {
         value = W.luminance(wheels, range), range = -1f..1f, step = 0.02f,
         onChange = { v -> set(hueIndex + 2, v) }, onReset = { set(hueIndex + 2, 0f) },
     )
-    ValueHeader("Balance", String.format(Locale.US, "%+.0f", W.balance(wheels) * 100))
+    }
+    ToolSection(
+        "Balance",
+        info = "Where the shadows end and the highlights begin, for all three wheels.",
+        onReset = if (W.balance(wheels) != 0f) ({ set(9, 0f) }) else null,
+    ) {
+    ValueHeader("", String.format(Locale.US, "%+.0f", W.balance(wheels) * 100))
     RulerSlider(
         value = W.balance(wheels), range = -1f..1f, step = 0.02f,
         onChange = { v -> set(9, v) }, onReset = { set(9, 0f) },
     )
+    }
 }
 
 /**
@@ -3317,7 +3309,7 @@ private fun CurveControls(state: UiState, vm: HeadsupViewModel) {
     val c = channel.ordinal
     val flat = state.grade.curves.getOrNull(c).orEmpty()
     val colour = when (channel) {
-        app.headsup.core.color.ToneCurve.Channel.RGB -> Color.White
+        app.headsup.core.color.ToneCurve.Channel.RGB -> HeadsupColors.InstrumentInk
         app.headsup.core.color.ToneCurve.Channel.RED -> Color(0xFFE0453A)
         app.headsup.core.color.ToneCurve.Channel.GREEN -> Color(0xFF4CB848)
         app.headsup.core.color.ToneCurve.Channel.BLUE -> Color(0xFF3A6FE0)
@@ -3326,15 +3318,16 @@ private fun CurveControls(state: UiState, vm: HeadsupViewModel) {
         val identity = points.size == 2 && points[0] == (0f to 0f) && points[1] == (1f to 1f)
         g.copy(curves = List(4) { i -> if (i == c) (if (identity) emptyList() else points.flatMap { listOf(it.first, it.second) }) else g.curves.getOrNull(i).orEmpty() })
     }
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        FlowRow(Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            for (ch in app.headsup.core.color.ToneCurve.Channel.entries) {
-                val changed = state.grade.curves.getOrNull(ch.ordinal).orEmpty().isNotEmpty()
-                FilterChip(selected = ch == channel, onClick = { channel = ch }, label = { Text(ch.label + if (changed) " •" else "") })
-            }
-        }
-        if (flat.isNotEmpty()) SmallAction("Reset", { store(listOf(0f to 0f, 1f to 1f)) })
-    }
+    val channels = app.headsup.core.color.ToneCurve.Channel.entries
+    ChoiceGrid(
+        channels.map { ch -> ch.label + if (state.grade.curves.getOrNull(ch.ordinal).orEmpty().isNotEmpty()) " •" else "" },
+        channels.indexOf(channel), { channel = channels[it] }, minCell = 52.dp,
+    )
+    ToolSection(
+        "Curve · ${channel.label}",
+        info = "Touch the curve to add a point and drag it; double-tap a point to remove it. Reset puts this channel's curve back to straight.",
+        onReset = if (flat.isNotEmpty()) ({ store(listOf(0f to 0f, 1f to 1f)) }) else null,
+    ) {
     // Cinematic contrast: lifted, flat shadows, contrast in the middle, a soft top (the points stay editable).
     if (channel == app.headsup.core.color.ToneCurve.Channel.RGB) {
         Row(Modifier.horizontalScroll(rememberScrollState()), verticalAlignment = Alignment.CenterVertically) {
@@ -3412,10 +3405,10 @@ private fun CurveControls(state: UiState, vm: HeadsupViewModel) {
         val h = size.height
         // Quarters, and the straight line for reference.
         for (k in 1..3) {
-            drawLine(Color.White.copy(alpha = 0.12f), Offset(w * k / 4, 0f), Offset(w * k / 4, h))
-            drawLine(Color.White.copy(alpha = 0.12f), Offset(0f, h * k / 4), Offset(w, h * k / 4))
+            drawLine(HeadsupColors.InstrumentInk.copy(alpha = 0.12f), Offset(w * k / 4, 0f), Offset(w * k / 4, h))
+            drawLine(HeadsupColors.InstrumentInk.copy(alpha = 0.12f), Offset(0f, h * k / 4), Offset(w, h * k / 4))
         }
-        drawLine(Color.White.copy(alpha = 0.25f), Offset(0f, h), Offset(w, 0f))
+        drawLine(HeadsupColors.InstrumentInk.copy(alpha = 0.25f), Offset(0f, h), Offset(w, 0f))
         val path = androidx.compose.ui.graphics.Path()
         for (k in 0..100) {
             val x = k / 100f
@@ -3425,7 +3418,7 @@ private fun CurveControls(state: UiState, vm: HeadsupViewModel) {
         drawPath(path, colour, style = androidx.compose.ui.graphics.drawscope.Stroke(2.dp.toPx()))
         for ((x, y) in points) drawCircle(colour, 6.dp.toPx(), Offset(x * w, (1 - y) * h))
     }
-    Hint("Touch the curve to add a point and drag it; double-tap a point to remove it.")
+    }
 }
 
 /**
@@ -3443,15 +3436,22 @@ private fun HueCurveControls(state: UiState, vm: HeadsupViewModel) {
         val none = points.all { kotlin.math.abs(it.second) < 0.005f }
         g.copy(hueCurves = List(4) { i -> if (i == c) (if (none) emptyList() else points.flatMap { listOf(it.first, it.second) }) else g.hueCurves.getOrNull(i).orEmpty() })
     }
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        FlowRow(Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            for (ch in app.headsup.core.color.HueCurves.Channel.entries) {
-                val changed = state.grade.hueCurves.getOrNull(ch.ordinal).orEmpty().isNotEmpty()
-                FilterChip(selected = ch == channel, onClick = { channel = ch }, label = { Text(ch.label + if (changed) " •" else "") })
-            }
-        }
-        if (flat.isNotEmpty()) SmallAction("Reset", { store(emptyList()) })
-    }
+    val channels = app.headsup.core.color.HueCurves.Channel.entries
+    ChoiceGrid(
+        channels.map { ch -> ch.label + if (state.grade.hueCurves.getOrNull(ch.ordinal).orEmpty().isNotEmpty()) " •" else "" },
+        channels.indexOf(channel), { channel = channels[it] },
+    )
+    val how = " Touch to add a point, drag it, double-tap to remove it."
+    ToolSection(
+        channel.label,
+        info = when (channel) {
+            app.headsup.core.color.HueCurves.Channel.HUE_HUE -> "Turns one hue towards another: a point on a colour, up or down to shift it (e.g. greens towards yellow)."
+            app.headsup.core.color.HueCurves.Channel.HUE_SAT -> "More or less colour in one hue only: e.g. a point on blue pulled down pales the sky alone."
+            app.headsup.core.color.HueCurves.Channel.HUE_LUM -> "Lighter or darker in one hue only: e.g. orange up for skin, blue down for a deeper sky."
+            app.headsup.core.color.HueCurves.Channel.LUM_SAT -> "More or less colour by brightness: pulling the dark end down takes colour out of the shadows, a filmic look."
+        } + how,
+        onReset = if (flat.isNotEmpty()) ({ store(emptyList()) }) else null,
+    ) {
     val points = HC.points(flat)
     val current by rememberUpdatedState(points)
     val periodic = channel.periodic
@@ -3517,8 +3517,8 @@ private fun HueCurveControls(state: UiState, vm: HeadsupViewModel) {
             androidx.compose.ui.graphics.Brush.horizontalGradient(*stops.toTypedArray()),
             topLeft = Offset(0f, h - 10.dp.toPx()), size = androidx.compose.ui.geometry.Size(w, 10.dp.toPx()),
         )
-        for (k in 1..3) drawLine(Color.White.copy(alpha = 0.1f), Offset(w * k / 4, 0f), Offset(w * k / 4, h - 10.dp.toPx()))
-        drawLine(Color.White.copy(alpha = 0.3f), Offset(0f, h / 2f), Offset(w, h / 2f))
+        for (k in 1..3) drawLine(HeadsupColors.InstrumentInk.copy(alpha = 0.1f), Offset(w * k / 4, 0f), Offset(w * k / 4, h - 10.dp.toPx()))
+        drawLine(HeadsupColors.InstrumentInk.copy(alpha = 0.3f), Offset(0f, h / 2f), Offset(w, h / 2f))
         val path = androidx.compose.ui.graphics.Path()
         for (k in 0..120) {
             val x = k / 120f
@@ -3526,17 +3526,10 @@ private fun HueCurveControls(state: UiState, vm: HeadsupViewModel) {
             val py = (0.5f - y / 2f) * h
             if (k == 0) path.moveTo(0f, py) else path.lineTo(x * w, py)
         }
-        drawPath(path, Color.White, style = androidx.compose.ui.graphics.drawscope.Stroke(2.dp.toPx()))
-        for ((x, y) in points) drawCircle(Color.White, 6.dp.toPx(), Offset(x * w, (0.5f - y / 2f) * h))
+        drawPath(path, HeadsupColors.InstrumentInk, style = androidx.compose.ui.graphics.drawscope.Stroke(2.dp.toPx()))
+        for ((x, y) in points) drawCircle(HeadsupColors.InstrumentInk, 6.dp.toPx(), Offset(x * w, (0.5f - y / 2f) * h))
     }
-    Hint(
-        when (channel) {
-            app.headsup.core.color.HueCurves.Channel.HUE_HUE -> "Turns one hue towards another: a point on a colour, up or down to shift it (e.g. greens towards yellow). Touch to add a point, drag it, double-tap to remove it."
-            app.headsup.core.color.HueCurves.Channel.HUE_SAT -> "More or less colour in one hue only: e.g. a point on blue pulled down pales the sky alone."
-            app.headsup.core.color.HueCurves.Channel.HUE_LUM -> "Lighter or darker in one hue only: e.g. orange up for skin, blue down for a deeper sky."
-            app.headsup.core.color.HueCurves.Channel.LUM_SAT -> "More or less colour by brightness: pulling the dark end down takes colour out of the shadows, a filmic look."
-        },
-    )
+    }
 }
 
 private val RGB_NAMES = listOf("Red", "Green", "Blue")
@@ -3546,15 +3539,15 @@ private val RGB_NAMES = listOf("Red", "Green", "Blue")
 private fun ChannelMixerControls(state: UiState, vm: HeadsupViewModel) {
     var output by rememberSaveable { mutableStateOf(0) }
     val mix = state.grade.channelMix
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        FlowRow(Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            RGB_NAMES.forEachIndexed { i, name ->
-                val changed = (0..2).any { mix.getOrElse(i * 3 + it) { 0f } != 0f }
-                FilterChip(selected = output == i, onClick = { output = i }, label = { Text(name + " out" + if (changed) " •" else "") })
-            }
-        }
-        if (mix.any { it != 0f }) SmallAction("Reset", { vm.updateGrade { it.copy(channelMix = app.headsup.core.color.ChannelMixer.NEUTRAL) } })
-    }
+    ToolSection(
+        "Channel mixer",
+        info = "Each output channel made from the three inputs. Swapping red and blue, or red from green (as infrared film), gives strong looks.",
+        onReset = if (mix.any { it != 0f }) ({ vm.updateGrade { it.copy(channelMix = app.headsup.core.color.ChannelMixer.NEUTRAL) } }) else null,
+    ) {
+    ChoiceGrid(
+        RGB_NAMES.mapIndexed { i, name -> name + " out" + if ((0..2).any { mix.getOrElse(i * 3 + it) { 0f } != 0f }) " •" else "" },
+        output, { output = it },
+    )
     for (input in 0..2) {
         val index = output * 3 + input
         val base = if (input == output) 1f else 0f
@@ -3566,7 +3559,7 @@ private fun ChannelMixerControls(state: UiState, vm: HeadsupViewModel) {
             onReset = { vm.updateGrade { g -> g.copy(channelMix = g.channelMix.toMutableList().also { it[index] = 0f }) } },
         )
     }
-    Hint("Each output channel made from the three inputs. Swapping red and blue, or red from green (as infrared film), gives strong looks.")
+    }
 }
 
 /** Black and white: on or off, and how light each hue band becomes in grey. */
@@ -3575,14 +3568,15 @@ private fun BlackAndWhiteControls(state: UiState, vm: HeadsupViewModel) {
     val B = app.headsup.core.color.BlackAndWhite
     val bw = state.grade.bw
     var band by rememberSaveable { mutableStateOf(app.headsup.core.color.ColourMixer.Band.BLUE) }
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        Text("Black & white", Modifier.weight(1f), style = MaterialTheme.typography.labelLarge)
-        Switch(checked = B.on(bw), onCheckedChange = { on -> vm.updateGrade { g -> g.copy(bw = g.bw.toMutableList().also { it[0] = if (on) 1f else 0f }) } })
-    }
-    if (!B.on(bw)) {
-        Hint("Turns the picture grey; then each colour can be made lighter or darker (a deep sky, bright skin).")
-        return
-    }
+    ToolSection(
+        "Black & white",
+        info = "Turns the picture grey; then each colour can be made lighter or darker (a deep sky, bright skin).",
+        onReset = if (bw.drop(1).any { it != 0f }) ({ vm.updateGrade { g -> g.copy(bw = g.bw.toMutableList().also { for (k in 1 until it.size) it[k] = 0f }) } }) else null,
+    ) {
+    ChoiceGrid(listOf("Colour", "Black & white"), if (B.on(bw)) 1 else 0, { i ->
+        vm.updateGrade { g -> g.copy(bw = g.bw.toMutableList().also { it[0] = if (i == 1) 1f else 0f }) }
+    })
+    if (!B.on(bw)) return@ToolSection
     LazyRow(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
         items(app.headsup.core.color.ColourMixer.Band.entries) { b ->
             val changed = bw.getOrElse(1 + b.ordinal) { 0f } != 0f
@@ -3603,6 +3597,7 @@ private fun BlackAndWhiteControls(state: UiState, vm: HeadsupViewModel) {
         onChange = { v -> vm.updateGrade { g -> g.copy(bw = g.bw.toMutableList().also { it[index] = v }) } },
         onReset = { vm.updateGrade { g -> g.copy(bw = g.bw.toMutableList().also { it[index] = 0f }) } },
     )
+    }
 }
 
 /** Calibration: a primary (red, green, blue), and its hue and saturation. */
@@ -3610,15 +3605,15 @@ private fun BlackAndWhiteControls(state: UiState, vm: HeadsupViewModel) {
 private fun CalibrationControls(state: UiState, vm: HeadsupViewModel) {
     var primary by rememberSaveable { mutableStateOf(0) }
     val cal = state.grade.calibration
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        FlowRow(Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            RGB_NAMES.forEachIndexed { i, name ->
-                val changed = cal.getOrElse(i * 2) { 0f } != 0f || cal.getOrElse(i * 2 + 1) { 0f } != 0f
-                FilterChip(selected = primary == i, onClick = { primary = i }, label = { Text(name + " primary" + if (changed) " •" else "") })
-            }
-        }
-        if (cal.any { it != 0f }) SmallAction("Reset", { vm.updateGrade { it.copy(calibration = app.headsup.core.color.Calibration.NEUTRAL) } })
-    }
+    ToolSection(
+        "Calibration",
+        info = "Shifts every colour made of this primary: e.g. the blue primary's hue towards cyan for teal skies, red's saturation down for calmer skin.",
+        onReset = if (cal.any { it != 0f }) ({ vm.updateGrade { it.copy(calibration = app.headsup.core.color.Calibration.NEUTRAL) } }) else null,
+    ) {
+    ChoiceGrid(
+        RGB_NAMES.mapIndexed { i, name -> name + if (cal.getOrElse(i * 2) { 0f } != 0f || cal.getOrElse(i * 2 + 1) { 0f } != 0f) " •" else "" },
+        primary, { primary = it },
+    )
     for ((offset, label) in listOf(0 to "Hue", 1 to "Saturation")) {
         val index = primary * 2 + offset
         ValueHeader(label, String.format(Locale.US, "%+.0f", cal.getOrElse(index) { 0f } * 100))
@@ -3628,7 +3623,7 @@ private fun CalibrationControls(state: UiState, vm: HeadsupViewModel) {
             onReset = { vm.updateGrade { g -> g.copy(calibration = g.calibration.toMutableList().also { it[index] = 0f }) } },
         )
     }
-    Hint("Shifts every colour made of this primary: e.g. the blue primary's hue towards cyan for teal skies, red's saturation down for calmer skin.")
+    }
 }
 
 /** Colour mixer: a hue band, which of its hue, saturation and luminance, and a ruler for it. */
@@ -3637,11 +3632,13 @@ private fun MixerControls(state: UiState, vm: HeadsupViewModel) {
     var band by rememberSaveable { mutableStateOf(app.headsup.core.color.ColourMixer.Band.RED) }
     var property by rememberSaveable { mutableStateOf(app.headsup.core.color.ColourMixer.Property.SATURATION) }
     val mixer = state.grade.mixer
-    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        for (p in app.headsup.core.color.ColourMixer.Property.entries) {
-            FilterChip(selected = p == property, onClick = { property = p }, label = { Text(p.label) })
-        }
-    }
+    val properties = app.headsup.core.color.ColourMixer.Property.entries
+    ToolSection(
+        "Colour mixer",
+        info = "Pick what to change (hue, saturation or luminance), then a colour, then move the ruler: only that colour changes. A dot marks the colours changed. Hold the ruler to compare.",
+        onReset = if (mixer.any { it != 0f }) ({ vm.updateGrade { it.copy(mixer = app.headsup.core.color.ColourMixer.NEUTRAL) } }) else null,
+    ) {
+    ChoiceGrid(properties.map { it.label }, properties.indexOf(property), { property = properties[it] })
     LazyRow(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
         items(app.headsup.core.color.ColourMixer.Band.entries) { b ->
             val changed = app.headsup.core.color.ColourMixer.Property.entries.any { mixer.getOrElse(app.headsup.core.color.ColourMixer.index(b, it)) { 0f } != 0f }
@@ -3668,11 +3665,6 @@ private fun MixerControls(state: UiState, vm: HeadsupViewModel) {
         onReset = { vm.updateGrade { set(it, 0f) } },
         onHold = { held -> vm.setCompareGrade(if (held) set(state.grade, 0f) else null) },
     )
-    if (mixer.any { it != 0f }) {
-        Row {
-            Spacer(Modifier.weight(1f))
-            SmallAction("Reset mixer", { vm.updateGrade { it.copy(mixer = app.headsup.core.color.ColourMixer.NEUTRAL) } })
-        }
     }
 }
 
@@ -3770,16 +3762,12 @@ private fun LooksPanel(state: UiState, vm: HeadsupViewModel, frameSource: (() ->
     }
     if (stats != null) {
         SectionCaption("Suggested for this clip")
-        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            for (look in suggestedLooks(stats)) FilterChip(selected = fast?.look == look, onClick = { choose(look) }, label = { Text(look.label) })
-        }
+        val suggested = suggestedLooks(stats)
+        ChoiceGrid(suggested.map { it.label }, suggested.indexOf(fast?.look), { choose(suggested[it]) })
     }
     SectionCaption("Cinematic")
-    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        for (look in app.headsup.color.FastLook.entries) {
-            FilterChip(selected = fast?.look == look, onClick = { choose(look) }, label = { Text(look.label) })
-        }
-    }
+    val cinematic = app.headsup.color.FastLook.entries
+    ChoiceGrid(cinematic.map { it.label }, cinematic.indexOf(fast?.look), { choose(cinematic[it]) })
     // The look being tried: its strength, then keep it or put the clip back.
     if (fast != null) {
         ValueHeader("Strength", String.format(Locale.US, "%.0f %%", fast.strength * 100))
@@ -3804,12 +3792,8 @@ private fun LooksPanel(state: UiState, vm: HeadsupViewModel, frameSource: (() ->
 @Composable
 private fun LookControls(state: UiState, vm: HeadsupViewModel) {
     val current = app.headsup.core.color.Look.of(state.grade.look)
-    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        FilterChip(selected = current == null, onClick = { vm.updateGrade { it.copy(look = null) } }, label = { Text("None") })
-        for (look in app.headsup.core.color.Look.entries) {
-            FilterChip(selected = look == current, onClick = { vm.updateGrade { it.copy(look = look.name) } }, label = { Text(look.label) })
-        }
-    }
+    val looks = listOf<app.headsup.core.color.Look?>(null) + app.headsup.core.color.Look.entries
+    ChoiceGrid(looks.map { it?.label ?: "None" }, looks.indexOf(current), { i -> vm.updateGrade { it.copy(look = looks[i]?.name) } })
     if (current != null) {
         ValueHeader("Amount", String.format(Locale.US, "%.0f %%", state.grade.lookAmount * 100))
         RulerSlider(
@@ -3852,11 +3836,7 @@ private fun CinePanel(state: UiState, vm: HeadsupViewModel, frameSource: (() -> 
             if (s.skin > 0.03f) " · skin found" else "",
         ),
     )
-    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        for (style in CineStyle.entries) {
-            FilterChip(selected = session.style == style, onClick = { vm.applyCine(style, session.strength) }, label = { Text(style.label) })
-        }
-    }
+    ChoiceGrid(CineStyle.entries.map { it.label }, CineStyle.entries.indexOf(session.style), { vm.applyCine(CineStyle.entries[it], session.strength) })
     val style = session.style
     if (style != null) {
         ValueHeader("Strength", String.format(Locale.US, "%.0f %%", session.strength * 100))
@@ -3884,11 +3864,8 @@ private fun FastEdit(state: UiState, vm: HeadsupViewModel) {
     val clip = state.selected ?: return
     val fast = state.fast?.takeIf { it.clipId == clip.id }
     SectionCaption("Fast edit")
-    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        for (look in app.headsup.color.FastLook.entries) {
-            FilterChip(selected = fast?.look == look, onClick = { vm.applyFastLook(look, fast?.strength ?: 1f) }, label = { Text(look.label) })
-        }
-    }
+    val fastLooks = app.headsup.color.FastLook.entries
+    ChoiceGrid(fastLooks.map { it.label }, fastLooks.indexOf(fast?.look), { vm.applyFastLook(fastLooks[it], fast?.strength ?: 1f) })
     if (fast == null) {
         Hint("A whole look at once: colour taken away rather than added, soft highlights, grain and light. Everything stays adjustable afterwards.")
         return
@@ -4004,8 +3981,7 @@ private fun BrushControls(state: UiState, vm: HeadsupViewModel, pictureSource: (
     when (brush.mode) {
         BrushMode.SELECT -> {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                FilterChip(selected = !brush.subtract, onClick = { vm.updateBrush { it.copy(subtract = false) } }, label = { Text("Add") })
-                FilterChip(selected = brush.subtract, onClick = { vm.updateBrush { it.copy(subtract = true) } }, label = { Text("Subtract") })
+                ChoiceGrid(listOf("Add", "Subtract"), if (brush.subtract) 1 else 0, { i -> vm.updateBrush { it.copy(subtract = i == 1) } }, Modifier.weight(1f))
             }
             Hint("Tap an object to select it; tap other parts of it to take them in too, or with Subtract a part that is not it (the whole is found again each time). Tap the same place again for a smaller or larger part. You can also draw round it, or a line across to split the picture. Then fix what is wrong (Push), and finish below.")
         }
@@ -4483,12 +4459,11 @@ private fun GroupControls(state: UiState, clip: ClipState, index: Int, group: Cl
         }
         if (session != null) {
             // What is matched.
-            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                for (part in MatchPart.entries) {
-                    val on = part in session.parts
-                    FilterChip(selected = on, onClick = { vm.setMatchParts(if (on) session.parts - part else session.parts + part) }, label = { Text(part.label) })
-                }
-            }
+            val parts = MatchPart.entries
+            ChoiceGrid(parts.map { it.label }, { parts[it] in session.parts }, { i ->
+                val part = parts[i]
+                vm.setMatchParts(if (part in session.parts) session.parts - part else session.parts + part)
+            })
             ValueHeader("Match strength", String.format(Locale.US, "%.0f %%", session.strength * 100))
             RulerSlider(session.strength, 0f..1f, 0.02f, vm::setMatchStrength, onReset = { vm.setMatchStrength(1f) })
             // Each clip: in or out, how much of its change, and (selected) its own ruler.
@@ -4566,16 +4541,16 @@ private fun VectorscopeView(scope: ScopeResult?, modifier: Modifier) {
         val c = center
         image?.let { drawImage(it, dstSize = IntSize(size.width.toInt(), size.height.toInt()), filterQuality = FilterQuality.Low) }
         // Graticule.
-        for (ring in listOf(0.5f, 1f)) drawCircle(Color.White.copy(alpha = 0.12f), radius = r * ring - 1, center = c, style = Stroke(1f))
-        drawLine(Color.White.copy(alpha = 0.10f), Offset(c.x - r, c.y), Offset(c.x + r, c.y))
-        drawLine(Color.White.copy(alpha = 0.10f), Offset(c.x, c.y - r), Offset(c.x, c.y + r))
+        for (ring in listOf(0.5f, 1f)) drawCircle(HeadsupColors.InstrumentInk.copy(alpha = 0.12f), radius = r * ring - 1, center = c, style = Stroke(1f))
+        drawLine(HeadsupColors.InstrumentInk.copy(alpha = 0.10f), Offset(c.x - r, c.y), Offset(c.x + r, c.y))
+        drawLine(HeadsupColors.InstrumentInk.copy(alpha = 0.10f), Offset(c.x, c.y - r), Offset(c.x, c.y + r))
         // Skin line at 123° (counter-clockwise from +Cb, screen y points down).
         val a = Math.toRadians(SkinTone.LINE_DEGREES)
         drawLine(HeadsupColors.Accent, c, Offset(c.x + (cos(a) * r).toFloat(), c.y - (sin(a) * r).toFloat()), strokeWidth = 2f)
         scope?.measured?.let { m ->
             val k = r / Vectorscope.RANGE.toFloat()
             val p = Offset(c.x + (m.cb * k).toFloat(), c.y - (m.cr * k).toFloat())
-            drawCircle(Color.White, radius = 5.dp.toPx(), center = p, style = Stroke(2f))
+            drawCircle(HeadsupColors.InstrumentInk, radius = 5.dp.toPx(), center = p, style = Stroke(2f))
         }
     }
 }
@@ -4831,31 +4806,20 @@ private fun EffectRuler(params: List<EffectParam>) {
 @Composable
 private fun WidgetControls(style: DashboardStyle, activities: List<LoadedActivity>, update: ((DashboardStyle) -> DashboardStyle) -> Unit) {
     val available = Widget.entries.filter { w -> activities.isEmpty() || activities.any { w.isAvailableIn(it.track) } }
-    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        for (widget in available) {
-            val on = widget in style.widgets
-            FilterChip(
-                selected = on,
-                onClick = { update { s -> s.copy(widgets = if (on) s.widgets - widget else s.widgets + widget) } },
-                label = { Text(widget.label) },
-            )
-        }
-    }
+    ChoiceGrid(available.map { it.label }, { available[it] in style.widgets }, { i ->
+        val widget = available[i]
+        update { s -> s.copy(widgets = if (widget in s.widgets) s.widgets - widget else s.widgets + widget) }
+    })
 }
 
 @Composable
 private fun LayoutControls(style: DashboardStyle, update: ((DashboardStyle) -> DashboardStyle) -> Unit) {
     Hint("Drag widgets on the picture to place them by hand.")
-    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        for (preset in LayoutPreset.entries) {
-            FilterChip(
-                // Picking a layout puts every widget back into it, including dragged ones.
-                selected = style.preset == preset && style.placements.isEmpty(),
-                onClick = { update { it.copy(preset = preset, placements = emptyMap()) } },
-                label = { Text(preset.label) },
-            )
-        }
-    }
+    // Picking a layout puts every widget back into it, including dragged ones.
+    val presets = LayoutPreset.entries
+    ChoiceGrid(presets.map { it.label }, if (style.placements.isEmpty()) presets.indexOf(style.preset) else -1, { i ->
+        update { it.copy(preset = presets[i], placements = emptyMap()) }
+    })
     if (style.placements.isNotEmpty()) Hint("${style.placements.size} placed by hand; pick a layout to reset.")
     ValueHeader("Size", String.format(Locale.US, "%.0f %%", style.scale * 100))
     RulerSlider(
@@ -4951,84 +4915,58 @@ private fun ExportControls(
             color = HeadsupColors.Accent,
         )
     }
-    SettingRow("Export") {
-        FilterChip(selected = settings.wholeTimeline, onClick = { vm.updateExportSettings { it.copy(wholeTimeline = true) } }, label = { Text("Whole timeline") })
-        FilterChip(selected = !settings.wholeTimeline, onClick = { vm.updateExportSettings { it.copy(wholeTimeline = false) } }, label = { Text("Each clip") })
+    ToolSection("Output") {
+        ChoiceGrid(listOf("Whole timeline", "Each clip"), if (settings.wholeTimeline) 0 else 1, { i -> vm.updateExportSettings { it.copy(wholeTimeline = i == 0) } })
     }
-    SectionCaption("Picture")
-    SettingRow("Resolution") {
-        for ((height, label) in ExportSettings.HEIGHTS) {
-            FilterChip(selected = settings.height == height, onClick = { vm.updateExportSettings { it.copy(height = height) } }, label = { Text(label) })
-        }
-    }
-    SettingRow("Quality") {
-        for ((factor, label) in ExportSettings.QUALITIES) {
-            FilterChip(selected = settings.bitrateFactor == factor, onClick = { vm.updateExportSettings { it.copy(bitrateFactor = factor) } }, label = { Text(label) })
-        }
+    ToolSection("Picture") {
+        val heights = ExportSettings.HEIGHTS
+        LabeledChoice("Resolution", heights.map { it.second }, { heights[it].first == settings.height }, { i -> vm.updateExportSettings { it.copy(height = heights[i].first) } }, minCell = 64.dp)
+        val qualities = ExportSettings.QUALITIES
+        LabeledChoice("Quality", qualities.map { it.second }, { qualities[it].first == settings.bitrateFactor }, { i -> vm.updateExportSettings { it.copy(bitrateFactor = qualities[i].first) } })
     }
     // The film's sound: brought to a loudness, the music under the clips' own sound.
-    SectionCaption("Sound")
-    SettingRow("Loudness") {
-        for (t in app.headsup.export.LoudnessTarget.entries) {
-            FilterChip(selected = settings.loudness == t, onClick = { vm.updateExportSettings { it.copy(loudness = t) } }, label = { Text(t.label) })
+    ToolSection(
+        "Sound",
+        info = if (settings.loudness.lufs != null) "The whole film is measured and set to ${settings.loudness.label} as a whole: clips and music keep the balance you gave them; peaks stay under −1 dB. −14 is what YouTube, Instagram and TikTok play at."
+        else "The sound is exported as you mixed it. A loudness sets the whole film to it, keeping its balance; −14 is what YouTube, Instagram and TikTok play at.",
+    ) {
+        val targets = app.headsup.export.LoudnessTarget.entries
+        LabeledChoice("Loudness", targets.map { it.label }, { targets[it] == settings.loudness }, { i -> vm.updateExportSettings { it.copy(loudness = targets[i]) } }, minCell = 120.dp)
+        if (state.audioClips.isNotEmpty()) {
+            LabeledChoice("Music", listOf("Steady", "Lower under clip sound"), { (it == 1) == settings.duck }, { i -> vm.updateExportSettings { it.copy(duck = i == 1) } }, minCell = 120.dp)
         }
     }
-    if (state.audioClips.isNotEmpty()) {
-        SettingRow("Music") {
-            FilterChip(selected = !settings.duck, onClick = { vm.updateExportSettings { it.copy(duck = false) } }, label = { Text("Steady") })
-            FilterChip(selected = settings.duck, onClick = { vm.updateExportSettings { it.copy(duck = true) } }, label = { Text("Lower under clip sound") })
-        }
-    }
-    Hint(
-        if (settings.loudness.lufs != null) "The whole film is measured and set to ${settings.loudness.label} as a whole: clips and music keep the balance you gave them; peaks stay under −1 dB. −14 is what YouTube, Instagram and TikTok play at."
-        else "The sound is exported as you mixed it.",
-    )
     val tenBitBlocker = remember(state.clips) { vm.tenBitBlocker(state) }
     val tenBit = settings.tenBit && tenBitBlocker == null
-    SectionCaption("Encoding")
-    SettingRow("Codec") {
-        for (codec in VideoCodec.entries) {
-            FilterChip(
-                selected = settings.codec == codec || (tenBit && codec == VideoCodec.HEVC),
-                onClick = { vm.updateExportSettings { it.copy(codec = codec) } },
-                enabled = !tenBit,
-                label = { Text(codec.label) },
-            )
-        }
-    }
-    SettingRow("Colour depth") {
-        FilterChip(selected = !tenBit, onClick = { vm.updateExportSettings { it.copy(tenBit = false) } }, label = { Text("8-bit") })
-        FilterChip(
-            selected = tenBit && !settings.hlg,
-            onClick = { vm.updateExportSettings { it.copy(tenBit = true, hlg = false) } },
-            enabled = tenBitBlocker == null,
-            label = { Text("10-bit") },
+    ToolSection(
+        "Encoding",
+        info = when {
+            tenBit && settings.hlg -> "10-bit HLG: HEVC Main10, shown as HDR on HDR screens. Phone galleries and editors show HLG darker than the 8-bit export, less so at higher white levels; while it plays the phone may brighten the screen."
+            tenBit -> "10-bit: HEVC Main10 Rec.709 like DJI Mimo's 10-bit export; looks like 8-bit, smoother gradients, more room for later grading."
+            settings.codec == VideoCodec.HEVC -> "HEVC: smaller files. H.264: plays everywhere, larger files."
+            else -> "H.264: plays everywhere, larger files. HEVC: smaller files."
+        } + (tenBitBlocker?.let { " 10-bit: $it" } ?: ""),
+    ) {
+        val codecs = VideoCodec.entries
+        LabeledChoice(
+            "Codec", codecs.map { it.label }, { settings.codec == codecs[it] || (tenBit && codecs[it] == VideoCodec.HEVC) },
+            { i -> vm.updateExportSettings { it.copy(codec = codecs[i]) } }, enabled = { !tenBit },
         )
-        FilterChip(
-            selected = tenBit && settings.hlg,
-            onClick = { vm.updateExportSettings { it.copy(tenBit = true, hlg = true) } },
-            enabled = tenBitBlocker == null,
-            label = { Text("10-bit HDR (HLG)") },
+        LabeledChoice(
+            "Colour depth", listOf("8-bit", "10-bit", "10-bit HDR (HLG)"),
+            { i -> when (i) { 0 -> !tenBit; 1 -> tenBit && !settings.hlg; else -> tenBit && settings.hlg } },
+            { i -> vm.updateExportSettings { if (i == 0) it.copy(tenBit = false) else it.copy(tenBit = true, hlg = i == 2) } },
+            minCell = 96.dp, enabled = { it == 0 || tenBitBlocker == null },
         )
-    }
-    if (tenBit && settings.hlg) {
-        SettingRow("White in HDR") {
-            for ((level, label) in HdrRoute.WHITE_LEVELS) {
-                FilterChip(selected = settings.hdrWhite == level, onClick = { vm.updateExportSettings { it.copy(hdrWhite = level) } }, label = { Text(label) })
-            }
+        if (tenBit && settings.hlg) {
+            val levels = HdrRoute.WHITE_LEVELS
+            LabeledChoice("White in HDR", levels.map { it.second }, { levels[it].first == settings.hdrWhite }, { i -> vm.updateExportSettings { it.copy(hdrWhite = levels[i].first) } })
         }
-        Hint("For HDR screens. Phone galleries and editors show HLG darker than the 8-bit export, less so at higher white levels; while it plays the phone may brighten the screen.")
+        // What the clips themselves are, so the choice is an informed one (shown, not behind ⓘ).
+        val clipNote = (if (!tenBit && tenBitBlocker == null && state.clips.any { it.meta.format?.tenBit == true }) "Your clips are 10-bit: the 10-bit export keeps that. " else "") +
+            (if (!tenBit && tenBitBlocker == null && state.clips.any { it.meta.format?.transfer == "HLG" }) "HDR (HLG) clips are always exported in 10-bit." else "")
+        if (clipNote.isNotEmpty()) Hint(clipNote.trim())
     }
-    Hint(
-        when {
-                tenBit && settings.hlg -> "10-bit HLG: HEVC Main10, shown as HDR on HDR screens."
-                tenBit -> "10-bit: HEVC Main10 Rec.709 like DJI Mimo's 10-bit export; looks like 8-bit, smoother gradients, more room for later grading."
-                settings.codec == VideoCodec.HEVC -> "HEVC: smaller files."
-                else -> "H.264: plays everywhere, larger files."
-            } + (tenBitBlocker?.let { " 10-bit: $it" } ?: "") +
-            (if (!tenBit && tenBitBlocker == null && state.clips.any { it.meta.format?.tenBit == true }) " Your clips are 10-bit: the 10-bit export keeps that." else "") +
-            (if (!tenBit && tenBitBlocker == null && state.clips.any { it.meta.format?.transfer == "HLG" }) " HDR (HLG) clips are always exported in 10-bit." else ""),
-    )
     SectionCaption("Export")
     Button(onClick = onExportVideos, enabled = state.clips.isNotEmpty(), modifier = Modifier.fillMaxWidth()) {
         Text(if (settings.wholeTimeline) "Export timeline" else "Export ${state.clips.size} clips")
@@ -5064,26 +5002,17 @@ private fun PhotoExport(state: UiState, vm: HeadsupViewModel) {
     val photoCount = state.clips.count { it.meta.isPhoto }
     Label("Photos")
     run {
-        SettingRow("Photo size") {
-            for ((side, label) in ExportSettings.PHOTO_SIZES) {
-                FilterChip(selected = settings.photoLongSide == side, onClick = { vm.updateExportSettings { it.copy(photoLongSide = side) } }, label = { Text(label) })
-            }
-        }
-        SettingRow("Format") {
-            // Ultra HDR needs Android 14.
-            for (f in app.headsup.export.PhotoFormat.entries.filter { it != app.headsup.export.PhotoFormat.ULTRA_HDR || android.os.Build.VERSION.SDK_INT >= 34 }) {
-                FilterChip(selected = settings.photoFormat == f, onClick = { vm.updateExportSettings { it.copy(photoFormat = f) } }, label = { Text(f.label) })
-            }
-        }
+        val sizes = ExportSettings.PHOTO_SIZES
+        LabeledChoice("Photo size", sizes.map { it.second }, { sizes[it].first == settings.photoLongSide }, { i -> vm.updateExportSettings { it.copy(photoLongSide = sizes[i].first) } })
+        // Ultra HDR needs Android 14.
+        val formats = app.headsup.export.PhotoFormat.entries.filter { it != app.headsup.export.PhotoFormat.ULTRA_HDR || android.os.Build.VERSION.SDK_INT >= 34 }
+        LabeledChoice("Format", formats.map { it.label }, { formats[it] == settings.photoFormat }, { i -> vm.updateExportSettings { it.copy(photoFormat = formats[i]) } }, minCell = 96.dp)
         if (settings.photoFormat == app.headsup.export.PhotoFormat.ULTRA_HDR) {
             Hint("A JPEG with a gain map: on HDR screens (and in Google Photos) the brightest parts shine up to 2 stops brighter; elsewhere it looks like the JPEG.")
         }
         if (settings.photoFormat != app.headsup.export.PhotoFormat.TIFF16) {
-            SettingRow("JPEG") {
-                for ((q, label) in ExportSettings.PHOTO_QUALITIES) {
-                    FilterChip(selected = settings.photoQuality == q, onClick = { vm.updateExportSettings { it.copy(photoQuality = q) } }, label = { Text(label) })
-                }
-            }
+            val qualities = ExportSettings.PHOTO_QUALITIES
+            LabeledChoice("JPEG", qualities.map { it.second }, { qualities[it].first == settings.photoQuality }, { i -> vm.updateExportSettings { it.copy(photoQuality = qualities[i].first) } })
         } else {
             Hint("16 bits per colour, uncompressed: for further editing (Lightroom, Photoshop, DaVinci). Large files.")
         }
@@ -5313,15 +5242,11 @@ private fun TextPanel(state: UiState, vm: HeadsupViewModel, at: () -> Long) {
         }
         TextTool.IN, TextTool.OUT -> {
             val current = if (tool == TextTool.IN) item.animIn else item.animOut
-            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                for (a in TextAnim.entries) {
-                    FilterChip(
-                        selected = current == a,
-                        onClick = { update { if (tool == TextTool.IN) it.copy(animIn = a) else it.copy(animOut = a) } },
-                        label = { Text(a.label) },
-                    )
-                }
-            }
+            val anims = TextAnim.entries
+            ChoiceGrid(anims.map { it.label }, anims.indexOf(current), { i ->
+                val a = anims[i]
+                update { if (tool == TextTool.IN) it.copy(animIn = a) else it.copy(animOut = a) }
+            })
             if (current == TextAnim.FADE || current == TextAnim.RISE || current == TextAnim.POP) {
                 ValueHeader("Animation", String.format(Locale.US, "%.1f s", item.animMs / 1000f))
                 RulerSlider(item.animMs / 1000f, 0.1f..3f, 0.1f, { v -> update { it.copy(animMs = (v * 1000).toLong()) } }, onReset = { update { it.copy(animMs = 500L) } })
@@ -5683,8 +5608,8 @@ private fun PhotoMoment(clip: ClipState, track: app.headsup.core.track.ActivityT
     val minutes = (atMs - track.startMs) / 60_000f
     val sample = app.headsup.core.track.TelemetrySampler(track).frameAt(atMs)
     val clock = Formats.clock(atMs, offset).take(5)
-    val distance = sample[app.headsup.core.track.Metric.DISTANCE]?.let { String.format(Locale.US, " · %.2f km", it / 1000) }.orEmpty()
-    val altitude = sample[app.headsup.core.track.Metric.ALTITUDE]?.let { " · ${it.toInt()} m" }.orEmpty()
+    val distance = sample[app.headsup.core.track.Metric.DISTANCE]?.let { String.format(Locale.US, " · %.2f %s", app.headsup.render.Units.distance(it), app.headsup.render.Units.distanceUnit) }.orEmpty()
+    val altitude = sample[app.headsup.core.track.Metric.ALTITUDE]?.let { " · ${app.headsup.render.Units.height(it).toInt()} ${app.headsup.render.Units.heightUnit}" }.orEmpty()
     ValueHeader("Moment in the activity", clock + distance + altitude)
     RulerSlider(
         minutes, 0f..totalMin, (totalMin / 400f).coerceAtLeast(0.05f),

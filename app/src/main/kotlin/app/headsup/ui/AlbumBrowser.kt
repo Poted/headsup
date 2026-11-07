@@ -427,7 +427,7 @@ fun PhotoViewer(state: UiState, vm: HeadsupViewModel, indices: List<Int>, start:
 @Composable
 fun FullScreenLayer(background: Color, content: @Composable () -> Unit) {
     // The photo viewer, on black, keeps the dark theme's controls in light mode too.
-    if (background == HeadsupColors.Picture) HeadsupTheme(dark = true) { FullScreenBox(background, content) } else FullScreenBox(background, content)
+    if (background == HeadsupColors.Picture) HeadsupTheme(AppSettings.current(androidx.compose.foundation.isSystemInDarkTheme()).onPicture) { FullScreenBox(HeadsupColors.Picture, content) } else FullScreenBox(background, content)
 }
 
 @Composable

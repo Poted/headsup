@@ -566,7 +566,6 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
 
             globalGrade = ColorGrade(),
             luts = gradeStore.names(),
-            messages = listOfNotNull((app as HeadsupApp).takeCrashReport()),
         ),
     )
     val state: StateFlow<UiState> = _state.asStateFlow()
@@ -1562,6 +1561,60 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
      * Deletes the project, and the app's copies of its media that no other project uses. Files in
      * the gallery are never touched.
      */
+    /** What the app keeps on the phone, by kind, in bytes (Settings › Storage). */
+    data class StorageUsage(
+        val media: Long,
+        val unusedMedia: Long,
+        val projects: Long,
+        val previews: Long,
+        val masks: Long,
+        val reversed: Long,
+        val models: Long,
+        val temporary: Long,
+    ) {
+        val total get() = media + projects + previews + masks + reversed + models + temporary
+    }
+
+    private val appContext get() = getApplication<Application>()
+    private fun dirBytes(dir: java.io.File?): Long = dir?.takeIf { it.exists() }?.walkTopDown()?.filter { it.isFile }?.sumOf { it.length() } ?: 0L
+    private val exportTemp get() = java.io.File(appContext.getExternalFilesDir(null) ?: appContext.filesDir, "export")
+    private val inUseMedia get() = (projectStore.all() + _state.value.toProject()).flatMap { it.mediaUris }.toSet()
+
+    suspend fun storageUsage(): StorageUsage = withContext(Dispatchers.IO) {
+        val files = appContext.filesDir
+        val (unused, media) = library.bytes(inUseMedia)
+        StorageUsage(
+            media = media,
+            unusedMedia = unused,
+            projects = dirBytes(java.io.File(files, "projects")) + dirBytes(java.io.File(files, "luts")),
+            previews = proxies.bytes(),
+            masks = listOf("sequence", "brush", "retouch").sumOf { dirBytes(java.io.File(files, it)) },
+            reversed = dirBytes(java.io.File(files, "reversed")),
+            models = dirBytes(java.io.File(files, "models")),
+            temporary = dirBytes(appContext.cacheDir) + dirBytes(exportTemp),
+        )
+    }
+
+    /** Preview copies of large clips of other projects: made again when such a project is opened. */
+    fun clearPreviews(): Long = proxies.clearExcept(_state.value.clips.map { it.meta.uri })
+
+    /** Imported files no project uses any more. Never while files are being copied in. */
+    suspend fun clearUnusedMedia() = withContext(Dispatchers.IO) {
+        if (!_state.value.busy) runCatching { library.deleteUnused(inUseMedia) }
+    }
+
+    /** The app's cache and finished exports' leftovers; only while nothing is exported. */
+    suspend fun clearTemporary() = withContext(Dispatchers.IO) {
+        appContext.cacheDir.listFiles()?.forEach { it.deleteRecursively() }
+        val exporting = exportManager.jobs.value.any { it.status == app.headsup.export.JobStatus.QUEUED || it.status == app.headsup.export.JobStatus.RUNNING }
+        if (!exporting) exportTemp.listFiles()?.forEach { it.deleteRecursively() }
+    }
+
+    /** The AI models' unpacked copies (the app carries them; unpacked again on next use, a few seconds). */
+    suspend fun clearModelCopies() = withContext(Dispatchers.IO) {
+        java.io.File(appContext.filesDir, "models").listFiles()?.forEach { it.delete() }
+    }
+
     fun deleteProject(name: String) {
         projectStore.delete(name)
         if (name == _state.value.projectName) newProject()
