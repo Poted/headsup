@@ -560,6 +560,9 @@ fun ClipPreview(
     // Exposure aids on the picture: 0 off, 1 zebra, 2 clipping (red: a channel at full, blue: black), 3 false colour.
     var aid by androidx.compose.runtime.saveable.rememberSaveable { mutableIntStateOf(0) }
     val zebra = aid > 0
+    // Before / after: where the line between the picture as shot (left) and as edited (right)
+    // is, a fraction of its width; null off. Dragged sideways on the picture.
+    var split by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf<Float?>(null) }
     var histogramOn by remember { mutableStateOf(false) }
     var histogram by remember { mutableStateOf<FloatArray?>(null) }
     // Which scope shows (a tap on it steps through them): histogram, waveform, RGB parade.
@@ -967,6 +970,17 @@ fun ClipPreview(
                     }
                 } else Modifier,
             ).then(
+                // Before / after on: one finger dragged sideways moves the line (nothing else
+                // takes the finger meanwhile).
+                if (split != null) {
+                    Modifier.pointerInput(Unit) {
+                        androidx.compose.foundation.gestures.detectHorizontalDragGestures { change, dx ->
+                            change.consume()
+                            split = ((split ?: 0.5f) + dx / size.width.coerceAtLeast(1)).coerceIn(0f, 1f)
+                        }
+                    }
+                } else Modifier,
+            ).then(
                 // A photo can be looked at closely: pinch to zoom the view, double tap to fit again
                 // (only when the picture is not being framed, masked or written on).
                 if (inspect) {
@@ -1145,6 +1159,7 @@ fun ClipPreview(
                         val fromWeight = if (fromCube != null) ColourTransition.fromWeight(positionMs, transitionMs) else 0f
                         previewShader?.overlayLayer = overlayLayer
                         previewShader?.exposureAid = aid
+                        previewShader?.split = split ?: -1f
                         renderEffect = previewShader?.effect(effects, zebra, frame, size.width, size.height, masks.map { it.at(fileMs) }, fromWeight, if (raw) clip.rawDevelop else null, presence, reframe.warp)
                         // Reframing moves the graded picture, as in the export (colour first, then framing).
                         val t = reframeTransform(reframe, geometry)
@@ -1206,6 +1221,7 @@ fun ClipPreview(
                                     val fromWeight = if (from != null) ColourTransition.fromWeight(positionMs, transitionMs) else 0f
                                     playerShaders?.get(i)?.overlayLayer = if (fresh) overlayLayer else -1
                                     playerShaders?.get(i)?.exposureAid = aid
+                                    playerShaders?.get(i)?.split = if (fresh) split ?: -1f else -1f
                                     renderEffect = if (pictureClip[i] == null || pictureClip[i] == clip.id) {
                                         playerShaders?.get(i)?.effect(
                                             effects, zebra, frame, this.size.width, this.size.height, if (fresh) masks.map { it.at(fileMs) } else emptyList(), fromWeight,
@@ -1750,6 +1766,9 @@ fun ClipPreview(
             Spacer(Modifier.width(4.dp))
             // Exposure aids, a tap each: zebra, clipping, false colour, off.
             if (Build.VERSION.SDK_INT >= 33) ToggleDot(listOf("Z", "Z", "C", "F")[aid], aid > 0) { aid = (aid + 1) % 4 }
+            Spacer(Modifier.width(4.dp))
+            // Before / after with a line across the picture (dragged sideways).
+            if (Build.VERSION.SDK_INT >= 33) ToggleDot("◧", split != null) { split = if (split == null) 0.5f else null }
             // Sideways: fold the transport and the timeline away for a bigger picture (upright the
             // arrow is beside the handle under the transport: the transport has no room).
             onCompact?.takeIf { sideways }?.let { fold ->
