@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- The window before Compose draws: the ground of the light theme, so a light phone does not flash dark. -->
+    <style name="Theme.SweetSpot" parent="@android:style/Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">@color/ground</item>
+    </style>
+</resources>

@@ -24,13 +24,13 @@ object TextValues {
         val s = summary(track)
         return buildMap {
             s.distanceM?.let { put(TextField.DISTANCE.key, km(it)) }
-            s.ascentM?.let { put(TextField.ASCENT.key, "${it.roundToInt()} m") }
-            s.descentM?.let { put(TextField.DESCENT.key, "${it.roundToInt()} m") }
-            s.highestM?.let { put(TextField.HIGHEST.key, "${it.roundToInt()} m") }
+            s.ascentM?.let { put(TextField.ASCENT.key, height(it)) }
+            s.descentM?.let { put(TextField.DESCENT.key, height(it)) }
+            s.highestM?.let { put(TextField.HIGHEST.key, height(it)) }
             put(TextField.DURATION.key, hours(s.movingMs))
             s.avgHr?.let { put(TextField.AVG_HR.key, "${it.roundToInt()} bpm") }
             s.maxHr?.let { put(TextField.MAX_HR.key, "${it.roundToInt()} bpm") }
-            s.maxSpeedMps?.let { put(TextField.MAX_SPEED.key, String.format(Locale.US, "%.1f km/h", it * 3.6)) }
+            s.maxSpeedMps?.let { put(TextField.MAX_SPEED.key, speed(it)) }
             put(TextField.SPORT.key, track.sportName ?: track.sport.name.lowercase().replaceFirstChar { it.uppercase() })
         }
     }
@@ -39,11 +39,11 @@ object TextValues {
     fun moment(frame: TelemetryFrame?, utcMs: Long?, offsetSeconds: Int?): Map<String, String> {
         frame ?: return emptyMap()
         return buildMap {
-            frame[Metric.ALTITUDE]?.let { put(TextField.ALTITUDE_NOW.key, "${it.roundToInt()} m") }
+            frame[Metric.ALTITUDE]?.let { put(TextField.ALTITUDE_NOW.key, height(it)) }
             frame[Metric.DISTANCE]?.let { put(TextField.DISTANCE_NOW.key, km(it)) }
-            frame[Metric.ASCENT]?.let { put(TextField.ASCENT_NOW.key, "${it.roundToInt()} m") }
+            frame[Metric.ASCENT]?.let { put(TextField.ASCENT_NOW.key, height(it)) }
             frame[Metric.HEART_RATE]?.let { put(TextField.HR_NOW.key, "${it.roundToInt()} bpm") }
-            frame[Metric.SPEED]?.let { put(TextField.SPEED_NOW.key, String.format(Locale.US, "%.1f km/h", it * 3.6)) }
+            frame[Metric.SPEED]?.let { put(TextField.SPEED_NOW.key, speed(it)) }
             val lat = frame[Metric.LATITUDE]
             val lon = frame[Metric.LONGITUDE]
             if (lat != null && lon != null) {
@@ -65,7 +65,7 @@ object TextValues {
                 put(TextField.COORDS.key, coords(info.latitude, info.longitude))
                 put(TextField.PLACE.key, Places.known(info.latitude, info.longitude) ?: coords(info.latitude, info.longitude))
             }
-            info.altitudeM?.let { put(TextField.PHOTO_ALTITUDE.key, "${it.roundToInt()} m") }
+            info.altitudeM?.let { put(TextField.PHOTO_ALTITUDE.key, height(it)) }
             info.dateTime?.takeIf { it.length >= 16 }?.let { d ->
                 put(TextField.DATE.key, "${d.substring(8, 10)}.${d.substring(5, 7)}.${d.substring(0, 4)}")
                 put(TextField.TIME.key, d.substring(11, 16))
@@ -89,7 +89,14 @@ object TextValues {
         }
     }
 
-    private fun km(m: Double) = String.format(Locale.US, if (m >= 10_000) "%.1f km" else "%.2f km", m / 1000)
+    private fun km(m: Double): String {
+        val d = Units.distance(m)
+        return String.format(Locale.US, if (d >= 10) "%.1f %s" else "%.2f %s", d, Units.distanceUnit)
+    }
+
+    private fun height(m: Double) = "${Units.height(m).roundToInt()} ${Units.heightUnit}"
+
+    private fun speed(mps: Double) = String.format(Locale.US, "%.1f %s", Units.speed(mps), Units.speedUnit)
 
     private fun hours(ms: Long): String {
         val min = ms / 60_000

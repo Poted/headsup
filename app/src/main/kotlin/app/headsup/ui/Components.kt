@@ -22,6 +22,8 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.Icon
+import androidx.compose.material3.minimumInteractiveComponentSize
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -39,7 +41,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
@@ -78,6 +79,15 @@ fun RulerSlider(
     val reset by rememberUpdatedState(onReset)
     val tickSpacing = 9.dp
     fun snap(v: Float) = ((v / step).roundToInt() * step).coerceIn(range.start, range.endInclusive)
+    // A light click on each step, a firmer one on reaching zero, like a camera's dial (Settings › Ruler clicks).
+    val view = androidx.compose.ui.platform.LocalView.current
+    fun click(atZero: Boolean) {
+        if (!AppSettings.haptics) return
+        view.performHapticFeedback(
+            if (atZero) (if (android.os.Build.VERSION.SDK_INT >= 30) android.view.HapticFeedbackConstants.CONFIRM else android.view.HapticFeedbackConstants.VIRTUAL_KEY)
+            else android.view.HapticFeedbackConstants.CLOCK_TICK,
+        )
+    }
 
     Canvas(
         modifier
@@ -94,7 +104,9 @@ fun RulerSlider(
                     val ticks = (travelled / px).toInt()
                     if (ticks != 0) {
                         travelled -= ticks * px
+                        val before = dragValue
                         dragValue = snap(dragValue + ticks * step)
+                        if (dragValue != before) click(atZero = dragValue == 0f)
                         emit(dragValue)
                     }
                 }
@@ -133,29 +145,23 @@ fun RulerSlider(
             val fade = (1f - abs(x - cx) / cx).coerceIn(0.1f, 1f)
             val major = (i - zero) % 5 == 0
             val h = (if (i == zero) 24.dp else if (major) 16.dp else 9.dp).toPx()
-            val color = if (i == zero) HeadsupColors.AccentSoft else Color.White
+            val color = if (i == zero) HeadsupColors.ZeroTick else HeadsupColors.Ink
             drawLine(
                 color.copy(alpha = fade * if (major) 0.85f else 0.45f),
                 Offset(x, bottom - h),
                 Offset(x, bottom),
-                strokeWidth = 1.dp.toPx(),
+                strokeWidth = 1.dp.toPx() * HeadsupColors.StrokeScale,
                 cap = StrokeCap.Round,
             )
         }
-        drawLine(
-            Brush.horizontalGradient(listOf(Color.Transparent, HeadsupColors.Accent.copy(alpha = 0.7f), Color.Transparent)),
-            Offset(0f, bottom + 3.dp.toPx()),
-            Offset(size.width, bottom + 3.dp.toPx()),
-            strokeWidth = 1.dp.toPx(),
-        )
         val marker = Path().apply {
             moveTo(cx - 5.dp.toPx(), 0f)
             lineTo(cx + 5.dp.toPx(), 0f)
             lineTo(cx, 7.dp.toPx())
             close()
         }
-        drawPath(marker, HeadsupColors.Accent)
-        drawLine(HeadsupColors.Accent, Offset(cx, 10.dp.toPx()), Offset(cx, bottom), strokeWidth = 2.dp.toPx(), cap = StrokeCap.Round)
+        drawPath(marker, HeadsupColors.AccentInk)
+        drawLine(HeadsupColors.AccentInk, Offset(cx, 10.dp.toPx()), Offset(cx, bottom), strokeWidth = 2.dp.toPx(), cap = StrokeCap.Round)
     }
 }
 
@@ -163,7 +169,7 @@ fun RulerSlider(
 @Composable
 fun ValueHeader(label: String, value: String, modifier: Modifier = Modifier) {
     Row(modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.Bottom) {
-        Text("$label  ", style = MaterialTheme.typography.bodyMedium, color = HeadsupColors.TextMuted)
+        if (label.isNotEmpty()) Text("$label  ", style = MaterialTheme.typography.bodyMedium, color = HeadsupColors.TextMuted)
         Text(value, style = MaterialTheme.typography.headlineSmall.copy(fontWeight = FontWeight.Light))
     }
 }
@@ -180,10 +186,10 @@ fun CircleOption(symbol: String, caption: String, selected: Boolean, modified: B
                 .size(44.dp)
                 .clip(CircleShape)
                 .background(if (selected) HeadsupColors.SurfaceHigh else Color.Transparent)
-                .border(1.dp, if (selected) HeadsupColors.Accent else HeadsupColors.Outline, CircleShape),
+                .border(1.dp, if (selected) HeadsupColors.AccentInk else HeadsupColors.ControlEdge, CircleShape),
             contentAlignment = Alignment.Center,
         ) {
-            Text(symbol, style = MaterialTheme.typography.labelLarge, color = if (selected) HeadsupColors.Accent else Color.White)
+            Text(symbol, style = MaterialTheme.typography.labelLarge, color = if (selected) HeadsupColors.AccentInk else HeadsupColors.Ink)
             if (modified) {
                 Box(Modifier.align(Alignment.TopEnd).padding(5.dp).size(6.dp).background(HeadsupColors.Accent, CircleShape))
             }
@@ -200,16 +206,16 @@ fun RoundIconButton(icon: ImageVector, description: String, onClick: () -> Unit,
             .size(42.dp)
             .clip(CircleShape)
             .background(HeadsupColors.Surface)
-            .border(1.dp, HeadsupColors.Outline, CircleShape)
+            .border(1.dp, HeadsupColors.ControlEdge, CircleShape)
             .clickable(onClick = onClick),
         contentAlignment = Alignment.Center,
     ) {
-        Icon(icon, contentDescription = description, Modifier.size(20.dp), tint = Color.White)
+        Icon(icon, contentDescription = description, Modifier.size(20.dp), tint = HeadsupColors.Ink)
         if (badge) {
             Box(
                 Modifier.align(Alignment.BottomEnd).padding(4.dp).size(14.dp).clip(CircleShape).background(HeadsupColors.Accent),
                 contentAlignment = Alignment.Center,
-            ) { Icon(HeadsupIcons.Add, contentDescription = null, Modifier.size(10.dp), tint = Color.Black) }
+            ) { Icon(HeadsupIcons.Add, contentDescription = null, Modifier.size(10.dp), tint = HeadsupColors.OnAccent) }
         }
     }
 }
@@ -294,15 +300,15 @@ fun LayerChip(symbol: String, label: String, selected: Boolean, modified: Boolea
             .height(34.dp)
             .clip(CircleShape)
             .background(if (selected) HeadsupColors.SurfaceHigh else Color.Transparent)
-            .border(1.dp, if (selected) HeadsupColors.Accent else HeadsupColors.Outline, CircleShape)
+            .border(1.dp, if (selected) HeadsupColors.AccentInk else HeadsupColors.ControlEdge, CircleShape)
             .clickable(onClick = onClick)
             .padding(horizontal = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text(symbol, style = MaterialTheme.typography.labelLarge, color = if (selected) HeadsupColors.Accent else Color.White)
+        Text(symbol, style = MaterialTheme.typography.labelLarge, color = if (selected) HeadsupColors.AccentInk else HeadsupColors.Ink)
         if (label.isNotEmpty()) {
             Spacer(Modifier.width(6.dp))
-            Text(label, style = MaterialTheme.typography.labelMedium, color = if (selected) Color.White else HeadsupColors.TextMuted, maxLines = 1)
+            Text(label, style = MaterialTheme.typography.labelMedium, color = if (selected) HeadsupColors.Ink else HeadsupColors.TextMuted, maxLines = 1)
         }
         if (modified) {
             Spacer(Modifier.width(6.dp))
@@ -342,6 +348,8 @@ fun PillAction(symbol: String, text: String, onClick: () -> Unit, selected: Bool
 fun SmallAction(text: String, onClick: () -> Unit, modifier: Modifier = Modifier, enabled: Boolean = true) {
     Box(
         modifier
+            // 48 dp to touch (as Material's chips), 32 dp drawn.
+            .minimumInteractiveComponentSize()
             // A little room around it, so pills side by side never touch.
             .padding(horizontal = 2.dp)
             .height(32.dp)
@@ -372,7 +380,7 @@ fun PanelAction(text: String, onClick: () -> Unit, modifier: Modifier = Modifier
             .height(44.dp)
             .clip(shape)
             .background(HeadsupColors.SurfaceHigh)
-            .border(1.dp, if (danger) Color(0x55FF6B5E) else HeadsupColors.Outline, shape)
+            .border(1.dp, if (danger) HeadsupColors.Bad.copy(alpha = 0.45f) else HeadsupColors.Outline, shape)
             .clickable(enabled = enabled, onClick = onClick)
             .padding(horizontal = 8.dp),
         contentAlignment = Alignment.Center,
@@ -382,8 +390,8 @@ fun PanelAction(text: String, onClick: () -> Unit, modifier: Modifier = Modifier
             style = MaterialTheme.typography.labelLarge,
             color = when {
                 !enabled -> HeadsupColors.TextMuted.copy(alpha = 0.5f)
-                danger -> Color(0xFFFF8A80)
-                else -> Color.White
+                danger -> HeadsupColors.Bad
+                else -> HeadsupColors.Ink
             },
             maxLines = 1,
         )
@@ -470,7 +478,7 @@ fun CineLoader(message: String, modifier: Modifier = Modifier, progress: Float? 
             Text(
                 if (progress != null) String.format(java.util.Locale.US, "%.0f%%", progress * 100)
                 else String.format(java.util.Locale.US, "%02d:%02d:%02d:%02d", total / 90000, total / 1500 % 60, total / 25 % 60, total % 25),
-                style = MaterialTheme.typography.labelSmall.copy(fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace),
+                style = MaterialTheme.typography.labelSmall.copy(fontFamily = GeistMonoFamily),
                 color = HeadsupColors.TextMuted,
             )
             if (progress != null) {
@@ -487,5 +495,194 @@ fun CineLoader(message: String, modifier: Modifier = Modifier, progress: Float? 
             androidx.compose.foundation.layout.Spacer(Modifier.width(4.dp))
             SmallAction("Cancel", onCancel)
         }
+    }
+}
+
+/**
+ * A section of a panel as a card: its [title] top left, then (top right, always in these places)
+ * ⓘ when it has an [info] text and Reset when [onReset] is given, and its controls under them.
+ * Every panel is built of these, in the same order (scope, picker, sections, panel actions), so a
+ * new panel reads like the ones already known. Reset resets everything in the card.
+ */
+@Composable
+fun ToolSection(
+    title: String,
+    modifier: Modifier = Modifier,
+    info: String? = null,
+    onReset: (() -> Unit)? = null,
+    content: @Composable androidx.compose.foundation.layout.ColumnScope.() -> Unit,
+) {
+    var showInfo by androidx.compose.runtime.saveable.rememberSaveable(title) { androidx.compose.runtime.mutableStateOf(false) }
+    val shape = MaterialTheme.shapes.medium
+    Column(
+        modifier
+            .fillMaxWidth()
+            .clip(shape)
+            .background(HeadsupColors.CardGradient)
+            .border(1.dp, HeadsupColors.Outline, shape)
+            .padding(start = 14.dp, end = 8.dp, top = 6.dp, bottom = 12.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Row(Modifier.fillMaxWidth().heightIn(min = 36.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                title.uppercase(),
+                Modifier.weight(1f),
+                style = MaterialTheme.typography.labelSmall.copy(letterSpacing = 1.2.sp, fontWeight = FontWeight.Medium),
+                color = HeadsupColors.TextMuted,
+                maxLines = 1,
+            )
+            if (info != null) InfoButton(showInfo) { showInfo = !showInfo }
+            if (onReset != null) SmallAction("Reset", onReset, Modifier.padding(start = 4.dp))
+        }
+        androidx.compose.animation.AnimatedVisibility(visible = showInfo && info != null) {
+            Text(
+                info.orEmpty(),
+                Modifier.padding(end = 6.dp),
+                style = MaterialTheme.typography.bodySmall,
+                color = HeadsupColors.TextMuted,
+            )
+        }
+        Column(Modifier.padding(end = 6.dp), verticalArrangement = Arrangement.spacedBy(8.dp), content = content)
+    }
+}
+
+/** ⓘ: shows or hides a card's explanation; filled while it shows. 48 dp to touch, 22 dp drawn. */
+@Composable
+fun InfoButton(open: Boolean, onClick: () -> Unit) {
+    Box(
+        Modifier
+            .minimumInteractiveComponentSize()
+            .size(36.dp)
+            .clip(CircleShape)
+            .clickable(onClickLabel = if (open) "Hide explanation" else "Explain", onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        Box(
+            Modifier
+                .size(22.dp)
+                .clip(CircleShape)
+                .background(if (open) HeadsupColors.Highlight else Color.Transparent)
+                .border(1.dp, if (open) HeadsupColors.Highlight else HeadsupColors.ControlEdge, CircleShape),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(
+                "i",
+                style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.SemiBold),
+                color = if (open) HeadsupColors.OnHighlight else HeadsupColors.Ink,
+            )
+        }
+    }
+}
+
+/**
+ * A choice of a few options as a grid of equal cells across the whole width, in rows of equal
+ * length (6 options: 3 + 3, never 5 + 1); the chosen one light. [selected] may be none (-1).
+ * [glyph] draws a small mark before an option's text (e.g. the shape of a crop).
+ */
+@Composable
+fun ChoiceGrid(
+    options: List<String>,
+    selected: Int,
+    onSelect: (Int) -> Unit,
+    modifier: Modifier = Modifier,
+    minCell: androidx.compose.ui.unit.Dp = 76.dp,
+    glyph: (@Composable (index: Int, on: Boolean) -> Unit)? = null,
+    enabled: (Int) -> Boolean = { true },
+) = ChoiceGrid(options, { it == selected }, onSelect, modifier, minCell, glyph, enabled)
+
+/** As above, for a choice of several at once: [isOn] says which are on; a tap toggles one. */
+@Composable
+fun ChoiceGrid(
+    options: List<String>,
+    isOn: (Int) -> Boolean,
+    onSelect: (Int) -> Unit,
+    modifier: Modifier = Modifier,
+    minCell: androidx.compose.ui.unit.Dp = 76.dp,
+    glyph: (@Composable (index: Int, on: Boolean) -> Unit)? = null,
+    enabled: (Int) -> Boolean = { true },
+) {
+    if (options.isEmpty()) return
+    androidx.compose.foundation.layout.BoxWithConstraints(modifier.fillMaxWidth()) {
+        val gap = 6.dp
+        val fit = ((maxWidth + gap) / (minCell + gap)).toInt().coerceIn(1, options.size)
+        val rows = (options.size + fit - 1) / fit
+        val columns = (options.size + rows - 1) / rows
+        Column(verticalArrangement = Arrangement.spacedBy(gap)) {
+            for (r in 0 until rows) {
+                Row(horizontalArrangement = Arrangement.spacedBy(gap)) {
+                    for (c in 0 until columns) {
+                        val i = r * columns + c
+                        if (i >= options.size) {
+                            Spacer(Modifier.weight(1f))
+                            continue
+                        }
+                        val on = isOn(i)
+                        val usable = enabled(i)
+                        Row(
+                            Modifier
+                                .weight(1f)
+                                .height(40.dp)
+                                .clip(MaterialTheme.shapes.small)
+                                .background(if (on) HeadsupColors.Highlight else HeadsupColors.SurfaceHigh)
+                                .clickable(enabled = usable) { onSelect(i) }
+                                .padding(horizontal = 6.dp),
+                            horizontalArrangement = Arrangement.Center,
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            if (glyph != null) {
+                                glyph(i, on)
+                                Spacer(Modifier.width(6.dp))
+                            }
+                            Text(
+                                options[i],
+                                style = MaterialTheme.typography.labelLarge,
+                                color = (if (on) HeadsupColors.OnHighlight else HeadsupColors.Ink).copy(alpha = if (usable) 1f else 0.4f),
+                                maxLines = 1,
+                                softWrap = false,
+                                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** A crop's shape as a small outlined rectangle ([aspect] width / height; null: the picture's own, drawn dashed). */
+@Composable
+fun AspectGlyph(aspect: Float?, on: Boolean) {
+    val ink = if (on) HeadsupColors.OnHighlight else HeadsupColors.Ink
+    Canvas(Modifier.size(16.dp)) {
+        val a = aspect ?: 1.5f
+        val w = if (a >= 1f) size.width else size.height * a
+        val h = if (a >= 1f) size.width / a else size.height
+        val stroke = 1.3.dp.toPx()
+        drawRoundRect(
+            ink,
+            Offset((size.width - w) / 2f + stroke / 2f, (size.height - h) / 2f + stroke / 2f),
+            androidx.compose.ui.geometry.Size(w - stroke, h - stroke),
+            androidx.compose.ui.geometry.CornerRadius(2.dp.toPx()),
+            style = androidx.compose.ui.graphics.drawscope.Stroke(
+                stroke,
+                pathEffect = if (aspect == null) androidx.compose.ui.graphics.PathEffect.dashPathEffect(floatArrayOf(2.dp.toPx(), 1.5.dp.toPx())) else null,
+            ),
+        )
+    }
+}
+
+/** A named choice inside a section: its name (muted) over its grid, as "Resolution" over Source · 4K · 1080p. */
+@Composable
+fun LabeledChoice(
+    label: String,
+    options: List<String>,
+    isOn: (Int) -> Boolean,
+    onSelect: (Int) -> Unit,
+    minCell: androidx.compose.ui.unit.Dp = 76.dp,
+    enabled: (Int) -> Boolean = { true },
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Text(label, style = MaterialTheme.typography.labelMedium, color = HeadsupColors.TextMuted)
+        ChoiceGrid(options, isOn, onSelect, minCell = minCell, enabled = enabled)
     }
 }

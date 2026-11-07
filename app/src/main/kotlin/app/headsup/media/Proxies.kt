@@ -176,6 +176,23 @@ class Proxies(private val context: Context, private val scope: CoroutineScope) {
 
     fun release() = cancelRunning()
 
+    /** Bytes the preview files take. */
+    fun bytes(): Long = dir.listFiles()?.sumOf { it.length() } ?: 0L
+
+    /**
+     * Deletes the preview files of every clip but [keep] (the open project's) and the one being
+     * made; they are made again when their project is opened. Returns the bytes freed.
+     */
+    fun clearExcept(keep: Collection<Uri>): Long {
+        val kept = (keep + listOfNotNull(current)).map { fileFor(it).name }.toSet()
+        var freed = 0L
+        dir.listFiles()?.forEach { f ->
+            val base = f.name.removeSuffix(".part")
+            if (base !in kept) { freed += f.length(); f.delete() }
+        }
+        return freed
+    }
+
     private companion object {
         const val SHORT_SIDE = 1080
         const val BITRATE = 12_000_000
