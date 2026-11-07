@@ -992,17 +992,33 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
      * A logo from [uri] (a PNG keeps its transparency) over the whole film or album, in the
      * bottom right corner as a camera app puts its mark; copied into the app, so it stays.
      */
-    fun addLogo(uri: Uri) {
+    fun addLogo(uri: Uri) = placeLogo { context ->
+        val dir = java.io.File(context.filesDir, "logos").apply { mkdirs() }
+        val file = java.io.File(dir, java.util.UUID.randomUUID().toString())
+        context.contentResolver.openInputStream(uri)?.use { input -> file.outputStream().use { input.copyTo(it) } } ?: return@placeLogo null
+        file.absolutePath
+    }
+
+    /** A sticker from the library ([file]) placed as a logo; copied, so deleting its pack leaves it. */
+    fun addSticker(file: java.io.File) = placeLogo(x = 0.5f, y = 0.5f, size = 0.1f) { context ->
+        val dir = java.io.File(context.filesDir, "logos").apply { mkdirs() }
+        file.copyTo(java.io.File(dir, java.util.UUID.randomUUID().toString()), overwrite = true).absolutePath
+    }
+
+    /** The selected logo or sticker kept in the library (My stickers), for other projects. */
+    fun saveAsSticker(id: Long) {
+        val path = _state.value.texts.firstOrNull { it.id == id }?.image ?: return
         val context = getApplication<Application>()
         viewModelScope.launch {
-            val path = withContext(Dispatchers.IO) {
-                runCatching {
-                    val dir = java.io.File(context.filesDir, "logos").apply { mkdirs() }
-                    val file = java.io.File(dir, java.util.UUID.randomUUID().toString())
-                    context.contentResolver.openInputStream(uri)?.use { input -> file.outputStream().use { input.copyTo(it) } } ?: return@runCatching null
-                    file.absolutePath
-                }.getOrNull()
-            }
+            val ok = withContext(Dispatchers.IO) { app.headsup.media.StickerLibrary.save(context, path) }
+            _state.update { it.copy(messages = it.messages + if (ok) "Saved to ${app.headsup.media.StickerLibrary.MINE}." else "Could not save the sticker.") }
+        }
+    }
+
+    private fun placeLogo(x: Float = 0.86f, y: Float = 0.9f, size: Float = 0.07f, copy: (android.content.Context) -> String?) {
+        val context = getApplication<Application>()
+        viewModelScope.launch {
+            val path = withContext(Dispatchers.IO) { runCatching { copy(context) }.getOrNull() }
             if (path == null) {
                 _state.update { it.copy(messages = it.messages + "Could not read that picture.") }
                 return@launch
@@ -1011,7 +1027,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                 val end = s.clips.sumOf { it.timelineDurationMs }.coerceAtLeast(500L)
                 val id = (s.texts.maxOfOrNull { it.id } ?: 0L) + 1
                 val item = TextItem(
-                    id = id, text = "Logo", startMs = 0L, lengthMs = end, x = 0.86f, y = 0.9f, size = 0.07f,
+                    id = id, text = "Logo", startMs = 0L, lengthMs = end, x = x, y = y, size = size,
                     animIn = TextAnim.NONE, animOut = TextAnim.NONE, image = path, shadow = false,
                 )
                 s.copy(texts = s.texts + item, selectedText = id)

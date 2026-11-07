@@ -257,9 +257,60 @@ fun SettingsSheet(vm: HeadsupViewModel, onDismiss: () -> Unit) {
                     color = HeadsupColors.TextMuted,
                 )
             }
+            StickerSection(context)
             StorageSection(vm)
             ReportsSection(context)
             AboutSection(context)
+        }
+    }
+}
+
+/** Sticker packs: imported from pictures or a ZIP, kept for every project; Overlays › + Sticker puts them on. */
+@Composable
+private fun StickerSection(context: Context) {
+    var packs by remember { mutableStateOf(app.headsup.media.StickerLibrary.packs(context)) }
+    var note by remember { mutableStateOf<String?>(null) }
+    val scope = androidx.compose.runtime.rememberCoroutineScope()
+    fun after(kept: Int) {
+        packs = app.headsup.media.StickerLibrary.packs(context)
+        note = if (kept > 0) "$kept stickers added." else "No pictures found there."
+    }
+    val pictures = androidx.activity.compose.rememberLauncherForActivityResult(androidx.activity.result.contract.ActivityResultContracts.PickMultipleVisualMedia()) { uris ->
+        if (uris.isEmpty()) return@rememberLauncherForActivityResult
+        scope.launch {
+            val name = "Pack " + java.time.LocalDate.now()
+            val kept = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { app.headsup.media.StickerLibrary.importPictures(context, uris, name) }
+            after(kept)
+        }
+    }
+    val zip = androidx.activity.compose.rememberLauncherForActivityResult(androidx.activity.result.contract.ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        scope.launch {
+            val name = runCatching {
+                context.contentResolver.query(uri, arrayOf(android.provider.OpenableColumns.DISPLAY_NAME), null, null, null)?.use { c -> if (c.moveToFirst()) c.getString(0) else null }
+            }.getOrNull()?.substringBeforeLast('.') ?: "Pack"
+            val kept = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { app.headsup.media.StickerLibrary.importZip(context, uri, name) }
+            after(kept)
+        }
+    }
+    ToolSection(
+        "Sticker packs",
+        info = "Stickers, frames and marks of your own, for every project: a few pictures at once, or a ZIP of them (PNG keeps its transparency). Overlays › Text › + Sticker puts one on; a logo there can be saved here too (My stickers).",
+    ) {
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            SmallAction("+ Pictures", { pictures.launch(androidx.activity.result.PickVisualMediaRequest(androidx.activity.result.contract.ActivityResultContracts.PickVisualMedia.ImageOnly)) })
+            SmallAction("+ ZIP", { zip.launch(arrayOf("application/zip", "application/x-zip-compressed", "application/octet-stream")) })
+        }
+        note?.let { Text(it, style = MaterialTheme.typography.labelSmall, color = HeadsupColors.TextMuted) }
+        if (packs.isEmpty()) Text("No packs yet.", style = MaterialTheme.typography.bodySmall, color = HeadsupColors.TextMuted)
+        for (p in packs) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("${p.name} · ${p.stickers.size}", Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium, maxLines = 1)
+                SmallAction("Delete", {
+                    app.headsup.media.StickerLibrary.delete(context, p.name)
+                    packs = app.headsup.media.StickerLibrary.packs(context)
+                })
+            }
         }
     }
 }

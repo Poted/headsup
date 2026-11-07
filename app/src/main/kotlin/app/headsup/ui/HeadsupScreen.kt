@@ -2,6 +2,10 @@
 
 package app.headsup.ui
 
+import androidx.compose.foundation.layout.heightIn
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import androidx.compose.runtime.produceState
 import android.Manifest
 import android.content.Context
 import android.content.Intent
@@ -492,12 +496,16 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
                         routeOverlay = if (state.routeMap.enabled) routeOverlayFor(vm, state, selected) else null,
                         // A finger on the picture places the text being edited, or the route map.
                         // Texts and logos on the picture: picked by a touch, moved, sized and turned (as in a phone editor).
-                        onMoveText = if (fullscreen || !editingTexts) null else { x, y -> state.selectedText?.let { id -> vm.updateText(id) { snapText(it, x, y) } } },
+                        onMoveText = when {
+                            fullscreen -> null
+                            editingTexts -> { x: Float, y: Float -> val id = state.selectedText; if (id != null) vm.updateText(id) { snapText(it, x, y) } }
+                            tool == Tool.OVERLAYS && effectKind == EffectKind.MAP && state.routeMap.enabled -> { x: Float, y: Float -> vm.updateRouteMap { it.copy(x = x, y = y) } }
+                            else -> null
+                        },
                         selectedTextId = state.selectedText.takeIf { editingTexts },
                         onTextChange = { id, change -> vm.updateText(id, change) },
                         onDeleteText = { id -> vm.removeText(id) },
                         onSelectText = { id -> vm.selectText(id) },
-                            ?: if (tool == Tool.OVERLAYS && effectKind == EffectKind.MAP && state.routeMap.enabled) { x: Float, y: Float -> vm.updateRouteMap { it.copy(x = x, y = y) } } else null,
                         cutScrub = cutScrub,
                         onFrameSource = { frameSource.value = it },
                         onPictureSource = { pictureSource.value = it },
@@ -1880,6 +1888,70 @@ private fun AddSoundDialog(state: UiState, onPick: (AudioFile) -> Unit, onImport
         confirmButton = { TextButton(onClick = onDismiss) { Text("Close") } },
         dismissButton = { TextButton(onClick = onImport) { Text("Import…") } },
     )
+}
+
+/** The sticker library (Settings › Sticker packs): a pack's pictures; a touch puts one on the picture. */
+@Composable
+private fun StickerDialog(onPick: (java.io.File) -> Unit, onDismiss: () -> Unit) {
+    val context = LocalContext.current
+    val packs by produceState<List<app.headsup.media.StickerLibrary.Pack>?>(null) {
+        value = withContext(Dispatchers.IO) { app.headsup.media.StickerLibrary.packs(context) }
+    }
+    var pack by rememberSaveable { mutableStateOf<String?>(null) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Stickers") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                val all = packs
+                when {
+                    all == null -> Hint("Loading…")
+                    all.isEmpty() -> Hint("No sticker packs yet. Import pictures or a ZIP in Settings › Sticker packs (PNG keeps transparency).")
+                    else -> {
+                        val shown = all.firstOrNull { it.name == pack } ?: all.first()
+                        if (all.size > 1) Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            for (p in all) FilterChip(selected = p.name == shown.name, onClick = { pack = p.name }, label = { Text(p.name, maxLines = 1) })
+                        }
+                        androidx.compose.foundation.lazy.grid.LazyVerticalGrid(
+                            columns = androidx.compose.foundation.lazy.grid.GridCells.Adaptive(72.dp),
+                            modifier = Modifier.fillMaxWidth().heightIn(max = 360.dp),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            verticalArrangement = Arrangement.spacedBy(6.dp),
+                        ) {
+                            items(shown.stickers.size, key = { shown.stickers[it].path }) { i -> StickerThumb(shown.stickers[i]) { onPick(shown.stickers[i]) } }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("Close") } },
+    )
+}
+
+@Composable
+private fun StickerThumb(file: java.io.File, onClick: () -> Unit) {
+    val bitmap by produceState<androidx.compose.ui.graphics.ImageBitmap?>(null, file) {
+        value = withContext(Dispatchers.IO) {
+            runCatching {
+                val bounds = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                android.graphics.BitmapFactory.decodeFile(file.path, bounds)
+                var sample = 1
+                while (maxOf(bounds.outWidth, bounds.outHeight) / (sample * 2) >= 160) sample *= 2
+                android.graphics.BitmapFactory.decodeFile(file.path, android.graphics.BitmapFactory.Options().apply { inSampleSize = sample })?.asImageBitmap()
+            }.getOrNull()
+        }
+    }
+    Box(
+        Modifier
+            .aspectRatio(1f)
+            .clip(RoundedCornerShape(10.dp))
+            .background(HeadsupColors.TextMuted.copy(alpha = 0.15f))
+            .clickable(onClick = onClick)
+            .padding(6.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        bitmap?.let { androidx.compose.foundation.Image(it, contentDescription = file.nameWithoutExtension, modifier = Modifier.fillMaxSize(), contentScale = androidx.compose.ui.layout.ContentScale.Fit) }
+    }
 }
 
 private fun fadeLabel(ms: Long) = if (ms <= 0) "Off" else String.format(Locale.US, "%.1f s", ms / 1000f)
@@ -5244,9 +5316,12 @@ private fun TextPanel(state: UiState, vm: HeadsupViewModel, at: () -> Long) {
     // A logo: any picture from the gallery (a PNG keeps its transparency).
     val logoPicker = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri -> uri?.let(vm::addLogo) }
     LaunchedEffect(item?.id) { if (item?.isLogo == true && tool !in LOGO_TOOLS) tool = TextTool.SIZE }
+    var stickers by remember { mutableStateOf(false) }
+    if (stickers) StickerDialog(onPick = { f -> vm.addSticker(f); stickers = false }, onDismiss = { stickers = false })
     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
         SmallAction("+ Text", { vm.addText(at()) })
         SmallAction("+ Logo", { logoPicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) })
+        SmallAction("+ Sticker", { stickers = true })
         if (item != null) {
             SmallAction("Delete", { vm.removeText(item.id) })
             SmallAction("Done", { vm.selectText(null) })
@@ -5374,6 +5449,7 @@ private fun TextPanel(state: UiState, vm: HeadsupViewModel, at: () -> Long) {
             if (item.isLogo) {
                 ValueHeader("Opacity", String.format(Locale.US, "%.0f %%", item.opacity * 100))
                 RulerSlider(item.opacity, 0.1f..1f, 0.02f, { v -> update { it.copy(opacity = v) } }, onReset = { update { it.copy(opacity = 1f) } })
+                SmallAction("Save as sticker", { vm.saveAsSticker(item.id) })
             }
         }
         TextTool.GLOW -> {
