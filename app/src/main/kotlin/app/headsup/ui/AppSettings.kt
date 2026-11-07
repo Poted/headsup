@@ -66,6 +66,14 @@ object AppSettings {
     var haptics by mutableStateOf(true)
         private set
 
+    /** Field (most contrast) put on by itself in bright sunlight, from the phone's light sensor. */
+    var fieldInSun by mutableStateOf(false)
+        private set
+
+    /** The light sensor says the phone is in bright sun now (only watched with [fieldInSun]). */
+    var inSun by mutableStateOf(false)
+        internal set
+
     /** Held sideways, the picture on the right and the tools on the left (for the left hand). */
     var pictureRight by mutableStateOf(false)
         private set
@@ -76,6 +84,7 @@ object AppSettings {
         reduceMotion = p.getBoolean("reduceMotion", false)
         haptics = p.getBoolean("haptics", true)
         pictureRight = p.getBoolean("pictureRight", false)
+        fieldInSun = p.getBoolean("fieldInSun", false)
         Units.imperial = p.getBoolean("imperial", false)
     }
 
@@ -97,6 +106,12 @@ object AppSettings {
         save(context) { putBoolean("haptics", value) }
     }
 
+    fun setFieldInSun(context: Context, value: Boolean) {
+        fieldInSun = value
+        if (!value) inSun = false
+        save(context) { putBoolean("fieldInSun", value) }
+    }
+
     fun setPictureRight(context: Context, value: Boolean) {
         pictureRight = value
         save(context) { putBoolean("pictureRight", value) }
@@ -108,7 +123,43 @@ object AppSettings {
     }
 
     /** The theme in use, given whether the phone is set to dark. */
-    fun current(systemDark: Boolean): Theme = theme ?: if (systemDark) Theme.STUDIO else Theme.PAPER
+    fun current(systemDark: Boolean): Theme = if (fieldInSun && inSun) Theme.FIELD else theme ?: if (systemDark) Theme.STUDIO else Theme.PAPER
+}
+
+/**
+ * The phone's light sensor read while the app is on screen, for [AppSettings.fieldInSun]: in
+ * bright sun (above [SUN_LUX] for 2 s) Field comes on, back in shade (below [SHADE_LUX] for 8 s)
+ * the chosen theme returns; the gap and the waits keep it from flickering at a passing cloud.
+ */
+class SunWatch(context: Context) : android.hardware.SensorEventListener {
+    private val sensors = context.getSystemService(Context.SENSOR_SERVICE) as android.hardware.SensorManager
+    private val light = sensors.getDefaultSensor(android.hardware.Sensor.TYPE_LIGHT)
+    private var since = 0L
+    private var bright = false
+
+    fun start() {
+        if (light == null || !AppSettings.fieldInSun) return
+        sensors.registerListener(this, light, android.hardware.SensorManager.SENSOR_DELAY_NORMAL)
+    }
+
+    fun stop() = sensors.unregisterListener(this)
+
+    override fun onSensorChanged(event: android.hardware.SensorEvent) {
+        if (!AppSettings.fieldInSun) { AppSettings.inSun = false; return }
+        val lux = event.values.firstOrNull() ?: return
+        val now = android.os.SystemClock.uptimeMillis()
+        val wantsBright = if (AppSettings.inSun) lux > SHADE_LUX else lux >= SUN_LUX
+        if (wantsBright != bright) { bright = wantsBright; since = now }
+        val wait = if (AppSettings.inSun) 8_000L else 2_000L
+        if (bright != AppSettings.inSun && now - since >= wait) AppSettings.inSun = bright
+    }
+
+    override fun onAccuracyChanged(sensor: android.hardware.Sensor?, accuracy: Int) = Unit
+
+    companion object {
+        const val SUN_LUX = 15_000f
+        const val SHADE_LUX = 4_000f
+    }
 }
 
 /**
@@ -182,6 +233,12 @@ fun SettingsSheet(vm: HeadsupViewModel, onDismiss: () -> Unit) {
             ) {
                 SettingSwitch("Reduce animations", "Everything appears at once.", AppSettings.reduceMotion) { AppSettings.setReduceMotion(context, it) }
                 SettingSwitch("Ruler clicks", "A light tap on every step.", AppSettings.haptics) { AppSettings.setHaptics(context, it) }
+            }
+            ToolSection(
+                "In the sun",
+                info = "With the phone's light sensor: in bright sunlight the app switches to Field (most contrast) by itself, and back to your theme in the shade. Off: the theme stays as chosen.",
+            ) {
+                SettingSwitch("Field in bright sun", "Switches by itself, back in the shade.", AppSettings.fieldInSun) { AppSettings.setFieldInSun(context, it) }
             }
             ToolSection(
                 "Layout",

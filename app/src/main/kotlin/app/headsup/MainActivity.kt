@@ -31,6 +31,7 @@ import kotlinx.coroutines.launch
 class MainActivity : ComponentActivity() {
     private lateinit var motion: AppMotion
     private lateinit var recomposer: Recomposer
+    private lateinit var sun: app.headsup.ui.SunWatch
 
     override fun onCreate(savedInstanceState: Bundle?) {
         AppSettings.load(this)
@@ -41,16 +42,25 @@ class MainActivity : ComponentActivity() {
         // scale, or none with Settings › Reduce animations. Like the window's own, it rests while
         // the app is not on screen.
         motion = AppMotion(this)
+        sun = app.headsup.ui.SunWatch(this)
         val context = AndroidUiDispatcher.Main + motion
         recomposer = Recomposer(context)
         lifecycleScope.launch(context, start = CoroutineStart.UNDISPATCHED) { recomposer.runRecomposeAndApplyChanges() }
         lifecycle.addObserver(object : DefaultLifecycleObserver {
-            override fun onStart(owner: LifecycleOwner) = recomposer.resumeCompositionFrameClock()
-            override fun onStop(owner: LifecycleOwner) = recomposer.pauseCompositionFrameClock()
+            override fun onStart(owner: LifecycleOwner) {
+                recomposer.resumeCompositionFrameClock()
+                sun.start()
+            }
+            override fun onStop(owner: LifecycleOwner) {
+                recomposer.pauseCompositionFrameClock()
+                sun.stop()
+            }
         })
         setContent(parent = recomposer) {
             // The theme chosen in Settings (or Studio / Paper as the phone is set), applied at once.
             val palette = AppSettings.current(isSystemInDarkTheme()).palette
+            // Turned on in Settings while the app runs: the sensor starts at once.
+            LaunchedEffect(AppSettings.fieldInSun) { if (AppSettings.fieldInSun) sun.start() else sun.stop() }
             LaunchedEffect(palette) { bars(palette) }
             HeadsupTheme(palette) {
                 // The logo animation plays once per launch, not on rotation.
