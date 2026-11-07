@@ -562,8 +562,8 @@ fun ClipPreview(
     var aid by androidx.compose.runtime.saveable.rememberSaveable { mutableIntStateOf(0) }
     val zebra = aid > 0
     // Before / after: where the line between the picture as shot (left) and as edited (right)
-    // is, a fraction of its width; null off. Dragged sideways on the picture.
-    var split by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf<Float?>(null) }
+    // is, a fraction of its width, while a finger held on the picture moves sideways; null off.
+    var split by remember { mutableStateOf<Float?>(null) }
     var histogramOn by remember { mutableStateOf(false) }
     var histogram by remember { mutableStateOf<FloatArray?>(null) }
     // Which scope shows (a tap on it steps through them): histogram, waveform, RGB parade.
@@ -962,25 +962,34 @@ fun ClipPreview(
                             if (released == null) {
                                 val hold = holdNow ?: return@awaitEachGesture
                                 hold(true)
+                                // Held, then moved sideways: a line follows the finger, the picture as
+                                // shot on its left and as edited on its right; lifted, all as edited.
+                                var splitting = false
                                 do {
                                     val e = awaitPointerEvent(androidx.compose.ui.input.pointer.PointerEventPass.Initial)
+                                    val c = e.changes.firstOrNull { it.id == down.id }
+                                    if (c != null && c.pressed) {
+                                        if (!splitting && kotlin.math.abs(c.position.x - down.position.x) > viewConfiguration.touchSlop) {
+                                            splitting = true
+                                            hold(false)
+                                        }
+                                        if (splitting) {
+                                            c.consume()
+                                            // The finger's place on the picture as it is framed (zoomed and moved).
+                                            val g = geometryRef.value
+                                            val t = reframeTransform(currentReframe, g)
+                                            val px = (c.position.x - g.boxW / 2f - t.translation.x) / t.zoom.coerceAtLeast(0.01f) + g.pictureW / 2f
+                                            split = (px / g.pictureW.coerceAtLeast(1f)).coerceIn(0f, 1f)
+                                        }
+                                    }
                                 } while (e.changes.any { it.pressed })
-                                hold(false)
+                                if (splitting) split = null else hold(false)
                             }
                         }
                     }
                 } else Modifier,
             ).then(
-                // Before / after on: one finger dragged sideways moves the line (nothing else
-                // takes the finger meanwhile).
-                if (split != null) {
-                    Modifier.pointerInput(Unit) {
-                        androidx.compose.foundation.gestures.detectHorizontalDragGestures { change, dx ->
-                            change.consume()
-                            split = ((split ?: 0.5f) + dx / size.width.coerceAtLeast(1)).coerceIn(0f, 1f)
-                        }
-                    }
-                } else Modifier,
+                Modifier
             ).then(
                 // A photo can be looked at closely: pinch to zoom the view, double tap to fit again
                 // (only when the picture is not being framed, masked or written on).
@@ -1774,14 +1783,11 @@ fun ClipPreview(
                 Spacer(Modifier.width(4.dp))
                 // Exposure aids, a tap each: zebra, clipping, false colour, off.
                 if (Build.VERSION.SDK_INT >= 33) ToggleDot(listOf("Z", "Z", "C", "F")[aid], aid > 0) { aid = (aid + 1) % 4 }
-                Spacer(Modifier.width(4.dp))
-                // Before / after with a line across the picture (dragged sideways).
-                if (Build.VERSION.SDK_INT >= 33) ToggleDot("◧", split != null) { split = if (split == null) 0.5f else null }
             } else {
                 // Narrow: the scopes, the exposure aids and before / after behind one dot.
                 Box {
                     var menu by remember { mutableStateOf(false) }
-                    ToggleDot("◎", histogramOn || aid > 0 || split != null) { menu = true }
+                    ToggleDot("◎", histogramOn || aid > 0) { menu = true }
                     androidx.compose.material3.DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
                         val scopes = listOf("Off", "Histogram", "Waveform", "RGB parade")
                         val scopeNow = if (histogramOn) scopeKind + 1 else 0
@@ -1795,11 +1801,6 @@ fun ClipPreview(
                             for ((k, label) in aids.withIndex()) androidx.compose.material3.DropdownMenuItem(
                                 text = { Text((if (k == aid) "● " else "   ") + label) },
                                 onClick = { menu = false; aid = k },
-                            )
-                            androidx.compose.material3.HorizontalDivider()
-                            androidx.compose.material3.DropdownMenuItem(
-                                text = { Text((if (split != null) "● " else "   ") + "Before / after") },
-                                onClick = { menu = false; split = if (split == null) 0.5f else null },
                             )
                         }
                     }
