@@ -45,6 +45,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameMillis
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.input.pointer.pointerInput
@@ -1679,9 +1680,15 @@ fun ClipPreview(
             }
         }
 
+        // How wide the bar is (dp): narrow, the frame rate goes; narrower, the view aids share one dot.
+        var barWidth by remember { mutableIntStateOf(1000) }
+        val barDensity = LocalDensity.current.density
+        val roomy = barWidth >= (if (photoMode) 260 else 420)
+        val wide = barWidth >= (if (photoMode) 220 else 360)
         if (showTransport && !compactTransport) Row(
             Modifier
                 .fillMaxWidth()
+                .onSizeChanged { barWidth = (it.width / barDensity).toInt() }
                 // Sideways, a finger going down the transport folds it and the timeline away.
                 .pointerInput(onCompact, sideways) {
                     // Upright the arrow folds them; only sideways does a finger going down.
@@ -1746,7 +1753,7 @@ fun ClipPreview(
                 maxLines = 1,
             )
             // The shown clip's own frame rate (the export's is chosen on the Export page).
-            clip.meta.frameRate?.takeIf { !photo && !photoMode }?.let { fps ->
+            clip.meta.frameRate?.takeIf { !photo && !photoMode && roomy }?.let { fps ->
                 Text(
                     String.format(java.util.Locale.US, "%.4g fps", fps) + (if (clip.speed != 1f) " · ${String.format(java.util.Locale.US, "%.3g", clip.speed)}×" else ""),
                     Modifier.padding(end = 8.dp),
@@ -1757,18 +1764,47 @@ fun ClipPreview(
             }
             // A ramped clip: a little speed graph.
             if (clip.speedCurve.isNotEmpty() && !photoMode) SpeedRampIcon(Modifier.padding(end = 8.dp), tint = HeadsupColors.TextMuted)
-            // Scopes, a tap each: histogram, waveform, RGB parade, off.
-            ToggleDot(if (!histogramOn) "H" else listOf("H", "W", "P")[scopeKind], histogramOn) {
-                if (!histogramOn) { histogramOn = true; scopeKind = 0 }
-                else if (scopeKind < 2) scopeKind++
-                else { histogramOn = false; scopeKind = 0 }
+            if (wide) {
+                // Scopes, a tap each: histogram, waveform, RGB parade, off.
+                ToggleDot(if (!histogramOn) "H" else listOf("H", "W", "P")[scopeKind], histogramOn) {
+                    if (!histogramOn) { histogramOn = true; scopeKind = 0 }
+                    else if (scopeKind < 2) scopeKind++
+                    else { histogramOn = false; scopeKind = 0 }
+                }
+                Spacer(Modifier.width(4.dp))
+                // Exposure aids, a tap each: zebra, clipping, false colour, off.
+                if (Build.VERSION.SDK_INT >= 33) ToggleDot(listOf("Z", "Z", "C", "F")[aid], aid > 0) { aid = (aid + 1) % 4 }
+                Spacer(Modifier.width(4.dp))
+                // Before / after with a line across the picture (dragged sideways).
+                if (Build.VERSION.SDK_INT >= 33) ToggleDot("◧", split != null) { split = if (split == null) 0.5f else null }
+            } else {
+                // Narrow: the scopes, the exposure aids and before / after behind one dot.
+                Box {
+                    var menu by remember { mutableStateOf(false) }
+                    ToggleDot("◎", histogramOn || aid > 0 || split != null) { menu = true }
+                    androidx.compose.material3.DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+                        val scopes = listOf("Off", "Histogram", "Waveform", "RGB parade")
+                        val scopeNow = if (histogramOn) scopeKind + 1 else 0
+                        for ((k, label) in scopes.withIndex()) androidx.compose.material3.DropdownMenuItem(
+                            text = { Text((if (k == scopeNow) "● " else "   ") + if (k == 0) "No scope" else label) },
+                            onClick = { menu = false; histogramOn = k > 0; scopeKind = (k - 1).coerceAtLeast(0) },
+                        )
+                        if (Build.VERSION.SDK_INT >= 33) {
+                            androidx.compose.material3.HorizontalDivider()
+                            val aids = listOf("No exposure aid", "Zebra", "Clipping", "False colour")
+                            for ((k, label) in aids.withIndex()) androidx.compose.material3.DropdownMenuItem(
+                                text = { Text((if (k == aid) "● " else "   ") + label) },
+                                onClick = { menu = false; aid = k },
+                            )
+                            androidx.compose.material3.HorizontalDivider()
+                            androidx.compose.material3.DropdownMenuItem(
+                                text = { Text((if (split != null) "● " else "   ") + "Before / after") },
+                                onClick = { menu = false; split = if (split == null) 0.5f else null },
+                            )
+                        }
+                    }
+                }
             }
-            Spacer(Modifier.width(4.dp))
-            // Exposure aids, a tap each: zebra, clipping, false colour, off.
-            if (Build.VERSION.SDK_INT >= 33) ToggleDot(listOf("Z", "Z", "C", "F")[aid], aid > 0) { aid = (aid + 1) % 4 }
-            Spacer(Modifier.width(4.dp))
-            // Before / after with a line across the picture (dragged sideways).
-            if (Build.VERSION.SDK_INT >= 33) ToggleDot("◧", split != null) { split = if (split == null) 0.5f else null }
             // Sideways: fold the transport and the timeline away for a bigger picture (upright the
             // arrow is beside the handle under the transport: the transport has no room).
             onCompact?.takeIf { sideways }?.let { fold ->
