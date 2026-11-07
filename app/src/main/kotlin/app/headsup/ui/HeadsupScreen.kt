@@ -563,20 +563,7 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
                 if (photoFolded) {
                     // Folded: sideways a small arrow brings the info row and the album back (or a
                     // swipe up); upright a double tap on the handle above does.
-                    if (wide) {
-                        // A handle, pulled up (or tapped), brings the album back, as the film's timeline.
-                        var pulled by remember { mutableStateOf(0f) }
-                        val drag = androidx.compose.foundation.gestures.rememberDraggableState { dy ->
-                            pulled += dy
-                            if (pulled < -with(density) { 24.dp.toPx() }) { pulled = 0f; compact = false }
-                        }
-                        Box(
-                            Modifier.fillMaxWidth().height(28.dp)
-                                .draggable(drag, Orientation.Vertical, onDragStopped = { pulled = 0f })
-                                .clickable { compact = false },
-                            contentAlignment = Alignment.Center,
-                        ) { Box(Modifier.width(40.dp).height(4.dp).clip(RoundedCornerShape(2.dp)).background(HeadsupColors.Outline)) }
-                    }
+                    // Folded sideways: nothing under the photo; a swipe up brings the album back.
                 } else if (state.clips.isNotEmpty()) {
                     // The album's photos are always shown (also on Export, where the marked ones
                     // are exported); a double tap on the handle folds them away.
@@ -749,6 +736,16 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
     fun onScreenSwipe(swipe: Swipe, upper: Boolean) {
         if (!wide) {
             if (swipe == Swipe.UP) fullscreen = true
+            return
+        }
+        // Albums sideways: up and down fold the album away and back, right goes full screen.
+        if (state.photoProject) {
+            when (swipe) {
+                Swipe.RIGHT -> fullscreen = true
+                Swipe.UP -> compact = false
+                Swipe.DOWN -> if (tool != Tool.FILES) compact = true
+                else -> Unit
+            }
             return
         }
         when {

@@ -972,8 +972,23 @@ fun ClipPreview(
                 if (inspect) {
                     Modifier
                         .pointerInput(Unit) {
-                            detectTransformGestures { centroid, pan, zoomChange, _ ->
-                                zoomViewAt(centroid, zoomChange, pan, size.width.toFloat(), size.height.toFloat())
+                            // Two fingers zoom; one finger moves the view only while it is zoomed.
+                            // At 1× a single finger is left alone, so the screen's swipes (full
+                            // screen, folding the album) still work over the photo.
+                            awaitEachGesture {
+                                awaitFirstDown(requireUnconsumed = false)
+                                do {
+                                    val event = awaitPointerEvent()
+                                    val fingers = event.changes.count { it.pressed }
+                                    if (fingers >= 2 || viewZoom > 1.01f) {
+                                        val zoom = event.calculateZoom()
+                                        val pan = event.calculatePan()
+                                        if (zoom != 1f || pan != Offset.Zero) {
+                                            zoomViewAt(event.calculateCentroid(), zoom, pan, size.width.toFloat(), size.height.toFloat())
+                                            event.changes.forEach { it.consume() }
+                                        }
+                                    }
+                                } while (event.changes.any { it.pressed })
                             }
                         }
                         .pointerInput(Unit) {
