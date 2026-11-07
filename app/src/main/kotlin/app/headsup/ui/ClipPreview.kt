@@ -263,6 +263,12 @@ fun ClipPreview(
     texts: List<TextItem> = emptyList(),
     /** Set while a text is edited: a finger on the picture places it (0..1 of the frame). */
     onMoveText: ((Float, Float) -> Unit)? = null,
+    /** The text (or logo) being edited: framed with handles, as in a phone editor. */
+    selectedTextId: Long? = null,
+    /** The selected text resized or turned (its handle, two fingers). */
+    onTextChange: ((Long, (TextItem) -> TextItem) -> Unit)? = null,
+    onDeleteText: ((Long) -> Unit)? = null,
+    onSelectText: ((Long) -> Unit)? = null,
     /** Only photos in the project: no play button or time. */
     photoMode: Boolean = false,
     /** Values of the texts' data fields at a position in this clip. */
@@ -1564,6 +1570,11 @@ fun ClipPreview(
                 }
                 // Texts sit on the frame (not the picture), over the dashboard, as in the export.
                 val textMover by rememberUpdatedState(onMoveText)
+                val textChange by rememberUpdatedState(onTextChange)
+                val textDelete by rememberUpdatedState(onDeleteText)
+                val textSelect by rememberUpdatedState(onSelectText)
+                val textsNow by rememberUpdatedState(texts)
+                val selectedTextNow by rememberUpdatedState(selectedTextId)
                 // While a text is dragged, guides show the middle and the margins it snaps to.
                 var placing by remember { mutableStateOf(false) }
                 Canvas(
@@ -1572,15 +1583,76 @@ fun ClipPreview(
                             Modifier
                         } else {
                             Modifier.pointerInput(Unit) {
+                                val grab = 28.dp.toPx()
                                 awaitEachGesture {
                                     val down = awaitFirstDown()
                                     down.consume()
-                                    placing = true
-                                    textMover?.invoke(down.position.x / size.width, down.position.y / size.height)
-                                    drag(down.id) { change ->
-                                        change.consume()
-                                        textMover?.invoke((change.position.x / size.width).coerceIn(0f, 1f), (change.position.y / size.height).coerceIn(0f, 1f))
+                                    val w = size.width.toFloat()
+                                    val h = size.height.toFloat()
+                                    val items = textsNow
+                                    val sel = items.firstOrNull { it.id == selectedTextNow }
+                                    fun boxOf(t: TextItem) = TextRenderer.box(t, w, h)
+                                    // A point taken into an item's own (unturned) space.
+                                    fun local(t: TextItem, p: Offset): Offset {
+                                        val b = boxOf(t)
+                                        val a = Math.toRadians(-t.angle.toDouble())
+                                        val dx = p.x - b.centerX()
+                                        val dy = p.y - b.centerY()
+                                        return Offset(b.centerX() + (dx * kotlin.math.cos(a) - dy * kotlin.math.sin(a)).toFloat(), b.centerY() + (dx * kotlin.math.sin(a) + dy * kotlin.math.cos(a)).toFloat())
                                     }
+                                    val pad = TEXT_FRAME_PAD.toPx()
+                                    if (sel != null) {
+                                        val b = boxOf(sel)
+                                        val p = local(sel, down.position)
+                                        // ✕ at the top left: taken away.
+                                        if (kotlin.math.hypot(p.x - (b.left - pad), p.y - (b.top - pad)) < grab) {
+                                            textDelete?.invoke(sel.id)
+                                            return@awaitEachGesture
+                                        }
+                                        // ↘ at the bottom right: dragged, it sizes and turns the item about its middle.
+                                        if (kotlin.math.hypot(p.x - (b.right + pad), p.y - (b.bottom + pad)) < grab) {
+                                            val c = Offset(b.centerX(), b.centerY())
+                                            val d0 = down.position - c
+                                            val len0 = d0.getDistance().coerceAtLeast(1f)
+                                            val a0 = kotlin.math.atan2(d0.y, d0.x)
+                                            val size0 = sel.size
+                                            val angle0 = sel.angle
+                                            drag(down.id) { change ->
+                                                change.consume()
+                                                val d = change.position - c
+                                                val turned = angle0 + Math.toDegrees((kotlin.math.atan2(d.y, d.x) - a0).toDouble()).toFloat()
+                                                textChange?.invoke(sel.id) { it.copy(size = (size0 * d.getDistance() / len0).coerceIn(0.01f, 0.5f), angle = snapAngle(turned)) }
+                                            }
+                                            return@awaitEachGesture
+                                        }
+                                    }
+                                    // Touching another text or logo picks it.
+                                    val hit = items.lastOrNull { t ->
+                                        val b = boxOf(t)
+                                        val p = local(t, down.position)
+                                        p.x in b.left - pad..b.right + pad && p.y in b.top - pad..b.bottom + pad
+                                    }
+                                    if (hit != null && hit.id != sel?.id) textSelect?.invoke(hit.id)
+                                    val target = hit ?: sel ?: return@awaitEachGesture
+                                    placing = true
+                                    // Moved by the finger's travel (not jumping to it); two fingers size and turn it.
+                                    val start = Offset(target.x * w, target.y * h)
+                                    var moved = Offset.Zero
+                                    do {
+                                        val event = awaitPointerEvent()
+                                        val fingers = event.changes.count { it.pressed }
+                                        if (fingers >= 2) {
+                                            val zoom = event.calculateZoom()
+                                            val turn = event.calculateRotation()
+                                            moved += event.calculatePan()
+                                            textChange?.invoke(target.id) { it.copy(size = (it.size * zoom).coerceIn(0.01f, 0.5f), angle = snapAngle(it.angle + turn)) }
+                                        } else {
+                                            val ch = event.changes.firstOrNull { it.id == down.id } ?: event.changes.firstOrNull()
+                                            if (ch != null) moved += ch.positionChange()
+                                        }
+                                        textMover?.invoke(((start.x + moved.x) / w).coerceIn(0f, 1f), ((start.y + moved.y) / h).coerceIn(0f, 1f))
+                                        event.changes.forEach { it.consume() }
+                                    } while (event.changes.any { it.pressed })
                                     placing = false
                                 }
                             }
@@ -1599,6 +1671,31 @@ fun ClipPreview(
                     if (texts.isNotEmpty()) {
                         val values = if (texts.any { app.headsup.core.edit.TextFields.hasFields(it.text) }) textValues(positionMs) else emptyMap()
                         drawIntoCanvas { TextRenderer.draw(it.nativeCanvas, size.width, size.height, texts, timelineOffsetMs + clipTimelineMs, values) }
+                    }
+                    // The text or logo being edited: a dashed frame, ✕ to take it away, ↘ to size and turn it.
+                    texts.firstOrNull { it.id == selectedTextId }?.takeIf { onMoveText != null }?.let { t ->
+                        val b = TextRenderer.box(t, size.width, size.height)
+                        val pad = TEXT_FRAME_PAD.toPx()
+                        rotate(t.angle, Offset(b.centerX(), b.centerY())) {
+                            val tl = Offset(b.left - pad, b.top - pad)
+                            val br = Offset(b.right + pad, b.bottom + pad)
+                            drawRect(Color.White, tl, androidx.compose.ui.geometry.Size(br.x - tl.x, br.y - tl.y), style = Stroke(1.5.dp.toPx(), pathEffect = PathEffect.dashPathEffect(floatArrayOf(14f, 10f))))
+                            val r = 12.dp.toPx()
+                            for (c in listOf(tl, br)) {
+                                drawCircle(Color.White, r, c)
+                                drawCircle(Color.Black.copy(alpha = 0.25f), r, c, style = Stroke(1.dp.toPx()))
+                            }
+                            val k = r * 0.42f
+                            // ✕
+                            drawLine(Color.Black, tl + Offset(-k, -k), tl + Offset(k, k), 2.dp.toPx())
+                            drawLine(Color.Black, tl + Offset(-k, k), tl + Offset(k, -k), 2.dp.toPx())
+                            // ↘ with its two heads (size and turn).
+                            drawLine(Color.Black, br + Offset(-k, -k), br + Offset(k, k), 2.dp.toPx())
+                            drawLine(Color.Black, br + Offset(k, k), br + Offset(k, 0f), 2.dp.toPx())
+                            drawLine(Color.Black, br + Offset(k, k), br + Offset(0f, k), 2.dp.toPx())
+                            drawLine(Color.Black, br + Offset(-k, -k), br + Offset(-k, 0f), 2.dp.toPx())
+                            drawLine(Color.Black, br + Offset(-k, -k), br + Offset(0f, -k), 2.dp.toPx())
+                        }
                     }
                 }
                 if (fadeGain < 1f) Box(Modifier.matchParentSize().background(Color.Black.copy(alpha = 1f - fadeGain)))
@@ -1826,6 +1923,16 @@ fun ClipPreview(
 }
 
 private const val SAMPLE_WIDTH = 192
+
+/** Room between a selected text and its frame. */
+private val TEXT_FRAME_PAD = 8.dp
+
+/** A turn near level or a quarter: made exact. */
+private fun snapAngle(a: Float): Float {
+    val wrapped = ((a + 180f) % 360f + 360f) % 360f - 180f
+    val nearest = Math.round(wrapped / 90f) * 90f
+    return if (kotlin.math.abs(wrapped - nearest) < 4f) nearest else wrapped
+}
 
 
 /** How long before a cut the next clip starts (hidden), and when the picture switches to it. */

@@ -491,7 +491,12 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
                         textValues = state.placesVersion.let { _ -> { pos -> vm.textValues(state, selected, pos) } },
                         routeOverlay = if (state.routeMap.enabled) routeOverlayFor(vm, state, selected) else null,
                         // A finger on the picture places the text being edited, or the route map.
-                        onMoveText = if (fullscreen) null else state.selectedText?.takeIf { editingTexts }?.let { id -> { x, y -> vm.updateText(id) { snapText(it, x, y) } } }
+                        // Texts and logos on the picture: picked by a touch, moved, sized and turned (as in a phone editor).
+                        onMoveText = if (fullscreen || !editingTexts) null else { x, y -> state.selectedText?.let { id -> vm.updateText(id) { snapText(it, x, y) } } },
+                        selectedTextId = state.selectedText.takeIf { editingTexts },
+                        onTextChange = { id, change -> vm.updateText(id, change) },
+                        onDeleteText = { id -> vm.removeText(id) },
+                        onSelectText = { id -> vm.selectText(id) },
                             ?: if (tool == Tool.OVERLAYS && effectKind == EffectKind.MAP && state.routeMap.enabled) { x: Float, y: Float -> vm.updateRouteMap { it.copy(x = x, y = y) } } else null,
                         cutScrub = cutScrub,
                         onFrameSource = { frameSource.value = it },

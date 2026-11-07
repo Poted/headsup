@@ -54,6 +54,8 @@ data class TextItem(
      */
     val image: String? = null,
     val opacity: Float = 1f,
+    /** Turned about its middle, degrees clockwise. */
+    val angle: Float = 0f,
 ) {
     val isLogo: Boolean get() = image != null
 

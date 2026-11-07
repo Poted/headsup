@@ -65,6 +65,31 @@ object TextRenderer {
         android.graphics.BitmapFactory.decodeFile(path, android.graphics.BitmapFactory.Options().apply { inSampleSize = sample })
     }.getOrNull()?.also { logos.put(path, it) }
 
+    /**
+     * Where [item] sits on a [w]×[h] frame before it is turned: its box in pixels (the letters'
+     * block, or the logo's picture). Turned by [TextItem.angle] about the box's middle.
+     */
+    fun box(item: TextItem, w: Float, h: Float, values: Map<String, String> = emptyMap()): android.graphics.RectF {
+        val it2 = filled(item, values)
+        if (it2.isLogo) {
+            val bmp = it2.image?.let { logo(it) }
+            val width = it2.size * 3f * minOf(w, h)
+            val height = if (bmp != null) width * bmp.height / bmp.width.coerceAtLeast(1) else width
+            val cx = it2.x * w
+            val cy = it2.y * h
+            return android.graphics.RectF(cx - width / 2f, cy - height / 2f, cx + width / 2f, cy + height / 2f)
+        }
+        val size = it2.size * minOf(w, h)
+        val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply { typeface = typeface(it2.font); textSize = size }
+        val lines = it2.text.split('\n')
+        val blockW = lines.maxOf { paint.measureText(it) }
+        val blockH = size * 1.2f * lines.size
+        val cx = it2.x * w
+        val cy = it2.y * h
+        val left = if (it2.align == TextAlign.LEFT) cx else cx - blockW / 2f
+        return android.graphics.RectF(left, cy - blockH / 2f, left + blockW, cy + blockH / 2f)
+    }
+
     /** A logo: its picture at the text's place and timing, as wide as size × 3 of the frame's short side. */
     private fun drawLogo(canvas: Canvas, w: Float, h: Float, item: TextItem, f: TextFrame) {
         val bmp = logo(item.image ?: return) ?: return
@@ -73,7 +98,10 @@ object TextRenderer {
         val cx = item.x * w
         val cy = item.y * h - f.offset * height
         val paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG).apply { alpha = (255f * f.alpha * item.opacity).toInt().coerceIn(0, 255) }
+        canvas.save()
+        canvas.rotate(item.angle, cx, cy)
         canvas.drawBitmap(bmp, null, android.graphics.RectF(cx - width / 2f, cy - height / 2f, cx + width / 2f, cy + height / 2f), paint)
+        canvas.restore()
     }
 
     private fun drawItem(canvas: Canvas, w: Float, h: Float, item: TextItem, f: TextFrame) {
@@ -95,6 +123,8 @@ object TextRenderer {
         val left = if (item.align == TextAlign.LEFT) cx else cx - blockW / 2f
         val top = cy - blockH / 2f
         canvas.save()
+        // Turned about the middle of its block.
+        if (item.angle != 0f) canvas.rotate(item.angle, left + blockW / 2f, cy)
         canvas.scale(f.scale, f.scale, if (item.align == TextAlign.LEFT) left else cx, cy)
         val alpha = (f.alpha * Color.alpha(item.colour)).toInt().coerceIn(0, 255)
         val baseline0 = top + size
