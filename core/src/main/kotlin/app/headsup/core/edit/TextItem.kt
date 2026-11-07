@@ -57,6 +57,13 @@ data class TextItem(
 ) {
     val isLogo: Boolean get() = image != null
 
+    /**
+     * As shown on an album's photo: there is no timeline, so it is there all the time, still (an
+     * album's texts once kept the album's length when they were made, and photos added after
+     * that fell outside it).
+     */
+    fun shownAlways(): TextItem = copy(startMs = 0L, lengthMs = 315_000_000_000L, animIn = TextAnim.NONE, animOut = TextAnim.NONE)
+
     /** Whether it shows on the photo [clipId] in group [groupId]. */
     fun showsOn(clipId: Long, groupId: Long?): Boolean = when {
         onlyClip != null -> onlyClip == clipId

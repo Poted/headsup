@@ -4439,7 +4439,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                         // Texts as they are in the middle of the photo's time on the timeline (after any fade in).
                         // Data fields filled in for this photo.
                         texts = withContext(Dispatchers.IO) { textValues(s, clip, 0L) }.let { values ->
-                            s.texts.filter { it.showsOn(clip.id, clip.groupId) }.map { t -> t.copy(text = app.headsup.core.edit.TextFields.fill(t.text, values)) }
+                            s.texts.filter { it.showsOn(clip.id, clip.groupId) }.map { t -> (if (s.photoProject) t.shownAlways() else t).copy(text = app.headsup.core.edit.TextFields.fill(t.text, values)) }
                         },
                         textMs = start + clip.timelineDurationMs / 2,
                         routeMap = s.routeMap,

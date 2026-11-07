@@ -481,7 +481,7 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
                         neighbourFrom = state.previewNeighbourFrom,
                         cubesFor = state.previewCubesFor,
                         // In an album each photo shows only its own texts (or its group's, or all photos').
-                        texts = if (state.photoProject) state.texts.filter { it.showsOn(selected.id, selected.groupId) } else state.texts,
+                        texts = if (state.photoProject) state.texts.filter { it.showsOn(selected.id, selected.groupId) }.map { it.shownAlways() } else state.texts,
                         photoMode = state.photoProject,
                         showTransport = fullscreenFilm || (!fullscreen && (!state.photoProject || tool == Tool.EDIT || tool == Tool.COLOUR)),
                         compactTransport = folded || fullscreenFilm || photoFolded,
@@ -5325,7 +5325,17 @@ private fun TextPanel(state: UiState, vm: HeadsupViewModel, at: () -> Long) {
                         val v = values[f.key]
                         FilterChip(
                             selected = item.text.contains("{${f.key}}"),
-                            onClick = { update { it.copy(text = if (it.text == "Text") "{${f.key}}" else it.text + " {${f.key}}") } },
+                            // In the text: tapped again, taken out (every copy of it); else added at the end.
+                            onClick = {
+                                update {
+                                    val tag = "{${f.key}}"
+                                    when {
+                                        it.text.contains(tag) -> it.copy(text = it.text.replace(tag, "").replace(Regex(" {2,}"), " ").trim().ifEmpty { "Text" })
+                                        it.text == "Text" -> it.copy(text = tag)
+                                        else -> it.copy(text = it.text + " " + tag)
+                                    }
+                                }
+                            },
                             label = { Text(if (v != null) "${f.label}: $v" else f.label, maxLines = 1) },
                             enabled = v != null,
                         )
