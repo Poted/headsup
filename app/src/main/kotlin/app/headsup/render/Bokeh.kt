@@ -23,7 +23,14 @@ object Bokeh {
      * The blurred background of [photo] (upright, as shown) as a layer the size of a [side]-long
      * copy, transparent where it stays sharp; null when there is nothing to blur or nothing to keep.
      */
-    fun layer(context: Context, photo: Bitmap, key: String, effects: EffectSettings, masks: List<ColourMask>, side: Int): Bitmap? {
+    fun layer(context: Context, photo: Bitmap, key: String, effects: EffectSettings, masks: List<ColourMask>, side: Int): Bitmap? =
+        layerWithOutline(context, photo, key, effects, masks, side)?.first
+
+    /**
+     * [layer], with the outline of what stays sharp (white along the edge, a dark rim outside it,
+     * the copy's size) to show for a moment what was found.
+     */
+    fun layerWithOutline(context: Context, photo: Bitmap, key: String, effects: EffectSettings, masks: List<ColourMask>, side: Int): Pair<Bitmap, Bitmap>? {
         if (effects.bokeh <= 0f) return null
         val small = app.headsup.color.Segmenter.scaled(photo, side)
         val w = small.width
@@ -41,7 +48,35 @@ object Bokeh {
         val px = IntArray(w * h)
         small.getPixels(px, 0, w, 0, 0, w, h)
         val out = LensBlur.background(px, w, h, keep, LensBlur.radiusFor(effects.bokeh, maxOf(w, h)), effects.bokehHighlights)
-        return Bitmap.createBitmap(out, w, h, Bitmap.Config.ARGB_8888)
+        return Bitmap.createBitmap(out, w, h, Bitmap.Config.ARGB_8888) to outline(keep, w, h)
+    }
+
+    /** The edge of [keep] ([w]×[h]): a white line two pixels wide, and a soft dark rim just outside it. */
+    private fun outline(keep: FloatArray, w: Int, h: Int): Bitmap {
+        val inside = BooleanArray(w * h) { keep[it] >= 0.5f }
+        // Distance (in steps) from the edge, up to 3, on the outside and inside.
+        val dist = IntArray(w * h) { 99 }
+        for (y in 0 until h) for (x in 0 until w) {
+            val i = y * w + x
+            val me = inside[i]
+            if ((x > 0 && inside[i - 1] != me) || (x < w - 1 && inside[i + 1] != me) || (y > 0 && inside[i - w] != me) || (y < h - 1 && inside[i + w] != me)) dist[i] = 0
+        }
+        repeat(3) { step ->
+            for (y in 0 until h) for (x in 0 until w) {
+                val i = y * w + x
+                if (dist[i] != 99) continue
+                if ((x > 0 && dist[i - 1] == step) || (x < w - 1 && dist[i + 1] == step) || (y > 0 && dist[i - w] == step) || (y < h - 1 && dist[i + w] == step)) dist[i] = step + 1
+            }
+        }
+        val px = IntArray(w * h) { i ->
+            val d = dist[i]
+            when {
+                d <= 1 -> 0xFFFFFFFF.toInt()
+                d <= 3 && !inside[i] -> 0x66000000
+                else -> 0
+            }
+        }
+        return Bitmap.createBitmap(px, w, h, Bitmap.Config.ARGB_8888)
     }
 
     /** [photo] with [layer] laid over it (a copy, in the photo's own config); [degrees] turns the layer to the photo's own orientation. */

@@ -20,6 +20,8 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Icon
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.graphics.Color
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -668,17 +670,35 @@ fun ClipPreview(
             runCatching { app.headsup.color.SubjectMaps.find(context, key, picture) }.onFailure { it.printStackTrace() }.getOrNull()
         }
     }
-    // Bokeh: the photo's background blurred as by a wide-open lens, laid over it (worked out on a
-    // smaller copy, a moment after the ruler stops).
-    val bokehPhoto by produceState<ImageBitmap?>(null, photoBitmap, effects.bokeh, effects.bokehHighlights, effects.bokehMask, effects.bokehInvert, clip.masks, subjectVersion) {
+    // Bokeh: the photo's background blurred as by a wide-open lens, a layer laid over the photo
+    // (worked out on a smaller copy, a moment after the ruler stops). Its own settings (the clip's),
+    // so holding the picture for the original does not work it out again; and while it is worked
+    // out, and for a moment after, what stays sharp is outlined.
+    val bokehSettings = clip.effects
+    var bokehWorking by remember { mutableStateOf(false) }
+    var bokehOutline by remember { mutableStateOf<Bitmap?>(null) }
+    val outlineAlpha = remember { androidx.compose.animation.core.Animatable(0f) }
+    val bokehPhoto by produceState<ImageBitmap?>(null, photoBitmap, bokehSettings.bokeh, bokehSettings.bokehHighlights, bokehSettings.bokehMask, bokehSettings.bokehInvert, clip.masks, subjectVersion) {
         val src = photoBitmap?.asAndroidBitmap()
-        if (!photo || src == null || effects.bokeh <= 0f) { value = null; return@produceState }
+        if (!photo || src == null || bokehSettings.bokeh <= 0f) { value = null; bokehOutline = null; return@produceState }
         delay(150)
-        value = withContext(Dispatchers.Default) {
-            runCatching {
-                app.headsup.render.Bokeh.layer(context, src, clip.meta.uri.toString(), effects, clip.masks, app.headsup.render.Bokeh.PREVIEW)
-                    ?.let { app.headsup.render.Bokeh.over(src, it).asImageBitmap() }
-            }.onFailure { it.printStackTrace() }.getOrNull()
+        bokehWorking = true
+        try {
+            val made = withContext(Dispatchers.Default) {
+                runCatching {
+                    app.headsup.render.Bokeh.layerWithOutline(context, src, clip.meta.uri.toString(), bokehSettings, clip.masks, app.headsup.render.Bokeh.PREVIEW)
+                }.onFailure { it.printStackTrace() }.getOrNull()
+            }
+            value = made?.let { app.headsup.render.Bokeh.over(src, it.first).asImageBitmap() }
+            bokehOutline = made?.second
+        } finally {
+            bokehWorking = false
+        }
+        // The outline shows a moment, then fades.
+        if (bokehOutline != null) {
+            outlineAlpha.snapTo(1f)
+            delay(1200)
+            outlineAlpha.animateTo(0f, androidx.compose.animation.core.tween(800))
         }
     }
     val geometryRef = remember { GeometryRef(FrameGeometry(1f, 1f, 1f, 1f)) }
@@ -1243,9 +1263,20 @@ fun ClipPreview(
                         translationX = t.translation.x + (c?.let { it.dx * size.width * t.zoom } ?: 0f)
                         translationY = t.translation.y + (c?.let { it.dy * size.height * t.zoom } ?: 0f)
                     }
-                val bitmap = bokehPhoto ?: photoBitmap
+                val bitmap = photoBitmap
                 if (photo) {
                     if (bitmap != null) Image(bitmap, contentDescription = clip.meta.name, contentScale = ContentScale.FillBounds, modifier = pictureLayer)
+                    // Bokeh over the photo: not while the original is held; with the before / after
+                    // line, only on its edited side (right of the line).
+                    bokehPhoto?.takeIf { !showingOriginal && bitmap != null }?.let { b ->
+                        Image(
+                            b, contentDescription = null, contentScale = ContentScale.FillBounds,
+                            modifier = pictureLayer.drawWithContent {
+                                val at = split
+                                if (at == null) drawContent() else clipRect(left = at * size.width) { this@drawWithContent.drawContent() }
+                            },
+                        )
+                    }
                     if (photoFrom != clip.meta.uri) {
                         // The next photo is being developed: the previous one is dimmed under a spinner.
                         Box(Modifier.matchParentSize().background(Color.Black.copy(alpha = 0.55f)), contentAlignment = Alignment.Center) {
@@ -1803,6 +1834,31 @@ fun ClipPreview(
                 }
                 if (fadeGain < 1f) Box(Modifier.matchParentSize().background(Color.Black.copy(alpha = 1f - fadeGain)))
                 if (showGrid) Canvas(Modifier.matchParentSize()) { drawThirds() }
+                // What bokeh keeps sharp, outlined for a moment after it is found.
+                val outline = bokehOutline
+                if (outline != null && outlineAlpha.value > 0f && !showingOriginal) {
+                    Canvas(Modifier.matchParentSize()) {
+                        val g = geometryRef.value
+                        val t = reframeTransform(reframe, g)
+                        val p = android.graphics.Paint(android.graphics.Paint.FILTER_BITMAP_FLAG).apply { alpha = (255 * outlineAlpha.value).toInt().coerceIn(0, 255) }
+                        drawIntoCanvas {
+                            TextRenderer.drawSubject(
+                                it.nativeCanvas, p, outline, size.width, size.height, g.pictureW, g.pictureH,
+                                t.translation.x, t.translation.y, reframe.angleDegrees, t.zoom, reframe.mirrored,
+                                reframe.warp?.let { w -> perspectiveMatrix(w, g.pictureW, g.pictureH) },
+                            )
+                        }
+                    }
+                }
+                if (bokehWorking && !showingOriginal) {
+                    Text(
+                        "Bokeh…",
+                        Modifier.align(Alignment.TopCenter).padding(top = 10.dp).clip(RoundedCornerShape(50))
+                            .background(Color.Black.copy(alpha = 0.6f)).padding(horizontal = 12.dp, vertical = 4.dp),
+                        color = Color.White,
+                        style = MaterialTheme.typography.labelLarge,
+                    )
+                }
                 if (showingOriginal) {
                     Text(
                         originalLabel,

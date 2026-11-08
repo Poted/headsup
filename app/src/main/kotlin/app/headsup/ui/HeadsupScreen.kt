@@ -459,7 +459,7 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
                         // (Not while the finger shapes a mask or measures a colour.)
                         // On every page where a finger on the picture has nothing else to do (not
                         // while framing, writing, shaping a mask or measuring a colour).
-                        onHoldOriginal = if (!measuring && !shaping && !pickingColour && !pickingPoint && !framing && !editingTexts) { held ->
+                        onHoldOriginal = if (!measuring && !shaping && !pickingColour && !pickingPoint && !framing && !(editingTexts && state.selectedText != null)) { held ->
                             if (editingMasks) hideMask = held else showOriginal = held
                         } else null,
                         showingOriginal = showOriginal || hideMask,
@@ -972,8 +972,8 @@ private fun UndoRedo(
             text = {
                 Text(
                     "Since opened: back to how the project was when you opened it.\n\nEvery edit: colour, masks, " +
-                        (if (album) "framing and effects removed from every photo, however long ago they were made; the photos and texts stay."
-                        else "framing, effects, speed and cuts removed from every clip, however long ago they were made; the files, sound and texts stay.") + "\n\nEither way, undo brings the changes back.",
+                        (if (album) "framing, effects, texts and stickers removed from every photo, however long ago they were made; the photos stay."
+                        else "framing, effects, speed, cuts, texts and stickers removed from every clip, however long ago they were made; the files and sound stay.") + "\n\nEither way, undo brings the changes back.",
                 )
             },
             confirmButton = {

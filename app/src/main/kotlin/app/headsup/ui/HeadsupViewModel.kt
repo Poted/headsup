@@ -1528,7 +1528,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
     /**
      * Every picture edit gone, however long ago it was made (also in earlier sessions): colour,
      * masks, LUTs, framing and perspective, effects, speed, cuts, fades, blends, raw development and
-     * the groups' and all clips' corrections. The files, their order, sound and texts stay; pieces
+     * the groups' and all clips' corrections, texts and stickers. The files, their order and sound stay; pieces
      * of one file cut apart become one clip again. A step of its own, so undo brings it all back.
      */
     fun resetAllEdits() {
@@ -1557,6 +1557,8 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                 fast = null,
                 matchSession = null,
                 scope = null,
+                texts = emptyList(),
+                selectedText = null,
             )
         }
         record(_state.value.snapshot())
