@@ -235,12 +235,6 @@ fun SettingsSheet(vm: HeadsupViewModel, onDismiss: () -> Unit) {
                 SettingSwitch("Ruler clicks", "A light tap on every step.", AppSettings.haptics) { AppSettings.setHaptics(context, it) }
             }
             ToolSection(
-                "In the sun",
-                info = "With the phone's light sensor: in bright sunlight the app switches to Field (most contrast) by itself, and back to your theme in the shade. Off: the theme stays as chosen.",
-            ) {
-                SettingSwitch("Field in bright sun", "Switches by itself, back in the shade.", AppSettings.fieldInSun) { AppSettings.setFieldInSun(context, it) }
-            }
-            ToolSection(
                 "Layout",
                 info = "Held sideways the picture is on the left and the tools on the right. Left-handed: the tools on the left, under the left thumb, and the picture on the right. A swipe towards the tools' side still goes full screen.",
             ) {
@@ -322,7 +316,8 @@ private fun ThemeSection(context: Context) {
     ToolSection(
         "Theme",
         info = "Each theme is made for a way of working. System: Studio or Paper as the phone is set to dark or light. " +
-            Theme.entries.joinToString(" ") { "${it.label}: ${it.about}" },
+            Theme.entries.joinToString(" ") { "${it.label}: ${it.about}" } +
+            " Field in bright sun: with the phone's light sensor the app switches to Field by itself in bright sunlight, and back to your theme in the shade.",
     ) {
         ChoiceGrid(
             options.map { it?.label ?: "System" },
@@ -336,6 +331,7 @@ private fun ThemeSection(context: Context) {
             style = MaterialTheme.typography.labelSmall,
             color = HeadsupColors.TextMuted,
         )
+        SettingSwitch("Field in bright sun", "Switches by itself, back in the shade.", AppSettings.fieldInSun) { AppSettings.setFieldInSun(context, it) }
     }
 }
 

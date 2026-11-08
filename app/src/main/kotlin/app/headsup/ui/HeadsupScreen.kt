@@ -699,6 +699,8 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
     val tools: @Composable ColumnScope.() -> Unit = tools@{
             if (fullscreen) return@tools
             val panelScroll = rememberScrollState()
+            // Each tool opens at its top (Adjust's top is its layers), not where another was left.
+            LaunchedEffect(tool) { panelScroll.scrollTo(0) }
             Column(
                 Modifier
                     .weight(1f)
@@ -2988,37 +2990,71 @@ private fun AdjustHeader(
     onMaskTools: (Boolean) -> Unit,
 ): Boolean {
     val album = state.photoProject
+    val what = if (album) "photo" else "clip"
     val scope = when (state.target) {
         GradeTarget.GROUP -> 1
         GradeTarget.GLOBAL -> 2
         GradeTarget.CLIP, GradeTarget.MASK -> 0
     }
-    Segmented(listOf(if (album) "This photo" else "This clip", "Group", if (album) "All photos" else "All clips"), scope, { i ->
-        if (i != scope) {
-            vm.setTarget(listOf(GradeTarget.CLIP, GradeTarget.GROUP, GradeTarget.GLOBAL)[i])
-            // The looks (grain, glow…) follow the same choice: this clip's, or set on all.
-            vm.setEffectsOnAll(i == 2)
+    val group = state.groupOf(clip)
+    val scopes = listOf(if (album) "This photo" else "This clip", "Group", if (album) "All photos" else "All clips")
+    // What is used now and then (what the page works on, groups, keys, copy and paste) is in a
+    // sheet from the bottom; the top of the page is the layers.
+    var options by rememberSaveable { mutableStateOf(false) }
+    val keys = if (!clip.meta.isPhoto) clip.gradeKeys.size else 0
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Text(
+            when (scope) {
+                1 -> "Group" + (group?.let { " · ${it.name}" } ?: "")
+                2 -> scopes[2]
+                else -> "Layers"
+            }.uppercase(),
+            Modifier.weight(1f),
+            style = MaterialTheme.typography.labelSmall.copy(letterSpacing = 1.2.sp, fontWeight = androidx.compose.ui.text.font.FontWeight.Medium),
+            color = HeadsupColors.TextMuted,
+            maxLines = 1,
+        )
+        SmallAction(scopes[scope] + (if (scope == 0 && keys > 0) " · ◆ $keys" else "") + "  ▾", { options = true })
+    }
+    if (options) {
+        OptionsSheet(if (album) "This photo's adjustments" else "This clip's adjustments", onDismiss = { options = false }) {
+            ToolSection(
+                "Applies to",
+                info = "This $what: the corrections are its own. Group: set on every $what of its group ($what" + "s shot the same way). All: set on every $what of the ${if (album) "album" else "film"}, and on those added later; each shows it under This $what.",
+            ) {
+                ChoiceGrid(scopes, scope, { i ->
+                    if (i != scope) {
+                        vm.setTarget(listOf(GradeTarget.CLIP, GradeTarget.GROUP, GradeTarget.GLOBAL)[i])
+                        // The looks (grain, glow…) follow the same choice: this clip's, or set on all.
+                        vm.setEffectsOnAll(i == 2)
+                    }
+                })
+            }
+            when (scope) {
+                1 -> GroupControls(state, clip, index, group, vm)
+                2 -> ToolSection(scopes[2], info = "Reset all takes the changes set on every $what off.") {
+                    PanelAction("Reset all", { vm.resetSyncedPhotos(); options = false }, Modifier.fillMaxWidth())
+                }
+                else -> {
+                    ToolSection(
+                        "Look",
+                        info = "Copy takes this $what's look (corrections, LUT and its effects; not masks or framing), Paste puts it on the $what shown, Copy to all on every $what. Reset takes the corrections and the look's effects off.",
+                    ) { LookActions(state, vm) }
+                    if (!clip.meta.isPhoto) GradeKeyRow(state, clip, vm, playhead, onSeek)
+                }
+            }
         }
-    })
+    }
     return when (scope) {
         1 -> {
-            GroupControls(state, clip, index, state.groupOf(clip), vm)
-            false
-        }
-        2 -> {
-            // As everywhere on this page: what it does, then its actions in a row on the left.
-            ToolSection(
-                if (album) "All photos" else "All clips",
-                info = if (album) "A change is set on every photo: each shows it under This photo. Reset all takes these shared changes off." else "A change is set on every clip: each shows it under This clip. Reset all takes these shared changes off.",
-            ) {
-                PanelAction("Reset all", { vm.resetSyncedPhotos() }, Modifier.fillMaxWidth())
+            if (group == null) {
+                Hint("This $what is in no group yet.")
+                PanelAction("Choose a group", { options = true }, Modifier.fillMaxWidth())
             }
             false
         }
-        else -> {
-            if (!clip.meta.isPhoto && state.target == GradeTarget.CLIP) GradeKeyRow(state, clip, vm, playhead, onSeek)
-            Layers(state, clip, vm, pictureSource, maskTools, onMaskTools)
-        }
+        2 -> false
+        else -> Layers(state, clip, vm, pictureSource, maskTools, onMaskTools)
     }
 }
 
@@ -3313,15 +3349,6 @@ private fun ColourPage(
         }
         return
     }
-    // Which layer the corrections below are for.
-    SectionCaption(
-        when (target) {
-            GradeTarget.CLIP -> "Base"
-            GradeTarget.MASK -> mask?.let { "${state.selectedMask + 1} · ${maskName(it)}" } ?: "Mask"
-            GradeTarget.GROUP -> group?.name ?: "Group"
-            GradeTarget.GLOBAL -> if (album) "All photos" else "All clips"
-        },
-    )
     val sections = listOfNotNull("RAW".takeIf { rawPhoto }) +
         ColourSection.entries.filter { s -> options.any { it.section == s } || (s == ColourSection.EFFECTS && baseEffects) }.map { it.label }
     val section = when {
@@ -4081,12 +4108,11 @@ private fun LooksPanel(state: UiState, vm: HeadsupViewModel, frameSource: (() ->
         Spacer(Modifier.width(8.dp))
         PillAction("⌕", if (stats == null) (if (clip.meta.isPhoto) "Analyse photo" else "Analyse clip") else "Again", { vm.analyseClip(frameSource) }, enabled = !state.busy)
     }
-    if (stats != null) {
-        val suggested = suggestedLooks(stats)
-        LabeledChoice("Suggested for this $what", suggested.map { it.label }, { suggested[it] == fast?.look }, { choose(suggested[it]) })
-    }
+    // What suits the clip is outlined in the one grid (no second row of the same looks).
+    val suggested = stats?.let { suggestedLooks(it) }.orEmpty()
     val cinematic = app.headsup.color.FastLook.entries
-    ChoiceGrid(cinematic.map { it.label }, cinematic.indexOf(fast?.look), { choose(cinematic[it]) })
+    ChoiceGrid(cinematic.map { it.label }, cinematic.indexOf(fast?.look), { choose(cinematic[it]) }, outlined = { cinematic[it] in suggested })
+    if (suggested.isNotEmpty()) Hint("Outlined: the looks that suit this $what.")
     // The look being tried: its strength, then keep it or put the clip back.
     if (fast != null) {
         ValueHeader("Strength", String.format(Locale.US, "%.0f %%", fast.strength * 100))
@@ -4403,7 +4429,6 @@ private fun Layers(
     var adding by rememberSaveable { mutableStateOf(false) }
     val full = clip.masks.size >= ColourMask.MAX_PER_CLIP
     val onMask = state.target == GradeTarget.MASK
-    SectionCaption("Layers")
     // What is there, then one chip to add: what exists and what can be made never mix.
     LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
         item {
@@ -4472,20 +4497,35 @@ private fun Layers(
         return true
     }
     if (!onMask) {
-        LookActions(state, vm)
+        // Copied from another one: Paste right here, where it is wanted (Copy and the rest are in ▾).
+        state.selectedClip?.let { index -> if (state.copiedLook != null) PillAction("⎘", "Paste look", { vm.pasteLook(index) }) }
         return false
     }
     val mask = clip.masks.getOrNull(state.selectedMask) ?: return false
-    // The selected mask's own actions, always in the same place.
-    Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+    // The selected mask: Invert at hand, the rest (copy, opposite, reset, delete) in a sheet.
+    var more by rememberSaveable { mutableStateOf(false) }
+    Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
         PillAction("◑", "Invert", { vm.updateMask { it.copy(inverted = !it.inverted) } }, selected = mask.inverted)
-        // A copy, or its opposite (the sky's mask as the land's), with its tracking.
-        if (clip.masks.size < ColourMask.MAX_PER_CLIP) {
-            PillAction("⧉", "Copy", { vm.duplicateMask(inverted = false) })
-            PillAction("◐", "Opposite", { vm.duplicateMask(inverted = true) })
+        PillAction("⋯", "More", { more = true })
+    }
+    if (more) {
+        OptionsSheet("Mask ${state.selectedMask + 1} · ${maskName(mask)}", onDismiss = { more = false }) {
+            ToolSection(
+                "Mask",
+                info = "Copy: a second mask the same, with its tracking. Opposite: a copy inverted (the sky's mask as the land's). Reset takes the mask's corrections off; Delete takes the mask away (Undo brings it back).",
+            ) {
+                if (clip.masks.size < ColourMask.MAX_PER_CLIP) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        PanelAction("Copy", { vm.duplicateMask(inverted = false); more = false }, Modifier.weight(1f))
+                        PanelAction("Opposite", { vm.duplicateMask(inverted = true); more = false }, Modifier.weight(1f))
+                    }
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    PanelAction("Reset", { vm.updateGrade { ColorGrade() }; more = false }, Modifier.weight(1f), enabled = mask.grade != ColorGrade())
+                    PanelAction("Delete", { vm.removeMask(state.selectedMask); more = false }, Modifier.weight(1f), danger = true)
+                }
+            }
         }
-        if (mask.grade != ColorGrade()) PillAction("↺", "Reset", { vm.updateGrade { ColorGrade() } })
-        PillAction("✕", "Delete", { vm.removeMask(state.selectedMask) })
     }
     // The mask itself (where it is: select, paint, shape, track) or what it changes in the picture.
     // Only while the mask is worked on does a finger on the picture change it.

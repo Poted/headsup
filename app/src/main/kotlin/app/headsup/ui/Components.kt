@@ -20,6 +20,8 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.Icon
 import androidx.compose.material3.minimumInteractiveComponentSize
@@ -588,7 +590,8 @@ fun ChoiceGrid(
     minCell: androidx.compose.ui.unit.Dp = 76.dp,
     glyph: (@Composable (index: Int, on: Boolean) -> Unit)? = null,
     enabled: (Int) -> Boolean = { true },
-) = ChoiceGrid(options, { it == selected }, onSelect, modifier, minCell, glyph, enabled)
+    outlined: (Int) -> Boolean = { false },
+) = ChoiceGrid(options, { it == selected }, onSelect, modifier, minCell, glyph, enabled, outlined)
 
 /** As above, for a choice of several at once: [isOn] says which are on; a tap toggles one. */
 @Composable
@@ -600,6 +603,8 @@ fun ChoiceGrid(
     minCell: androidx.compose.ui.unit.Dp = 76.dp,
     glyph: (@Composable (index: Int, on: Boolean) -> Unit)? = null,
     enabled: (Int) -> Boolean = { true },
+    /** Cells to point out (suggested ones): an accent outline, chosen or not. */
+    outlined: (Int) -> Boolean = { false },
 ) {
     if (options.isEmpty()) return
     androidx.compose.foundation.layout.BoxWithConstraints(modifier.fillMaxWidth()) {
@@ -624,6 +629,7 @@ fun ChoiceGrid(
                                 .height(40.dp)
                                 .clip(MaterialTheme.shapes.small)
                                 .background(if (on) HeadsupColors.Highlight else HeadsupColors.SurfaceHigh)
+                                .then(if (outlined(i)) Modifier.border(1.5.dp, HeadsupColors.AccentInk, MaterialTheme.shapes.small) else Modifier)
                                 .clickable(enabled = usable) { onSelect(i) }
                                 .padding(horizontal = 6.dp),
                             horizontalArrangement = Arrangement.Center,
@@ -684,5 +690,32 @@ fun LabeledChoice(
     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
         Text(label, style = MaterialTheme.typography.labelMedium, color = HeadsupColors.TextMuted)
         ChoiceGrid(options, isOn, onSelect, minCell = minCell, enabled = enabled)
+    }
+}
+
+/**
+ * A sheet that slides up from the bottom for what a page needs only now and then (what it works
+ * on, its keys, copy and paste), as Settings does: the page itself keeps to what is used all the time.
+ */
+@OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
+@Composable
+fun OptionsSheet(title: String, onDismiss: () -> Unit, content: @Composable androidx.compose.foundation.layout.ColumnScope.() -> Unit) {
+    androidx.compose.material3.ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        containerColor = HeadsupColors.Background,
+        contentColor = HeadsupColors.Ink,
+    ) {
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .verticalScroll(androidx.compose.foundation.rememberScrollState())
+                .padding(horizontal = 16.dp)
+                .padding(bottom = 24.dp)
+                .navigationBarsPadding(),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Text(title, style = MaterialTheme.typography.titleLarge)
+            content()
+        }
     }
 }
