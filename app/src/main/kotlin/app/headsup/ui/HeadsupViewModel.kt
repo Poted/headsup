@@ -408,6 +408,8 @@ data class UiState(
     val pickingColour: Boolean = false,
     /** Point colour: the next tap on the picture picks a colour. */
     val pickingPoint: Boolean = false,
+    /** Point colour: the colour whose sliders are shown (and that a finger on the picture moves). */
+    val pointSelected: Int = 0,
     /** When the brush's size (softness, strength) was last set: it shows on the picture for a moment. */
     val brushSizedAt: Long = 0L,
     /** The clip measured for looks ([HeadsupViewModel.analyseClip]): its id and what was measured. */
@@ -3311,13 +3313,24 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
     /** Point colour: the next tap on the picture picks a colour (or stops waiting for it). */
     fun setPickingPoint(on: Boolean) = _state.update { it.copy(pickingPoint = on) }
 
-    /** The colour around ([x], [y]) of [frame] picked to change on its own (Point colour). */
+    fun selectPoint(i: Int) = _state.update { it.copy(pointSelected = i, pickingPoint = false) }
+
+    /**
+     * The colour around ([x], [y]) (fractions of the picture) of [frame] for Point colour: a new
+     * colour after + Pick (or when there is none), else the chosen colour moved to it (its changes
+     * kept). Told again as the finger moves, so the colour and the picture follow it.
+     */
     fun pickPointColour(frame: Bitmap, x: Float, y: Float) {
         val (r, g, b) = patchColour(frame, x, y) ?: return
-        _state.update { it.copy(pickingPoint = false) }
-        updateGrade { gr ->
-            if (gr.points.size >= app.headsup.core.color.PointColours.MAX) gr
-            else gr.copy(points = gr.points + app.headsup.core.color.PointColour(r, g, b))
+        val s = _state.value
+        val points = s.grade.points
+        if (s.pickingPoint || points.isEmpty()) {
+            if (points.size >= app.headsup.core.color.PointColours.MAX) return
+            _state.update { it.copy(pickingPoint = false, pointSelected = points.size) }
+            updateGrade { gr -> gr.copy(points = gr.points + app.headsup.core.color.PointColour(r, g, b)) }
+        } else {
+            val i = s.pointSelected.coerceIn(0, points.size - 1)
+            updateGrade { gr -> gr.copy(points = gr.points.mapIndexed { k, p -> if (k == i) p.copy(r = r, g = g, b = b) else p }) }
         }
     }
 

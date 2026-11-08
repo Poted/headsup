@@ -198,6 +198,11 @@ fun ClipPreview(
     onMoveFinished: () -> Unit,
     /** When set, tapping the picture (away from widgets) grabs the frame for the vectorscope. */
     onSample: ((Bitmap, Float, Float) -> Unit)? = null,
+    /**
+     * Picking a colour to change (Point colour): [onSample] is told as the finger moves (the
+     * colour under it shown live), with the picture's own position; two fingers zoom the view.
+     */
+    liveSample: Boolean = false,
     /** Point last measured, 0..1 of the frame, drawn as a target. */
     marker: Offset? = null,
     /** Playhead position within the (trimmed) clip, reported as it changes. */
@@ -629,6 +634,7 @@ fun ClipPreview(
     }
     LaunchedEffect(active) { textureView = textureViews[active] }
     val sample by rememberUpdatedState(onSample)
+    val liveSampleNow by rememberUpdatedState(liveSample)
     val maskMover by rememberUpdatedState(onMoveMask)
     val maskTransformer by rememberUpdatedState(onTransformMask)
     val maskEnd by rememberUpdatedState(onMaskEnd)
@@ -944,7 +950,8 @@ fun ClipPreview(
     // Looking closely at a photo: the view's zoom and pan (not the photo's framing).
     val inspect = photoMode && onReframe == null && onMoveMask == null && onTransformMask == null && onBrush == null && onMoveText == null && onSample == null
     // The view's zoom applies while looking at a photo closely or painting a mask.
-    val viewZoomed = inspect || zoomForPainting
+    val zoomForSampling = photoMode && onSample != null && liveSample
+    val viewZoomed = inspect || zoomForPainting || zoomForSampling
     var viewZoom by remember(clip.id) { mutableStateOf(1f) }
     val zoomedNow = viewZoom > 1.01f
     val tellZoomed by rememberUpdatedState(onViewZoomed)
@@ -1047,6 +1054,20 @@ fun ClipPreview(
                                 else zoomViewAt(at, 3f, Offset.Zero, size.width.toFloat(), size.height.toFloat())
                             })
                         }
+                } else if (zoomForSampling) {
+                    // Picking a colour: two fingers zoom and pan the view (one finger picks).
+                    Modifier.pointerInput(Unit) {
+                        awaitEachGesture {
+                            awaitFirstDown(requireUnconsumed = false, pass = androidx.compose.ui.input.pointer.PointerEventPass.Initial)
+                            do {
+                                val e = awaitPointerEvent(androidx.compose.ui.input.pointer.PointerEventPass.Initial)
+                                if (e.changes.count { it.pressed } >= 2) {
+                                    zoomViewAt(e.calculateCentroid(), e.calculateZoom(), e.calculatePan(), size.width.toFloat(), size.height.toFloat())
+                                    e.changes.forEach { it.consume() }
+                                }
+                            } while (e.changes.any { it.pressed })
+                        }
+                    }
                 } else if (zoomForPainting) {
                     // Painting: two fingers zoom and pan the view, taken before the painting sees
                     // them (one finger still paints; in View it moves the view). A double tap
@@ -1438,10 +1459,24 @@ fun ClipPreview(
                                     // The marker follows the finger; the colour is measured where it lifts.
                                     val onTap = sample ?: return@awaitEachGesture
                                     fun at(p: Offset) = Offset(p.x / size.width, p.y / size.height)
+                                    val live = liveSampleNow
+                                    // Picking a colour: the place in the picture itself (through its framing), and
+                                    // the frame grabbed larger when zoomed in, so a small spot can be picked.
+                                    fun picked(p: Offset): Offset {
+                                        if (!live) return at(p)
+                                        val g = geometryRef.value
+                                        val (sx, sy) = currentReframe.sourceOf(p.x, p.y, g.boxW, g.boxH, g.pictureW, g.pictureH)
+                                        return Offset((sx / g.pictureW).coerceIn(0f, 1f), (sy / g.pictureH).coerceIn(0f, 1f))
+                                    }
+                                    val width = if (live) (SAMPLE_WIDTH * viewZoom * 2f).toInt().coerceIn(SAMPLE_WIDTH, 1536) else SAMPLE_WIDTH
                                     liveMarker = at(down.position)
                                     var last = down.position
+                                    var lastLiveMs = 0L
+                                    var cancelled = false
                                     while (true) {
                                         val event = awaitPointerEvent()
+                                        // A second finger: zooming, not picking.
+                                        if (live && event.changes.count { it.pressed } >= 2) { cancelled = true; break }
                                         val change = event.changes.firstOrNull { it.id == down.id } ?: break
                                         if (!change.pressed) {
                                             change.consume()
@@ -1451,9 +1486,17 @@ fun ClipPreview(
                                         change.consume()
                                         last = change.position
                                         liveMarker = at(last)
+                                        val now = change.uptimeMillis
+                                        if (live && now - lastLiveMs >= 90L) {
+                                            lastLiveMs = now
+                                            val m = picked(last)
+                                            grab(width)?.let { onTap(it, m.x, m.y) }
+                                        }
                                     }
-                                    val m = at(last)
-                                    grab(SAMPLE_WIDTH)?.let { onTap(it, m.x, m.y) }
+                                    if (!cancelled) {
+                                        val m = picked(last)
+                                        grab(width)?.let { onTap(it, m.x, m.y) }
+                                    }
                                     liveMarker = null
                                     return@awaitEachGesture
                                 }

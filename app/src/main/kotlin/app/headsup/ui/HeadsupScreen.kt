@@ -267,8 +267,8 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
     // A range mask has no window to move; while a colour is being picked a tap picks it.
     val editingRange = state.selected?.masks?.getOrNull(state.selectedMask)?.kind == MaskKind.RANGE
     val pickingColour = editingMasks && state.pickingColour
-    // Point colour: the next tap on the picture picks a colour to change.
-    val pickingPoint = tool == Tool.COLOUR && adjustment == Adjustment.POINT && state.pickingPoint
+    // Point colour: a finger on the picture picks a colour (+ Pick: a new one; else the chosen one is moved).
+    val pickingPoint = tool == Tool.COLOUR && adjustment == Adjustment.POINT && state.target != GradeTarget.MASK
     // Only while a mask's shape is being changed (Shape) does a finger on the picture change it;
     // with its corrections the picture is left alone (the outline still shows).
     var maskTools by rememberSaveable { mutableStateOf(false) }
@@ -471,6 +471,7 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
                             pickingPoint -> vm::pickPointColour
                             else -> null
                         },
+                        liveSample = pickingPoint,
                         marker = if (measuring) state.scope?.let { Offset(it.markerX, it.markerY) } else null,
                         maxHeight = previewMaxHeight,
                         edgeToEdge = fullscreen,
@@ -3196,7 +3197,9 @@ private fun ColourPage(
         GradeTarget.GROUP -> Adjustment.entries - Adjustment.BLEND - Adjustment.CINE - Adjustment.MATCH - maskOnly
         GradeTarget.GLOBAL -> Adjustment.entries - Adjustment.BLEND - Adjustment.CINE - Adjustment.MATCH - maskOnly
         GradeTarget.MASK -> Adjustment.entries - Adjustment.LUT - Adjustment.SKIN - Adjustment.VIGNETTE - Adjustment.BLEND -
-            Adjustment.CINE - Adjustment.MATCH - Adjustment.LOOK
+            Adjustment.CINE - Adjustment.MATCH - Adjustment.LOOK -
+            // A finger on the picture edits the mask there, so colours are picked on the whole picture.
+            Adjustment.POINT
     }
     val adjustment = if (adjustment in options) adjustment else Adjustment.EXPOSURE
     // On the Masks tab the ruler edits either a shape control or a correction.
@@ -3883,19 +3886,19 @@ private fun CalibrationControls(state: UiState, vm: HeadsupViewModel) {
 @Composable
 private fun PointColourControls(state: UiState, vm: HeadsupViewModel) {
     val points = state.grade.points
-    var selected by rememberSaveable { mutableStateOf(0) }
-    // A colour just picked is the one being changed.
-    LaunchedEffect(points.size) { selected = (points.size - 1).coerceAtLeast(0) }
+    val selected = state.pointSelected
     ToolSection(
         "Point colour",
-        info = "Pick a colour on the picture (+ Pick, then tap it) and change just that colour and its family: Range is how much of the family, " +
+        info = "Put a finger on the picture and move it to the colour you want: the circle shows the colour under it, and the picture follows. " +
+            "+ Pick adds another colour; without it, the finger moves the chosen colour. Two fingers zoom in to pick a small spot. " +
+            "Then change just that colour and its family: Range is how much of the family, " +
             "then its hue, saturation and luminance. Up to ${app.headsup.core.color.PointColours.MAX} colours. Colour pop takes the colour out of everything else, " +
             "leaving only the picked colours (a red coat in a grey street). Hold a ruler to compare.",
         onReset = if (points.isNotEmpty() || state.grade.colourPop > 0f) ({ vm.updateGrade { it.copy(points = emptyList(), colourPop = 0f) } }) else null,
     ) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             if (points.size < app.headsup.core.color.PointColours.MAX) {
-                SmallAction(if (state.pickingPoint) "Tap the picture…" else "+ Pick", { vm.setPickingPoint(!state.pickingPoint) })
+                SmallAction(if (state.pickingPoint || points.isEmpty()) "Touch a colour…" else "+ Pick", { vm.setPickingPoint(!state.pickingPoint) })
             }
             Row(Modifier.weight(1f).horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 points.forEachIndexed { i, p ->
@@ -3905,7 +3908,7 @@ private fun PointColourControls(state: UiState, vm: HeadsupViewModel) {
                             .clip(CircleShape)
                             .background(Color(p.r, p.g, p.b))
                             .border(if (i == selected) 3.dp else 1.dp, if (i == selected) HeadsupColors.Ink else HeadsupColors.Outline, CircleShape)
-                            .clickable { selected = i },
+                            .clickable { vm.selectPoint(i) },
                     )
                 }
             }
@@ -3927,7 +3930,7 @@ private fun PointColourControls(state: UiState, vm: HeadsupViewModel) {
             ValueHeader("Luminance", String.format(Locale.US, "%+.0f", p.luminance * 100))
             RulerSlider(p.luminance, -1f..1f, 0.02f, { v -> set { it.copy(luminance = v) } }, onReset = { set { it.copy(luminance = 0f) } })
         }
-        if (points.isEmpty()) Hint("No colours picked yet: + Pick, then tap a colour on the picture.")
+        if (points.isEmpty()) Hint("Put a finger on the picture and move it to a colour.")
         else {
             ValueHeader("Colour pop", String.format(Locale.US, "%.0f %%", state.grade.colourPop * 100))
             RulerSlider(state.grade.colourPop, 0f..1f, 0.02f, { v -> vm.updateGrade { it.copy(colourPop = v) } }, onReset = { vm.updateGrade { it.copy(colourPop = 0f) } })
