@@ -5274,21 +5274,59 @@ private fun ExportControls(
         PhotoExport(state, vm)
         return
     }
-    Label("Video")
+    // The page: a quick preset, what will come out (its settings a tap away, in a sheet) and Export.
     val active = vm.activePreset(state)
-    SettingRow("Quick presets") {
-        for (p in ExportPreset.entries) {
-            FilterChip(selected = active == p, onClick = { vm.applyPreset(p) }, label = { Text(p.label) })
+    var settingsOpen by rememberSaveable { mutableStateOf(false) }
+    val tenBitOn = settings.tenBit && remember(state.clips) { vm.tenBitBlocker(state) } == null
+    val summary = listOfNotNull(
+        vm.outputPreview(state)?.toString(),
+        if (tenBitOn) (if (settings.hlg) "HEVC 10-bit HLG" else "HEVC 10-bit") else settings.codec.label,
+        settings.loudness.lufs?.let { settings.loudness.label.substringBefore(" (") },
+        if (settings.wholeTimeline) null else "each clip",
+    ).joinToString(" · ")
+    ToolSection(
+        "Video",
+        info = "A quick preset sets the frame, size and quality for where the film goes. The line under it is what will come out; tap it for every setting (output, picture, sound, encoding). " +
+            "Export: colour, effects, framing, speed and the dashboard where there is activity data, saved to ${MediaStoreOutput.VIDEO_FOLDER}.",
+    ) {
+        val presets = ExportPreset.entries
+        LabeledChoice("Quick presets", presets.map { it.label }, { presets[it] == active }, { vm.applyPreset(presets[it]) }, minCell = 120.dp)
+        Row(
+            Modifier.fillMaxWidth().clip(MaterialTheme.shapes.small).background(HeadsupColors.SurfaceHigh).clickable { settingsOpen = true }.padding(horizontal = 12.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(summary, Modifier.weight(1f), style = MaterialTheme.typography.labelLarge, color = HeadsupColors.AccentInk, maxLines = 2)
+            Text("Settings ▾", style = MaterialTheme.typography.labelLarge, color = HeadsupColors.Ink)
+        }
+        Button(onClick = onExportVideos, enabled = state.clips.isNotEmpty(), modifier = Modifier.fillMaxWidth()) {
+            Text(if (settings.wholeTimeline) "Export timeline" else "Export ${state.clips.size} clips")
         }
     }
-    // What will come out, so a preset's effect shows without scrolling through the options.
-    vm.outputPreview(state)?.let { out ->
-        Text(
-            out.toString() + (if (state.exportSettings.wholeTimeline) "" else " · each clip"),
-            style = MaterialTheme.typography.titleSmall,
-            color = HeadsupColors.Accent,
-        )
+    if (settingsOpen) OptionsSheet("Video export", onDismiss = { settingsOpen = false }) { VideoExportSettings(state, vm) }
+    val canOverlay = state.clips.any { it.sync != null }
+    ToolSection("Dashboard only", info = "Transparent PNG frames (ZIP) per clip, to lay over the video in DaVinci. Saved to ${MediaStoreOutput.OVERLAY_FOLDER}.") {
+        OutlinedButton(onClick = onExportOverlays, enabled = canOverlay, modifier = Modifier.fillMaxWidth()) { Text("Export dashboard only (PNG)") }
+        if (!canOverlay) Hint("Needs a FIT file matched to the clips.")
     }
+    if (state.clips.any { it.meta.isPhoto }) PhotoExport(state, vm)
+
+    if (jobs.isNotEmpty()) {
+        SectionCaption("Exports") {
+            Spacer(Modifier.width(8.dp))
+            if (jobs.any { it.status == JobStatus.QUEUED || it.status == JobStatus.RUNNING }) {
+                SmallAction("Cancel all", vm::cancelExports)
+            } else {
+                SmallAction("Clear list", vm::clearFinishedExports)
+            }
+        }
+        jobs.forEach { JobRow(it) }
+    }
+}
+
+/** The film's export settings, in a sheet from the bottom: set once for a project, not at every export. */
+@Composable
+private fun VideoExportSettings(state: UiState, vm: HeadsupViewModel) {
+    val settings = state.exportSettings
     ToolSection("Output") {
         ChoiceGrid(listOf("Whole timeline", "Each clip"), if (settings.wholeTimeline) 0 else 1, { i -> vm.updateExportSettings { it.copy(wholeTimeline = i == 0) } })
     }
@@ -5341,29 +5379,6 @@ private fun ExportControls(
             (if (!tenBit && tenBitBlocker == null && state.clips.any { it.meta.format?.transfer == "HLG" }) "HDR (HLG) clips are always exported in 10-bit." else "")
         if (clipNote.isNotEmpty()) Hint(clipNote.trim())
     }
-    ToolSection("Export", info = "Colour, effects, framing, speed; the dashboard where there is activity data. Saved to ${MediaStoreOutput.VIDEO_FOLDER}.") {
-        Button(onClick = onExportVideos, enabled = state.clips.isNotEmpty(), modifier = Modifier.fillMaxWidth()) {
-            Text(if (settings.wholeTimeline) "Export timeline" else "Export ${state.clips.size} clips")
-        }
-    }
-    val canOverlay = state.clips.any { it.sync != null }
-    ToolSection("Dashboard only", info = "Transparent PNG frames (ZIP) per clip, to lay over the video in DaVinci. Saved to ${MediaStoreOutput.OVERLAY_FOLDER}.") {
-        OutlinedButton(onClick = onExportOverlays, enabled = canOverlay, modifier = Modifier.fillMaxWidth()) { Text("Export dashboard only (PNG)") }
-        if (!canOverlay) Hint("Needs a FIT file matched to the clips.")
-    }
-    if (state.clips.any { it.meta.isPhoto }) PhotoExport(state, vm)
-
-    if (jobs.isNotEmpty()) {
-        SectionCaption("Exports") {
-            Spacer(Modifier.width(8.dp))
-            if (jobs.any { it.status == JobStatus.QUEUED || it.status == JobStatus.RUNNING }) {
-                SmallAction("Cancel all", vm::cancelExports)
-            } else {
-                SmallAction("Clear list", vm::clearFinishedExports)
-            }
-        }
-        jobs.forEach { JobRow(it) }
-    }
 }
 
 /** Photos on the timeline, each as a JPEG at its own resolution in the timeline's frame. */
@@ -5376,11 +5391,26 @@ private fun PhotoExport(state: UiState, vm: HeadsupViewModel) {
         app.headsup.export.PhotoFormat.TIFF16 -> " TIFF: 16 bits per colour, uncompressed, for further editing (Lightroom, Photoshop, DaVinci). Large files."
         else -> ""
     }
+    var settingsOpen by rememberSaveable { mutableStateOf(false) }
     ToolSection(
         "Photos",
-        info = "Each photo at its own resolution (or the size chosen), with its edits." + formatInfo +
+        info = "Each photo at its own resolution (or the size chosen), with its edits. The line is how they are saved; tap it to change the size, format and quality." + formatInfo +
             (if (photoCount > 1) " Mark photos for export: hold a thumbnail (double-tap a marked one for its menu), or Mark under the photos." else ""),
     ) {
+        val summary = listOfNotNull(
+            ExportSettings.PHOTO_SIZES.firstOrNull { it.first == settings.photoLongSide }?.second,
+            settings.photoFormat.label,
+            ExportSettings.PHOTO_QUALITIES.firstOrNull { it.first == settings.photoQuality }?.second?.takeIf { settings.photoFormat != app.headsup.export.PhotoFormat.TIFF16 },
+        ).joinToString(" · ")
+        Row(
+            Modifier.fillMaxWidth().clip(MaterialTheme.shapes.small).background(HeadsupColors.SurfaceHigh).clickable { settingsOpen = true }.padding(horizontal = 12.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(summary, Modifier.weight(1f), style = MaterialTheme.typography.labelLarge, color = HeadsupColors.AccentInk, maxLines = 1)
+            Text("Settings ▾", style = MaterialTheme.typography.labelLarge, color = HeadsupColors.Ink)
+        }
+        if (settingsOpen) OptionsSheet("Photo export", onDismiss = { settingsOpen = false }) {
+            ToolSection("Photos", info = "Size: the long side in pixels (Full keeps each photo's own)." + formatInfo) {
         val sizes = ExportSettings.PHOTO_SIZES
         LabeledChoice("Photo size", sizes.map { it.second }, { sizes[it].first == settings.photoLongSide }, { i -> vm.updateExportSettings { it.copy(photoLongSide = sizes[i].first) } })
         // Ultra HDR needs Android 14.
@@ -5389,6 +5419,8 @@ private fun PhotoExport(state: UiState, vm: HeadsupViewModel) {
         if (settings.photoFormat != app.headsup.export.PhotoFormat.TIFF16) {
             val qualities = ExportSettings.PHOTO_QUALITIES
             LabeledChoice("JPEG", qualities.map { it.second }, { qualities[it].first == settings.photoQuality }, { i -> vm.updateExportSettings { it.copy(photoQuality = qualities[i].first) } })
+        }
+            }
         }
         val selectedPhoto = state.selected?.meta?.isPhoto == true
         val picked = state.clips.count { it.meta.isPhoto && it.picked }
