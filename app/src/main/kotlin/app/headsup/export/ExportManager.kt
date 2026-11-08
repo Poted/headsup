@@ -317,9 +317,10 @@ class ExportManager(private val context: Context) {
             texts = request.texts,
             // The overlay counts the clip's own time (before the speed change); texts are placed on the timeline.
             timelineMsOf = { positionMs -> request.timelineStartMs + if (request.isPhoto) positionMs else (positionMs / request.speed).toLong() },
-            textValues = { data ->
-                // The moment's values, then the clip's own (a photo's place and time win over the watch's).
-                app.headsup.render.TextValues.moment(data?.frame, data?.utcMs, data?.zoneOffsetSeconds) + request.textValues
+            textValues = { data, positionMs ->
+                // The video's own clock, the moment's values, then the clip's own (a photo's place and time win over the watch's).
+                val own = request.videoStartUtcMs?.let { app.headsup.render.TextValues.clock(it + request.trimStartMs + positionMs) }.orEmpty()
+                own + app.headsup.render.TextValues.moment(data?.frame, data?.utcMs, data?.zoneOffsetSeconds) + request.textValues
             },
             drawMap = if (request.routeMap.enabled && request.mapTrack != null) { canvas, w, h, data ->
                 val (lat, lon) = request.mapMarker ?: markerOf(data)

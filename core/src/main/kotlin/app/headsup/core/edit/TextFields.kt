@@ -4,7 +4,7 @@ import app.headsup.core.track.ActivityTrack
 import app.headsup.core.track.Metric
 
 /** Where a text field's value comes from. */
-enum class FieldSource(val label: String) { ACTIVITY("Activity"), MOMENT("At this moment"), PHOTO("Photo") }
+enum class FieldSource(val label: String) { ACTIVITY("Activity"), MOMENT("At this moment"), PHOTO("From the file") }
 
 /**
  * Values a text can show, written into it as `{key}`: a summary of the watch activity, its values
@@ -26,6 +26,8 @@ enum class TextField(val key: String, val label: String, val source: FieldSource
     ASCENT_NOW("ascentNow", "Ascent so far", FieldSource.MOMENT),
     HR_NOW("hrNow", "Heart rate", FieldSource.MOMENT),
     SPEED_NOW("speedNow", "Speed", FieldSource.MOMENT),
+    /** The time of day running with the video, to the second. */
+    CLOCK("clock", "Clock (running)", FieldSource.MOMENT),
 
     PLACE("place", "Place", FieldSource.PHOTO),
     COORDS("coords", "Coordinates", FieldSource.PHOTO),

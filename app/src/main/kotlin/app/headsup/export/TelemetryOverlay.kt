@@ -34,7 +34,7 @@ class TelemetryOverlay(
     private val texts: List<TextItem> = emptyList(),
     private val timelineMsOf: (positionMs: Long) -> Long = { it },
     /** Values of the texts' data fields at a moment (with the watch data there, if any). */
-    private val textValues: (DashboardData?) -> Map<String, String> = { emptyMap() },
+    private val textValues: (DashboardData?, positionMs: Long) -> Map<String, String> = { _, _ -> emptyMap() },
     /** Draws the route map (under the texts); its content key at the same moment. */
     private val drawMap: ((Canvas, Float, Float, DashboardData?) -> Unit)? = null,
     private val mapKey: (DashboardData?) -> String = { "" },
@@ -77,7 +77,7 @@ class TelemetryOverlay(
         val data = dataAt(positionMs)
         val timelineMs = timelineMsOf(positionMs)
         val effects = if (this.effects.barsRatio != null) this.effects.copy(barsAmount = barsAt(timelineMs)) else this.effects
-        val values = if (texts.isEmpty()) emptyMap() else textValues(data)
+        val values = if (texts.isEmpty()) emptyMap() else textValues(data, positionMs)
         val shownTexts = if (texts.isEmpty()) texts else placeTexts(texts, positionMs)
         val textKey = if (texts.isEmpty()) "" else TextRenderer.key(shownTexts, timelineMs, values) + subjectKey(positionMs)
         val key = "${width}x$height ${(effects.barsAmount * 200).toInt()} " + (data?.let { renderer.contentKey(style, it, w, h, effects) } ?: "-") + textKey + mapKey(data)

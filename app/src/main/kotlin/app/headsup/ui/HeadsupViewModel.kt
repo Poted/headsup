@@ -925,6 +925,9 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
         if (c.meta.isPhoto) {
             val info = withContext(Dispatchers.IO) { app.headsup.media.PhotoInfo.read(getApplication(), c.meta.uri) }
             if (info.latitude != null && info.longitude != null) return info.latitude to info.longitude
+        } else {
+            val v = withContext(Dispatchers.IO) { app.headsup.media.VideoInfo.read(getApplication(), c.meta.uri) }
+            if (v.latitude != null && v.longitude != null) return v.latitude to v.longitude
         }
         val track = activityOf(s, c) ?: return null
         val utc = c.telemetryUtc(0L) ?: return null
@@ -944,7 +947,10 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
         val frame = if (track != null && utc != null) synchronized(samplers) { samplers.getOrPut(track) { app.headsup.core.track.TelemetrySampler(track) } }.frameAt(utc) else null
         val offset = track?.utcOffsetSeconds ?: utc?.let { java.time.ZoneId.systemDefault().rules.getOffset(java.time.Instant.ofEpochMilli(it)).totalSeconds }
         val photo = if (c.meta.isPhoto) app.headsup.media.PhotoInfo.read(getApplication(), c.meta.uri) else null
-        return app.headsup.render.TextValues.activity(track) + app.headsup.render.TextValues.moment(frame, utc, offset) + app.headsup.render.TextValues.photo(photo)
+        // A video's own time and place (the watch's, when synced, win).
+        val video = if (!c.meta.isPhoto) app.headsup.media.VideoInfo.read(getApplication(), c.meta.uri) else null
+        val own = video?.let { v -> app.headsup.render.TextValues.video(v.startUtcMs?.plus(c.trimStartMs + positionMs), v.latitude, v.longitude) }.orEmpty()
+        return app.headsup.render.TextValues.activity(track) + own + app.headsup.render.TextValues.moment(frame, utc, offset) + app.headsup.render.TextValues.photo(photo)
     }
 
     fun updateRouteMap(transform: (app.headsup.render.RouteMap) -> app.headsup.render.RouteMap) = _state.update { it.copy(routeMap = transform(it.routeMap)) }
@@ -969,7 +975,10 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
     /** The values that do not change within a clip (for the export, which adds the moment's). */
     private fun staticTextValues(s: UiState, c: ClipState): Map<String, String> {
         val photo = if (c.meta.isPhoto) app.headsup.media.PhotoInfo.read(getApplication(), c.meta.uri) else null
-        return app.headsup.render.TextValues.activity(activityOf(s, c)) + app.headsup.render.TextValues.photo(photo)
+        // A video's place (its time runs: added at each moment by the export).
+        val video = if (!c.meta.isPhoto) app.headsup.media.VideoInfo.read(getApplication(), c.meta.uri) else null
+        val place = video?.let { app.headsup.render.TextValues.video(null, it.latitude, it.longitude) }.orEmpty()
+        return app.headsup.render.TextValues.activity(activityOf(s, c)) + place + app.headsup.render.TextValues.photo(photo)
     }
 
     /** Adds a text at timeline time [atMs] (3 s, or up to the video's end) and selects it. */
@@ -4848,6 +4857,9 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                         s.texts.filter { it.startMs < start + clip.timelineDurationMs && it.endMs > start }
                     } else emptyList(),
                     textValues = if (kind == ExportKind.VIDEO && s.texts.isNotEmpty()) withContext(Dispatchers.IO) { staticTextValues(s, clip) } else emptyMap(),
+                    videoStartUtcMs = if (kind == ExportKind.VIDEO && !clip.meta.isPhoto && s.texts.any { app.headsup.core.edit.TextFields.hasFields(it.text) }) {
+                        withContext(Dispatchers.IO) { app.headsup.media.VideoInfo.read(getApplication(), clip.meta.uri).startUtcMs }
+                    } else null,
                     routeMap = if (kind == ExportKind.VIDEO) s.routeMap else app.headsup.render.RouteMap(),
                     mapTrack = if (kind == ExportKind.VIDEO && s.routeMap.enabled) mapTrack(s, clip) else null,
                     // A photo's place is fixed; a video's follows the watch frame by frame.

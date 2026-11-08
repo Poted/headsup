@@ -92,6 +92,8 @@ data class ExportRequest(
     val texts: List<TextItem> = emptyList(),
     /** Text field values that do not change within the clip (activity summary, photo data). */
     val textValues: Map<String, String> = emptyMap(),
+    /** When the video was started (its own clock, UTC), for texts showing the time as it runs. */
+    val videoStartUtcMs: Long? = null,
     /** The route map, the activity it shows and (for a photo) its fixed place on it. */
     val routeMap: app.headsup.render.RouteMap = app.headsup.render.RouteMap(),
     val mapTrack: ActivityTrack? = null,
