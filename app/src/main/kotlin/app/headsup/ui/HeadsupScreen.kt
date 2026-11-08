@@ -1930,7 +1930,7 @@ private fun StickerLibraryGrid(onPick: (java.io.File) -> Unit) {
             SmallAction(if (removing) "Done" else "Remove…", { removing = !removing })
         }
         when {
-            all == null -> Hint("Loading…")
+            all == null -> Hint("Reading the sticker packs…")
             all.isEmpty() -> Hint("No sticker packs yet. Import pictures or a ZIP in Settings › Sticker packs (PNG keeps transparency).")
             else -> {
                 val shown = all.firstOrNull { it.name == pack } ?: all.first()
@@ -2998,26 +2998,27 @@ private fun AdjustHeader(
     }
     val group = state.groupOf(clip)
     val scopes = listOf(if (album) "This photo" else "This clip", "Group", if (album) "All photos" else "All clips")
-    // What is used now and then (what the page works on, groups, keys, copy and paste) is in a
-    // sheet from the bottom; the top of the page is the layers.
-    var options by rememberSaveable { mutableStateOf(false) }
-    val keys = if (!clip.meta.isPhoto) clip.gradeKeys.size else 0
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        Text(
-            when (scope) {
-                1 -> "Group" + (group?.let { " · ${it.name}" } ?: "")
-                2 -> scopes[2]
-                else -> "Layers"
-            }.uppercase(),
-            Modifier.weight(1f),
-            style = MaterialTheme.typography.labelSmall.copy(letterSpacing = 1.2.sp, fontWeight = androidx.compose.ui.text.font.FontWeight.Medium),
-            color = HeadsupColors.TextMuted,
-            maxLines = 1,
-        )
-        SmallAction(scopes[scope] + (if (scope == 0 && keys > 0) " · ◆ $keys" else "") + "  ▾", { options = true })
-    }
-    if (options) {
-        OptionsSheet(if (album) "This photo's adjustments" else "This clip's adjustments", onDismiss = { options = false }) {
+    // The top of the page is one place that switches between the layers, the keys and what the
+    // page works on; the menu under it (Mask / Adjust, Light, Colour…) stays whatever is shown here.
+    val video = !clip.meta.isPhoto
+    val keys = if (video) clip.gradeKeys.size else 0
+    val panes = listOfNotNull("Layers", "Keys".takeIf { video && scope == 0 }, "Applies to")
+    var pane by rememberSaveable { mutableStateOf("Layers") }
+    val shown = pane.takeIf { it in panes } ?: "Layers"
+    PillTabs(
+        panes.map { p ->
+            when {
+                p == "Keys" && keys > 0 -> "Keys · $keys"
+                p == "Applies to" && scope != 0 -> if (scope == 1) "Group" else scopes[2]
+                else -> p
+            }
+        },
+        panes.indexOf(shown),
+    ) { pane = panes[it] }
+    var adding = false
+    when (shown) {
+        "Keys" -> GradeKeyRow(state, clip, vm, playhead, onSeek)
+        "Applies to" -> {
             ToolSection(
                 "Applies to",
                 info = "This $what: the corrections are its own. Group: set on every $what of its group ($what" + "s shot the same way). All: set on every $what of the ${if (album) "album" else "film"}, and on those added later; each shows it under This $what.",
@@ -3033,29 +3034,31 @@ private fun AdjustHeader(
             when (scope) {
                 1 -> GroupControls(state, clip, index, group, vm)
                 2 -> ToolSection(scopes[2], info = "Reset all takes the changes set on every $what off.") {
-                    PanelAction("Reset all", { vm.resetSyncedPhotos(); options = false }, Modifier.fillMaxWidth())
+                    PanelAction("Reset all", { vm.resetSyncedPhotos() }, Modifier.fillMaxWidth())
                 }
-                else -> {
-                    ToolSection(
-                        "Look",
-                        info = "Copy takes this $what's look (corrections, LUT and its effects; not masks or framing), Paste puts it on the $what shown, Copy to all on every $what. Reset takes the corrections and the look's effects off.",
-                    ) { LookActions(state, vm) }
-                    if (!clip.meta.isPhoto) GradeKeyRow(state, clip, vm, playhead, onSeek)
-                }
+                else -> ToolSection(
+                    "This $what's look",
+                    info = "Copy takes this $what's look (corrections, LUT and its effects; not masks, framing or bokeh), Paste puts it on the $what shown, Copy to all on every $what. Reset takes the corrections and the look's effects off.",
+                ) { LookActions(state, vm) }
             }
         }
-    }
-    return when (scope) {
-        1 -> {
-            if (group == null) {
+        else -> when (scope) {
+            1 -> if (group == null) {
                 Hint("This $what is in no group yet.")
-                PanelAction("Choose a group", { options = true }, Modifier.fillMaxWidth())
+                PanelAction("Choose a group", { pane = "Applies to" }, Modifier.fillMaxWidth())
+            } else {
+                Hint("Working on the group ${group.name}: every $what in it. Layers (masks) are each $what's own: Applies to › This $what.")
             }
-            false
+            2 -> Hint("Working on every $what. Layers (masks) are each $what's own: Applies to › This $what.")
+            else -> adding = Layers(state, clip, vm, pictureSource, maskTools, onMaskTools)
         }
-        2 -> false
-        else -> Layers(state, clip, vm, pictureSource, maskTools, onMaskTools)
     }
+    // The selected mask: its shape, or what it changes in the picture (only while it is worked on
+    // does a finger on the picture change it); stays under the switch above, whichever shows.
+    if (!adding && scope == 0 && state.target == GradeTarget.MASK && clip.masks.getOrNull(state.selectedMask) != null && !state.removing) {
+        Segmented(listOf("Mask", "Adjust"), if (maskTools) 0 else 1, { onMaskTools(it == 0) })
+    }
+    return adding
 }
 
 /** Sections of the colour corrections, so the picker row stays short. */
@@ -4527,9 +4530,6 @@ private fun Layers(
             }
         }
     }
-    // The mask itself (where it is: select, paint, shape, track) or what it changes in the picture.
-    // Only while the mask is worked on does a finger on the picture change it.
-    if (!state.removing) Segmented(listOf("Mask", "Adjust"), if (maskTools) 0 else 1, { onMaskTools(it == 0) })
     return false
 }
 
@@ -5120,7 +5120,8 @@ private fun EffectsPanel(state: UiState, vm: HeadsupViewModel, kind: EffectKind,
         EffectKind.BOKEH -> ToolSection(
             "Bokeh",
             info = "The background blurred as by a wide-open lens: what stays sharp is the subject the phone finds (people, animals, vehicles; else what is in the middle) " +
-                "or a mask of yours (Adjust › Masks: Select, the brush…). Highlights: how much bright points open into bright discs. Worked out on the photo, a moment after the ruler stops.",
+                "or a mask of yours (Adjust › Masks: Select, the brush…). Highlights: how much bright points open into bright discs. Worked out on the photo, a moment after the ruler stops. " +
+                "Bokeh is this photo's own: it is not set on other photos by All, Copy or Paste.",
         ) {
             EffectRuler(
                 listOf(
