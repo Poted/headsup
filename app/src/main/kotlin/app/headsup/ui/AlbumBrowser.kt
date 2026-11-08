@@ -207,6 +207,8 @@ fun AlbumBrowser(state: UiState, vm: HeadsupViewModel, onAdd: () -> Unit, onClos
                         })
                         if (markedCount > 0) {
                             RateMarkedButton { stars -> vm.rateMarked(stars) }
+                            // An exposure bracket (AEB) merged into one photo.
+                            if (markedCount >= 2) SmallAction("HDR", { vm.mergeMarked() })
                             SmallAction("Delete", { confirmDelete = true })
                             Spacer(Modifier.width(4.dp))
                             // The marked photos, and only they, to the editor.

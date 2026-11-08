@@ -267,6 +267,8 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
     // A range mask has no window to move; while a colour is being picked a tap picks it.
     val editingRange = state.selected?.masks?.getOrNull(state.selectedMask)?.kind == MaskKind.RANGE
     val pickingColour = editingMasks && state.pickingColour
+    // Point colour: the next tap on the picture picks a colour to change.
+    val pickingPoint = tool == Tool.COLOUR && adjustment == Adjustment.POINT && state.pickingPoint
     // Only while a mask's shape is being changed (Shape) does a finger on the picture change it;
     // with its corrections the picture is left alone (the outline still shows).
     var maskTools by rememberSaveable { mutableStateOf(false) }
@@ -457,7 +459,7 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
                         // (Not while the finger shapes a mask or measures a colour.)
                         // On every page where a finger on the picture has nothing else to do (not
                         // while framing, writing, shaping a mask or measuring a colour).
-                        onHoldOriginal = if (!measuring && !shaping && !pickingColour && !framing && !editingTexts) { held ->
+                        onHoldOriginal = if (!measuring && !shaping && !pickingColour && !pickingPoint && !framing && !editingTexts) { held ->
                             if (editingMasks) hideMask = held else showOriginal = held
                         } else null,
                         showingOriginal = showOriginal || hideMask,
@@ -466,6 +468,7 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
                             fullscreen -> null
                             measuring -> vm::sampleFrame
                             pickingColour -> vm::pickMaskColour
+                            pickingPoint -> vm::pickPointColour
                             else -> null
                         },
                         marker = if (measuring) state.scope?.let { Offset(it.markerX, it.markerY) } else null,
@@ -3028,7 +3031,7 @@ private val Adjustment.section: ColourSection
         Adjustment.SPLIT, Adjustment.SHADOW_HUE, Adjustment.HIGHLIGHT_HUE, Adjustment.TAME, Adjustment.VIGNETTE, Adjustment.WHEELS -> ColourSection.FILM
         Adjustment.TEXTURE, Adjustment.CLARITY, Adjustment.DEHAZE, Adjustment.DEFRINGE -> ColourSection.PRESENCE
         Adjustment.CINE, Adjustment.LUT, Adjustment.MATCH, Adjustment.BLEND -> ColourSection.TOOLS
-        Adjustment.MIXER, Adjustment.HUE_CURVES, Adjustment.CHANNELS, Adjustment.BW, Adjustment.CALIBRATION -> ColourSection.MIXER
+        Adjustment.MIXER, Adjustment.POINT, Adjustment.HUE_CURVES, Adjustment.CHANNELS, Adjustment.BW, Adjustment.CALIBRATION -> ColourSection.MIXER
         // Looks sit with the other tools that set a whole look (LUT, shot match).
         Adjustment.LOOK -> ColourSection.TOOLS
         Adjustment.GLOW, Adjustment.HALATION -> ColourSection.EFFECTS
@@ -3114,6 +3117,9 @@ internal enum class Adjustment(
 
     /** Not a single ruler: hue, saturation and luminance per hue band. */
     MIXER("HSL", "Colour mixer", 0f..1f, 1f, "", { 0f }, { g, _ -> g }),
+
+    /** Not a single ruler: colours picked from the picture and changed on their own, and colour pop. */
+    POINT("◉", "Point colour", 0f..1f, 1f, "", { 0f }, { g, _ -> g }),
 
     /** Not a single ruler: curves by hue and brightness (Hue vs Hue, Sat, Lum; Lum vs Sat). */
     HUE_CURVES("H∿", "Hue curves", 0f..1f, 1f, "", { 0f }, { g, _ -> g }),
@@ -3344,6 +3350,7 @@ private fun ColourPage(
                 Adjustment.CINE -> state.cine != null
                 Adjustment.MATCH -> state.matchReference?.clipId == clip.id
                 Adjustment.MIXER -> state.grade.mixer.any { it != 0f }
+                Adjustment.POINT -> state.grade.points.isNotEmpty() || state.grade.colourPop > 0f
                 Adjustment.CHANNELS -> state.grade.channelMix.any { it != 0f }
                 Adjustment.BW -> app.headsup.core.color.BlackAndWhite.on(state.grade.bw)
                 Adjustment.CALIBRATION -> state.grade.calibration.any { it != 0f }
@@ -3398,6 +3405,10 @@ private fun ColourPage(
     }
     if (adjustment == Adjustment.CHANNELS) {
         ChannelMixerControls(state, vm)
+        return
+    }
+    if (adjustment == Adjustment.POINT) {
+        PointColourControls(state, vm)
         return
     }
     if (adjustment == Adjustment.BW) {
@@ -3869,6 +3880,61 @@ private fun CalibrationControls(state: UiState, vm: HeadsupViewModel) {
 }
 
 /** Colour mixer: a hue band, which of its hue, saturation and luminance, and a ruler for it. */
+@Composable
+private fun PointColourControls(state: UiState, vm: HeadsupViewModel) {
+    val points = state.grade.points
+    var selected by rememberSaveable { mutableStateOf(0) }
+    // A colour just picked is the one being changed.
+    LaunchedEffect(points.size) { selected = (points.size - 1).coerceAtLeast(0) }
+    ToolSection(
+        "Point colour",
+        info = "Pick a colour on the picture (+ Pick, then tap it) and change just that colour and its family: Range is how much of the family, " +
+            "then its hue, saturation and luminance. Up to ${app.headsup.core.color.PointColours.MAX} colours. Colour pop takes the colour out of everything else, " +
+            "leaving only the picked colours (a red coat in a grey street). Hold a ruler to compare.",
+        onReset = if (points.isNotEmpty() || state.grade.colourPop > 0f) ({ vm.updateGrade { it.copy(points = emptyList(), colourPop = 0f) } }) else null,
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            if (points.size < app.headsup.core.color.PointColours.MAX) {
+                SmallAction(if (state.pickingPoint) "Tap the picture…" else "+ Pick", { vm.setPickingPoint(!state.pickingPoint) })
+            }
+            Row(Modifier.weight(1f).horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                points.forEachIndexed { i, p ->
+                    Box(
+                        Modifier
+                            .size(34.dp)
+                            .clip(CircleShape)
+                            .background(Color(p.r, p.g, p.b))
+                            .border(if (i == selected) 3.dp else 1.dp, if (i == selected) HeadsupColors.Ink else HeadsupColors.Outline, CircleShape)
+                            .clickable { selected = i },
+                    )
+                }
+            }
+            if (points.isNotEmpty()) SmallAction("Delete", {
+                val i = selected.coerceIn(0, points.size - 1)
+                vm.updateGrade { g -> g.copy(points = g.points.filterIndexed { k, _ -> k != i }) }
+            })
+        }
+        val i = selected.coerceIn(0, (points.size - 1).coerceAtLeast(0))
+        points.getOrNull(i)?.let { p ->
+            fun set(change: (app.headsup.core.color.PointColour) -> app.headsup.core.color.PointColour) =
+                vm.updateGrade { g -> g.copy(points = g.points.mapIndexed { k, q -> if (k == i) change(q) else q }) }
+            ValueHeader("Range", String.format(Locale.US, "%.0f %%", p.range * 100))
+            RulerSlider(p.range, 0f..1f, 0.02f, { v -> set { it.copy(range = v) } }, onReset = { set { it.copy(range = 0.35f) } })
+            ValueHeader("Hue", String.format(Locale.US, "%+.0f°", p.hue * 60))
+            RulerSlider(p.hue, -1f..1f, 0.02f, { v -> set { it.copy(hue = v) } }, onReset = { set { it.copy(hue = 0f) } })
+            ValueHeader("Saturation", String.format(Locale.US, "%+.0f", p.saturation * 100))
+            RulerSlider(p.saturation, -1f..1f, 0.02f, { v -> set { it.copy(saturation = v) } }, onReset = { set { it.copy(saturation = 0f) } })
+            ValueHeader("Luminance", String.format(Locale.US, "%+.0f", p.luminance * 100))
+            RulerSlider(p.luminance, -1f..1f, 0.02f, { v -> set { it.copy(luminance = v) } }, onReset = { set { it.copy(luminance = 0f) } })
+        }
+        if (points.isEmpty()) Hint("No colours picked yet: + Pick, then tap a colour on the picture.")
+        else {
+            ValueHeader("Colour pop", String.format(Locale.US, "%.0f %%", state.grade.colourPop * 100))
+            RulerSlider(state.grade.colourPop, 0f..1f, 0.02f, { v -> vm.updateGrade { it.copy(colourPop = v) } }, onReset = { vm.updateGrade { it.copy(colourPop = 0f) } })
+        }
+    }
+}
+
 @Composable
 private fun MixerControls(state: UiState, vm: HeadsupViewModel) {
     var band by rememberSaveable { mutableStateOf(app.headsup.core.color.ColourMixer.Band.RED) }

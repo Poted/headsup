@@ -406,6 +406,8 @@ data class UiState(
     val removing: Boolean = false,
     /** The next tap on the picture picks the selected mask's colour ([HeadsupViewModel.pickMaskColour]). */
     val pickingColour: Boolean = false,
+    /** Point colour: the next tap on the picture picks a colour. */
+    val pickingPoint: Boolean = false,
     /** When the brush's size (softness, strength) was last set: it shows on the picture for a moment. */
     val brushSizedAt: Long = 0L,
     /** The clip measured for looks ([HeadsupViewModel.analyseClip]): its id and what was measured. */
@@ -658,6 +660,33 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
 
     /** Marks or unmarks an album photo for export. */
     fun togglePicked(index: Int) = updateClip(index) { it.copy(picked = !it.picked) }
+
+    /**
+     * The marked photos, an exposure bracket (AEB), merged into one photo with the detail of each
+     * (HDR): lined up, fused, saved next to the exports and added to the album. In the background.
+     */
+    fun mergeMarked() {
+        val s = _state.value
+        val marked = s.clips.filter { it.meta.isPhoto && it.picked }
+        if (marked.size < 2) return
+        val context: Application = getApplication()
+        runInBackground("Merging ${marked.size} exposures", null, null) { report, _ ->
+            val uri = withContext(Dispatchers.Default) {
+                runCatching {
+                    app.headsup.media.Bracket.merge(context, marked.map { it.meta.uri }, raw = { u ->
+                        // A raw photo developed as it is set in the album.
+                        marked.firstOrNull { it.meta.uri == u }?.takeIf { it.meta.isRaw }?.let { c -> app.headsup.media.RawPhotos.decode(context, u, c.rawDevelop, 2560) }
+                    }, onProgress = report)
+                }.onFailure { it.printStackTrace() }.getOrNull()
+            }
+            if (uri == null) {
+                _state.update { it.copy(messages = it.messages + "Could not merge the photos (too large for the phone's memory, or unreadable).") }
+                return@runInBackground
+            }
+            _state.update { st -> st.copy(clips = st.clips.map { if (it.picked) it.copy(picked = false) else it }, messages = st.messages + "${marked.size} exposures merged into one photo (HDR): saved to DCIM/Sweet Spot and added to the album.") }
+            addClips(listOf(uri))
+        }
+    }
 
     /** An album photo's stars, by hand (the same stars again take them off). */
     fun setRating(index: Int, stars: Int) = updateClip(index) {
@@ -3277,6 +3306,40 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
         if (n == 0) return
         updateMask { it.copy(colour = app.headsup.core.color.ColourRange(sr / n, sg / n, sb / n, it.colour?.tolerance ?: 0.35f)) }
         _state.update { it.copy(pickingColour = false) }
+    }
+
+    /** Point colour: the next tap on the picture picks a colour (or stops waiting for it). */
+    fun setPickingPoint(on: Boolean) = _state.update { it.copy(pickingPoint = on) }
+
+    /** The colour around ([x], [y]) of [frame] picked to change on its own (Point colour). */
+    fun pickPointColour(frame: Bitmap, x: Float, y: Float) {
+        val (r, g, b) = patchColour(frame, x, y) ?: return
+        _state.update { it.copy(pickingPoint = false) }
+        updateGrade { gr ->
+            if (gr.points.size >= app.headsup.core.color.PointColours.MAX) gr
+            else gr.copy(points = gr.points + app.headsup.core.color.PointColour(r, g, b))
+        }
+    }
+
+    /** The mean colour of a small patch around ([x], [y]) (fractions) of [frame], which is then let go. */
+    private fun patchColour(frame: Bitmap, x: Float, y: Float): Triple<Float, Float, Float>? {
+        val cx = (x * frame.width).toInt().coerceIn(0, frame.width - 1)
+        val cy = (y * frame.height).toInt().coerceIn(0, frame.height - 1)
+        val r = maxOf(1, frame.width / 200)
+        var sr = 0f
+        var sg = 0f
+        var sb = 0f
+        var n = 0
+        for (yy in (cy - r)..(cy + r)) for (xx in (cx - r)..(cx + r)) {
+            if (xx !in 0 until frame.width || yy !in 0 until frame.height) continue
+            val c = frame.getPixel(xx, yy)
+            sr += (c shr 16 and 0xFF) / 255f
+            sg += (c shr 8 and 0xFF) / 255f
+            sb += (c and 0xFF) / 255f
+            n++
+        }
+        frame.recycle()
+        return if (n == 0) null else Triple(sr / n, sg / n, sb / n)
     }
 
     /** How the selected mask works with the one before it: its own layer, or added, subtracted, intersected. */

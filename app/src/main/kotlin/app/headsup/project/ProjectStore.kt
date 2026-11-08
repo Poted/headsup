@@ -512,6 +512,11 @@ internal object Json {
         .put("wheels", JSONArray(g.wheels.map { it.toDouble() }))
         .put("texture", g.texture)
         .put("defringe", g.defringe.toDouble())
+        .put("colourPop", g.colourPop.toDouble())
+        .put("points", JSONArray(g.points.map { p ->
+            JSONObject().put("r", p.r.toDouble()).put("g", p.g.toDouble()).put("b", p.b.toDouble()).put("range", p.range.toDouble())
+                .put("hue", p.hue.toDouble()).put("sat", p.saturation.toDouble()).put("lum", p.luminance.toDouble())
+        }))
         .put("clarity", g.clarity)
         .put("dehaze", g.dehaze)
         .put("glow", g.glow)
@@ -557,6 +562,15 @@ internal object Json {
                 ?: app.headsup.core.color.ColourWheels.NEUTRAL,
             texture = f("texture"),
             defringe = f("defringe"),
+            colourPop = f("colourPop"),
+            points = o.optJSONArray("points")?.let { a ->
+                List(a.length()) { k -> a.getJSONObject(k) }.map { p ->
+                    app.headsup.core.color.PointColour(
+                        p.optDouble("r").toFloat(), p.optDouble("g").toFloat(), p.optDouble("b").toFloat(), p.optDouble("range", 0.35).toFloat(),
+                        p.optDouble("hue", 0.0).toFloat(), p.optDouble("sat", 0.0).toFloat(), p.optDouble("lum", 0.0).toFloat(),
+                    )
+                }
+            }.orEmpty(),
             clarity = f("clarity"),
             dehaze = f("dehaze"),
             glow = f("glow"),
