@@ -56,6 +56,11 @@ data class TextItem(
     val opacity: Float = 1f,
     /** Turned about its middle, degrees clockwise. */
     val angle: Float = 0f,
+    /**
+     * The picture inside the letters: the whole frame covered in [colour] with the letters cut out
+     * of it, so the video (or photo) shows only through them.
+     */
+    val cutout: Boolean = false,
 ) {
     val isLogo: Boolean get() = image != null
 

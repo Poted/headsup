@@ -128,6 +128,25 @@ object TextRenderer {
         canvas.scale(f.scale, f.scale, if (item.align == TextAlign.LEFT) left else cx, cy)
         val alpha = (f.alpha * Color.alpha(item.colour)).toInt().coerceIn(0, 255)
         val baseline0 = top + size
+        if (item.cutout) {
+            // The frame covered in the colour, the letters cut out of it: the picture shows through them.
+            canvas.restore()
+            val layer = canvas.saveLayer(0f, 0f, w, h, null)
+            canvas.drawColor(withAlpha(item.colour, alpha))
+            canvas.save()
+            if (item.angle != 0f) canvas.rotate(item.angle, left + blockW / 2f, cy)
+            canvas.scale(f.scale, f.scale, if (item.align == TextAlign.LEFT) left else cx, cy)
+            paint.color = Color.BLACK
+            paint.xfermode = android.graphics.PorterDuffXfermode(android.graphics.PorterDuff.Mode.DST_OUT)
+            lines.forEachIndexed { i, line ->
+                val lineW = paint.measureText(fullLines.getOrElse(i) { line })
+                val x = if (item.align == TextAlign.LEFT) left else cx - lineW / 2f
+                canvas.drawText(line, x, baseline0 + i * lineH, paint)
+            }
+            canvas.restore()
+            canvas.restoreToCount(layer)
+            return
+        }
         fun pass(colour: Int, shadowRadius: Float, shadowDy: Float, shadowColour: Int) {
             paint.color = colour
             paint.alpha = alpha

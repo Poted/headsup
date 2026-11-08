@@ -1914,9 +1914,14 @@ private fun StickerLibraryGrid(onPick: (java.io.File) -> Unit) {
     }
     var pack by rememberSaveable { mutableStateOf<String?>(null) }
     var deleting by remember { mutableStateOf<java.io.File?>(null) }
+    // Taking stickers out of the library: each gets a ✕, a touch asks to delete it.
+    var removing by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
-    ToolSection("Library") {
+    ToolSection("Library", info = "The packs imported in Settings › Sticker packs, and My stickers (pictures saved from here). A touch puts a sticker on; Remove… takes stickers out of the library (where one is already placed, it stays).") {
         val all = packs
+        if (!all.isNullOrEmpty()) Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            SmallAction(if (removing) "Done" else "Remove…", { removing = !removing })
+        }
         when {
             all == null -> Hint("Loading…")
             all.isEmpty() -> Hint("No sticker packs yet. Import pictures or a ZIP in Settings › Sticker packs (PNG keeps transparency).")
@@ -1933,7 +1938,19 @@ private fun StickerLibraryGrid(onPick: (java.io.File) -> Unit) {
                 ) {
                     items(shown.stickers.size, key = { shown.stickers[it].path }) { i ->
                         val f = shown.stickers[i]
-                        StickerThumb(f, onLongClick = { deleting = f }) { onPick(f) }
+                        Box {
+                            StickerThumb(f, onLongClick = { deleting = f }) { if (removing) deleting = f else onPick(f) }
+                            if (removing) Box(
+                                Modifier
+                                    .align(Alignment.TopEnd)
+                                    .padding(2.dp)
+                                    .size(22.dp)
+                                    .clip(CircleShape)
+                                    .background(Color(0xFFD7263D))
+                                    .clickable { deleting = f },
+                                contentAlignment = Alignment.Center,
+                            ) { Text("✕", color = Color.White, style = MaterialTheme.typography.labelSmall) }
+                        }
                     }
                 }
             }
@@ -5429,7 +5446,7 @@ private fun TextPanel(state: UiState, vm: HeadsupViewModel, stickers: Boolean, a
         TextTool.LOOK -> "A ready-made style: font, size, colour, glow" + (if (state.photoProject) "." else " and animation.") + " Everything stays adjustable after."
         TextTool.DATA -> "Fields show as {name} in the text; type around them, e.g. \"↑ {ascent} · {distance}\". Values come from the selected ${if (state.photoProject) "photo" else "clip"}; tap one to add it."
         TextTool.FONT -> "The typeface, and Left (from the frame's left margin) or Centre."
-        TextTool.COLOUR -> "The text's colour."
+        TextTool.COLOUR -> "The text's colour. Picture inside: the frame covered in this colour, the " + (if (state.photoProject) "photo" else "video") + " showing only through the letters (large, bold letters work best)."
         TextTool.SIZE -> if (item.isLogo) "How wide the logo is, and how see-through (Opacity). Double-tap a ruler for the usual." else "How large the text is, against the frame's height. Double-tap the ruler for the usual size."
         TextTool.GLOW -> "Light round the letters, and a soft shadow under them to lift the text off the picture. Double-tap the ruler to turn the glow off."
         TextTool.IN, TextTool.OUT -> "How the text comes in or goes out. Type and HUD write it a letter every ${TextAnimation.CHAR_MS} ms; Fade, Rise and Pop take the time on the ruler."
@@ -5480,7 +5497,20 @@ private fun TextPanel(state: UiState, vm: HeadsupViewModel, stickers: Boolean, a
                 update { if (i == 0) it.copy(align = TextAlign.LEFT, x = 0.08f) else it.copy(align = TextAlign.CENTER, x = 0.5f) }
             })
         }
-        TextTool.COLOUR -> Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+        TextTool.COLOUR -> {
+          // Letters in the colour, or the picture inside them (the frame covered in the colour).
+          LabeledChoice("Fill", listOf("Letters", "Picture inside"), { (it == 1) == item.cutout }, { i ->
+              update { t ->
+                  val inside = i == 1
+                  // Picture inside starts on black (white over everything rarely is what is wanted), and large.
+                  t.copy(
+                      cutout = inside,
+                      colour = if (inside && t.colour == 0xFFFFFFFF.toInt()) 0xFF000000.toInt() else t.colour,
+                      size = if (inside) maxOf(t.size, 0.2f) else t.size,
+                  )
+              }
+          })
+          Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             for (c in TEXT_COLOURS) {
                 Box(
                     Modifier
@@ -5491,10 +5521,11 @@ private fun TextPanel(state: UiState, vm: HeadsupViewModel, stickers: Boolean, a
                         .clickable { update { it.copy(colour = c) } },
                 )
             }
+          }
         }
         TextTool.SIZE -> {
             ValueHeader(if (item.isLogo) "Size" else "", String.format(Locale.US, "%.0f %%", item.size * 100))
-            RulerSlider(item.size, 0.02f..0.25f, 0.005f, { v -> update { it.copy(size = v) } }, onReset = { update { it.copy(size = 0.07f) } })
+            RulerSlider(item.size, 0.02f..0.5f, 0.005f, { v -> update { it.copy(size = v) } }, onReset = { update { it.copy(size = 0.07f) } })
             if (item.isLogo) {
                 ValueHeader("Opacity", String.format(Locale.US, "%.0f %%", item.opacity * 100))
                 RulerSlider(item.opacity, 0.1f..1f, 0.02f, { v -> update { it.copy(opacity = v) } }, onReset = { update { it.copy(opacity = 1f) } })
