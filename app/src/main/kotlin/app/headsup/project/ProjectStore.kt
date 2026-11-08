@@ -60,6 +60,7 @@ data class SavedClip(
     val gradeKeys: List<app.headsup.core.color.GradeKey> = emptyList(),
     /** The shot steadied (its measured path and strength), or null. */
     val stabilize: app.headsup.core.frame.Stabilizer.Path? = null,
+    val subject: String? = null,
 )
 
 /** A reversed clip's source: [originalUri] from [startMs] to [endMs], played backwards. */
@@ -275,6 +276,13 @@ internal object Json {
         .putOpt("onlyClip", t.onlyClip).putOpt("onlyGroup", t.onlyGroup)
         .putOpt("image", t.image).put("opacity", t.opacity.toDouble()).put("angle", t.angle.toDouble())
         .put("cutout", t.cutout).put("behind", t.behind)
+        .apply {
+            t.follow?.let { f ->
+                put("follow", JSONObject().put("clip", f.clipId)
+                    .put("t", JSONArray(f.timesMs)).put("x", JSONArray(f.xs.map { it.toDouble() })).put("y", JSONArray(f.ys.map { it.toDouble() }))
+                    .put("a", JSONArray(f.angles.map { it.toDouble() })).put("s", JSONArray(f.scales.map { it.toDouble() })))
+            }
+        }
 
     private fun text(o: JSONObject) = TextItem(
         id = o.optLong("id"),
@@ -299,6 +307,13 @@ internal object Json {
         angle = o.optDouble("angle", 0.0).toFloat(),
         cutout = o.optBoolean("cutout", false),
         behind = o.optBoolean("behind", false),
+        follow = o.optJSONObject("follow")?.let { j ->
+            fun floats(k: String) = j.optJSONArray(k)?.let { a -> List(a.length()) { a.optDouble(it).toFloat() } }.orEmpty()
+            val times = j.optJSONArray("t")?.let { a -> List(a.length()) { a.optLong(it) } }.orEmpty()
+            val xs = floats("x"); val ys = floats("y"); val an = floats("a"); val sc = floats("s")
+            if (times.isEmpty() || listOf(xs, ys, an, sc).any { it.size != times.size }) null
+            else app.headsup.core.edit.TextFollow(j.optLong("clip"), times, xs, ys, an, sc)
+        },
     )
 
     private fun audioClip(c: AudioClip) = JSONObject()
@@ -379,6 +394,7 @@ internal object Json {
                 put("stabilize", JSONObject().put("start", p.startMs).put("frame", p.frameMs.toDouble()).put("strength", p.strength.toDouble()).put("steps", flat))
             }
         }
+        .putOpt("subject", c.subject)
         .apply { if (c.gradeKeys.isNotEmpty()) put("gradeKeys", JSONArray(c.gradeKeys.map { k -> JSONObject().put("t", k.timeMs).put("grade", grade(k.grade)) })) }
         .put("raw", JSONObject().put("exposure", c.rawDevelop.exposure.toDouble()).put("highlights", c.rawDevelop.highlights.toDouble())
             .put("shadows", c.rawDevelop.shadows.toDouble()).put("temperature", c.rawDevelop.temperature.toDouble()).put("tint", c.rawDevelop.tint.toDouble())
@@ -421,6 +437,7 @@ internal object Json {
         suggested = o.optBoolean("suggested", false),
         cullGroup = if (o.has("cullGroup")) o.optInt("cullGroup") else null,
         cullBest = o.optBoolean("cullBest", false),
+        subject = o.optStringOrNull("subject"),
         stabilize = o.optJSONObject("stabilize")?.let { j ->
             val flat = j.optJSONArray("steps") ?: return@let null
             app.headsup.core.frame.Stabilizer.Path(

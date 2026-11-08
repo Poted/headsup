@@ -5415,7 +5415,7 @@ private fun TextPanel(state: UiState, vm: HeadsupViewModel, stickers: Boolean, a
     val update: ((TextItem) -> TextItem) -> Unit = { vm.updateText(item.id, it) }
     // In an album: which photos the text is on.
     val photo = state.selected
-    ToolSection(if (item.isLogo) "Sticker" else "Text", info = if (item.isLogo) (if (state.photoProject) "Which photos the sticker is on. Drag it on the picture to place it; ✕ takes it away, ↘ or two fingers size and turn it." else "Drag the sticker on the picture to place it; Size, Opacity and its timing are below.") else if (state.photoProject) "The text, and which photos it is on. Subject › Behind puts it behind the person (or animal, vehicle) in the photo: found by the phone the first time, kept after." else "The text. Its look, data, font and timing are in the tools below.") {
+    ToolSection(if (item.isLogo) "Sticker" else "Text", info = if (item.isLogo) (if (state.photoProject) "Which photos the sticker is on. Drag it on the picture to place it; ✕ takes it away, ↘ or two fingers size and turn it." else "Drag the sticker on the picture to place it; Size, Opacity and its timing are below. Stick to picture: placed over something in the clip, it moves, turns and grows with it (followed through the clip in the background). Subject › Behind: the person (or animal, vehicle) passes in front of it.") else if (state.photoProject) "The text, and which photos it is on. Subject › Behind puts it behind the person (or animal, vehicle) in the photo: found by the phone the first time, kept after." else "The text. Its look, data, font and timing are in the tools below. Stick to picture: placed over something in the clip, it moves, turns and grows with it. Subject › Behind: the person (or animal, vehicle) passes in front of the letters; the clip's subject is found once, in the background.") {
         if (state.photoProject && photo != null) {
             ChoiceGrid(
                 listOf("This photo", "All photos"),
@@ -5424,6 +5424,39 @@ private fun TextPanel(state: UiState, vm: HeadsupViewModel, stickers: Boolean, a
             )
             // Behind the person (or animal, vehicle) in the photo: found once per photo, a moment the first time.
             LabeledChoice("Subject", listOf("In front", "Behind"), { (it == 1) == item.behind }, { i -> update { it.copy(behind = i == 1) } })
+        }
+        if (!state.photoProject) {
+            val clipNow = state.selected
+            val clipIndex = state.selectedClip
+            val finding = clipNow != null && state.work.any { it.clipId == clipNow.id && it.label.startsWith("Finding the subject") }
+            LabeledChoice("Subject", listOf("In front", "Behind"), { (it == 1) == item.behind }, { i ->
+                update { it.copy(behind = i == 1) }
+                // Behind needs the clip's subject: found in the background the first time.
+                if (i == 1 && clipNow != null && clipNow.subject == null && clipIndex != null) vm.findSubject(clipIndex)
+            })
+            if (item.behind && clipNow != null) Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(
+                    when {
+                        finding -> "Finding the subject in this clip…"
+                        clipNow.subject == null -> "This clip's subject is not found yet."
+                        else -> "Behind the subject of this clip."
+                    },
+                    Modifier.weight(1f), style = MaterialTheme.typography.bodySmall, color = HeadsupColors.TextMuted,
+                )
+                if (!finding && clipIndex != null) SmallAction(if (clipNow.subject == null) "Find" else "Find again", { vm.findSubject(clipIndex) })
+            }
+            // Stuck to a place in the picture: it moves, turns and grows with it.
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                val following = item.follow != null
+                Text(
+                    if (following) "Stuck to the picture: moves with what is under it." else "Stays put in the frame.",
+                    Modifier.weight(1f), style = MaterialTheme.typography.bodySmall, color = HeadsupColors.TextMuted,
+                )
+                if (following) {
+                    SmallAction("Again", { vm.followText(item.id) })
+                    SmallAction("Unstick", { vm.unfollowText(item.id) })
+                } else SmallAction("Stick to picture", { vm.followText(item.id) })
+            }
         }
         if (!item.isLogo) OutlinedTextField(
             value = item.text,

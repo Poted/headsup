@@ -57,3 +57,21 @@ class TextAnimationTest {
         assertEquals(200L, TextAnimation.durationOf(short, TextAnim.FADE))
     }
 }
+
+class TextFollowTest {
+    @Test
+    fun movesWithThePlaceItFollows() {
+        val f = app.headsup.core.edit.TextFollow(7L, listOf(1000L, 2000L), listOf(0.2f, 0.4f), listOf(0.5f, 0.5f), listOf(0f, 10f), listOf(1f, 2f))
+        val item = app.headsup.core.edit.TextItem(1L, "Hi", 0L, 5000L, x = 0.3f, y = 0.6f, size = 0.1f, follow = f)
+        val id: (Float, Float) -> Pair<Float, Float> = { x, y -> x to y }
+        val mid = item.placed(7L, 1500L, id)
+        kotlin.test.assertEquals(0.4f, mid.x, 1e-4f)
+        kotlin.test.assertEquals(0.6f, mid.y, 1e-4f)
+        kotlin.test.assertEquals(5f, mid.angle, 1e-4f)
+        kotlin.test.assertEquals(0.15f, mid.size, 1e-4f)
+        // Before the first and after the last it holds; another clip leaves it where it is.
+        kotlin.test.assertEquals(0.3f, item.placed(7L, 0L, id).x, 1e-4f)
+        kotlin.test.assertEquals(0.5f, item.placed(7L, 9000L, id).x, 1e-4f)
+        kotlin.test.assertEquals(item, item.placed(8L, 1500L, id))
+    }
+}

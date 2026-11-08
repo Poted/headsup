@@ -1587,7 +1587,15 @@ fun ClipPreview(
                 val textChange by rememberUpdatedState(onTextChange)
                 val textDelete by rememberUpdatedState(onDeleteText)
                 val textSelect by rememberUpdatedState(onSelectText)
-                val textsNow by rememberUpdatedState(texts)
+                // Texts stuck to the picture are where the place they follow is now.
+                val shownTexts = if (photo || texts.none { it.follow != null }) texts else {
+                    val srcW = clip.meta.width.takeIf { it > 0 }?.toFloat() ?: 1920f
+                    val srcH = clip.meta.height.takeIf { it > 0 }?.toFloat() ?: 1080f
+                    val (ow, oh) = reframe.outputSize(srcW, srcH)
+                    texts.map { t -> t.placed(clip.id, fileMs) { x, y -> reframe.frameOf(x * srcW, y * srcH, ow, oh, srcW, srcH).let { (fx, fy) -> fx / ow to fy / oh } } }
+                }
+                val textsNow by rememberUpdatedState(shownTexts)
+                val rawTextsNow by rememberUpdatedState(texts)
                 val selectedTextNow by rememberUpdatedState(selectedTextId)
                 // While a text is dragged, guides show the middle and the margins it snaps to.
                 var placing by remember { mutableStateOf(false) }
@@ -1629,8 +1637,10 @@ fun ClipPreview(
                                             val d0 = down.position - c
                                             val len0 = d0.getDistance().coerceAtLeast(1f)
                                             val a0 = kotlin.math.atan2(d0.y, d0.x)
-                                            val size0 = sel.size
-                                            val angle0 = sel.angle
+                                            // Sized and turned from the item as kept (a stuck one shows sized and turned by its place).
+                                            val kept = rawTextsNow.firstOrNull { it.id == sel.id } ?: sel
+                                            val size0 = kept.size
+                                            val angle0 = kept.angle
                                             drag(down.id) { change ->
                                                 change.consume()
                                                 val d = change.position - c
@@ -1650,7 +1660,8 @@ fun ClipPreview(
                                     val target = hit ?: sel ?: return@awaitEachGesture
                                     placing = true
                                     // Moved by the finger's travel (not jumping to it); two fingers size and turn it.
-                                    val start = Offset(target.x * w, target.y * h)
+                                    val base = rawTextsNow.firstOrNull { it.id == target.id } ?: target
+                                    val start = Offset(base.x * w, base.y * h)
                                     var moved = Offset.Zero
                                     do {
                                         val event = awaitPointerEvent()
@@ -1684,8 +1695,11 @@ fun ClipPreview(
                     }
                     if (texts.isNotEmpty()) {
                         val values = if (texts.any { app.headsup.core.edit.TextFields.hasFields(it.text) }) textValues(positionMs) else emptyMap()
+                        // A clip's subject: its map at this moment, moved with the picture (steadied too).
+                        val clipSubject = clip.subject?.takeIf { !photo && texts.any { it.behind } }
+                        val clipMap = clipSubject?.let { app.headsup.color.SubjectMaps.frameAt(context, it, fileMs) }
                         val map = subjectMap?.takeIf { wantsSubject }
-                        val behind: ((android.graphics.Canvas, android.graphics.Paint) -> Unit)? = map?.let { m ->
+                        fun photoBehind(): ((android.graphics.Canvas, android.graphics.Paint) -> Unit)? = map?.let { m ->
                             { c, p ->
                                 val t = reframeTransform(reframe, geometry)
                                 TextRenderer.drawSubject(
@@ -1695,10 +1709,23 @@ fun ClipPreview(
                                 )
                             }
                         }
-                        drawIntoCanvas { TextRenderer.draw(it.nativeCanvas, size.width, size.height, texts, timelineOffsetMs + clipTimelineMs, values, behind) }
+                        val behind: ((android.graphics.Canvas, android.graphics.Paint) -> Unit)? = if (clipMap != null) {
+                            val t = reframeTransform(reframe, geometry)
+                            val c = if (steady != null && steadyCorrections != null) app.headsup.core.frame.Stabilizer.at(steady, steadyCorrections, fileMs) else null
+                            val f: (android.graphics.Canvas, android.graphics.Paint) -> Unit = { cv, p ->
+                                TextRenderer.drawSubject(
+                                    cv, p, clipMap, size.width, size.height, geometry.pictureW, geometry.pictureH,
+                                    t.translation.x + (c?.let { it.dx * size.width * t.zoom } ?: 0f), t.translation.y + (c?.let { it.dy * size.height * t.zoom } ?: 0f),
+                                    reframe.angleDegrees + (c?.degrees ?: 0f), t.zoom * (c?.zoom ?: 1f), reframe.mirrored,
+                                    reframe.warp?.let { perspectiveMatrix(it, geometry.pictureW, geometry.pictureH) },
+                                )
+                            }
+                            f
+                        } else photoBehind()
+                        drawIntoCanvas { TextRenderer.draw(it.nativeCanvas, size.width, size.height, shownTexts, timelineOffsetMs + clipTimelineMs, values, behind) }
                     }
                     // The text or logo being edited: a dashed frame, ✕ to take it away, ↘ to size and turn it.
-                    texts.firstOrNull { it.id == selectedTextId }?.takeIf { onMoveText != null }?.let { t ->
+                    shownTexts.firstOrNull { it.id == selectedTextId }?.takeIf { onMoveText != null }?.let { t ->
                         val b = TextRenderer.box(t, size.width, size.height)
                         val pad = TEXT_FRAME_PAD.toPx()
                         rotate(t.angle, Offset(b.centerX(), b.centerY())) {

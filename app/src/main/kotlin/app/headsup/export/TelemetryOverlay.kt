@@ -41,6 +41,11 @@ class TelemetryOverlay(
     private val dataAt: (positionMs: Long) -> DashboardData?,
     /** How far in the bars are at a moment of the timeline (sliding in), 0..1. */
     private val barsAt: (timelineMs: Long) -> Float = { 1f },
+    /** The texts as shown at a moment (those stuck to the picture moved with it). */
+    private val placeTexts: (List<TextItem>, positionMs: Long) -> List<TextItem> = { t, _ -> t },
+    /** Draws the clip's subject at a moment into a [w]×[h] frame (texts behind it); which map that is. */
+    private val subject: ((Canvas, android.graphics.Paint, positionMs: Long, w: Float, h: Float) -> Unit)? = null,
+    private val subjectKey: (positionMs: Long) -> String = { "" },
 ) : BitmapOverlay() {
     private var width = fallbackWidth
     private var height = fallbackHeight
@@ -73,7 +78,8 @@ class TelemetryOverlay(
         val timelineMs = timelineMsOf(positionMs)
         val effects = if (this.effects.barsRatio != null) this.effects.copy(barsAmount = barsAt(timelineMs)) else this.effects
         val values = if (texts.isEmpty()) emptyMap() else textValues(data)
-        val textKey = if (texts.isEmpty()) "" else TextRenderer.key(texts, timelineMs, values)
+        val shownTexts = if (texts.isEmpty()) texts else placeTexts(texts, positionMs)
+        val textKey = if (texts.isEmpty()) "" else TextRenderer.key(shownTexts, timelineMs, values) + subjectKey(positionMs)
         val key = "${width}x$height ${(effects.barsAmount * 200).toInt()} " + (data?.let { renderer.contentKey(style, it, w, h, effects) } ?: "-") + textKey + mapKey(data)
         buffers[current]?.let { if (key == lastKey) return it }
 
@@ -85,7 +91,7 @@ class TelemetryOverlay(
         renderer.drawVignette(canvas, w, h, vignette)
         if (data != null) renderer.draw(canvas, w, h, style, data, effects) else renderer.drawBars(canvas, w, h, effects)
         drawMap?.invoke(canvas, w, h, data)
-        if (texts.isNotEmpty()) TextRenderer.draw(canvas, w, h, texts, timelineMs, values)
+        if (texts.isNotEmpty()) TextRenderer.draw(canvas, w, h, shownTexts, timelineMs, values, subject?.let { s -> { c, p -> s(c, p, positionMs, w, h) } })
         lastKey = key
         return bitmap
     }

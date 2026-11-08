@@ -135,6 +135,8 @@ data class ClipState(
     val gradeKeys: List<app.headsup.core.color.GradeKey> = emptyList(),
     /** The shot steadied: its measured camera path and how much of the shake goes; null: as shot. */
     val stabilize: app.headsup.core.frame.Stabilizer.Path? = null,
+    /** The clip's subject found on its frames (a [app.headsup.color.MaskSequences] id), for texts behind it. */
+    val subject: String? = null,
     /** Picture effects of this clip. */
     val effects: EffectSettings = EffectSettings(),
     /** Windows with their own corrections (graduated lines, ovals), at most [ColourMask.MAX_PER_CLIP]. */
@@ -1039,6 +1041,167 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
 
     fun selectText(id: Long?) = _state.update { it.copy(selectedText = id) }
 
+    /** Source fractions of [clip] to the frame's (as framed now). */
+    private fun frameMapping(s: UiState, clip: ClipState): (Float, Float) -> Pair<Float, Float> {
+        val srcW = clip.meta.width.takeIf { it > 0 }?.toFloat() ?: 1920f
+        val srcH = clip.meta.height.takeIf { it > 0 }?.toFloat() ?: 1080f
+        val r = s.framing(clip)
+        val (ow, oh) = r.outputSize(srcW, srcH)
+        return { x, y -> r.frameOf(x * srcW, y * srcH, ow, oh, srcW, srcH).let { (fx, fy) -> fx / ow to fy / oh } }
+    }
+
+    /**
+     * Sticks text or sticker [id] to the place under it in the clip at the playhead: that place
+     * is followed through the clip (a planar tracker, as for masks) and the item moves, turns and
+     * grows with it. Dragging it afterwards still places it; the path keeps its motion.
+     */
+    fun followText(id: Long) {
+        val s = _state.value
+        val clip = s.selected?.takeIf { !it.meta.isPhoto } ?: return
+        val raw = s.texts.firstOrNull { it.id == id } ?: return
+        val t0 = playheadFileMs.coerceIn(clip.trimStartMs, clip.trimEndMs)
+        val srcW = clip.meta.width.takeIf { it > 0 }?.toFloat() ?: 1920f
+        val srcH = clip.meta.height.takeIf { it > 0 }?.toFloat() ?: 1080f
+        val r = s.framing(clip)
+        val (ow, oh) = r.outputSize(srcW, srcH)
+        val shown = raw.placed(clip.id, t0, frameMapping(s, clip))
+        val box = app.headsup.render.TextRenderer.box(shown, ow, oh)
+        val corners = listOf(box.left to box.top, box.right to box.top, box.left to box.bottom, box.right to box.bottom)
+            .map { (x, y) -> r.sourceOf(x, y, ow, oh, srcW, srcH) }
+        val (cx, cy) = r.sourceOf(box.centerX(), box.centerY(), ow, oh, srcW, srcH)
+        val hw = ((corners.maxOf { it.first } - corners.minOf { it.first }) / 2f / srcW).coerceIn(0.03f, 0.3f)
+        val hh = ((corners.maxOf { it.second } - corners.minOf { it.second }) / 2f / srcH).coerceIn(0.03f, 0.3f)
+        val start = ColourMask(
+            kind = MaskKind.ELLIPSE, centerX = (cx / srcW).coerceIn(0f, 1f), centerY = (cy / srcH).coerceIn(0f, 1f),
+            sizeX = hw * 2f * srcW / srcH, sizeY = hh * 2f,
+        )
+        val uri = s.previewSource(clip)
+        val context: Application = getApplication()
+        runInBackground("Following the place", clip.id, null) { report, stopped ->
+            val result = withContext(Dispatchers.Default) {
+                val step = maxOf(50L, (clip.trimEndMs - clip.trimStartMs) / 400)
+                val frames = TrackingFrames.read(context, uri, clip.trimStartMs, clip.trimEndMs, step) { p -> report(p * 0.7f) }
+                if (stopped()) return@withContext null
+                val first = frames.indices.minByOrNull { kotlin.math.abs(frames[it].first - t0) } ?: return@withContext null
+                fun follow(range: IntProgression): Pair<List<MaskKey>, Long?> {
+                    val tracker = MaskTracker(start, frames[first].second, frames[first].first, start.centerX to start.centerY, hw to hh)
+                    val keys = mutableListOf<MaskKey>()
+                    for (i in range) {
+                        val (ms, frame) = frames[i]
+                        val key = tracker.next(frame, ms) ?: return keys to ms.takeIf { !tracker.leftFrame }
+                        keys += key
+                    }
+                    return keys to null
+                }
+                val (ahead, lostAhead) = follow(first + 1 until frames.size)
+                report(0.85f)
+                val (behind, lostBehind) = follow(first - 1 downTo 0)
+                val keys = behind.reversed() + MaskKey.of(start, frames[first].first) + ahead
+                Triple(keys, lostAhead, lostBehind)
+            } ?: return@runInBackground
+            val (keys, lostAhead, lostBehind) = result
+            val follow = app.headsup.core.edit.TextFollow(
+                clip.id, keys.map { it.timeMs }, keys.map { it.centerX }, keys.map { it.centerY },
+                keys.map { it.angleDegrees - start.angleDegrees }, keys.map { it.sizeX / start.sizeX },
+                fromMs = frames0(keys, t0),
+            )
+            fun at(ms: Long) = Formats.duration(ms - clip.trimStartMs)
+            _state.update { st ->
+                st.copy(
+                    texts = st.texts.map { if (it.id == id) it.copy(x = shown.x, y = shown.y, angle = shown.angle, size = shown.size, follow = follow) else it },
+                    messages = st.messages + listOfNotNull(
+                        "Follows the place ${at(keys.first().timeMs)}–${at(keys.last().timeMs)}.",
+                        lostAhead?.let { "Lost at ${at(it)}: it holds its place from there." },
+                        lostBehind?.let { "Going back, lost at ${at(it)}: it holds its place before that." },
+                    ),
+                )
+            }
+        }
+    }
+
+    /** The key time nearest [t0] (where the item was set to follow). */
+    private fun frames0(keys: List<MaskKey>, t0: Long): Long = keys.minByOrNull { kotlin.math.abs(it.timeMs - t0) }?.timeMs ?: t0
+
+    /** Text or sticker [id] no longer follows: it stays where it shows now. */
+    fun unfollowText(id: Long) {
+        val s = _state.value
+        val clip = s.selected
+        _state.update { st ->
+            st.copy(texts = st.texts.map { t ->
+                if (t.id != id) t else {
+                    val shown = if (clip != null) t.placed(clip.id, playheadFileMs, frameMapping(st, clip)) else t
+                    shown.copy(follow = null)
+                }
+            })
+        }
+    }
+
+    /**
+     * Finds the subject (people, animals, vehicles) on clip [index]'s frames, for texts behind
+     * it: found where it first shows, then followed (MobileSAM, told where it was), looked for
+     * again whenever it is gone. In the background; the maps are kept with the clip.
+     */
+    fun findSubject(index: Int) {
+        val s = _state.value
+        val clip = s.clips.getOrNull(index)?.takeIf { !it.meta.isPhoto } ?: return
+        if (s.work.any { it.clipId == clip.id && it.label.startsWith("Finding the subject") }) return
+        val uri = s.previewSource(clip)
+        val context: Application = getApplication()
+        runInBackground("Finding the subject", clip.id, null) { report, stopped ->
+            val id = withContext(Dispatchers.Default) {
+                val aspect = if (clip.meta.width > 0 && clip.meta.height > 0) clip.meta.width.toFloat() / clip.meta.height else 16f / 9f
+                val side = app.headsup.color.SubjectMaps.CLIP_SIDE
+                val w = if (aspect >= 1f) side else (side * aspect).toInt().coerceAtLeast(1)
+                val h = if (aspect >= 1f) (side / aspect).toInt().coerceAtLeast(1) else side
+                val times = ArrayList<Long>()
+                val maps = ArrayList<ByteArray>()
+                var follower: app.headsup.color.MaskFollower? = null
+                var wait = 0
+                var n = 0
+                val length = (clip.trimEndMs - clip.trimStartMs).coerceAtLeast(1L)
+                TrackingFrames.forEachPicture(context, uri, clip.trimStartMs, clip.trimEndMs, AI_TRACK_STEP_MS, app.headsup.color.Segmenter.INPUT) { ms, picture ->
+                    if (stopped()) return@forEachPicture false
+                    report(((ms - clip.trimStartMs).toFloat() / length).coerceIn(0f, 1f))
+                    var map: FloatArray? = null
+                    follower?.let { f ->
+                        n++
+                        // The model reads every other frame; the ones between follow the picture.
+                        map = (if (n % 2 == 1) f.between(picture) else f.next(picture))
+                            ?.takeIf { app.headsup.core.color.MaskFollow.area(it) > 0.002f }
+                        if (map == null) follower = null
+                    }
+                    if (map == null && wait-- <= 0) {
+                        val found = runCatching { app.headsup.color.SubjectMaps.detect(context, picture, w, h, centre = false) }.getOrNull()
+                        if (found != null) {
+                            follower = app.headsup.color.MaskFollower(context, w, h, null, false, found).also { it.begin(picture) }
+                            n = 0
+                            map = found
+                        } else {
+                            // Looked for again a moment later (each look is a few model runs).
+                            wait = 4
+                        }
+                    }
+                    times += ms
+                    maps += app.headsup.core.color.PackedFrames.pack(map?.let { app.headsup.core.color.MaskSequence.bytes(it) } ?: ByteArray(w * h))
+                    true
+                }
+                if (times.isEmpty()) return@withContext null
+                val seq = app.headsup.core.color.MaskSequence(w, h, times.toLongArray(), app.headsup.core.color.PackedFrames(maps, w * h))
+                app.headsup.color.MaskSequences.create(context, seq)
+            }
+            if (id == null) {
+                _state.update { it.copy(messages = it.messages + "Could not read the clip's frames.") }
+                return@runInBackground
+            }
+            _state.update { st ->
+                st.copy(
+                    clips = st.clips.map { c -> if (c.id == clip.id) c.copy(subject = id) else c },
+                    messages = st.messages + (if (stopped()) "Subject found up to where it was stopped." else "Subject found on the clip: texts set Behind stand behind it."),
+                )
+            }
+        }
+    }
+
     fun updateText(id: Long, transform: (TextItem) -> TextItem) =
         _state.update { s -> s.copy(texts = s.texts.map { if (it.id == id) transform(it) else it }) }
 
@@ -1407,6 +1570,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                 rating = it.rating, suggested = it.suggested, cullGroup = it.cullGroup, cullBest = it.cullBest,
                 gradeKeys = it.gradeKeys,
                 stabilize = it.stabilize,
+                subject = it.subject,
             )
         },
         groups = groups.map { SavedGroup(it.id, it.name, it.grade, it.lutName) },
@@ -1555,6 +1719,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
             cullBest = c.cullBest,
             gradeKeys = c.gradeKeys,
             stabilize = c.stabilize,
+            subject = c.subject,
             groupId = c.groupId,
         )
     }
@@ -4668,6 +4833,8 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                     },
                     reframe = s.framing(clip),
                     stabilize = clip.stabilize?.takeIf { it.strength > 0f },
+                    clipId = clip.id,
+                    subject = clip.subject,
                     speed = clip.speed,
                     isPhoto = clip.meta.isPhoto,
                     muteChangedSpeed = clip.muteChangedSpeed,

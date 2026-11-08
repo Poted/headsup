@@ -142,6 +142,20 @@ data class Reframe(
         return (r.centerX * srcW + sx) to (r.centerY * srcH + sy)
     }
 
+    /** Output pixel where source pixel ([x], [y]) is shown: the inverse of [sourceOf]. */
+    fun frameOf(x: Float, y: Float, outW: Float, outH: Float, srcW: Float, srcH: Float): Pair<Float, Float> {
+        val r = clamped(outW, outH, srcW, srcH)
+        val scale = baseScale(outW, outH, srcW, srcH) * r.effectiveZoom(outW, outH, srcW, srcH)
+        val a = Math.toRadians(angleDegrees.toDouble())
+        val sx = x - r.centerX * srcW
+        val sy = y - r.centerY * srcH
+        val ux = if (mirrored) -sx else sx
+        // Turned clockwise (screen coordinates, y down).
+        val dx = (ux * cos(a) - sy * sin(a)).toFloat()
+        val dy = (ux * sin(a) + sy * cos(a)).toFloat()
+        return (outW / 2f + dx * scale) to (outH / 2f + dy * scale)
+    }
+
     // Same-size output (no aspect change), as used by most callers.
     fun effectiveZoom(width: Float, height: Float) = effectiveZoom(width, height, width, height)
     fun clamped(width: Float, height: Float) = clamped(width, height, width, height)

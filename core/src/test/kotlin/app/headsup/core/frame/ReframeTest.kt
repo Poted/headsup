@@ -108,4 +108,23 @@ class ReframeTest {
         assertEquals(50f, sy, 1e-3f)
         assertEquals(false, Reframe().mirroredLeftRight().mirroredLeftRight().mirrored)
     }
+
+    @Test
+    fun frameOfUndoesSourceOf() {
+        val cases = listOf(
+            Reframe(),
+            Reframe(aspect = 9f / 16f, zoom = 1.4f, centerX = 0.3f, centerY = 0.6f, angleDegrees = 12f),
+            Reframe(aspect = 1f, zoom = 1.2f, centerX = 0.6f, angleDegrees = -7f).mirroredLeftRight(),
+            Reframe().turned(1),
+        )
+        for (r in cases) {
+            val (ow, oh) = r.outputSize(1920f, 1080f)
+            for ((x, y) in listOf(100f to 200f, ow / 2f to oh / 2f, ow - 50f to 30f)) {
+                val (sx, sy) = r.sourceOf(x, y, ow, oh, 1920f, 1080f)
+                val (fx, fy) = r.frameOf(sx, sy, ow, oh, 1920f, 1080f)
+                assertEquals(x, fx, 0.05f, "$r")
+                assertEquals(y, fy, 0.05f, "$r")
+            }
+        }
+    }
 }
