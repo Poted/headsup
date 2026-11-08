@@ -63,8 +63,17 @@ data class TextItem(
     val cutout: Boolean = false,
     /** Behind the subject of the photo or clip (the person in front stands over the letters). */
     val behind: Boolean = false,
+    /**
+     * With [behind]: the mask (its place in the clip's or photo's list of masks) it goes behind,
+     * e.g. a wall it comes out from; null: the subject found by itself.
+     */
+    val behindMask: Int? = null,
     /** Stuck to a place in a clip's picture: carried, turned and sized with it. */
     val follow: TextFollow? = null,
+    /** A font of the user's own (a TTF or OTF kept by the app) in place of [font]. */
+    val fontFile: String? = null,
+    /** The letters filled with this picture (kept by the app) instead of [colour]. */
+    val fillImage: String? = null,
 ) {
     val isLogo: Boolean get() = image != null
 

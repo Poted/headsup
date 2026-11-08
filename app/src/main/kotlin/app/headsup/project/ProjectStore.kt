@@ -275,7 +275,8 @@ internal object Json {
         .put("align", t.align.name).put("animIn", t.animIn.name).put("animOut", t.animOut.name).put("animMs", t.animMs)
         .putOpt("onlyClip", t.onlyClip).putOpt("onlyGroup", t.onlyGroup)
         .putOpt("image", t.image).put("opacity", t.opacity.toDouble()).put("angle", t.angle.toDouble())
-        .put("cutout", t.cutout).put("behind", t.behind)
+        .put("cutout", t.cutout).put("behind", t.behind).putOpt("behindMask", t.behindMask)
+        .putOpt("fontFile", t.fontFile).putOpt("fillImage", t.fillImage)
         .apply {
             t.follow?.let { f ->
                 put("follow", JSONObject().put("clip", f.clipId)
@@ -307,6 +308,9 @@ internal object Json {
         angle = o.optDouble("angle", 0.0).toFloat(),
         cutout = o.optBoolean("cutout", false),
         behind = o.optBoolean("behind", false),
+        behindMask = if (o.has("behindMask")) o.optInt("behindMask") else null,
+        fontFile = o.optStringOrNull("fontFile"),
+        fillImage = o.optStringOrNull("fillImage"),
         follow = o.optJSONObject("follow")?.let { j ->
             fun floats(k: String) = j.optJSONArray(k)?.let { a -> List(a.length()) { a.optDouble(it).toFloat() } }.orEmpty()
             val times = j.optJSONArray("t")?.let { a -> List(a.length()) { a.optLong(it) } }.orEmpty()

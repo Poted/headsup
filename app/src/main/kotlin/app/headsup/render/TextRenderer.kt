@@ -26,6 +26,14 @@ object TextRenderer {
         TextFont.HAND -> Typeface.create("cursive", Typeface.NORMAL)
     }
 
+    /** Fonts of the user's own, read once per file. */
+    private val fontFiles = java.util.concurrent.ConcurrentHashMap<String, Typeface>()
+
+    /** [item]'s typeface: its own font file when it has one (and it can be read), else its font. */
+    fun typefaceOf(item: TextItem): Typeface = item.fontFile?.let { path ->
+        fontFiles[path] ?: runCatching { Typeface.createFromFile(path) }.getOrNull()?.also { fontFiles[path] = it }
+    } ?: typeface(item.font)
+
     /** Changes whenever what [draw] would draw changes (for reusing an export overlay's bitmap). */
     fun key(items: List<TextItem>, timelineMs: Long, values: Map<String, String> = emptyMap()): String =
         items.mapNotNull { raw -> val item = filled(raw, values); TextAnimation.frame(item, timelineMs)?.let { "${item.hashCode()}:$it" } }.joinToString("|")
@@ -35,12 +43,13 @@ object TextRenderer {
         if (TextFields.hasFields(item.text)) item.copy(text = TextFields.fill(item.text, values)) else item
 
     /**
-     * Draws [items]; [subject], when given, draws the photo's subject (its alpha) where it is in the
-     * frame with the paint it is handed, and is taken out of the texts set to stand behind it.
+     * Draws [items]; [subject], when given, draws what a text set to stand behind something goes
+     * behind (the subject, or its mask: an alpha map) where it is in the frame, with the paint it
+     * is handed; that is taken out of the text.
      */
     fun draw(
         canvas: Canvas, width: Float, height: Float, items: List<TextItem>, timelineMs: Long, values: Map<String, String> = emptyMap(),
-        subject: ((Canvas, Paint) -> Unit)? = null,
+        subject: ((TextItem, Canvas, Paint) -> Unit)? = null,
     ) {
         for (raw in items) {
             val item = filled(raw, values)
@@ -49,7 +58,7 @@ object TextRenderer {
             if (item.behind && subject != null) {
                 val layer = canvas.saveLayer(0f, 0f, width, height, null)
                 drawItem(canvas, width, height, item, f)
-                subject(canvas, Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG).apply {
+                subject(item, canvas, Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG).apply {
                     xfermode = android.graphics.PorterDuffXfermode(android.graphics.PorterDuff.Mode.DST_OUT)
                 })
                 canvas.restoreToCount(layer)
@@ -116,7 +125,7 @@ object TextRenderer {
             return android.graphics.RectF(cx - width / 2f, cy - height / 2f, cx + width / 2f, cy + height / 2f)
         }
         val size = it2.size * minOf(w, h)
-        val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply { typeface = typeface(it2.font); textSize = size }
+        val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply { typeface = typefaceOf(it2); textSize = size }
         val lines = it2.text.split('\n')
         val blockW = lines.maxOf { paint.measureText(it) }
         val blockH = size * 1.2f * lines.size
@@ -149,7 +158,7 @@ object TextRenderer {
         val fullLines = item.text.split('\n')
         // Its own paint: the preview and an export may draw at the same time.
         val paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.SUBPIXEL_TEXT_FLAG)
-        paint.typeface = typeface(item.font)
+        paint.typeface = typefaceOf(item)
         paint.textSize = size
         val lineH = size * 1.2f
         val blockW = fullLines.maxOf { paint.measureText(it) }
@@ -203,6 +212,25 @@ object TextRenderer {
             pass(item.colour, size * 0.08f, size * 0.04f, withAlpha(Color.BLACK, (150 * f.alpha).toInt()))
         } else {
             pass(item.colour, 0f, 0f, 0)
+        }
+        // Filled with a picture: drawn over the letters, the picture covering the whole block.
+        item.fillImage?.let { logo(it) }?.let { bmp ->
+            val shader = android.graphics.BitmapShader(bmp, android.graphics.Shader.TileMode.CLAMP, android.graphics.Shader.TileMode.CLAMP)
+            val k = maxOf(blockW / bmp.width, blockH / bmp.height)
+            shader.setLocalMatrix(android.graphics.Matrix().apply {
+                postScale(k, k)
+                postTranslate(left + (blockW - bmp.width * k) / 2f, top + (blockH - bmp.height * k) / 2f)
+            })
+            paint.clearShadowLayer()
+            paint.shader = shader
+            paint.color = Color.BLACK
+            paint.alpha = (f.alpha * 255).toInt().coerceIn(0, 255)
+            lines.forEachIndexed { i, line ->
+                val lineW = paint.measureText(fullLines.getOrElse(i) { line })
+                val x = if (item.align == TextAlign.LEFT) left else cx - lineW / 2f
+                canvas.drawText(line, x, baseline0 + i * lineH, paint)
+            }
+            paint.shader = null
         }
         canvas.restore()
     }

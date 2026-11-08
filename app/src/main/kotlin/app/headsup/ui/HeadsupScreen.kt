@@ -5484,26 +5484,44 @@ private fun TextPanel(state: UiState, vm: HeadsupViewModel, stickers: Boolean, a
     val update: ((TextItem) -> TextItem) -> Unit = { vm.updateText(item.id, it) }
     // In an album: which photos the text is on.
     val photo = state.selected
-    ToolSection(if (item.isLogo) "Sticker" else "Text", info = if (item.isLogo) (if (state.photoProject) "Which photos the sticker is on. Drag it on the picture to place it; ✕ takes it away, ↘ or two fingers size and turn it." else "Drag the sticker on the picture to place it; Size, Opacity and its timing are below. Stick to picture: placed over something in the clip, it moves, turns and grows with it (followed through the clip in the background). Subject › Behind: the person (or animal, vehicle) passes in front of it.") else if (state.photoProject) "The text, and which photos it is on. Subject › Behind puts it behind the person (or animal, vehicle) in the photo: found by the phone the first time, kept after." else "The text. Its look, data, font and timing are in the tools below. Stick to picture: placed over something in the clip, it moves, turns and grows with it. Subject › Behind: the person (or animal, vehicle) passes in front of the letters; the clip's subject is found once, in the background.") {
+    ToolSection(if (item.isLogo) "Sticker" else "Text", info = if (item.isLogo) (if (state.photoProject) "Which photos the sticker is on. Drag it on the picture to place it; ✕ takes it away, ↘ or two fingers size and turn it." else "Drag the sticker on the picture to place it; Size, Opacity and its timing are below. Stick to picture: placed over something in the clip, it moves, turns and grows with it (followed through the clip in the background). Behind: the subject or a mask of yours (Adjust › Masks) passes in front of it.") else if (state.photoProject) "The text, and which photos it is on. Behind: Subject puts it behind the people, animals or vehicles the phone finds; a mask (made in Adjust › Masks: a wall, a tree, a person) puts it behind that, e.g. coming out from behind a building." else "The text. Its look, data, font and timing are in the tools below. Stick to picture: placed over something in the clip, it moves, turns and grows with it. Behind: the subject (found once, in the background) or a mask of yours (Adjust › Masks, tracked on video) passes in front of the letters.") {
         if (state.photoProject && photo != null) {
             ChoiceGrid(
                 listOf("This photo", "All photos"),
                 when { item.onlyClip != null -> 0; item.onlyGroup == null -> 1; else -> -1 },
                 { i -> update { if (i == 0) it.copy(onlyClip = photo.id, onlyGroup = null) else it.copy(onlyClip = null, onlyGroup = null) } },
             )
-            // Behind the person (or animal, vehicle) in the photo: found once per photo, a moment the first time.
-            LabeledChoice("Subject", listOf("In front", "Behind"), { (it == 1) == item.behind }, { i -> update { it.copy(behind = i == 1) } })
+        }
+        // What it goes behind: nothing, the subject found by itself, or a mask of the picture (a wall it comes out from…).
+        run {
+            val clipNow = state.selected
+            val clipIndex = state.selectedClip
+            val choices = clipNow?.masks?.withIndex()?.filter { app.headsup.color.TextMasks.usable(it.value) }.orEmpty()
+            val labels = listOf("Nothing", "Subject") + choices.map { "Mask ${it.index + 1}" }
+            val current = when {
+                !item.behind -> 0
+                item.behindMask == null -> 1
+                else -> choices.indexOfFirst { it.index == item.behindMask }.let { if (it < 0) -1 else it + 2 }
+            }
+            LabeledChoice("Behind", labels, { it == current }, { i ->
+                when (i) {
+                    0 -> update { it.copy(behind = false, behindMask = null) }
+                    1 -> {
+                        update { it.copy(behind = true, behindMask = null) }
+                        // A clip's subject is found in the background the first time.
+                        if (!state.photoProject && clipNow != null && clipNow.subject == null && clipIndex != null) vm.findSubject(clipIndex)
+                    }
+                    else -> update { it.copy(behind = true, behindMask = choices[i - 2].index) }
+                }
+            })
+            if (item.behind && item.behindMask != null && current < 0) Hint("Mask ${item.behindMask + 1} is not on this ${if (state.photoProject) "photo" else "clip"}: nothing is in front of the text here.")
+            if (choices.isEmpty()) Hint("To go behind something of your own (a wall, a tree, a person), make a mask of it in Adjust › Masks (Select, Subject, Sky or the brush), then choose it here.")
         }
         if (!state.photoProject) {
             val clipNow = state.selected
             val clipIndex = state.selectedClip
             val finding = clipNow != null && state.work.any { it.clipId == clipNow.id && it.label.startsWith("Finding the subject") }
-            LabeledChoice("Subject", listOf("In front", "Behind"), { (it == 1) == item.behind }, { i ->
-                update { it.copy(behind = i == 1) }
-                // Behind needs the clip's subject: found in the background the first time.
-                if (i == 1 && clipNow != null && clipNow.subject == null && clipIndex != null) vm.findSubject(clipIndex)
-            })
-            if (item.behind && clipNow != null) Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            if (item.behind && item.behindMask == null && clipNow != null) Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text(
                     when {
                         finding -> "Finding the subject in this clip…"
@@ -5550,7 +5568,7 @@ private fun TextPanel(state: UiState, vm: HeadsupViewModel, stickers: Boolean, a
         TextTool.LOOK -> "A ready-made style: font, size, colour, glow" + (if (state.photoProject) "." else " and animation.") + " Everything stays adjustable after."
         TextTool.DATA -> "Fields show as {name} in the text; type around them, e.g. \"↑ {ascent} · {distance}\". Values come from the selected ${if (state.photoProject) "photo" else "clip"}; tap one to add it."
         TextTool.FONT -> "The typeface, and Left (from the frame's left margin) or Centre."
-        TextTool.COLOUR -> "The text's colour. Picture inside: the frame covered in this colour, the " + (if (state.photoProject) "photo" else "video") + " showing only through the letters (large, bold letters work best)."
+        TextTool.COLOUR -> "The text's colour. Image: the letters filled with a picture of yours (a texture, a sky, another photo). Picture inside: the frame covered in this colour, the " + (if (state.photoProject) "photo" else "video") + " showing only through the letters (large, bold letters work best)."
         TextTool.SIZE -> if (item.isLogo) "How wide the logo is, and how see-through (Opacity). Double-tap a ruler for the usual." else "How large the text is, against the frame's height. Double-tap the ruler for the usual size."
         TextTool.GLOW -> "Light round the letters, and a soft shadow under them to lift the text off the picture. Double-tap the ruler to turn the glow off."
         TextTool.IN, TextTool.OUT -> "How the text comes in or goes out. Type and HUD write it a letter every ${TextAnimation.CHAR_MS} ms; Fade, Rise and Pop take the time on the ruler."
@@ -5595,23 +5613,47 @@ private fun TextPanel(state: UiState, vm: HeadsupViewModel, stickers: Boolean, a
         }
         TextTool.FONT -> {
             val fonts = TextFont.entries
-            LabeledChoice("Font", fonts.map { it.label }, { fonts[it] == item.font }, { i -> update { it.copy(font = fonts[i]) } })
+            LabeledChoice("Font", fonts.map { it.label }, { item.fontFile == null && fonts[it] == item.font }, { i -> update { it.copy(font = fonts[i], fontFile = null) } })
+            // Fonts of one's own (TTF, OTF), kept for every project.
+            val context = LocalContext.current
+            var ownVersion by remember { mutableStateOf(0) }
+            val own = remember(ownVersion) { app.headsup.media.FontLibrary.fonts(context) }
+            val fontScope = rememberCoroutineScope()
+            val fontPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+                if (uri != null) fontScope.launch {
+                    val f = withContext(Dispatchers.IO) { app.headsup.media.FontLibrary.import(context, uri) }
+                    if (f != null) { ownVersion++; update { it.copy(fontFile = f.absolutePath) } }
+                }
+            }
+            Row(Modifier.horizontalScroll(rememberScrollState()), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                SmallAction("+ Import font", { fontPicker.launch(arrayOf("font/ttf", "font/otf", "font/*", "application/x-font-ttf", "application/x-font-otf", "application/vnd.ms-opentype", "application/octet-stream")) })
+                for (f in own) FilterChip(
+                    selected = item.fontFile == f.absolutePath,
+                    onClick = { update { it.copy(fontFile = if (it.fontFile == f.absolutePath) null else f.absolutePath) } },
+                    label = { Text(f.nameWithoutExtension, maxLines = 1) },
+                )
+            }
             // Left starts at the frame's left margin, centre sits in the middle.
             LabeledChoice("Align", listOf("Left", "Centre"), { (it == 0) == (item.align == TextAlign.LEFT) && (it == 1) == (item.align == TextAlign.CENTER) }, { i ->
                 update { if (i == 0) it.copy(align = TextAlign.LEFT, x = 0.08f) else it.copy(align = TextAlign.CENTER, x = 0.5f) }
             })
         }
         TextTool.COLOUR -> {
-          // Letters in the colour, or the picture inside them (the frame covered in the colour).
-          LabeledChoice("Fill", listOf("Letters", "Picture inside"), { (it == 1) == item.cutout }, { i ->
-              update { t ->
-                  val inside = i == 1
-                  // Picture inside starts on black (white over everything rarely is what is wanted), and large.
-                  t.copy(
-                      cutout = inside,
-                      colour = if (inside && t.colour == 0xFFFFFFFF.toInt()) 0xFF000000.toInt() else t.colour,
-                      size = if (inside) maxOf(t.size, 0.2f) else t.size,
-                  )
+          // Letters in the colour, the picture inside them (the frame covered in the colour), or an image in them.
+          val fillPicker = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri -> if (uri != null) vm.setTextFill(item.id, uri) }
+          LabeledChoice("Fill", listOf("Letters", "Picture inside", "Image"), { i -> when (i) { 1 -> item.cutout; 2 -> item.fillImage != null; else -> !item.cutout && item.fillImage == null } }, { i ->
+              when (i) {
+                  2 -> fillPicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+                  else -> update { t ->
+                      val inside = i == 1
+                      // Picture inside starts on black (white over everything rarely is what is wanted), and large.
+                      t.copy(
+                          cutout = inside,
+                          fillImage = null,
+                          colour = if (inside && t.colour == 0xFFFFFFFF.toInt()) 0xFF000000.toInt() else t.colour,
+                          size = if (inside) maxOf(t.size, 0.2f) else t.size,
+                      )
+                  }
               }
           })
           Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -5629,7 +5671,8 @@ private fun TextPanel(state: UiState, vm: HeadsupViewModel, stickers: Boolean, a
         }
         TextTool.SIZE -> {
             ValueHeader(if (item.isLogo) "Size" else "", String.format(Locale.US, "%.0f %%", item.size * 100))
-            RulerSlider(item.size, 0.02f..0.5f, 0.005f, { v -> update { it.copy(size = v) } }, onReset = { update { it.copy(size = 0.07f) } })
+            if (!item.isLogo) SmallAction("Fill the frame", { vm.fitText(item.id) })
+            RulerSlider(item.size, 0.02f..1f, 0.005f, { v -> update { it.copy(size = v) } }, onReset = { update { it.copy(size = 0.07f) } })
             if (item.isLogo) {
                 ValueHeader("Opacity", String.format(Locale.US, "%.0f %%", item.opacity * 100))
                 RulerSlider(item.opacity, 0.1f..1f, 0.02f, { v -> update { it.copy(opacity = v) } }, onReset = { update { it.copy(opacity = 1f) } })

@@ -76,6 +76,8 @@ data class ExportRequest(
     /** The clip's id (texts follow places in it) and its subject's maps (texts behind it). */
     val clipId: Long = -1L,
     val subject: String? = null,
+    /** The clip's masks, for texts that go behind one. */
+    val textMasks: List<app.headsup.core.color.ColourMask> = emptyList(),
     /** Playback speed (0.5 = half speed); the dashboard follows the picture. */
     val speed: Float = 1f,
     /** Silence the sound when the speed is changed (otherwise it is stretched, keeping its pitch). */

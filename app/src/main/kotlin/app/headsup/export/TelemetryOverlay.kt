@@ -43,8 +43,8 @@ class TelemetryOverlay(
     private val barsAt: (timelineMs: Long) -> Float = { 1f },
     /** The texts as shown at a moment (those stuck to the picture moved with it). */
     private val placeTexts: (List<TextItem>, positionMs: Long) -> List<TextItem> = { t, _ -> t },
-    /** Draws the clip's subject at a moment into a [w]×[h] frame (texts behind it); which map that is. */
-    private val subject: ((Canvas, android.graphics.Paint, positionMs: Long, w: Float, h: Float) -> Unit)? = null,
+    /** Draws what a text goes behind (the clip's subject, or a mask) at a moment into a [w]×[h] frame; which maps those are. */
+    private val subject: ((TextItem, Canvas, android.graphics.Paint, positionMs: Long, w: Float, h: Float) -> Unit)? = null,
     private val subjectKey: (positionMs: Long) -> String = { "" },
 ) : BitmapOverlay() {
     private var width = fallbackWidth
@@ -91,7 +91,7 @@ class TelemetryOverlay(
         renderer.drawVignette(canvas, w, h, vignette)
         if (data != null) renderer.draw(canvas, w, h, style, data, effects) else renderer.drawBars(canvas, w, h, effects)
         drawMap?.invoke(canvas, w, h, data)
-        if (texts.isNotEmpty()) TextRenderer.draw(canvas, w, h, shownTexts, timelineMs, values, subject?.let { s -> { c, p -> s(c, p, positionMs, w, h) } })
+        if (texts.isNotEmpty()) TextRenderer.draw(canvas, w, h, shownTexts, timelineMs, values, subject?.let { s -> { t, c, p -> s(t, c, p, positionMs, w, h) } })
         lastKey = key
         return bitmap
     }

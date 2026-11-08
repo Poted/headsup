@@ -327,7 +327,7 @@ fun ClipPreview(
     val developKey = if (raw) clip.rawDevelop.copy(sharpen = 0f, colourNoise = 0f) else null
     // Clean up's patches lie over the photo as decoded: a change of them decodes it again.
     // A text behind the subject: the photo's subject found once (kept for the photo), taken out of the letters.
-    val wantsSubject = photo && texts.any { it.behind }
+    val wantsSubject = photo && texts.any { it.behind && it.behindMask == null }
     var subjectMap by remember { mutableStateOf<Bitmap?>(null) }
     val photoBitmap by produceState<ImageBitmap?>(null, clip.meta.uri, photo, developKey, clip.retouch) {
         if (!photo) { value = null; return@produceState }
@@ -1688,7 +1688,7 @@ fun ClipPreview(
                                                 change.consume()
                                                 val d = change.position - c
                                                 val turned = angle0 + Math.toDegrees((kotlin.math.atan2(d.y, d.x) - a0).toDouble()).toFloat()
-                                                textChange?.invoke(sel.id) { it.copy(size = (size0 * d.getDistance() / len0).coerceIn(0.01f, 0.5f), angle = snapAngle(turned)) }
+                                                textChange?.invoke(sel.id) { it.copy(size = (size0 * d.getDistance() / len0).coerceIn(0.01f, 2f), angle = snapAngle(turned)) }
                                             }
                                             return@awaitEachGesture
                                         }
@@ -1713,7 +1713,7 @@ fun ClipPreview(
                                             val zoom = event.calculateZoom()
                                             val turn = event.calculateRotation()
                                             moved += event.calculatePan()
-                                            textChange?.invoke(target.id) { it.copy(size = (it.size * zoom).coerceIn(0.01f, 0.5f), angle = snapAngle(it.angle + turn)) }
+                                            textChange?.invoke(target.id) { it.copy(size = (it.size * zoom).coerceIn(0.01f, 2f), angle = snapAngle(it.angle + turn)) }
                                         } else {
                                             val ch = event.changes.firstOrNull { it.id == down.id } ?: event.changes.firstOrNull()
                                             if (ch != null) moved += ch.positionChange()
@@ -1738,33 +1738,26 @@ fun ClipPreview(
                     }
                     if (texts.isNotEmpty()) {
                         val values = if (texts.any { app.headsup.core.edit.TextFields.hasFields(it.text) }) textValues(positionMs) else emptyMap()
-                        // A clip's subject: its map at this moment, moved with the picture (steadied too).
-                        val clipSubject = clip.subject?.takeIf { !photo && texts.any { it.behind } }
+                        // What a text goes behind: its mask, or the subject (the clip's at this moment, or the
+                        // photo's), drawn where the picture is (moved with it, steadied too).
+                        val clipSubject = clip.subject?.takeIf { !photo && texts.any { it.behind && it.behindMask == null } }
                         val clipMap = clipSubject?.let { app.headsup.color.SubjectMaps.frameAt(context, it, fileMs) }
-                        val map = subjectMap?.takeIf { wantsSubject }
-                        fun photoBehind(): ((android.graphics.Canvas, android.graphics.Paint) -> Unit)? = map?.let { m ->
-                            { c, p ->
-                                val t = reframeTransform(reframe, geometry)
-                                TextRenderer.drawSubject(
-                                    c, p, m, size.width, size.height, geometry.pictureW, geometry.pictureH,
-                                    t.translation.x, t.translation.y, reframe.angleDegrees, t.zoom, reframe.mirrored,
-                                    reframe.warp?.let { perspectiveMatrix(it, geometry.pictureW, geometry.pictureH) },
-                                )
-                            }
-                        }
-                        val behind: ((android.graphics.Canvas, android.graphics.Paint) -> Unit)? = if (clipMap != null) {
+                        val photoMap = subjectMap?.takeIf { wantsSubject }
+                        val behind: ((TextItem, android.graphics.Canvas, android.graphics.Paint) -> Unit)? = if (texts.none { it.behind }) null else {
                             val t = reframeTransform(reframe, geometry)
-                            val c = if (steady != null && steadyCorrections != null) app.headsup.core.frame.Stabilizer.at(steady, steadyCorrections, fileMs) else null
-                            val f: (android.graphics.Canvas, android.graphics.Paint) -> Unit = { cv, p ->
-                                TextRenderer.drawSubject(
-                                    cv, p, clipMap, size.width, size.height, geometry.pictureW, geometry.pictureH,
+                            val c = if (!photo && steady != null && steadyCorrections != null) app.headsup.core.frame.Stabilizer.at(steady, steadyCorrections, fileMs) else null
+                            val warp = reframe.warp?.let { perspectiveMatrix(it, geometry.pictureW, geometry.pictureH) }
+                            val f: (TextItem, android.graphics.Canvas, android.graphics.Paint) -> Unit = { item, cv, p ->
+                                val m = item.behindMask?.let { k -> clip.masks.getOrNull(k)?.let { app.headsup.color.TextMasks.alphaOf(context, it, sourceAspect, fileMs) } }
+                                    ?: if (item.behindMask == null) clipMap ?: photoMap else null
+                                if (m != null) TextRenderer.drawSubject(
+                                    cv, p, m, size.width, size.height, geometry.pictureW, geometry.pictureH,
                                     t.translation.x + (c?.let { it.dx * size.width * t.zoom } ?: 0f), t.translation.y + (c?.let { it.dy * size.height * t.zoom } ?: 0f),
-                                    reframe.angleDegrees + (c?.degrees ?: 0f), t.zoom * (c?.zoom ?: 1f), reframe.mirrored,
-                                    reframe.warp?.let { perspectiveMatrix(it, geometry.pictureW, geometry.pictureH) },
+                                    reframe.angleDegrees + (c?.degrees ?: 0f), t.zoom * (c?.zoom ?: 1f), reframe.mirrored, warp,
                                 )
                             }
                             f
-                        } else photoBehind()
+                        }
                         drawIntoCanvas { TextRenderer.draw(it.nativeCanvas, size.width, size.height, shownTexts, timelineOffsetMs + clipTimelineMs, values, behind) }
                     }
                     // The text or logo being edited: a dashed frame, ✕ to take it away, ↘ to size and turn it.

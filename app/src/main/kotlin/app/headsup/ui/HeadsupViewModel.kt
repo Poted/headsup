@@ -1081,6 +1081,42 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
 
     fun selectText(id: Long?) = _state.update { it.copy(selectedText = id) }
 
+    /**
+     * Text [id] as large as the frame takes it (a full-screen title): centred, its block 92 % of
+     * the frame's width or height, whichever it reaches first.
+     */
+    fun fitText(id: Long) {
+        val s = _state.value
+        val clip = s.selected ?: return
+        val item = s.texts.firstOrNull { it.id == id }?.takeIf { !it.isLogo } ?: return
+        val srcW = clip.meta.width.takeIf { it > 0 }?.toFloat() ?: 1920f
+        val srcH = clip.meta.height.takeIf { it > 0 }?.toFloat() ?: 1080f
+        val (ow, oh) = s.framing(clip).outputSize(srcW, srcH)
+        val centred = item.copy(x = 0.5f, y = 0.5f, align = app.headsup.core.edit.TextAlign.CENTER, angle = 0f)
+        val box = app.headsup.render.TextRenderer.box(centred, ow, oh)
+        if (box.width() <= 0f || box.height() <= 0f) return
+        val k = minOf(0.92f * ow / box.width(), 0.92f * oh / box.height())
+        updateText(id) { centred.copy(size = (item.size * k).coerceIn(0.01f, 2f)) }
+    }
+
+    /** The letters of text [id] filled with the picture at [uri] (kept by the app); null: their colour again. */
+    fun setTextFill(id: Long, uri: Uri?) {
+        if (uri == null) { updateText(id) { it.copy(fillImage = null) }; return }
+        val context = getApplication<Application>()
+        viewModelScope.launch {
+            val path = withContext(Dispatchers.IO) {
+                runCatching {
+                    val dir = java.io.File(context.filesDir, "logos").apply { mkdirs() }
+                    val file = java.io.File(dir, java.util.UUID.randomUUID().toString())
+                    context.contentResolver.openInputStream(uri)?.use { input -> file.outputStream().use { input.copyTo(it) } } ?: return@runCatching null
+                    file.absolutePath
+                }.getOrNull()
+            }
+            if (path == null) _state.update { it.copy(messages = it.messages + "Could not read that picture.") }
+            else updateText(id) { it.copy(fillImage = path, cutout = false) }
+        }
+    }
+
     /** Source fractions of [clip] to the frame's (as framed now). */
     private fun frameMapping(s: UiState, clip: ClipState): (Float, Float) -> Pair<Float, Float> {
         val srcW = clip.meta.width.takeIf { it > 0 }?.toFloat() ?: 1920f
@@ -4701,6 +4737,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                     val request = app.headsup.export.PhotoRequest(
                         uri = clip.meta.uri, name = clip.meta.name, cube = cube,
                         masks = if (graded) clip.masks.map { it.at(clip.trimStartMs) } else emptyList(), maskCubes = maskCubes,
+                        textMasks = clip.masks,
                         effects = clip.effects, vignette = if (graded) s.appliedGrade(clip).vignette else 0f,
                         presence = if (graded) s.appliedGrade(clip).presence else app.headsup.core.color.Presence.NONE,
                         reframe = s.framing(clip), style = s.style, dashboard = dashboard,
@@ -4920,6 +4957,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                     stabilize = clip.stabilize?.takeIf { it.strength > 0f },
                     clipId = clip.id,
                     subject = clip.subject,
+                    textMasks = clip.masks,
                     speed = clip.speed,
                     isPhoto = clip.meta.isPhoto,
                     muteChangedSpeed = clip.muteChangedSpeed,

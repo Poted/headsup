@@ -62,6 +62,8 @@ class PhotoRequest(
     val longSide: Int? = null,
     val quality: Int = 92,
     val format: PhotoFormat = PhotoFormat.JPEG,
+    /** The photo's masks, for texts that go behind one. */
+    val textMasks: List<ColourMask> = emptyList(),
 )
 
 /**
@@ -124,7 +126,7 @@ object PhotoExporter {
         }
         val graded = android.graphics.Paint().apply { this.shader = shader.paintShader(request.effects, picW, picH, request.masks, patched, request.rawDevelop.takeIf { request.raw }, request.presence, request.reframe.warp) }
         // Texts behind the subject: its map as found for the preview (found here when it never was).
-        val subject = if (request.texts.none { it.behind }) null else runCatching {
+        val subject = if (request.texts.none { it.behind && it.behindMask == null }) null else runCatching {
             val key = request.uri.toString()
             app.headsup.color.SubjectMaps.get(context, key) ?: run {
                 val small = app.headsup.color.Segmenter.scaled(photo, 1024)
@@ -148,14 +150,15 @@ object PhotoExporter {
             val data = request.dashboard
             if (data != null) renderer.draw(c, fw.toFloat(), fh.toFloat(), request.style, data, request.effects) else renderer.drawBars(c, fw.toFloat(), fh.toFloat(), request.effects)
             app.headsup.render.RouteMapRenderer.draw(c, fw.toFloat(), fh.toFloat(), request.routeMap, request.mapTrack, request.mapMarker?.first, request.mapMarker?.second)
-            TextRenderer.draw(c, fw.toFloat(), fh.toFloat(), request.texts, request.textMs, subject = subject?.let { m ->
-                { canvas, paint ->
-                    TextRenderer.drawSubject(
-                        canvas, paint, m, fw.toFloat(), fh.toFloat(), picW, picH, t.translation.x, t.translation.y,
-                        request.reframe.angleDegrees, t.zoom, request.reframe.mirrored,
-                        request.reframe.warp?.let { app.headsup.ui.perspectiveMatrix(it, picW, picH) },
-                    )
-                }
+            TextRenderer.draw(c, fw.toFloat(), fh.toFloat(), request.texts, request.textMs, subject = { item, canvas, paint ->
+                // Behind its mask, or behind the subject.
+                val m = item.behindMask?.let { i -> request.textMasks.getOrNull(i)?.let { app.headsup.color.TextMasks.alphaOf(context, it, picW / picH, 0L) } }
+                    ?: subject.takeIf { item.behindMask == null }
+                if (m != null) TextRenderer.drawSubject(
+                    canvas, paint, m, fw.toFloat(), fh.toFloat(), picW, picH, t.translation.x, t.translation.y,
+                    request.reframe.angleDegrees, t.zoom, request.reframe.mirrored,
+                    request.reframe.warp?.let { app.headsup.ui.perspectiveMatrix(it, picW, picH) },
+                )
             })
             endRecording()
         }
