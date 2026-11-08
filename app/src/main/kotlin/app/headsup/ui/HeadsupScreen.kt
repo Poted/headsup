@@ -1399,54 +1399,30 @@ private fun FilesPanel(
         if (!state.photoProject) item { CircleOption("♪", "Sound", selected = section == "Sound", modified = state.audioFiles.isNotEmpty()) { section = "Sound" } }
         item { CircleOption("FIT", "Activity", selected = section == "FIT", modified = state.activities.isNotEmpty()) { section = "FIT" } }
     }
-    var list by rememberSaveable { mutableStateOf(false) }
-    fun count(n: Int, one: String, many: String = one + "s") = if (n == 1) "1 $one" else "$n $many"
     when (section) {
         "Sound" -> {
             AddTile(HeadsupIcons.Music, "Sound", onAddSound, Modifier.fillMaxWidth())
-            ToolSection("Sounds", info = "Music, ambience, effects (from Downloads or Music): copied into the project, then placed on the Audio page. The line opens the list.") {
-                val used = state.audioFiles.count { f -> state.audioClips.any { it.uri == f.uri } }
+            ToolSection("Sounds", info = "Music, ambience, effects (from Downloads or Music): copied into the project, then placed on the Audio page.") {
                 if (state.audioFiles.isEmpty()) Text("No sounds yet.", style = MaterialTheme.typography.bodySmall, color = HeadsupColors.TextMuted)
-                else SheetLine(count(state.audioFiles.size, "sound") + " · $used on the tracks", "List", { list = true })
+                SoundLibrary(state, vm)
             }
-            if (list) OptionsSheet("Sounds", onDismiss = { list = false }) { SoundLibrary(state, vm) }
         }
         "FIT" -> {
             AddTile(HeadsupIcons.Watch, "FIT file", onAddFit, Modifier.fillMaxWidth())
-            ToolSection("Activities", info = "The .FIT file(s) of the activity, from a watch, a band or a chest strap: for the dashboard, the data texts and the map. Each is matched to the ${if (state.photoProject) "photos" else "clips"} by time. The line opens the list.") {
+            ToolSection("Activities", info = "The .FIT file(s) of the activity, from a watch, a band or a chest strap: for the dashboard, the data texts and the map. Each is matched to the ${if (state.photoProject) "photos" else "clips"} by time.") {
                 if (state.activities.isEmpty()) Text("No activity yet.", style = MaterialTheme.typography.bodySmall, color = HeadsupColors.TextMuted)
-                else SheetLine(
-                    count(state.activities.size, "activity", "activities") + " · " + state.activities.joinToString(", ") { a -> a.track.sportName ?: a.track.sport.name.lowercase().replaceFirstChar { it.uppercase() } },
-                    "List", { list = true },
-                )
-            }
-            if (list) OptionsSheet("Activities", onDismiss = { list = false }) {
                 state.activities.forEachIndexed { i, a -> ActivityRow(a, onRemove = { vm.removeActivity(i) }) }
             }
         }
         else -> {
-            val add = if (state.photoProject) onAddPhotos else onAddVideos
-            AddTile(HeadsupIcons.Video, if (state.photoProject) "Photos" else "Videos and photos", add, Modifier.fillMaxWidth())
+            AddTile(HeadsupIcons.Video, if (state.photoProject) "Photos" else "Videos and photos", if (state.photoProject) onAddPhotos else onAddVideos, Modifier.fillMaxWidth())
             ToolSection(
                 if (state.photoProject) "Photos" else "Files",
-                info = "From the gallery or the cloud; copied into the project, so the gallery is never changed. The line opens the list: tap a file there to show it." +
+                info = "From the gallery or the cloud; copied into the project, so the gallery is never changed. Tap a file to show it." +
                     if (state.photoProject) "" else " Large clips (above 1080p) play from a light 1080p copy in the preview; the export always uses the original.",
             ) {
-                val files = state.clips.distinctBy { it.meta.uri }
-                val photos = files.count { it.meta.isPhoto }
-                val making = files.count { state.proxies[it.meta.uri] is ProxyState.Making || state.proxies[it.meta.uri] == ProxyState.Waiting }
-                if (files.isEmpty()) Text(if (state.photoProject) "No photos yet." else "No files yet.", style = MaterialTheme.typography.bodySmall, color = HeadsupColors.TextMuted)
-                else SheetLine(
-                    listOfNotNull(
-                        if (state.photoProject) count(photos, "photo") else count(files.size - photos, "clip").takeIf { files.size > photos },
-                        count(photos, "photo").takeIf { !state.photoProject && photos > 0 },
-                        if (making > 0) count(making, "preview file") + " being made" else null,
-                    ).joinToString(" · "),
-                    "List", { list = true },
-                )
-            }
-            if (list) OptionsSheet(if (state.photoProject) "Photos" else "Files", onDismiss = { list = false }) {
-                VideoFiles(state, vm, onShowClip = { i -> list = false; onShowClip(i) })
+                if (state.clips.isEmpty()) Text(if (state.photoProject) "No photos yet." else "No files yet.", style = MaterialTheme.typography.bodySmall, color = HeadsupColors.TextMuted)
+                VideoFiles(state, vm, onShowClip)
             }
         }
     }
@@ -2138,26 +2114,10 @@ private fun ProjectHeader(state: UiState, vm: HeadsupViewModel, onProjects: () -
     // The app's settings: on the Project page, the one about the projects rather than an edit.
     var settings by rememberSaveable { mutableStateOf(false) }
     if (settings) SettingsSheet(vm, onDismiss = { settings = false })
-    // All projects as a line (the list in a sheet), the settings beside it.
-    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        val films = state.projects.count { it.kind == ProjectKind.VIDEO }
-        val albums = state.projects.count { it.kind == ProjectKind.PHOTOS }
-        SheetLine(
-            "All projects · " + listOf(if (films == 1) "1 film" else "$films films", if (albums == 1) "1 album" else "$albums albums").joinToString(", "),
-            "Open", onProjects, Modifier.weight(1f),
-        )
-        RoundIconButton(HeadsupIcons.Settings, "Settings", { settings = true })
-    }
     LaunchedEffect(Unit) { vm.refreshProjects() }
-    // Its actions on a line of their own (album view, rename), the name and facts under them.
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        Spacer(Modifier.weight(1f))
-        // An open album's album view (stars, Auto pick): from the album itself, not the list.
-        if (state.photoProject && state.clips.isNotEmpty()) SmallAction("⊞ Album", { vm.openAlbumOf(state.projectName) })
-        SmallAction("Rename", { renaming = true })
-    }
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        Column(Modifier.weight(1f)) {
+    // The page starts with the project: its name and facts, its few actions as icons beside them.
+    Row(verticalAlignment = Alignment.Top) {
+        Column(Modifier.weight(1f).padding(top = 4.dp)) {
             val album = state.photoProject
             Text(state.projectName, style = MaterialTheme.typography.titleMedium, maxLines = 2)
             Text(
@@ -2174,6 +2134,11 @@ private fun ProjectHeader(state: UiState, vm: HeadsupViewModel, onProjects: () -
                 color = HeadsupColors.TextMuted,
             )
         }
+        IconAction(HeadsupIcons.Switch, "Switch project", onProjects)
+        // An open album's album view (stars, Auto pick): from the album itself, not the list.
+        if (state.photoProject && state.clips.isNotEmpty()) IconAction(HeadsupIcons.Grid, "Album view", { vm.openAlbumOf(state.projectName) })
+        IconAction(HeadsupIcons.Pencil, "Rename", { renaming = true })
+        IconAction(HeadsupIcons.Settings, "Settings", { settings = true })
     }
     if (renaming) {
         RenameDialog(state.projectName, onDismiss = { renaming = false }, title = "Project name") { vm.renameProject(it); renaming = false }
@@ -3091,8 +3056,34 @@ private fun AdjustHeader(
     }
     // The selected mask: its shape, or what it changes in the picture (only while it is worked on
     // does a finger on the picture change it); stays under the switch above, whichever shows.
-    if (!adding && scope == 0 && state.target == GradeTarget.MASK && clip.masks.getOrNull(state.selectedMask) != null && !state.removing) {
-        Segmented(listOf("Mask", "Adjust"), if (maskTools) 0 else 1, { onMaskTools(it == 0) })
+    val mask = clip.masks.getOrNull(state.selectedMask)
+    if (!adding && scope == 0 && state.target == GradeTarget.MASK && mask != null && !state.removing) {
+        // Its options (invert, copy, opposite, reset, delete) behind one icon beside it, in a sheet.
+        var options by rememberSaveable { mutableStateOf(false) }
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Segmented(listOf("Mask", "Adjust"), if (maskTools) 0 else 1, { onMaskTools(it == 0) }, Modifier.weight(1f))
+            IconAction(HeadsupIcons.Options, "Mask options", { options = true })
+        }
+        if (options) {
+            OptionsSheet("Mask ${state.selectedMask + 1} · ${maskName(mask)}", onDismiss = { options = false }) {
+                ToolSection(
+                    "Mask",
+                    info = "Invert: the mask's corrections go everywhere but where it is. Copy: a second mask the same, with its tracking. Opposite: a copy inverted (the sky's mask as the land's). Reset takes the mask's corrections off; Delete takes the mask away (Undo brings it back).",
+                ) {
+                    ChoiceGrid(listOf("As drawn", "Inverted"), if (mask.inverted) 1 else 0, { i -> if ((i == 1) != mask.inverted) vm.updateMask { it.copy(inverted = !it.inverted) } })
+                    if (clip.masks.size < ColourMask.MAX_PER_CLIP) {
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            PanelAction("Copy", { vm.duplicateMask(inverted = false); options = false }, Modifier.weight(1f))
+                            PanelAction("Opposite", { vm.duplicateMask(inverted = true); options = false }, Modifier.weight(1f))
+                        }
+                    }
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        PanelAction("Reset", { vm.updateGrade { ColorGrade() }; options = false }, Modifier.weight(1f), enabled = mask.grade != ColorGrade())
+                        PanelAction("Delete", { vm.removeMask(state.selectedMask); options = false }, Modifier.weight(1f), danger = true)
+                    }
+                }
+            }
+        }
     }
     return adding
 }
@@ -4536,35 +4527,9 @@ private fun Layers(
         return true
     }
     if (!onMask) {
-        // Copied from another one: Paste right here, where it is wanted (Copy and the rest are in ▾).
+        // Copied from another one: Paste right here, where it is wanted (Copy and the rest are under Applies to).
         state.selectedClip?.let { index -> if (state.copiedLook != null) PillAction("⎘", "Paste look", { vm.pasteLook(index) }) }
         return false
-    }
-    val mask = clip.masks.getOrNull(state.selectedMask) ?: return false
-    // The selected mask: Invert at hand, the rest (copy, opposite, reset, delete) in a sheet.
-    var more by rememberSaveable { mutableStateOf(false) }
-    Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
-        PillAction("◑", "Invert", { vm.updateMask { it.copy(inverted = !it.inverted) } }, selected = mask.inverted)
-        PillAction("⋯", "More", { more = true })
-    }
-    if (more) {
-        OptionsSheet("Mask ${state.selectedMask + 1} · ${maskName(mask)}", onDismiss = { more = false }) {
-            ToolSection(
-                "Mask",
-                info = "Copy: a second mask the same, with its tracking. Opposite: a copy inverted (the sky's mask as the land's). Reset takes the mask's corrections off; Delete takes the mask away (Undo brings it back).",
-            ) {
-                if (clip.masks.size < ColourMask.MAX_PER_CLIP) {
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        PanelAction("Copy", { vm.duplicateMask(inverted = false); more = false }, Modifier.weight(1f))
-                        PanelAction("Opposite", { vm.duplicateMask(inverted = true); more = false }, Modifier.weight(1f))
-                    }
-                }
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    PanelAction("Reset", { vm.updateGrade { ColorGrade() }; more = false }, Modifier.weight(1f), enabled = mask.grade != ColorGrade())
-                    PanelAction("Delete", { vm.removeMask(state.selectedMask); more = false }, Modifier.weight(1f), danger = true)
-                }
-            }
-        }
     }
     return false
 }
@@ -5580,8 +5545,13 @@ private fun TextPanel(state: UiState, vm: HeadsupViewModel, stickers: Boolean, a
                 if (shown.isEmpty()) {
                     Text(if (state.photoProject) "No stickers on this photo." else "No stickers yet.", style = MaterialTheme.typography.bodySmall, color = HeadsupColors.TextMuted)
                 } else {
-                    Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        for (t in shown) Box(Modifier.size(56.dp)) { StickerThumb(java.io.File(t.image.orEmpty())) { vm.selectText(t.id) } }
+                    // The placed ones in a sheet; a touch there selects one to edit.
+                    var list by rememberSaveable { mutableStateOf(false) }
+                    SheetLine((if (shown.size == 1) "1 sticker" else "${shown.size} stickers") + if (state.photoProject) " on this photo" else " in the film", "List", { list = true })
+                    if (list) OptionsSheet("Stickers", onDismiss = { list = false }) {
+                        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            for (t in shown) Box(Modifier.size(64.dp)) { StickerThumb(java.io.File(t.image.orEmpty())) { list = false; vm.selectText(t.id) } }
+                        }
                     }
                 }
             }
@@ -5595,8 +5565,19 @@ private fun TextPanel(state: UiState, vm: HeadsupViewModel, stickers: Boolean, a
                 if (shown.isEmpty()) {
                     Text(if (state.photoProject) "No texts on this photo." else "No texts yet.", style = MaterialTheme.typography.bodySmall, color = HeadsupColors.TextMuted)
                 } else {
-                    Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        for (t in shown) FilterChip(selected = false, onClick = { vm.selectText(t.id) }, label = { Text(t.text.replace('\n', ' ').take(18)) })
+                    // The texts in a sheet, each with when it shows; a touch there selects it to edit.
+                    var list by rememberSaveable { mutableStateOf(false) }
+                    SheetLine((if (shown.size == 1) "1 text" else "${shown.size} texts") + if (state.photoProject) " on this photo" else " in the film", "List", { list = true })
+                    if (list) OptionsSheet("Texts", onDismiss = { list = false }) {
+                        for (t in shown) {
+                            Row(
+                                Modifier.fillMaxWidth().clip(MaterialTheme.shapes.small).clickable { list = false; vm.selectText(t.id) }.padding(vertical = 8.dp, horizontal = 4.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Text(t.text.replace('\n', ' '), Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium, maxLines = 1)
+                                if (!state.photoProject) Text("${Formats.duration(t.startMs)}–${Formats.duration(t.endMs)}", style = MaterialTheme.typography.labelMedium.copy(fontFamily = GeistMonoFamily), color = HeadsupColors.TextMuted)
+                            }
+                        }
                     }
                 }
             }

@@ -222,6 +222,22 @@ fun RoundIconButton(icon: ImageVector, description: String, onClick: () -> Unit,
     }
 }
 
+/** A small round icon action beside a title (36 dp drawn, 48 dp to touch). */
+@Composable
+fun IconAction(icon: ImageVector, description: String, onClick: () -> Unit) {
+    Box(
+        Modifier
+            .minimumInteractiveComponentSize()
+            .size(36.dp)
+            .clip(CircleShape)
+            .background(HeadsupColors.SurfaceHigh)
+            .clickable(onClickLabel = description, onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(icon, contentDescription = description, Modifier.size(18.dp), tint = HeadsupColors.Ink)
+    }
+}
+
 /** Small pill tabs used inside a panel. */
 @Composable
 fun PillTabs(options: List<String>, selected: Int, onSelect: (Int) -> Unit) {

@@ -659,12 +659,15 @@ fun ClipPreview(
     val reframer by rememberUpdatedState(onReframe)
     val currentReframe by rememberUpdatedState(reframe)
     // Sizes of the frame and the picture under it, for gestures (read when they happen).
-    LaunchedEffect(clip.meta.uri, wantsSubject, photoBitmap, subjectVersion) {
+    LaunchedEffect(clip.meta.uri, wantsSubject, photoBitmap, photoFrom, subjectVersion) {
         subjectMap = null
         if (!wantsSubject) return@LaunchedEffect
         val key = clip.meta.uri.toString()
         subjectMap = withContext(Dispatchers.IO) { app.headsup.color.SubjectMaps.get(context, key) }
         if (subjectMap != null) return@LaunchedEffect
+        // Found only in this photo's own picture: the one shown before stays on screen while this
+        // one opens, and its subject must never be kept as this photo's.
+        if (photoFrom != clip.meta.uri) return@LaunchedEffect
         val picture = photoBitmap?.asAndroidBitmap() ?: return@LaunchedEffect
         subjectMap = withContext(Dispatchers.Default) {
             runCatching { app.headsup.color.SubjectMaps.find(context, key, picture) }.onFailure { it.printStackTrace() }.getOrNull()
