@@ -674,7 +674,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
         val marked = s.clips.filter { it.meta.isPhoto && it.picked }
         if (marked.size < 2) return
         val context: Application = getApplication()
-        runInBackground("Merging ${marked.size} exposures", null, null) { report, _ ->
+        runInBackground("Merging ${marked.size} exposures into one HDR photo", null, null) { report, _ ->
             val uri = withContext(Dispatchers.Default) {
                 runCatching {
                     app.headsup.media.Bracket.merge(context, marked.map { it.meta.uri }, raw = { u ->
@@ -1155,7 +1155,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
         )
         val uri = s.previewSource(clip)
         val context: Application = getApplication()
-        runInBackground("Following the place", clip.id, null) { report, stopped ->
+        runInBackground("Sticking it to the picture in ${clip.meta.name}", clip.id, null) { report, stopped ->
             val result = withContext(Dispatchers.Default) {
                 val step = maxOf(50L, (clip.trimEndMs - clip.trimStartMs) / 400)
                 val frames = TrackingFrames.read(context, uri, clip.trimStartMs, clip.trimEndMs, step) { p -> report(p * 0.7f) }
@@ -1232,7 +1232,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
         if (s.work.any { it.clipId == clip.id && it.label.startsWith("Finding the subject") }) return
         val uri = s.previewSource(clip)
         val context: Application = getApplication()
-        runInBackground("Finding the subject", clip.id, null) { report, stopped ->
+        runInBackground("Finding the subject in ${clip.meta.name}", clip.id, null) { report, stopped ->
             val id = withContext(Dispatchers.Default) {
                 val aspect = if (clip.meta.width > 0 && clip.meta.height > 0) clip.meta.width.toFloat() / clip.meta.height else 16f / 9f
                 val side = app.headsup.color.SubjectMaps.CLIP_SIDE
@@ -1968,7 +1968,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
     fun copyMediaIntoProject() {
         val pending = _state.value.externalMedia
         if (pending.isEmpty() || _state.value.busy) return
-        _state.update { it.copy(busy = true, loadingMessage = "Copying…", loadingProgress = null) }
+        _state.update { it.copy(busy = true, loadingMessage = "Copying ${pending.size} file${if (pending.size == 1) "" else "s"} into the project…", loadingProgress = null) }
         loadJob = viewModelScope.launch {
             val context = getApplication<Application>()
             val copies = HashMap<Uri, Uri>()
@@ -2302,7 +2302,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
         }
         val context: Application = getApplication()
         if (_state.value.work.any { it.clipId == clip.id && it.maskIndex == null }) return
-        runInBackground("Reversing clip ${index + 1}", clip.id, null) { report, _ ->
+        runInBackground("Making clip ${index + 1} play backwards", clip.id, null) { report, _ ->
             try {
                 val file = app.headsup.media.Reverser.reverse(context, clip.meta, clip.trimStartMs, clip.trimEndMs) { p -> report(p.coerceIn(0f, 1f)) }
                 val read = withContext(Dispatchers.IO) { ClipMetadataReader.read(context, Uri.fromFile(file)) }
@@ -2573,7 +2573,15 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
         refreshPreview()
     }
 
-    private fun ClipState.withLook(look: ClipLook) = copy(grade = look.grade, effects = look.effects, lutName = look.lutName, masks = look.masks)
+    /** A copied look on this clip; its own bokeh stays (made for its own picture and masks). */
+    private fun ClipState.withLook(look: ClipLook) = copy(
+        grade = look.grade,
+        effects = look.effects.copy(
+            bokeh = effects.bokeh, bokehHighlights = effects.bokehHighlights, bokehMask = effects.bokehMask, bokehInvert = effects.bokehInvert,
+        ),
+        lutName = look.lutName,
+        masks = look.masks,
+    )
 
     fun loadPresets() = _state.update { it.copy(presets = presetStore.list()) }
 
@@ -4291,7 +4299,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
         if (isTracking(clipId, maskIndex, s)) return
         val strokesAtStart = mask.strokes
         // In the background: the rest of the app can be used meanwhile (another track waits its turn).
-        runInBackground("Tracking ${maskIndex + 1}", clipId, maskIndex) { report, stopped ->
+        runInBackground("Tracking mask ${maskIndex + 1} through the clip", clipId, maskIndex) { report, stopped ->
             run {
                 val result = withContext(Dispatchers.Default) {
                     val aspect = if (clip.meta.width > 0 && clip.meta.height > 0) clip.meta.width.toFloat() / clip.meta.height else 16f / 9f
@@ -5084,7 +5092,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
             _state.update { it.copy(messages = it.messages + "Already in the project: ${skipped.joinToString { u -> ClipMetadataReader.displayName(context, u) ?: "file" }}") }
         }
         if (todo.isEmpty()) return
-        _state.update { it.copy(busy = true, loadingMessage = "Copying…", loadingProgress = null) }
+        _state.update { it.copy(busy = true, loadingMessage = "Copying ${todo.size} file${if (todo.size == 1) "" else "s"} into the project…", loadingProgress = null) }
         loadJob = viewModelScope.launch {
             val results = withContext(Dispatchers.IO) {
                 todo.mapIndexed { i, uri ->

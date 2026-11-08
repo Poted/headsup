@@ -18,8 +18,18 @@ object SubjectMaps {
 
     private val memory = LruCache<String, Bitmap>(4)
 
-    private fun file(context: Context, key: String) =
-        File(File(context.filesDir, "subject").apply { mkdirs() }, "v2_${key.hashCode().toUInt().toString(16)}_${key.length}.png")
+    // v3: maps kept before could have been found in the photo shown before this one (while this
+    // one was still opening); those are dropped and found again.
+    private fun file(context: Context, key: String): File {
+        val dir = File(context.filesDir, "subject").apply { mkdirs() }
+        if (!cleaned) {
+            cleaned = true
+            dir.listFiles()?.filter { it.name.startsWith("v2_") }?.forEach { it.delete() }
+        }
+        return File(dir, "v3_${key.hashCode().toUInt().toString(16)}_${key.length}.png")
+    }
+
+    @Volatile private var cleaned = false
 
     /** The map kept for the photo [key] (its uri), or null when it was never found. */
     fun get(context: Context, key: String): Bitmap? = memory.get(key) ?: run {

@@ -74,10 +74,11 @@ data class EffectSettings(
         barsMotion = if (after.barsMotion != before.barsMotion) after.barsMotion else barsMotion,
         graph = if (after.graph != before.graph) after.graph else graph,
         dashboard = if (after.dashboard != before.dashboard) after.dashboard else dashboard,
-        bokeh = if (after.bokeh != before.bokeh) after.bokeh else bokeh,
-        bokehHighlights = if (after.bokehHighlights != before.bokehHighlights) after.bokehHighlights else bokehHighlights,
-        bokehMask = if (after.bokehMask != before.bokehMask) after.bokehMask else bokehMask,
-        bokehInvert = if (after.bokehInvert != before.bokehInvert) after.bokehInvert else bokehInvert,
+        // Bokeh is made for one photo (its subject, its masks' numbers): never set on others.
+        bokeh = bokeh,
+        bokehHighlights = bokehHighlights,
+        bokehMask = bokehMask,
+        bokehInvert = bokehInvert,
     )
 }
 

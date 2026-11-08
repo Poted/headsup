@@ -461,6 +461,43 @@ object HeadsupIcons {
         }
     }
 
+    /** Two arrows, one each way: switch to another project. */
+    val Switch = icon("switch") {
+        stroke {
+            moveTo(4f, 8f); lineTo(19f, 8f); moveTo(15f, 4f); lineTo(19f, 8f); lineTo(15f, 12f)
+            moveTo(20f, 16f); lineTo(5f, 16f); moveTo(9f, 12f); lineTo(5f, 16f); lineTo(9f, 20f)
+        }
+    }
+
+    /** A pencil: rename. */
+    val Pencil = icon("pencil") {
+        stroke {
+            moveTo(4f, 20f); lineTo(5f, 15.5f); lineTo(15.5f, 5f); lineTo(19f, 8.5f); lineTo(8.5f, 19f); close()
+            moveTo(13f, 7.5f); lineTo(16.5f, 11f)
+        }
+    }
+
+    /** Four squares: the album view. */
+    val Grid = icon("grid") {
+        stroke {
+            for ((x, y) in listOf(4f to 4f, 13f to 4f, 4f to 13f, 13f to 13f)) {
+                moveTo(x, y); lineTo(x + 7f, y); lineTo(x + 7f, y + 7f); lineTo(x, y + 7f); close()
+            }
+        }
+    }
+
+    /** Three short lines with knobs: a layer's options. */
+    val Options = icon("options") {
+        stroke {
+            moveTo(4f, 7f); lineTo(20f, 7f); moveTo(4f, 12f); lineTo(20f, 12f); moveTo(4f, 17f); lineTo(20f, 17f)
+        }
+        path(fill = white) {
+            for ((x, y) in listOf(9f to 7f, 15f to 12f, 7f to 17f)) {
+                moveTo(x + 2f, y); arcTo(2f, 2f, 0f, true, true, x - 2f, y); arcTo(2f, 2f, 0f, true, true, x + 2f, y); close()
+            }
+        }
+    }
+
     /** A gear: the app's settings. */
     val Settings = icon("settings") {
         stroke {

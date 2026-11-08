@@ -485,10 +485,14 @@ fun Timeline(
                     if (r < 0f || l > size.width) continue
                     val top = g.videoTop + 2.dp.toPx()
                     val selected = item.id == state.selectedText
-                    drawRoundRect(accent.copy(alpha = 0.9f), Offset(l, top), Size(r - l, g.textH), CornerRadius(4.dp.toPx()))
+                    // A sticker or logo: a quiet bar of its own (the texts are the orange ones), named as what it is.
+                    val sticker = item.isLogo
+                    drawRoundRect(if (sticker) HeadsupColors.SurfaceHigh else accent.copy(alpha = 0.9f), Offset(l, top), Size(r - l, g.textH), CornerRadius(4.dp.toPx()))
+                    if (sticker && !selected) drawRoundRect(HeadsupColors.ControlEdge, Offset(l, top), Size(r - l, g.textH), CornerRadius(4.dp.toPx()), style = Stroke(1.dp.toPx()))
                     if (selected) drawRoundRect(HeadsupColors.Ink, Offset(l, top), Size(r - l, g.textH), CornerRadius(4.dp.toPx()), style = Stroke(2.dp.toPx()))
                     clipRect(l.coerceAtLeast(0f), top, r.coerceAtMost(size.width), top + g.textH) {
-                        drawLabel(text, "T  " + item.text.replace('\n', ' '), Offset(l + 4.dp.toPx(), top + 1.dp.toPx()), TextStyle(color = HeadsupColors.OnAccent, fontSize = 10.sp))
+                        val label = if (sticker) "◆  Sticker" else "T  " + item.text.replace('\n', ' ')
+                        drawLabel(text, label, Offset(l + 4.dp.toPx(), top + 1.dp.toPx()), TextStyle(color = if (sticker) HeadsupColors.Ink else HeadsupColors.OnAccent, fontSize = 10.sp))
                     }
                 }
                 // The sound tracks, scrolled, kept below the clips.

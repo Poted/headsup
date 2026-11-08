@@ -659,12 +659,15 @@ fun ClipPreview(
     val reframer by rememberUpdatedState(onReframe)
     val currentReframe by rememberUpdatedState(reframe)
     // Sizes of the frame and the picture under it, for gestures (read when they happen).
-    LaunchedEffect(clip.meta.uri, wantsSubject, photoBitmap, subjectVersion) {
+    LaunchedEffect(clip.meta.uri, wantsSubject, photoBitmap, photoFrom, subjectVersion) {
         subjectMap = null
         if (!wantsSubject) return@LaunchedEffect
         val key = clip.meta.uri.toString()
         subjectMap = withContext(Dispatchers.IO) { app.headsup.color.SubjectMaps.get(context, key) }
         if (subjectMap != null) return@LaunchedEffect
+        // Found only in this photo's own picture: the one shown before stays on screen while this
+        // one opens, and its subject must never be kept as this photo's.
+        if (photoFrom != clip.meta.uri) return@LaunchedEffect
         val picture = photoBitmap?.asAndroidBitmap() ?: return@LaunchedEffect
         subjectMap = withContext(Dispatchers.Default) {
             runCatching { app.headsup.color.SubjectMaps.find(context, key, picture) }.onFailure { it.printStackTrace() }.getOrNull()
@@ -678,7 +681,14 @@ fun ClipPreview(
     var bokehWorking by remember { mutableStateOf(false) }
     var bokehOutline by remember { mutableStateOf<Bitmap?>(null) }
     val outlineAlpha = remember { androidx.compose.animation.core.Animatable(0f) }
-    val bokehPhoto by produceState<ImageBitmap?>(null, photoBitmap, bokehSettings.bokeh, bokehSettings.bokehHighlights, bokehSettings.bokehMask, bokehSettings.bokehInvert, clip.masks, subjectVersion) {
+    // The photo the layer was made for: the layer is the whole photo with its background blurred,
+    // so another photo's must never stay over this one while this one's is worked out.
+    var bokehFor by remember { mutableStateOf<String?>(null) }
+    val bokehPhoto by produceState<ImageBitmap?>(null, photoBitmap, photoFrom, clip.meta.uri, bokehSettings.bokeh, bokehSettings.bokehHighlights, bokehSettings.bokehMask, bokehSettings.bokehInvert, clip.masks, subjectVersion) {
+        val uri = clip.meta.uri.toString()
+        if (bokehFor != uri) { value = null; bokehOutline = null; bokehFor = uri }
+        // Only from this photo's own picture (the previous one still shows while it is developed).
+        if (photoFrom != clip.meta.uri) return@produceState
         val src = photoBitmap?.asAndroidBitmap()
         if (!photo || src == null || bokehSettings.bokeh <= 0f) { value = null; bokehOutline = null; return@produceState }
         delay(150)
@@ -1288,7 +1298,7 @@ fun ClipPreview(
                                 Spinner(Modifier.size(20.dp))
                                 androidx.compose.foundation.layout.Spacer(Modifier.size(12.dp))
                                 androidx.compose.material3.Text(
-                                    "Loading…",
+                                    "Opening the photo…",
                                     color = Color.White,
                                     style = androidx.compose.material3.MaterialTheme.typography.labelLarge,
                                 )
@@ -1852,7 +1862,7 @@ fun ClipPreview(
                 }
                 if (bokehWorking && !showingOriginal) {
                     Text(
-                        "Bokeh…",
+                        if (bokehSettings.bokehMask == null) "Finding the subject, blurring the background…" else "Blurring the background…",
                         Modifier.align(Alignment.TopCenter).padding(top = 10.dp).clip(RoundedCornerShape(50))
                             .background(Color.Black.copy(alpha = 0.6f)).padding(horizontal = 12.dp, vertical = 4.dp),
                         color = Color.White,

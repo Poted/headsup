@@ -699,6 +699,8 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
     val tools: @Composable ColumnScope.() -> Unit = tools@{
             if (fullscreen) return@tools
             val panelScroll = rememberScrollState()
+            // Each tool opens at its top (Adjust's top is its layers), not where another was left.
+            LaunchedEffect(tool) { panelScroll.scrollTo(0) }
             Column(
                 Modifier
                     .weight(1f)
@@ -1371,25 +1373,26 @@ private fun FilesPanel(
     onShowClip: (Int) -> Unit,
     onAddPhotos: () -> Unit,
 ) {
-    // Two levels: all projects, and the open project with its files (pictures, sound, activity),
-    // going back and forth between them. Everything the project uses is copied in here.
-    var browsing by rememberSaveable { mutableStateOf(false) }
+    // The open project and its files on the page; the list of all projects and the project's own
+    // lists (files, sounds, activities) in sheets from the bottom, summed up by a line each.
+    var projects by rememberSaveable { mutableStateOf(false) }
     var section by rememberSaveable { mutableStateOf("Video") }
-    if (browsing) {
-        ProjectRow(
-            state, vm,
-            onOpen = { browsing = false },
-            onNew = { kind ->
-                // A new project goes straight to its files, and to the picker.
-                vm.newProject(kind)
-                browsing = false
-                section = "Video"
-                if (kind == ProjectKind.PHOTOS) onAddPhotos() else onAddVideos()
-            },
-        )
-        return
+    if (projects) {
+        OptionsSheet("Projects", onDismiss = { projects = false }) {
+            ProjectRow(
+                state, vm,
+                onOpen = { projects = false },
+                onNew = { kind ->
+                    // A new project goes straight to its files, and to the picker.
+                    vm.newProject(kind)
+                    projects = false
+                    section = "Video"
+                    if (kind == ProjectKind.PHOTOS) onAddPhotos() else onAddVideos()
+                },
+            )
+        }
     }
-    ProjectHeader(state, vm, onBack = { browsing = true })
+    ProjectHeader(state, vm, onProjects = { projects = true })
     // The project's files, by kind.
     LazyRow(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
         item { CircleOption("▶", if (state.photoProject) "Photos" else "Video", selected = section == "Video", modified = state.clips.isNotEmpty()) { section = "Video" } }
@@ -1411,19 +1414,23 @@ private fun FilesPanel(
                 state.activities.forEachIndexed { i, a -> ActivityRow(a, onRemove = { vm.removeActivity(i) }) }
             }
         }
-        else -> VideoFiles(state, vm, if (state.photoProject) onAddPhotos else onAddVideos, onShowClip)
+        else -> {
+            AddTile(HeadsupIcons.Video, if (state.photoProject) "Photos" else "Videos and photos", if (state.photoProject) onAddPhotos else onAddVideos, Modifier.fillMaxWidth())
+            ToolSection(
+                if (state.photoProject) "Photos" else "Files",
+                info = "From the gallery or the cloud; copied into the project, so the gallery is never changed. Tap a file to show it." +
+                    if (state.photoProject) "" else " Large clips (above 1080p) play from a light 1080p copy in the preview; the export always uses the original.",
+            ) {
+                if (state.clips.isEmpty()) Text(if (state.photoProject) "No photos yet." else "No files yet.", style = MaterialTheme.typography.bodySmall, color = HeadsupColors.TextMuted)
+                VideoFiles(state, vm, onShowClip)
+            }
+        }
     }
 }
 
 @Composable
-private fun VideoFiles(state: UiState, vm: HeadsupViewModel, onAdd: () -> Unit, onShowClip: (Int) -> Unit) {
-    AddTile(HeadsupIcons.Video, if (state.photoProject) "Photos" else "Videos and photos", onAdd, Modifier.fillMaxWidth())
-    ToolSection(
-        if (state.photoProject) "Photos" else "Files",
-        info = "From the gallery or the cloud; copied into the project, so the gallery is never changed. Tap a file to show it." +
-            if (state.photoProject) "" else " Large clips (above 1080p) play from a light 1080p copy in the preview; the export always uses the original.",
-    ) {
-        if (state.clips.isEmpty()) Text(if (state.photoProject) "No photos yet." else "No files yet.", style = MaterialTheme.typography.bodySmall, color = HeadsupColors.TextMuted)
+private fun VideoFiles(state: UiState, vm: HeadsupViewModel, onShowClip: (Int) -> Unit) {
+    run {
         // One row per file, however many times it is cut on the timeline.
         val files = state.clips.withIndex().groupBy { it.value.meta.uri }
         for ((uri, uses) in files) {
@@ -1928,7 +1935,7 @@ private fun StickerLibraryGrid(onPick: (java.io.File) -> Unit) {
             SmallAction(if (removing) "Done" else "Remove…", { removing = !removing })
         }
         when {
-            all == null -> Hint("Loading…")
+            all == null -> Hint("Reading the sticker packs…")
             all.isEmpty() -> Hint("No sticker packs yet. Import pictures or a ZIP in Settings › Sticker packs (PNG keeps transparency).")
             else -> {
                 val shown = all.firstOrNull { it.name == pack } ?: all.first()
@@ -2102,18 +2109,15 @@ private fun formatBytes(bytes: Long): String =
 
 /** The open project (saved automatically) and the list of saved ones. */
 @Composable
-private fun ProjectHeader(state: UiState, vm: HeadsupViewModel, onBack: () -> Unit) {
+private fun ProjectHeader(state: UiState, vm: HeadsupViewModel, onProjects: () -> Unit) {
     var renaming by remember { mutableStateOf(false) }
-    // Its actions on a line of their own (back to the list, rename), the name and facts under them.
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        SmallAction("‹ Projects", onBack)
-        Spacer(Modifier.weight(1f))
-        // An open album's album view (stars, Auto pick): from the album itself, not the list.
-        if (state.photoProject && state.clips.isNotEmpty()) SmallAction("⊞ Album", { vm.openAlbumOf(state.projectName) })
-        SmallAction("Rename", { renaming = true })
-    }
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        Column(Modifier.weight(1f)) {
+    // The app's settings: on the Project page, the one about the projects rather than an edit.
+    var settings by rememberSaveable { mutableStateOf(false) }
+    if (settings) SettingsSheet(vm, onDismiss = { settings = false })
+    LaunchedEffect(Unit) { vm.refreshProjects() }
+    // The page starts with the project: its name and facts, its few actions as icons beside them.
+    Row(verticalAlignment = Alignment.Top) {
+        Column(Modifier.weight(1f).padding(top = 4.dp)) {
             val album = state.photoProject
             Text(state.projectName, style = MaterialTheme.typography.titleMedium, maxLines = 2)
             Text(
@@ -2130,6 +2134,11 @@ private fun ProjectHeader(state: UiState, vm: HeadsupViewModel, onBack: () -> Un
                 color = HeadsupColors.TextMuted,
             )
         }
+        IconAction(HeadsupIcons.Switch, "Switch project", onProjects)
+        // An open album's album view (stars, Auto pick): from the album itself, not the list.
+        if (state.photoProject && state.clips.isNotEmpty()) IconAction(HeadsupIcons.Grid, "Album view", { vm.openAlbumOf(state.projectName) })
+        IconAction(HeadsupIcons.Pencil, "Rename", { renaming = true })
+        IconAction(HeadsupIcons.Settings, "Settings", { settings = true })
     }
     if (renaming) {
         RenameDialog(state.projectName, onDismiss = { renaming = false }, title = "Project name") { vm.renameProject(it); renaming = false }
@@ -2174,16 +2183,10 @@ private fun KindHeader(shown: ProjectKind, films: Int, albums: Int, modifier: Mo
 private fun ProjectRow(state: UiState, vm: HeadsupViewModel, onOpen: () -> Unit, onNew: (ProjectKind) -> Unit) {
     // Films and albums kept apart: a header to switch between them, each with its own New and list.
     var kindShown by rememberSaveable { mutableStateOf(if (state.photoProject) ProjectKind.PHOTOS else ProjectKind.VIDEO) }
-    // The app's settings live here, on the one page that is about no project in particular.
-    var settings by rememberSaveable { mutableStateOf(false) }
-    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        KindHeader(
-            kindShown, films = state.projects.count { it.kind == ProjectKind.VIDEO }, albums = state.projects.count { it.kind == ProjectKind.PHOTOS },
-            Modifier.weight(1f),
-        ) { kindShown = it }
-        RoundIconButton(HeadsupIcons.Settings, "Settings", { settings = true })
-    }
-    if (settings) SettingsSheet(vm, onDismiss = { settings = false })
+    KindHeader(
+        kindShown, films = state.projects.count { it.kind == ProjectKind.VIDEO }, albums = state.projects.count { it.kind == ProjectKind.PHOTOS },
+        Modifier.fillMaxWidth(),
+    ) { kindShown = it }
     // A project from the list being renamed, or about to be deleted.
     var renamingOther by remember { mutableStateOf<String?>(null) }
     var deletingOther by remember { mutableStateOf<String?>(null) }
@@ -2988,38 +2991,101 @@ private fun AdjustHeader(
     onMaskTools: (Boolean) -> Unit,
 ): Boolean {
     val album = state.photoProject
+    val what = if (album) "photo" else "clip"
     val scope = when (state.target) {
         GradeTarget.GROUP -> 1
         GradeTarget.GLOBAL -> 2
         GradeTarget.CLIP, GradeTarget.MASK -> 0
     }
-    Segmented(listOf(if (album) "This photo" else "This clip", "Group", if (album) "All photos" else "All clips"), scope, { i ->
-        if (i != scope) {
-            vm.setTarget(listOf(GradeTarget.CLIP, GradeTarget.GROUP, GradeTarget.GLOBAL)[i])
-            // The looks (grain, glow…) follow the same choice: this clip's, or set on all.
-            vm.setEffectsOnAll(i == 2)
-        }
-    })
-    return when (scope) {
-        1 -> {
-            GroupControls(state, clip, index, state.groupOf(clip), vm)
-            false
-        }
-        2 -> {
-            // As everywhere on this page: what it does, then its actions in a row on the left.
-            ToolSection(
-                if (album) "All photos" else "All clips",
-                info = if (album) "A change is set on every photo: each shows it under This photo. Reset all takes these shared changes off." else "A change is set on every clip: each shows it under This clip. Reset all takes these shared changes off.",
-            ) {
-                PanelAction("Reset all", { vm.resetSyncedPhotos() }, Modifier.fillMaxWidth())
+    val group = state.groupOf(clip)
+    val scopes = listOf(if (album) "This photo" else "This clip", "Group", if (album) "All photos" else "All clips")
+    // The top of the page is one place that switches between the layers, the keys and what the
+    // page works on; the menu under it (Mask / Adjust, Light, Colour…) stays whatever is shown here.
+    val video = !clip.meta.isPhoto
+    val keys = if (video) clip.gradeKeys.size else 0
+    val panes = listOfNotNull("Layers", "Keys".takeIf { video && scope == 0 }, "Applies to")
+    var pane by rememberSaveable { mutableStateOf("Layers") }
+    val shown = pane.takeIf { it in panes } ?: "Layers"
+    PillTabs(
+        panes.map { p ->
+            when {
+                p == "Keys" && keys > 0 -> "Keys · $keys"
+                p == "Applies to" && scope != 0 -> if (scope == 1) "Group" else scopes[2]
+                else -> p
             }
-            false
+        },
+        panes.indexOf(shown),
+    ) { pane = panes[it] }
+    var adding = false
+    when (shown) {
+        "Keys" -> GradeKeyRow(state, clip, vm, playhead, onSeek)
+        "Applies to" -> {
+            ToolSection(
+                "Applies to",
+                info = "This $what: the corrections are its own. Group: set on every $what of its group ($what" + "s shot the same way). All: set on every $what of the ${if (album) "album" else "film"}, and on those added later; each shows it under This $what.",
+            ) {
+                ChoiceGrid(scopes, scope, { i ->
+                    if (i != scope) {
+                        vm.setTarget(listOf(GradeTarget.CLIP, GradeTarget.GROUP, GradeTarget.GLOBAL)[i])
+                        // The looks (grain, glow…) follow the same choice: this clip's, or set on all.
+                        vm.setEffectsOnAll(i == 2)
+                    }
+                })
+            }
+            when (scope) {
+                1 -> GroupControls(state, clip, index, group, vm)
+                2 -> ToolSection(scopes[2], info = "Reset all takes the changes set on every $what off.") {
+                    PanelAction("Reset all", { vm.resetSyncedPhotos() }, Modifier.fillMaxWidth())
+                }
+                else -> ToolSection(
+                    "This $what's look",
+                    info = "Copy takes this $what's look (corrections, LUT and its effects; not masks, framing or bokeh), Paste puts it on the $what shown, Copy to all on every $what. Reset takes the corrections and the look's effects off.",
+                ) { LookActions(state, vm) }
+            }
         }
-        else -> {
-            if (!clip.meta.isPhoto && state.target == GradeTarget.CLIP) GradeKeyRow(state, clip, vm, playhead, onSeek)
-            Layers(state, clip, vm, pictureSource, maskTools, onMaskTools)
+        else -> when (scope) {
+            1 -> if (group == null) {
+                Hint("This $what is in no group yet.")
+                PanelAction("Choose a group", { pane = "Applies to" }, Modifier.fillMaxWidth())
+            } else {
+                Hint("Working on the group ${group.name}: every $what in it. Layers (masks) are each $what's own: Applies to › This $what.")
+            }
+            2 -> Hint("Working on every $what. Layers (masks) are each $what's own: Applies to › This $what.")
+            else -> adding = Layers(state, clip, vm, pictureSource, maskTools, onMaskTools)
         }
     }
+    // The selected mask: its shape, or what it changes in the picture (only while it is worked on
+    // does a finger on the picture change it); stays under the switch above, whichever shows.
+    val mask = clip.masks.getOrNull(state.selectedMask)
+    if (!adding && scope == 0 && state.target == GradeTarget.MASK && mask != null && !state.removing) {
+        // Its options (invert, copy, opposite, reset, delete) behind one icon beside it, in a sheet.
+        var options by rememberSaveable { mutableStateOf(false) }
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Segmented(listOf("Mask", "Adjust"), if (maskTools) 0 else 1, { onMaskTools(it == 0) }, Modifier.weight(1f))
+            IconAction(HeadsupIcons.Options, "Mask options", { options = true })
+        }
+        if (options) {
+            OptionsSheet("Mask ${state.selectedMask + 1} · ${maskName(mask)}", onDismiss = { options = false }) {
+                ToolSection(
+                    "Mask",
+                    info = "Invert: the mask's corrections go everywhere but where it is. Copy: a second mask the same, with its tracking. Opposite: a copy inverted (the sky's mask as the land's). Reset takes the mask's corrections off; Delete takes the mask away (Undo brings it back).",
+                ) {
+                    ChoiceGrid(listOf("As drawn", "Inverted"), if (mask.inverted) 1 else 0, { i -> if ((i == 1) != mask.inverted) vm.updateMask { it.copy(inverted = !it.inverted) } })
+                    if (clip.masks.size < ColourMask.MAX_PER_CLIP) {
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            PanelAction("Copy", { vm.duplicateMask(inverted = false); options = false }, Modifier.weight(1f))
+                            PanelAction("Opposite", { vm.duplicateMask(inverted = true); options = false }, Modifier.weight(1f))
+                        }
+                    }
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        PanelAction("Reset", { vm.updateGrade { ColorGrade() }; options = false }, Modifier.weight(1f), enabled = mask.grade != ColorGrade())
+                        PanelAction("Delete", { vm.removeMask(state.selectedMask); options = false }, Modifier.weight(1f), danger = true)
+                    }
+                }
+            }
+        }
+    }
+    return adding
 }
 
 /** Sections of the colour corrections, so the picker row stays short. */
@@ -3313,15 +3379,6 @@ private fun ColourPage(
         }
         return
     }
-    // Which layer the corrections below are for.
-    SectionCaption(
-        when (target) {
-            GradeTarget.CLIP -> "Base"
-            GradeTarget.MASK -> mask?.let { "${state.selectedMask + 1} · ${maskName(it)}" } ?: "Mask"
-            GradeTarget.GROUP -> group?.name ?: "Group"
-            GradeTarget.GLOBAL -> if (album) "All photos" else "All clips"
-        },
-    )
     val sections = listOfNotNull("RAW".takeIf { rawPhoto }) +
         ColourSection.entries.filter { s -> options.any { it.section == s } || (s == ColourSection.EFFECTS && baseEffects) }.map { it.label }
     val section = when {
@@ -4081,12 +4138,11 @@ private fun LooksPanel(state: UiState, vm: HeadsupViewModel, frameSource: (() ->
         Spacer(Modifier.width(8.dp))
         PillAction("⌕", if (stats == null) (if (clip.meta.isPhoto) "Analyse photo" else "Analyse clip") else "Again", { vm.analyseClip(frameSource) }, enabled = !state.busy)
     }
-    if (stats != null) {
-        val suggested = suggestedLooks(stats)
-        LabeledChoice("Suggested for this $what", suggested.map { it.label }, { suggested[it] == fast?.look }, { choose(suggested[it]) })
-    }
+    // What suits the clip is outlined in the one grid (no second row of the same looks).
+    val suggested = stats?.let { suggestedLooks(it) }.orEmpty()
     val cinematic = app.headsup.color.FastLook.entries
-    ChoiceGrid(cinematic.map { it.label }, cinematic.indexOf(fast?.look), { choose(cinematic[it]) })
+    ChoiceGrid(cinematic.map { it.label }, cinematic.indexOf(fast?.look), { choose(cinematic[it]) }, outlined = { cinematic[it] in suggested })
+    if (suggested.isNotEmpty()) Hint("Outlined: the looks that suit this $what.")
     // The look being tried: its strength, then keep it or put the clip back.
     if (fast != null) {
         ValueHeader("Strength", String.format(Locale.US, "%.0f %%", fast.strength * 100))
@@ -4403,7 +4459,6 @@ private fun Layers(
     var adding by rememberSaveable { mutableStateOf(false) }
     val full = clip.masks.size >= ColourMask.MAX_PER_CLIP
     val onMask = state.target == GradeTarget.MASK
-    SectionCaption("Layers")
     // What is there, then one chip to add: what exists and what can be made never mix.
     LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
         item {
@@ -4472,24 +4527,10 @@ private fun Layers(
         return true
     }
     if (!onMask) {
-        LookActions(state, vm)
+        // Copied from another one: Paste right here, where it is wanted (Copy and the rest are under Applies to).
+        state.selectedClip?.let { index -> if (state.copiedLook != null) PillAction("⎘", "Paste look", { vm.pasteLook(index) }) }
         return false
     }
-    val mask = clip.masks.getOrNull(state.selectedMask) ?: return false
-    // The selected mask's own actions, always in the same place.
-    Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
-        PillAction("◑", "Invert", { vm.updateMask { it.copy(inverted = !it.inverted) } }, selected = mask.inverted)
-        // A copy, or its opposite (the sky's mask as the land's), with its tracking.
-        if (clip.masks.size < ColourMask.MAX_PER_CLIP) {
-            PillAction("⧉", "Copy", { vm.duplicateMask(inverted = false) })
-            PillAction("◐", "Opposite", { vm.duplicateMask(inverted = true) })
-        }
-        if (mask.grade != ColorGrade()) PillAction("↺", "Reset", { vm.updateGrade { ColorGrade() } })
-        PillAction("✕", "Delete", { vm.removeMask(state.selectedMask) })
-    }
-    // The mask itself (where it is: select, paint, shape, track) or what it changes in the picture.
-    // Only while the mask is worked on does a finger on the picture change it.
-    if (!state.removing) Segmented(listOf("Mask", "Adjust"), if (maskTools) 0 else 1, { onMaskTools(it == 0) })
     return false
 }
 
@@ -5080,7 +5121,8 @@ private fun EffectsPanel(state: UiState, vm: HeadsupViewModel, kind: EffectKind,
         EffectKind.BOKEH -> ToolSection(
             "Bokeh",
             info = "The background blurred as by a wide-open lens: what stays sharp is the subject the phone finds (people, animals, vehicles; else what is in the middle) " +
-                "or a mask of yours (Adjust › Masks: Select, the brush…). Highlights: how much bright points open into bright discs. Worked out on the photo, a moment after the ruler stops.",
+                "or a mask of yours (Adjust › Masks: Select, the brush…). Highlights: how much bright points open into bright discs. Worked out on the photo, a moment after the ruler stops. " +
+                "Bokeh is this photo's own: it is not set on other photos by All, Copy or Paste.",
         ) {
             EffectRuler(
                 listOf(
@@ -5233,21 +5275,53 @@ private fun ExportControls(
         PhotoExport(state, vm)
         return
     }
-    Label("Video")
+    // The page: a quick preset, what will come out (its settings a tap away, in a sheet) and Export.
     val active = vm.activePreset(state)
-    SettingRow("Quick presets") {
-        for (p in ExportPreset.entries) {
-            FilterChip(selected = active == p, onClick = { vm.applyPreset(p) }, label = { Text(p.label) })
+    var settingsOpen by rememberSaveable { mutableStateOf(false) }
+    val tenBitOn = settings.tenBit && remember(state.clips) { vm.tenBitBlocker(state) } == null
+    val summary = listOfNotNull(
+        vm.outputPreview(state)?.toString(),
+        if (tenBitOn) (if (settings.hlg) "HEVC 10-bit HLG" else "HEVC 10-bit") else settings.codec.label,
+        settings.loudness.lufs?.let { settings.loudness.label.substringBefore(" (") },
+        if (settings.wholeTimeline) null else "each clip",
+    ).joinToString(" · ")
+    ToolSection(
+        "Video",
+        info = "A quick preset sets the frame, size and quality for where the film goes. The line under it is what will come out; tap it for every setting (output, picture, sound, encoding). " +
+            "Export: colour, effects, framing, speed and the dashboard where there is activity data, saved to ${MediaStoreOutput.VIDEO_FOLDER}.",
+    ) {
+        val presets = ExportPreset.entries
+        LabeledChoice("Quick presets", presets.map { it.label }, { presets[it] == active }, { vm.applyPreset(presets[it]) }, minCell = 120.dp)
+        SheetLine(summary, "Settings", { settingsOpen = true })
+        Button(onClick = onExportVideos, enabled = state.clips.isNotEmpty(), modifier = Modifier.fillMaxWidth()) {
+            Text(if (settings.wholeTimeline) "Export timeline" else "Export ${state.clips.size} clips")
         }
     }
-    // What will come out, so a preset's effect shows without scrolling through the options.
-    vm.outputPreview(state)?.let { out ->
-        Text(
-            out.toString() + (if (state.exportSettings.wholeTimeline) "" else " · each clip"),
-            style = MaterialTheme.typography.titleSmall,
-            color = HeadsupColors.Accent,
-        )
+    if (settingsOpen) OptionsSheet("Video export", onDismiss = { settingsOpen = false }) { VideoExportSettings(state, vm) }
+    val canOverlay = state.clips.any { it.sync != null }
+    ToolSection("Dashboard only", info = "Transparent PNG frames (ZIP) per clip, to lay over the video in DaVinci. Saved to ${MediaStoreOutput.OVERLAY_FOLDER}.") {
+        OutlinedButton(onClick = onExportOverlays, enabled = canOverlay, modifier = Modifier.fillMaxWidth()) { Text("Export dashboard only (PNG)") }
+        if (!canOverlay) Hint("Needs a FIT file matched to the clips.")
     }
+    if (state.clips.any { it.meta.isPhoto }) PhotoExport(state, vm)
+
+    if (jobs.isNotEmpty()) {
+        SectionCaption("Exports") {
+            Spacer(Modifier.width(8.dp))
+            if (jobs.any { it.status == JobStatus.QUEUED || it.status == JobStatus.RUNNING }) {
+                SmallAction("Cancel all", vm::cancelExports)
+            } else {
+                SmallAction("Clear list", vm::clearFinishedExports)
+            }
+        }
+        jobs.forEach { JobRow(it) }
+    }
+}
+
+/** The film's export settings, in a sheet from the bottom: set once for a project, not at every export. */
+@Composable
+private fun VideoExportSettings(state: UiState, vm: HeadsupViewModel) {
+    val settings = state.exportSettings
     ToolSection("Output") {
         ChoiceGrid(listOf("Whole timeline", "Each clip"), if (settings.wholeTimeline) 0 else 1, { i -> vm.updateExportSettings { it.copy(wholeTimeline = i == 0) } })
     }
@@ -5300,29 +5374,6 @@ private fun ExportControls(
             (if (!tenBit && tenBitBlocker == null && state.clips.any { it.meta.format?.transfer == "HLG" }) "HDR (HLG) clips are always exported in 10-bit." else "")
         if (clipNote.isNotEmpty()) Hint(clipNote.trim())
     }
-    ToolSection("Export", info = "Colour, effects, framing, speed; the dashboard where there is activity data. Saved to ${MediaStoreOutput.VIDEO_FOLDER}.") {
-        Button(onClick = onExportVideos, enabled = state.clips.isNotEmpty(), modifier = Modifier.fillMaxWidth()) {
-            Text(if (settings.wholeTimeline) "Export timeline" else "Export ${state.clips.size} clips")
-        }
-    }
-    val canOverlay = state.clips.any { it.sync != null }
-    ToolSection("Dashboard only", info = "Transparent PNG frames (ZIP) per clip, to lay over the video in DaVinci. Saved to ${MediaStoreOutput.OVERLAY_FOLDER}.") {
-        OutlinedButton(onClick = onExportOverlays, enabled = canOverlay, modifier = Modifier.fillMaxWidth()) { Text("Export dashboard only (PNG)") }
-        if (!canOverlay) Hint("Needs a FIT file matched to the clips.")
-    }
-    if (state.clips.any { it.meta.isPhoto }) PhotoExport(state, vm)
-
-    if (jobs.isNotEmpty()) {
-        SectionCaption("Exports") {
-            Spacer(Modifier.width(8.dp))
-            if (jobs.any { it.status == JobStatus.QUEUED || it.status == JobStatus.RUNNING }) {
-                SmallAction("Cancel all", vm::cancelExports)
-            } else {
-                SmallAction("Clear list", vm::clearFinishedExports)
-            }
-        }
-        jobs.forEach { JobRow(it) }
-    }
 }
 
 /** Photos on the timeline, each as a JPEG at its own resolution in the timeline's frame. */
@@ -5335,11 +5386,20 @@ private fun PhotoExport(state: UiState, vm: HeadsupViewModel) {
         app.headsup.export.PhotoFormat.TIFF16 -> " TIFF: 16 bits per colour, uncompressed, for further editing (Lightroom, Photoshop, DaVinci). Large files."
         else -> ""
     }
+    var settingsOpen by rememberSaveable { mutableStateOf(false) }
     ToolSection(
         "Photos",
-        info = "Each photo at its own resolution (or the size chosen), with its edits." + formatInfo +
+        info = "Each photo at its own resolution (or the size chosen), with its edits. The line is how they are saved; tap it to change the size, format and quality." + formatInfo +
             (if (photoCount > 1) " Mark photos for export: hold a thumbnail (double-tap a marked one for its menu), or Mark under the photos." else ""),
     ) {
+        val summary = listOfNotNull(
+            ExportSettings.PHOTO_SIZES.firstOrNull { it.first == settings.photoLongSide }?.second,
+            settings.photoFormat.label,
+            ExportSettings.PHOTO_QUALITIES.firstOrNull { it.first == settings.photoQuality }?.second?.takeIf { settings.photoFormat != app.headsup.export.PhotoFormat.TIFF16 },
+        ).joinToString(" · ")
+        SheetLine(summary, "Settings", { settingsOpen = true })
+        if (settingsOpen) OptionsSheet("Photo export", onDismiss = { settingsOpen = false }) {
+            ToolSection("Photos", info = "Size: the long side in pixels (Full keeps each photo's own)." + formatInfo) {
         val sizes = ExportSettings.PHOTO_SIZES
         LabeledChoice("Photo size", sizes.map { it.second }, { sizes[it].first == settings.photoLongSide }, { i -> vm.updateExportSettings { it.copy(photoLongSide = sizes[i].first) } })
         // Ultra HDR needs Android 14.
@@ -5348,6 +5408,8 @@ private fun PhotoExport(state: UiState, vm: HeadsupViewModel) {
         if (settings.photoFormat != app.headsup.export.PhotoFormat.TIFF16) {
             val qualities = ExportSettings.PHOTO_QUALITIES
             LabeledChoice("JPEG", qualities.map { it.second }, { qualities[it].first == settings.photoQuality }, { i -> vm.updateExportSettings { it.copy(photoQuality = qualities[i].first) } })
+        }
+            }
         }
         val selectedPhoto = state.selected?.meta?.isPhoto == true
         val picked = state.clips.count { it.meta.isPhoto && it.picked }
@@ -5483,8 +5545,13 @@ private fun TextPanel(state: UiState, vm: HeadsupViewModel, stickers: Boolean, a
                 if (shown.isEmpty()) {
                     Text(if (state.photoProject) "No stickers on this photo." else "No stickers yet.", style = MaterialTheme.typography.bodySmall, color = HeadsupColors.TextMuted)
                 } else {
-                    Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        for (t in shown) Box(Modifier.size(56.dp)) { StickerThumb(java.io.File(t.image.orEmpty())) { vm.selectText(t.id) } }
+                    // The placed ones in a sheet; a touch there selects one to edit.
+                    var list by rememberSaveable { mutableStateOf(false) }
+                    SheetLine((if (shown.size == 1) "1 sticker" else "${shown.size} stickers") + if (state.photoProject) " on this photo" else " in the film", "List", { list = true })
+                    if (list) OptionsSheet("Stickers", onDismiss = { list = false }) {
+                        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            for (t in shown) Box(Modifier.size(64.dp)) { StickerThumb(java.io.File(t.image.orEmpty())) { list = false; vm.selectText(t.id) } }
+                        }
                     }
                 }
             }
@@ -5498,8 +5565,19 @@ private fun TextPanel(state: UiState, vm: HeadsupViewModel, stickers: Boolean, a
                 if (shown.isEmpty()) {
                     Text(if (state.photoProject) "No texts on this photo." else "No texts yet.", style = MaterialTheme.typography.bodySmall, color = HeadsupColors.TextMuted)
                 } else {
-                    Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        for (t in shown) FilterChip(selected = false, onClick = { vm.selectText(t.id) }, label = { Text(t.text.replace('\n', ' ').take(18)) })
+                    // The texts in a sheet, each with when it shows; a touch there selects it to edit.
+                    var list by rememberSaveable { mutableStateOf(false) }
+                    SheetLine((if (shown.size == 1) "1 text" else "${shown.size} texts") + if (state.photoProject) " on this photo" else " in the film", "List", { list = true })
+                    if (list) OptionsSheet("Texts", onDismiss = { list = false }) {
+                        for (t in shown) {
+                            Row(
+                                Modifier.fillMaxWidth().clip(MaterialTheme.shapes.small).clickable { list = false; vm.selectText(t.id) }.padding(vertical = 8.dp, horizontal = 4.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Text(t.text.replace('\n', ' '), Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium, maxLines = 1)
+                                if (!state.photoProject) Text("${Formats.duration(t.startMs)}–${Formats.duration(t.endMs)}", style = MaterialTheme.typography.labelMedium.copy(fontFamily = GeistMonoFamily), color = HeadsupColors.TextMuted)
+                            }
+                        }
                     }
                 }
             }
