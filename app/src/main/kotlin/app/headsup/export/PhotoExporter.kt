@@ -85,10 +85,19 @@ object PhotoExporter {
         // Raw photos are developed by the app at full size in half floats; others decoded by Android.
         val full = if (request.raw) RawPhotos.developFull(context, request.uri, request.rawDevelop, onProgress) else null
         onProgress(0.8f)
-        val photo = full?.bitmap
+        var photo = full?.bitmap
             ?: (if (request.raw) RawPhotos.decode(context, request.uri, request.rawDevelop, MAX_SIDE) else null)
             ?: decodeUpright(context, request.uri) ?: error("Could not read ${request.name}")
         val degrees = full?.degrees ?: 0
+        // Bokeh: the background blurred on a smaller upright copy, laid over the photo.
+        if (request.effects.bokeh > 0f) {
+            runCatching {
+                val small = app.headsup.color.Segmenter.scaled(photo, app.headsup.render.Bokeh.EXPORT)
+                val upright = if (degrees == 0) small else android.graphics.Bitmap.createBitmap(small, 0, 0, small.width, small.height, Matrix().apply { postRotate(degrees.toFloat()) }, true)
+                app.headsup.render.Bokeh.layer(context, upright, request.uri.toString(), request.effects, request.textMasks, app.headsup.render.Bokeh.EXPORT)
+                    ?.let { photo = app.headsup.render.Bokeh.over(photo, it, degrees, inPlace = true) }
+            }.onFailure { it.printStackTrace() }
+        }
         val turned = degrees == 90 || degrees == 270
         val pw = (if (turned) photo.height else photo.width).toFloat()
         val ph = (if (turned) photo.width else photo.height).toFloat()

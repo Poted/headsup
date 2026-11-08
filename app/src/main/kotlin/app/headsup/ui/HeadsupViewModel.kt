@@ -1176,9 +1176,16 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                 Triple(keys, lostAhead, lostBehind)
             } ?: return@runInBackground
             val (keys, lostAhead, lostBehind) = result
+            // The place followed, evened out: a text or sticker takes its movement and how near it
+            // comes (size), not its turns (a planar fit on a small patch turns it wildly on a pan).
+            fun smooth(v: List<Float>, reach: Int) = v.indices.map { i ->
+                val from = maxOf(0, i - reach)
+                val to = minOf(v.size - 1, i + reach)
+                (from..to).sumOf { v[it].toDouble() }.toFloat() / (to - from + 1)
+            }
             val follow = app.headsup.core.edit.TextFollow(
-                clip.id, keys.map { it.timeMs }, keys.map { it.centerX }, keys.map { it.centerY },
-                keys.map { it.angleDegrees - start.angleDegrees }, keys.map { it.sizeX / start.sizeX },
+                clip.id, keys.map { it.timeMs }, smooth(keys.map { it.centerX }, 1), smooth(keys.map { it.centerY }, 1),
+                keys.map { 0f }, smooth(keys.map { (it.sizeX / start.sizeX).coerceIn(0.5f, 2f) }, 3),
                 fromMs = frames0(keys, t0),
             )
             fun at(ms: Long) = Formats.duration(ms - clip.trimStartMs)

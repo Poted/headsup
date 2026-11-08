@@ -44,6 +44,12 @@ data class EffectSettings(
     val graph: GraphMetric? = null,
     /** Whether this clip shows the dashboard (its layout and widgets are the project's). */
     val dashboard: Boolean = true,
+    /** Photos: the background blurred as by a wide-open lens (bokeh), 0..1. */
+    val bokeh: Float = 0f,
+    /** How much bright points open into bright discs, 0..1. */
+    val bokehHighlights: Float = 0.5f,
+    /** What stays sharp: a mask of the photo (its place in the list), or null for the subject found by itself. */
+    val bokehMask: Int? = null,
 ) {
     val changesPixels: Boolean get() = grain > 0f || glow > 0f || halation > 0f || lens
 
@@ -66,6 +72,9 @@ data class EffectSettings(
         barsMotion = if (after.barsMotion != before.barsMotion) after.barsMotion else barsMotion,
         graph = if (after.graph != before.graph) after.graph else graph,
         dashboard = if (after.dashboard != before.dashboard) after.dashboard else dashboard,
+        bokeh = if (after.bokeh != before.bokeh) after.bokeh else bokeh,
+        bokehHighlights = if (after.bokehHighlights != before.bokehHighlights) after.bokehHighlights else bokehHighlights,
+        bokehMask = if (after.bokehMask != before.bokehMask) after.bokehMask else bokehMask,
     )
 }
 

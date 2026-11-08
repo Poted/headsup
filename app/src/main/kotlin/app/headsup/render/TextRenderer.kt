@@ -59,7 +59,8 @@ object TextRenderer {
                 val layer = canvas.saveLayer(0f, 0f, width, height, null)
                 drawItem(canvas, width, height, item, f)
                 subject(item, canvas, Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG).apply {
-                    xfermode = android.graphics.PorterDuffXfermode(android.graphics.PorterDuff.Mode.DST_OUT)
+                    // Behind what the mask covers: taken out there; behind the rest: kept only there.
+                    xfermode = android.graphics.PorterDuffXfermode(if (item.behindOutside) android.graphics.PorterDuff.Mode.DST_IN else android.graphics.PorterDuff.Mode.DST_OUT)
                 })
                 canvas.restoreToCount(layer)
             } else {

@@ -3341,7 +3341,9 @@ private fun ColourPage(
     if (onEffects && baseEffects) {
         // Set on all clips exactly when Adjust works on all of them.
         LaunchedEffect(target) { vm.setEffectsOnAll(target == GradeTarget.GLOBAL) }
-        EffectsPanel(state, vm, lookKind, playhead, LOOK_KINDS) { lookKind = it }
+        // Bokeh is worked out on a photo (a whole video would take too long).
+        val looks = if (state.selected?.meta?.isPhoto == true) LOOK_KINDS else LOOK_KINDS - EffectKind.BOKEH
+        EffectsPanel(state, vm, lookKind.takeIf { it in looks } ?: looks.first(), playhead, looks) { lookKind = it }
         return
     }
     LazyRow(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
@@ -4953,6 +4955,7 @@ private fun EffectKinds(state: UiState, kind: EffectKind, kinds: List<EffectKind
                 EffectKind.GLOW -> effects.glow > 0f
                 EffectKind.HALATION -> effects.halation > 0f
                 EffectKind.LENS -> effects.lens
+                EffectKind.BOKEH -> effects.bokeh > 0f
                 EffectKind.BARS -> effects.barsRatio != null
             }
             CircleOption(e.symbol, e.label, selected = e == kind, modified = active) { onKind(e) }
@@ -4971,13 +4974,14 @@ private enum class EffectKind(val symbol: String, val label: String) {
     HALATION("Ha", "Halation"),
     BARS("Cin", "Bars"),
     LENS("Lens", "Lens"),
+    BOKEH("Bk", "Bokeh"),
 }
 
 /** Drawn over the picture: the Overlays tool. */
 private val OVERLAY_KINDS = listOf(EffectKind.TEXT, EffectKind.STICKER, EffectKind.MAP, EffectKind.DASHBOARD, EffectKind.GRAPH)
 
 /** Part of the picture's look: the base layer's Effects in Adjust. */
-private val LOOK_KINDS = listOf(EffectKind.GRAIN, EffectKind.GLOW, EffectKind.HALATION, EffectKind.LENS, EffectKind.BARS)
+private val LOOK_KINDS = listOf(EffectKind.BOKEH, EffectKind.GRAIN, EffectKind.GLOW, EffectKind.HALATION, EffectKind.LENS, EffectKind.BARS)
 
 /** Effects over the picture, picked from round options like the colour corrections. */
 @Composable
@@ -5071,6 +5075,23 @@ private fun EffectsPanel(state: UiState, vm: HeadsupViewModel, kind: EffectKind,
                 ),
             )
 
+        }
+        EffectKind.BOKEH -> ToolSection(
+            "Bokeh",
+            info = "The background blurred as by a wide-open lens: what stays sharp is the subject the phone finds (people, animals, vehicles; else what is in the middle) " +
+                "or a mask of yours (Adjust › Masks: Select, the brush…). Highlights: how much bright points open into bright discs. Worked out on the photo, a moment after the ruler stops.",
+        ) {
+            EffectRuler(
+                listOf(
+                    EffectParam("Blur", effects.bokeh, 0f..1f, 0.02f, 0f, percent = true) { v -> updateEffects { it.copy(bokeh = v) } },
+                    EffectParam("Highlights", effects.bokehHighlights, 0f..1f, 0.02f, 0.5f, percent = true) { v -> updateEffects { it.copy(bokehHighlights = v) } },
+                ),
+            )
+            val photoNow = state.selected
+            val choices = photoNow?.masks?.withIndex()?.filter { app.headsup.color.TextMasks.usable(it.value) }.orEmpty()
+            val labels = listOf("Subject") + choices.map { "Mask ${it.index + 1}" }
+            val current = effects.bokehMask?.let { m -> choices.indexOfFirst { it.index == m }.let { if (it < 0) -1 else it + 1 } } ?: 0
+            LabeledChoice("Sharp", labels, { it == current }, { i -> updateEffects { it.copy(bokehMask = if (i == 0) null else choices[i - 1].index) } })
         }
         EffectKind.LENS -> ToolSection("Lens", info = "An older lens: colour fringes and softness that grow towards the corners; the middle stays sharp. A little goes a long way.") {
             EffectRuler(
@@ -5514,7 +5535,16 @@ private fun TextPanel(state: UiState, vm: HeadsupViewModel, stickers: Boolean, a
                     else -> update { it.copy(behind = true, behindMask = choices[i - 2].index) }
                 }
             })
+            if (item.behind) LabeledChoice(
+                "Side", listOf("Behind it", "Behind the rest"), { (it == 1) == item.behindOutside },
+                { i -> update { it.copy(behindOutside = i == 1) } },
+            )
             val chosenMask = item.behindMask
+            // On video a mask that is neither tracked nor keyed stays where it was drawn while the camera moves.
+            val still = chosenMask?.let { clipNow?.masks?.getOrNull(it) }?.takeIf { m ->
+                !state.photoProject && m.sequence == null && m.keys.isEmpty()
+            }
+            if (item.behind && still != null && chosenMask != null) Hint("Mask ${chosenMask + 1} is not tracked: it stays where it was drawn while the camera moves. Track it in Adjust › Masks (Track ▶) so the text goes behind it as it moves.")
             if (item.behind && chosenMask != null && current < 0) Hint("Mask ${chosenMask + 1} is not on this ${if (state.photoProject) "photo" else "clip"}: nothing is in front of the text here.")
             if (choices.isEmpty()) Hint("To go behind something of your own (a wall, a tree, a person), make a mask of it in Adjust › Masks (Select, Subject, Sky or the brush), then choose it here.")
         }

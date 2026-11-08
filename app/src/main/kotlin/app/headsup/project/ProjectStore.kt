@@ -275,7 +275,7 @@ internal object Json {
         .put("align", t.align.name).put("animIn", t.animIn.name).put("animOut", t.animOut.name).put("animMs", t.animMs)
         .putOpt("onlyClip", t.onlyClip).putOpt("onlyGroup", t.onlyGroup)
         .putOpt("image", t.image).put("opacity", t.opacity.toDouble()).put("angle", t.angle.toDouble())
-        .put("cutout", t.cutout).put("behind", t.behind).putOpt("behindMask", t.behindMask)
+        .put("cutout", t.cutout).put("behind", t.behind).putOpt("behindMask", t.behindMask).put("behindOutside", t.behindOutside)
         .putOpt("fontFile", t.fontFile).putOpt("fillImage", t.fillImage)
         .apply {
             t.follow?.let { f ->
@@ -309,6 +309,7 @@ internal object Json {
         cutout = o.optBoolean("cutout", false),
         behind = o.optBoolean("behind", false),
         behindMask = if (o.has("behindMask")) o.optInt("behindMask") else null,
+        behindOutside = o.optBoolean("behindOutside", false),
         fontFile = o.optStringOrNull("fontFile"),
         fillImage = o.optStringOrNull("fillImage"),
         follow = o.optJSONObject("follow")?.let { j ->
@@ -600,6 +601,7 @@ internal object Json {
         .put("glowWarmth", e.glowWarmth.toDouble())
         .put("lensAberration", e.lensAberration.toDouble())
         .put("lensSoftness", e.lensSoftness.toDouble())
+        .put("bokeh", e.bokeh.toDouble()).put("bokehHighlights", e.bokehHighlights.toDouble()).putOpt("bokehMask", e.bokehMask)
         .putOpt("barsRatio", e.barsRatio)
         .put("barsMotion", e.barsMotion.name)
         .putOpt("graph", e.graph?.name)
@@ -619,6 +621,9 @@ internal object Json {
             glowWarmth = o.optDouble("glowWarmth", d.glowWarmth.toDouble()).toFloat(),
             lensAberration = o.optDouble("lensAberration", d.lensAberration.toDouble()).toFloat(),
             lensSoftness = o.optDouble("lensSoftness", d.lensSoftness.toDouble()).toFloat(),
+            bokeh = o.optDouble("bokeh", 0.0).toFloat(),
+            bokehHighlights = o.optDouble("bokehHighlights", 0.5).toFloat(),
+            bokehMask = if (o.has("bokehMask")) o.optInt("bokehMask") else null,
             barsRatio = if (o.has("barsRatio")) o.getDouble("barsRatio").toFloat() else null,
             barsMotion = app.headsup.render.BarsMotion.entries.firstOrNull { it.name == o.optString("barsMotion") } ?: app.headsup.render.BarsMotion.STILL,
             graph = GraphMetric.entries.firstOrNull { it.name == o.optStringOrNull("graph") },

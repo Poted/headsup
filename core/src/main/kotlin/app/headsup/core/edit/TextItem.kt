@@ -68,6 +68,11 @@ data class TextItem(
      * e.g. a wall it comes out from; null: the subject found by itself.
      */
     val behindMask: Int? = null,
+    /**
+     * With [behind]: it goes behind everything but the mask (or subject) instead, so it shows only
+     * over it, without turning the mask itself inside out.
+     */
+    val behindOutside: Boolean = false,
     /** Stuck to a place in a clip's picture: carried, turned and sized with it. */
     val follow: TextFollow? = null,
     /** A font of the user's own (a TTF or OTF kept by the app) in place of [font]. */

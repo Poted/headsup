@@ -666,6 +666,19 @@ fun ClipPreview(
             runCatching { app.headsup.color.SubjectMaps.find(context, key, picture) }.onFailure { it.printStackTrace() }.getOrNull()
         }
     }
+    // Bokeh: the photo's background blurred as by a wide-open lens, laid over it (worked out on a
+    // smaller copy, a moment after the ruler stops).
+    val bokehPhoto by produceState<ImageBitmap?>(null, photoBitmap, effects.bokeh, effects.bokehHighlights, effects.bokehMask, clip.masks) {
+        val src = photoBitmap?.asAndroidBitmap()
+        if (!photo || src == null || effects.bokeh <= 0f) { value = null; return@produceState }
+        delay(150)
+        value = withContext(Dispatchers.Default) {
+            runCatching {
+                app.headsup.render.Bokeh.layer(context, src, clip.meta.uri.toString(), effects, clip.masks, app.headsup.render.Bokeh.PREVIEW)
+                    ?.let { app.headsup.render.Bokeh.over(src, it).asImageBitmap() }
+            }.onFailure { it.printStackTrace() }.getOrNull()
+        }
+    }
     val geometryRef = remember { GeometryRef(FrameGeometry(1f, 1f, 1f, 1f)) }
     // The picture as decoded (before colour), from the photo or the video's TextureView.
     val grabFrame: (Int) -> Bitmap? = { w ->
@@ -1228,7 +1241,7 @@ fun ClipPreview(
                         translationX = t.translation.x + (c?.let { it.dx * size.width * t.zoom } ?: 0f)
                         translationY = t.translation.y + (c?.let { it.dy * size.height * t.zoom } ?: 0f)
                     }
-                val bitmap = photoBitmap
+                val bitmap = bokehPhoto ?: photoBitmap
                 if (photo) {
                     if (bitmap != null) Image(bitmap, contentDescription = clip.meta.name, contentScale = ContentScale.FillBounds, modifier = pictureLayer)
                     if (photoFrom != clip.meta.uri) {
