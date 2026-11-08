@@ -5415,13 +5415,15 @@ private fun TextPanel(state: UiState, vm: HeadsupViewModel, stickers: Boolean, a
     val update: ((TextItem) -> TextItem) -> Unit = { vm.updateText(item.id, it) }
     // In an album: which photos the text is on.
     val photo = state.selected
-    ToolSection(if (item.isLogo) "Sticker" else "Text", info = if (item.isLogo) (if (state.photoProject) "Which photos the sticker is on. Drag it on the picture to place it; ✕ takes it away, ↘ or two fingers size and turn it." else "Drag the sticker on the picture to place it; Size, Opacity and its timing are below.") else if (state.photoProject) "The text, and which photos it is on." else "The text. Its look, data, font and timing are in the tools below.") {
+    ToolSection(if (item.isLogo) "Sticker" else "Text", info = if (item.isLogo) (if (state.photoProject) "Which photos the sticker is on. Drag it on the picture to place it; ✕ takes it away, ↘ or two fingers size and turn it." else "Drag the sticker on the picture to place it; Size, Opacity and its timing are below.") else if (state.photoProject) "The text, and which photos it is on. Subject › Behind puts it behind the person (or animal, vehicle) in the photo: found by the phone the first time, kept after." else "The text. Its look, data, font and timing are in the tools below.") {
         if (state.photoProject && photo != null) {
             ChoiceGrid(
                 listOf("This photo", "All photos"),
                 when { item.onlyClip != null -> 0; item.onlyGroup == null -> 1; else -> -1 },
                 { i -> update { if (i == 0) it.copy(onlyClip = photo.id, onlyGroup = null) else it.copy(onlyClip = null, onlyGroup = null) } },
             )
+            // Behind the person (or animal, vehicle) in the photo: found once per photo, a moment the first time.
+            LabeledChoice("Subject", listOf("In front", "Behind"), { (it == 1) == item.behind }, { i -> update { it.copy(behind = i == 1) } })
         }
         if (!item.isLogo) OutlinedTextField(
             value = item.text,

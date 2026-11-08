@@ -61,6 +61,8 @@ data class TextItem(
      * of it, so the video (or photo) shows only through them.
      */
     val cutout: Boolean = false,
+    /** Behind the subject of the photo (the person in front stands over the letters). */
+    val behind: Boolean = false,
 ) {
     val isLogo: Boolean get() = image != null
 

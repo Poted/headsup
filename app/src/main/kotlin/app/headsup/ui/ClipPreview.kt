@@ -321,6 +321,9 @@ fun ClipPreview(
     // Sharpening and colour noise are applied by the shader: changing them needs no new development.
     val developKey = if (raw) clip.rawDevelop.copy(sharpen = 0f, colourNoise = 0f) else null
     // Clean up's patches lie over the photo as decoded: a change of them decodes it again.
+    // A text behind the subject: the photo's subject found once (kept for the photo), taken out of the letters.
+    val wantsSubject = photo && texts.any { it.behind }
+    var subjectMap by remember { mutableStateOf<Bitmap?>(null) }
     val photoBitmap by produceState<ImageBitmap?>(null, clip.meta.uri, photo, developKey, clip.retouch) {
         if (!photo) { value = null; return@produceState }
         // Tried again a few times: while a project opens, other reads of the same files may hold
@@ -646,6 +649,17 @@ fun ClipPreview(
     val reframer by rememberUpdatedState(onReframe)
     val currentReframe by rememberUpdatedState(reframe)
     // Sizes of the frame and the picture under it, for gestures (read when they happen).
+    LaunchedEffect(clip.meta.uri, wantsSubject, photoBitmap) {
+        subjectMap = null
+        if (!wantsSubject) return@LaunchedEffect
+        val key = clip.meta.uri.toString()
+        subjectMap = withContext(Dispatchers.IO) { app.headsup.color.SubjectMaps.get(context, key) }
+        if (subjectMap != null) return@LaunchedEffect
+        val picture = photoBitmap?.asAndroidBitmap() ?: return@LaunchedEffect
+        subjectMap = withContext(Dispatchers.Default) {
+            runCatching { app.headsup.color.SubjectMaps.find(context, key, picture) }.onFailure { it.printStackTrace() }.getOrNull()
+        }
+    }
     val geometryRef = remember { GeometryRef(FrameGeometry(1f, 1f, 1f, 1f)) }
     // The picture as decoded (before colour), from the photo or the video's TextureView.
     val grabFrame: (Int) -> Bitmap? = { w ->
@@ -1670,7 +1684,18 @@ fun ClipPreview(
                     }
                     if (texts.isNotEmpty()) {
                         val values = if (texts.any { app.headsup.core.edit.TextFields.hasFields(it.text) }) textValues(positionMs) else emptyMap()
-                        drawIntoCanvas { TextRenderer.draw(it.nativeCanvas, size.width, size.height, texts, timelineOffsetMs + clipTimelineMs, values) }
+                        val map = subjectMap?.takeIf { wantsSubject }
+                        val behind: ((android.graphics.Canvas, android.graphics.Paint) -> Unit)? = map?.let { m ->
+                            { c, p ->
+                                val t = reframeTransform(reframe, geometry)
+                                TextRenderer.drawSubject(
+                                    c, p, m, size.width, size.height, geometry.pictureW, geometry.pictureH,
+                                    t.translation.x, t.translation.y, reframe.angleDegrees, t.zoom, reframe.mirrored,
+                                    reframe.warp?.let { perspectiveMatrix(it, geometry.pictureW, geometry.pictureH) },
+                                )
+                            }
+                        }
+                        drawIntoCanvas { TextRenderer.draw(it.nativeCanvas, size.width, size.height, texts, timelineOffsetMs + clipTimelineMs, values, behind) }
                     }
                     // The text or logo being edited: a dashed frame, ✕ to take it away, ↘ to size and turn it.
                     texts.firstOrNull { it.id == selectedTextId }?.takeIf { onMoveText != null }?.let { t ->
@@ -2003,7 +2028,7 @@ private const val ANALYSIS_WIDTH = 256
  * the corrected picture's fractions to the original's): what is drawn on the original shows where
  * it is on screen.
  */
-private fun perspectiveMatrix(warp: DoubleArray, w: Float, h: Float): android.graphics.Matrix {
+internal fun perspectiveMatrix(warp: DoubleArray, w: Float, h: Float): android.graphics.Matrix {
     val back = app.headsup.core.frame.Perspective.invert(warp)
     // In pixels: S · back · S⁻¹, S scaling fractions to pixels.
     val m = floatArrayOf(

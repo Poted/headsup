@@ -34,13 +34,49 @@ object TextRenderer {
     private fun filled(item: TextItem, values: Map<String, String>) =
         if (TextFields.hasFields(item.text)) item.copy(text = TextFields.fill(item.text, values)) else item
 
-    fun draw(canvas: Canvas, width: Float, height: Float, items: List<TextItem>, timelineMs: Long, values: Map<String, String> = emptyMap()) {
+    /**
+     * Draws [items]; [subject], when given, draws the photo's subject (its alpha) where it is in the
+     * frame with the paint it is handed, and is taken out of the texts set to stand behind it.
+     */
+    fun draw(
+        canvas: Canvas, width: Float, height: Float, items: List<TextItem>, timelineMs: Long, values: Map<String, String> = emptyMap(),
+        subject: ((Canvas, Paint) -> Unit)? = null,
+    ) {
         for (raw in items) {
             val item = filled(raw, values)
             val f = TextAnimation.frame(item, timelineMs) ?: continue
             if (f.alpha <= 0.003f) continue
-            drawItem(canvas, width, height, item, f)
+            if (item.behind && subject != null) {
+                val layer = canvas.saveLayer(0f, 0f, width, height, null)
+                drawItem(canvas, width, height, item, f)
+                subject(canvas, Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG).apply {
+                    xfermode = android.graphics.PorterDuffXfermode(android.graphics.PorterDuff.Mode.DST_OUT)
+                })
+                canvas.restoreToCount(layer)
+            } else {
+                drawItem(canvas, width, height, item, f)
+            }
         }
+    }
+
+    /**
+     * Draws [map] (over the whole upright picture) where the picture lies in a [fw]×[fh] frame:
+     * centred, moved by ([tx], [ty]), turned by [degrees], scaled by [zoom] (mirrored when asked),
+     * the picture [picW]×[picH] before that, as the preview and the export lay it out.
+     */
+    fun drawSubject(
+        canvas: Canvas, paint: Paint, map: android.graphics.Bitmap, fw: Float, fh: Float, picW: Float, picH: Float,
+        tx: Float, ty: Float, degrees: Float, zoom: Float, mirrored: Boolean, warp: android.graphics.Matrix? = null,
+    ) {
+        canvas.save()
+        canvas.translate(fw / 2f + tx, fh / 2f + ty)
+        canvas.rotate(degrees)
+        canvas.scale(zoom * if (mirrored) -1f else 1f, zoom)
+        canvas.translate(-picW / 2f, -picH / 2f)
+        // Found on the original picture: through the perspective correction, as the picture is.
+        warp?.let { canvas.concat(it) }
+        canvas.drawBitmap(map, null, android.graphics.RectF(0f, 0f, picW, picH), paint)
+        canvas.restore()
     }
 
     /** The text as shown at frame [f]: typed so far, a decoding letter and the cursor. */

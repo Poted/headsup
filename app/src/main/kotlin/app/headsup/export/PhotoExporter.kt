@@ -123,6 +123,15 @@ object PhotoExporter {
             setBrush(brush)
         }
         val graded = android.graphics.Paint().apply { this.shader = shader.paintShader(request.effects, picW, picH, request.masks, patched, request.rawDevelop.takeIf { request.raw }, request.presence, request.reframe.warp) }
+        // Texts behind the subject: its map as found for the preview (found here when it never was).
+        val subject = if (request.texts.none { it.behind }) null else runCatching {
+            val key = request.uri.toString()
+            app.headsup.color.SubjectMaps.get(context, key) ?: run {
+                val small = app.headsup.color.Segmenter.scaled(photo, 1024)
+                val upright = if (degrees == 0) small else android.graphics.Bitmap.createBitmap(small, 0, 0, small.width, small.height, Matrix().apply { postRotate(degrees.toFloat()) }, true)
+                app.headsup.color.SubjectMaps.find(context, key, upright)
+            }
+        }.getOrNull()
         val renderer = DashboardRenderer(context.assets)
         val root = RenderNode("frame").apply {
             setPosition(0, 0, fw, fh)
@@ -139,7 +148,15 @@ object PhotoExporter {
             val data = request.dashboard
             if (data != null) renderer.draw(c, fw.toFloat(), fh.toFloat(), request.style, data, request.effects) else renderer.drawBars(c, fw.toFloat(), fh.toFloat(), request.effects)
             app.headsup.render.RouteMapRenderer.draw(c, fw.toFloat(), fh.toFloat(), request.routeMap, request.mapTrack, request.mapMarker?.first, request.mapMarker?.second)
-            TextRenderer.draw(c, fw.toFloat(), fh.toFloat(), request.texts, request.textMs)
+            TextRenderer.draw(c, fw.toFloat(), fh.toFloat(), request.texts, request.textMs, subject = subject?.let { m ->
+                { canvas, paint ->
+                    TextRenderer.drawSubject(
+                        canvas, paint, m, fw.toFloat(), fh.toFloat(), picW, picH, t.translation.x, t.translation.y,
+                        request.reframe.angleDegrees, t.zoom, request.reframe.mirrored,
+                        request.reframe.warp?.let { app.headsup.ui.perspectiveMatrix(it, picW, picH) },
+                    )
+                }
+            })
             endRecording()
         }
         if (request.format == PhotoFormat.TIFF16) {
