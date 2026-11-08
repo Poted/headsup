@@ -20,6 +20,7 @@ import androidx.media3.common.audio.SpeedChangingAudioProcessor
 import androidx.media3.common.audio.SpeedProvider
 import androidx.media3.transformer.EditedMediaItemSequence
 import android.graphics.Matrix
+import app.headsup.core.edit.TextItem
 import androidx.media3.common.util.Size
 import app.headsup.core.frame.Reframe
 import app.headsup.core.color.ColorGrade
@@ -193,6 +194,61 @@ class ExportManager(private val context: Context) {
         }
     }
 
+    /** Texts stuck to the picture of [request]'s clip, where the place they follow is at a moment (the clip's own time). */
+    private fun textPlacer(request: ExportRequest): (List<TextItem>, Long) -> List<TextItem> {
+        if (request.isPhoto || request.texts.none { it.follow?.clipId == request.clipId }) return { t, _ -> t }
+        val srcW = request.width.toFloat().coerceAtLeast(1f)
+        val srcH = request.height.toFloat().coerceAtLeast(1f)
+        val r = request.reframe
+        val (ow, oh) = r.outputSize(srcW, srcH)
+        val toFrame: (Float, Float) -> Pair<Float, Float> = { x, y -> r.frameOf(x * srcW, y * srcH, ow, oh, srcW, srcH).let { (fx, fy) -> fx / ow to fy / oh } }
+        return { texts, positionMs -> texts.map { it.placed(request.clipId, request.trimStartMs + positionMs, toFrame) } }
+    }
+
+    /**
+     * The clip's subject drawn where it is in the exported frame: its map (over the upright
+     * source) taken through the same steps as the picture (steadied, then framed) into pixels.
+     */
+    private fun subjectDrawer(request: ExportRequest): ((TextItem, android.graphics.Canvas, android.graphics.Paint, Long, Float, Float) -> Unit)? {
+        val id = request.subject
+        if (request.isPhoto || request.texts.none { it.behind }) return null
+        val aspect = request.width.toFloat() / request.height.coerceAtLeast(1)
+        val reframe = reframeMatrix(request.reframe, request.width, request.height)
+        val steady = request.stabilize?.let { p -> p to app.headsup.core.frame.Stabilizer.corrections(p, request.width.toFloat() / request.height.coerceAtLeast(1)) }
+        return { item, canvas, paint, positionMs, w, h ->
+            val fileMs = request.trimStartMs + positionMs
+            val chosen = item.behindMask?.let { i -> request.textMasks.getOrNull(i)?.let { app.headsup.color.TextMasks.alphaOf(context, it, aspect, fileMs) } }
+                ?: if (item.behindMask == null && id != null) app.headsup.color.SubjectMaps.frameAt(context, id, fileMs) else null
+            chosen?.let { map ->
+                val m = Matrix().apply {
+                    // Map pixels → source NDC (y up).
+                    postScale(2f / map.width, -2f / map.height)
+                    postTranslate(-1f, 1f)
+                    steady?.let { (p, cs) -> postConcat(stabilizeMatrix(app.headsup.core.frame.Stabilizer.at(p, cs, fileMs), request.width.toFloat(), request.height.toFloat())) }
+                    reframe?.let { postConcat(it) }
+                    // Frame NDC → the overlay's pixels (y down).
+                    postScale(w / 2f, -h / 2f)
+                    postTranslate(w / 2f, h / 2f)
+                }
+                canvas.save()
+                canvas.concat(m)
+                canvas.drawBitmap(map, 0f, 0f, paint)
+                canvas.restore()
+            }
+        }
+    }
+
+    /** A steadying correction as a Media3 matrix on normalised coordinates, for a [w]×[h] source. */
+    private fun stabilizeMatrix(c: app.headsup.core.frame.Stabilizer.Correction, w: Float, h: Float) = Matrix().apply {
+        postScale(w / 2f, h / 2f)
+        // Clockwise on screen is a negative angle with y pointing up.
+        postRotate(-c.degrees)
+        postScale(2f / w, 2f / h)
+        // Fractions of the frame to normalised coordinates (y up).
+        postTranslate(2f * c.dx, -2f * c.dy)
+        postScale(c.zoom, c.zoom)
+    }
+
     /** Source → frame (Media3's normalised coordinates) for [reframe]; null when it changes nothing. */
     private fun reframeMatrix(reframe: Reframe, width: Int, height: Int): Matrix? {
         if (reframe.isIdentity || width <= 0 || height <= 0) return null
@@ -204,6 +260,8 @@ class ExportManager(private val context: Context) {
         val matrix = Matrix().apply {
             // Source NDC → source pixels around the chosen centre (y up) → turned and scaled → frame NDC.
             postTranslate(-(2f * r.centerX - 1f), -(1f - 2f * r.centerY))
+            // Mirrored about the chosen centre, before it is turned (as in the preview).
+            if (r.mirrored) postScale(-1f, 1f)
             postScale(w / 2f, h / 2f)
             // Clockwise on screen is a negative angle with y pointing up.
             postRotate(-r.angleDegrees)
@@ -262,9 +320,10 @@ class ExportManager(private val context: Context) {
             texts = request.texts,
             // The overlay counts the clip's own time (before the speed change); texts are placed on the timeline.
             timelineMsOf = { positionMs -> request.timelineStartMs + if (request.isPhoto) positionMs else (positionMs / request.speed).toLong() },
-            textValues = { data ->
-                // The moment's values, then the clip's own (a photo's place and time win over the watch's).
-                app.headsup.render.TextValues.moment(data?.frame, data?.utcMs, data?.zoneOffsetSeconds) + request.textValues
+            textValues = { data, positionMs ->
+                // The video's own clock, the moment's values, then the clip's own (a photo's place and time win over the watch's).
+                val own = request.videoStartUtcMs?.let { app.headsup.render.TextValues.clock(it + request.trimStartMs + positionMs) }.orEmpty()
+                own + app.headsup.render.TextValues.moment(data?.frame, data?.utcMs, data?.zoneOffsetSeconds) + request.textValues
             },
             drawMap = if (request.routeMap.enabled && request.mapTrack != null) { canvas, w, h, data ->
                 val (lat, lon) = request.mapMarker ?: markerOf(data)
@@ -274,6 +333,15 @@ class ExportManager(private val context: Context) {
             mapKey = { data -> if (request.routeMap.enabled) markerOf(data).let { (a, b) -> "m${a?.let { String.format(java.util.Locale.US, "%.5f", it) }},${b?.let { String.format(java.util.Locale.US, "%.5f", it) }}" } else "" },
             dataAt = { positionMs -> request.dataAt(positionMs, sampler) },
             barsAt = { timelineMs -> request.effects.barsMotion.amount(timelineMs - request.clipStartMs, request.clipLengthMs) },
+            placeTexts = textPlacer(request),
+            subject = subjectDrawer(request),
+            subjectKey = { positionMs ->
+                val fileMs = request.trimStartMs + positionMs
+                (request.subject?.takeIf { !request.isPhoto && request.texts.any { it.behind && it.behindMask == null } }
+                    ?.let { "s" + app.headsup.color.SubjectMaps.frameIndex(context, it, fileMs) } ?: "") +
+                    // A mask that moves (keys, or tracked) changes the cut from moment to moment.
+                    (if (request.texts.any { t -> t.behind && t.behindMask?.let { request.textMasks.getOrNull(it) }?.let { m -> m.keys.isNotEmpty() || m.sequence != null } == true }) "m${fileMs / 40}" else "")
+            },
         )
 
         val effects = mutableListOf<Effect>()

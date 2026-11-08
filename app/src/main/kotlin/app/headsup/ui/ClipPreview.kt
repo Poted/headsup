@@ -20,6 +20,8 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Icon
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.graphics.Color
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -45,6 +47,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameMillis
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.input.pointer.pointerInput
@@ -197,6 +200,13 @@ fun ClipPreview(
     onMoveFinished: () -> Unit,
     /** When set, tapping the picture (away from widgets) grabs the frame for the vectorscope. */
     onSample: ((Bitmap, Float, Float) -> Unit)? = null,
+    /**
+     * Picking a colour to change (Point colour): [onSample] is told as the finger moves (the
+     * colour under it shown live), with the picture's own position; two fingers zoom the view.
+     */
+    liveSample: Boolean = false,
+    /** Changes when the subject is to be found again (the photo's kept one forgotten). */
+    subjectVersion: Int = 0,
     /** Point last measured, 0..1 of the frame, drawn as a target. */
     marker: Offset? = null,
     /** Playhead position within the (trimmed) clip, reported as it changes. */
@@ -262,6 +272,12 @@ fun ClipPreview(
     texts: List<TextItem> = emptyList(),
     /** Set while a text is edited: a finger on the picture places it (0..1 of the frame). */
     onMoveText: ((Float, Float) -> Unit)? = null,
+    /** The text (or logo) being edited: framed with handles, as in a phone editor. */
+    selectedTextId: Long? = null,
+    /** The selected text resized or turned (its handle, two fingers). */
+    onTextChange: ((Long, (TextItem) -> TextItem) -> Unit)? = null,
+    onDeleteText: ((Long) -> Unit)? = null,
+    onSelectText: ((Long) -> Unit)? = null,
     /** Only photos in the project: no play button or time. */
     photoMode: Boolean = false,
     /** Values of the texts' data fields at a position in this clip. */
@@ -276,6 +292,8 @@ fun ClipPreview(
      */
     compactTransport: Boolean = false,
     onCompact: ((Boolean) -> Unit)? = null,
+    /** Whether the view is zoomed in on the picture (the screen's swipes then leave the finger alone). */
+    onViewZoomed: (Boolean) -> Unit = {},
 ) {
     val context = LocalContext.current
     // Two players: one shows the clip, the other holds the next one ready (a different shape or
@@ -312,6 +330,9 @@ fun ClipPreview(
     // Sharpening and colour noise are applied by the shader: changing them needs no new development.
     val developKey = if (raw) clip.rawDevelop.copy(sharpen = 0f, colourNoise = 0f) else null
     // Clean up's patches lie over the photo as decoded: a change of them decodes it again.
+    // A text behind the subject: the photo's subject found once (kept for the photo), taken out of the letters.
+    val wantsSubject = photo && texts.any { it.behind && it.behindMask == null }
+    var subjectMap by remember { mutableStateOf<Bitmap?>(null) }
     val photoBitmap by produceState<ImageBitmap?>(null, clip.meta.uri, photo, developKey, clip.retouch) {
         if (!photo) { value = null; return@produceState }
         // Tried again a few times: while a project opens, other reads of the same files may hold
@@ -560,6 +581,9 @@ fun ClipPreview(
     // Exposure aids on the picture: 0 off, 1 zebra, 2 clipping (red: a channel at full, blue: black), 3 false colour.
     var aid by androidx.compose.runtime.saveable.rememberSaveable { mutableIntStateOf(0) }
     val zebra = aid > 0
+    // Before / after: where the line between the picture as shot (left) and as edited (right)
+    // is, a fraction of its width, while a finger held on the picture moves sideways; null off.
+    var split by remember { mutableStateOf<Float?>(null) }
     var histogramOn by remember { mutableStateOf(false) }
     var histogram by remember { mutableStateOf<FloatArray?>(null) }
     // Which scope shows (a tap on it steps through them): histogram, waveform, RGB parade.
@@ -614,6 +638,7 @@ fun ClipPreview(
     }
     LaunchedEffect(active) { textureView = textureViews[active] }
     val sample by rememberUpdatedState(onSample)
+    val liveSampleNow by rememberUpdatedState(liveSample)
     val maskMover by rememberUpdatedState(onMoveMask)
     val maskTransformer by rememberUpdatedState(onTransformMask)
     val maskEnd by rememberUpdatedState(onMaskEnd)
@@ -634,6 +659,48 @@ fun ClipPreview(
     val reframer by rememberUpdatedState(onReframe)
     val currentReframe by rememberUpdatedState(reframe)
     // Sizes of the frame and the picture under it, for gestures (read when they happen).
+    LaunchedEffect(clip.meta.uri, wantsSubject, photoBitmap, subjectVersion) {
+        subjectMap = null
+        if (!wantsSubject) return@LaunchedEffect
+        val key = clip.meta.uri.toString()
+        subjectMap = withContext(Dispatchers.IO) { app.headsup.color.SubjectMaps.get(context, key) }
+        if (subjectMap != null) return@LaunchedEffect
+        val picture = photoBitmap?.asAndroidBitmap() ?: return@LaunchedEffect
+        subjectMap = withContext(Dispatchers.Default) {
+            runCatching { app.headsup.color.SubjectMaps.find(context, key, picture) }.onFailure { it.printStackTrace() }.getOrNull()
+        }
+    }
+    // Bokeh: the photo's background blurred as by a wide-open lens, a layer laid over the photo
+    // (worked out on a smaller copy, a moment after the ruler stops). Its own settings (the clip's),
+    // so holding the picture for the original does not work it out again; and while it is worked
+    // out, and for a moment after, what stays sharp is outlined.
+    val bokehSettings = clip.effects
+    var bokehWorking by remember { mutableStateOf(false) }
+    var bokehOutline by remember { mutableStateOf<Bitmap?>(null) }
+    val outlineAlpha = remember { androidx.compose.animation.core.Animatable(0f) }
+    val bokehPhoto by produceState<ImageBitmap?>(null, photoBitmap, bokehSettings.bokeh, bokehSettings.bokehHighlights, bokehSettings.bokehMask, bokehSettings.bokehInvert, clip.masks, subjectVersion) {
+        val src = photoBitmap?.asAndroidBitmap()
+        if (!photo || src == null || bokehSettings.bokeh <= 0f) { value = null; bokehOutline = null; return@produceState }
+        delay(150)
+        bokehWorking = true
+        try {
+            val made = withContext(Dispatchers.Default) {
+                runCatching {
+                    app.headsup.render.Bokeh.layerWithOutline(context, src, clip.meta.uri.toString(), bokehSettings, clip.masks, app.headsup.render.Bokeh.PREVIEW)
+                }.onFailure { it.printStackTrace() }.getOrNull()
+            }
+            value = made?.let { app.headsup.render.Bokeh.over(src, it.first).asImageBitmap() }
+            bokehOutline = made?.second
+        } finally {
+            bokehWorking = false
+        }
+        // The outline shows a moment, then fades.
+        if (bokehOutline != null) {
+            outlineAlpha.snapTo(1f)
+            delay(1200)
+            outlineAlpha.animateTo(0f, androidx.compose.animation.core.tween(800))
+        }
+    }
     val geometryRef = remember { GeometryRef(FrameGeometry(1f, 1f, 1f, 1f)) }
     // The picture as decoded (before colour), from the photo or the video's TextureView.
     val grabFrame: (Int) -> Bitmap? = { w ->
@@ -880,7 +947,8 @@ fun ClipPreview(
         return Triple(c, r, a)
     }
     // The frame takes the reframe's shape; the picture is laid out under it, just covering it.
-    val frameAspect = reframe.aspect ?: sourceAspect
+    // Turned a quarter, the photo's own shape stands the other way (as Reframe.outputSize has it).
+    val frameAspect = reframe.aspect ?: if (reframe.quarterTurns % 2 != 0) 1f / sourceAspect else sourceAspect
     // Painted masks as one picture for the shaders, drawn again when a stroke changes. While a
     // finger paints, each drawing finishes and the next starts from the latest strokes (a new
     // stroke point must not cancel the drawing, or nothing would show until the finger lifts).
@@ -917,8 +985,12 @@ fun ClipPreview(
     // Looking closely at a photo: the view's zoom and pan (not the photo's framing).
     val inspect = photoMode && onReframe == null && onMoveMask == null && onTransformMask == null && onBrush == null && onMoveText == null && onSample == null
     // The view's zoom applies while looking at a photo closely or painting a mask.
-    val viewZoomed = inspect || zoomForPainting
+    val zoomForSampling = photoMode && onSample != null && liveSample
+    val viewZoomed = inspect || zoomForPainting || zoomForSampling
     var viewZoom by remember(clip.id) { mutableStateOf(1f) }
+    val zoomedNow = viewZoom > 1.01f
+    val tellZoomed by rememberUpdatedState(onViewZoomed)
+    LaunchedEffect(zoomedNow) { tellZoomed(zoomedNow) }
     var viewPan by remember(clip.id) { mutableStateOf(Offset.Zero) }
     /**
      * The view zoomed by [factor] around [at] (where the fingers are, in a [w]×[h] area) and moved
@@ -958,22 +1030,57 @@ fun ClipPreview(
                             if (released == null) {
                                 val hold = holdNow ?: return@awaitEachGesture
                                 hold(true)
+                                // Held, then moved sideways: a line follows the finger, the picture as
+                                // shot on its left and as edited on its right; lifted, all as edited.
+                                var splitting = false
                                 do {
                                     val e = awaitPointerEvent(androidx.compose.ui.input.pointer.PointerEventPass.Initial)
+                                    val c = e.changes.firstOrNull { it.id == down.id }
+                                    if (c != null && c.pressed) {
+                                        if (!splitting && kotlin.math.abs(c.position.x - down.position.x) > viewConfiguration.touchSlop) {
+                                            splitting = true
+                                            hold(false)
+                                        }
+                                        if (splitting) {
+                                            c.consume()
+                                            // The finger's place on the picture as it is framed (zoomed and moved).
+                                            val g = geometryRef.value
+                                            val t = reframeTransform(currentReframe, g)
+                                            val px = (c.position.x - g.boxW / 2f - t.translation.x) / t.zoom.coerceAtLeast(0.01f) + g.pictureW / 2f
+                                            split = (px / g.pictureW.coerceAtLeast(1f)).coerceIn(0f, 1f)
+                                        }
+                                    }
                                 } while (e.changes.any { it.pressed })
-                                hold(false)
+                                if (splitting) split = null else hold(false)
                             }
                         }
                     }
                 } else Modifier,
+            ).then(
+                Modifier
             ).then(
                 // A photo can be looked at closely: pinch to zoom the view, double tap to fit again
                 // (only when the picture is not being framed, masked or written on).
                 if (inspect) {
                     Modifier
                         .pointerInput(Unit) {
-                            detectTransformGestures { centroid, pan, zoomChange, _ ->
-                                zoomViewAt(centroid, zoomChange, pan, size.width.toFloat(), size.height.toFloat())
+                            // Two fingers zoom; one finger moves the view only while it is zoomed.
+                            // At 1× a single finger is left alone, so the screen's swipes (full
+                            // screen, folding the album) still work over the photo.
+                            awaitEachGesture {
+                                awaitFirstDown(requireUnconsumed = false)
+                                do {
+                                    val event = awaitPointerEvent()
+                                    val fingers = event.changes.count { it.pressed }
+                                    if (fingers >= 2 || viewZoom > 1.01f) {
+                                        val zoom = event.calculateZoom()
+                                        val pan = event.calculatePan()
+                                        if (zoom != 1f || pan != Offset.Zero) {
+                                            zoomViewAt(event.calculateCentroid(), zoom, pan, size.width.toFloat(), size.height.toFloat())
+                                            event.changes.forEach { it.consume() }
+                                        }
+                                    }
+                                } while (event.changes.any { it.pressed })
                             }
                         }
                         .pointerInput(Unit) {
@@ -982,6 +1089,20 @@ fun ClipPreview(
                                 else zoomViewAt(at, 3f, Offset.Zero, size.width.toFloat(), size.height.toFloat())
                             })
                         }
+                } else if (zoomForSampling) {
+                    // Picking a colour: two fingers zoom and pan the view (one finger picks).
+                    Modifier.pointerInput(Unit) {
+                        awaitEachGesture {
+                            awaitFirstDown(requireUnconsumed = false, pass = androidx.compose.ui.input.pointer.PointerEventPass.Initial)
+                            do {
+                                val e = awaitPointerEvent(androidx.compose.ui.input.pointer.PointerEventPass.Initial)
+                                if (e.changes.count { it.pressed } >= 2) {
+                                    zoomViewAt(e.calculateCentroid(), e.calculateZoom(), e.calculatePan(), size.width.toFloat(), size.height.toFloat())
+                                    e.changes.forEach { it.consume() }
+                                }
+                            } while (e.changes.any { it.pressed })
+                        }
+                    }
                 } else if (zoomForPainting) {
                     // Painting: two fingers zoom and pan the view, taken before the painting sees
                     // them (one finger still paints; in View it moves the view). A double tap
@@ -1130,12 +1251,13 @@ fun ClipPreview(
                         val fromWeight = if (fromCube != null) ColourTransition.fromWeight(positionMs, transitionMs) else 0f
                         previewShader?.overlayLayer = overlayLayer
                         previewShader?.exposureAid = aid
+                        previewShader?.split = split ?: -1f
                         renderEffect = previewShader?.effect(effects, zebra, frame, size.width, size.height, masks.map { it.at(fileMs) }, fromWeight, if (raw) clip.rawDevelop else null, presence, reframe.warp)
                         // Reframing moves the graded picture, as in the export (colour first, then framing).
                         val t = reframeTransform(reframe, geometry)
                         // Steadied: the frame's correction on the picture before it is framed.
                         val c = if (steady != null && steadyCorrections != null && !photo) app.headsup.core.frame.Stabilizer.at(steady, steadyCorrections, fileMs) else null
-                        scaleX = t.zoom * (c?.zoom ?: 1f)
+                        scaleX = t.zoom * (c?.zoom ?: 1f) * if (reframe.mirrored) -1f else 1f
                         scaleY = t.zoom * (c?.zoom ?: 1f)
                         rotationZ = reframe.angleDegrees + (c?.degrees ?: 0f)
                         translationX = t.translation.x + (c?.let { it.dx * size.width * t.zoom } ?: 0f)
@@ -1144,6 +1266,17 @@ fun ClipPreview(
                 val bitmap = photoBitmap
                 if (photo) {
                     if (bitmap != null) Image(bitmap, contentDescription = clip.meta.name, contentScale = ContentScale.FillBounds, modifier = pictureLayer)
+                    // Bokeh over the photo: not while the original is held; with the before / after
+                    // line, only on its edited side (right of the line).
+                    bokehPhoto?.takeIf { !showingOriginal && bitmap != null }?.let { b ->
+                        Image(
+                            b, contentDescription = null, contentScale = ContentScale.FillBounds,
+                            modifier = pictureLayer.drawWithContent {
+                                val at = split
+                                if (at == null) drawContent() else clipRect(left = at * size.width) { this@drawWithContent.drawContent() }
+                            },
+                        )
+                    }
                     if (photoFrom != clip.meta.uri) {
                         // The next photo is being developed: the previous one is dimmed under a spinner.
                         Box(Modifier.matchParentSize().background(Color.Black.copy(alpha = 0.55f)), contentAlignment = Alignment.Center) {
@@ -1191,6 +1324,7 @@ fun ClipPreview(
                                     val fromWeight = if (from != null) ColourTransition.fromWeight(positionMs, transitionMs) else 0f
                                     playerShaders?.get(i)?.overlayLayer = if (fresh) overlayLayer else -1
                                     playerShaders?.get(i)?.exposureAid = aid
+                                    playerShaders?.get(i)?.split = if (fresh) split ?: -1f else -1f
                                     renderEffect = if (pictureClip[i] == null || pictureClip[i] == clip.id) {
                                         playerShaders?.get(i)?.effect(
                                             effects, zebra, frame, this.size.width, this.size.height, if (fresh) masks.map { it.at(fileMs) } else emptyList(), fromWeight,
@@ -1202,7 +1336,7 @@ fun ClipPreview(
                                     val t = reframeTransform(r, g)
                                     // Steadied (the selected clip's own player).
                                     val c = if (fresh && (pictureClip[i] == null || pictureClip[i] == clip.id) && steady != null && steadyCorrections != null) app.headsup.core.frame.Stabilizer.at(steady, steadyCorrections, fileMs) else null
-                                    scaleX = t.zoom * (c?.zoom ?: 1f)
+                                    scaleX = t.zoom * (c?.zoom ?: 1f) * if (r.mirrored) -1f else 1f
                                     scaleY = t.zoom * (c?.zoom ?: 1f)
                                     rotationZ = r.angleDegrees + (c?.degrees ?: 0f)
                                     translationX = t.translation.x + (c?.let { it.dx * this.size.width * t.zoom } ?: 0f)
@@ -1228,7 +1362,7 @@ fun ClipPreview(
                                         val z = r.clamped(g.boxW, g.boxH, w, h).effectiveZoom(g.boxW, g.boxH, w, h)
                                         // A finger moving right shows more of the left: undo rotation and zoom.
                                         val a = Math.toRadians(r.angleDegrees.toDouble())
-                                        val dx = (pan.x * kotlin.math.cos(a) + pan.y * kotlin.math.sin(a)).toFloat() / z
+                                        val dx = (pan.x * kotlin.math.cos(a) + pan.y * kotlin.math.sin(a)).toFloat() / z * if (r.mirrored) -1f else 1f
                                         val dy = (-pan.x * kotlin.math.sin(a) + pan.y * kotlin.math.cos(a)).toFloat() / z
                                         reframer?.invoke(
                                             r.copy(zoom = r.zoom * zoomChange, centerX = r.centerX - dx / w, centerY = r.centerY - dy / h),
@@ -1371,10 +1505,24 @@ fun ClipPreview(
                                     // The marker follows the finger; the colour is measured where it lifts.
                                     val onTap = sample ?: return@awaitEachGesture
                                     fun at(p: Offset) = Offset(p.x / size.width, p.y / size.height)
+                                    val live = liveSampleNow
+                                    // Picking a colour: the place in the picture itself (through its framing), and
+                                    // the frame grabbed larger when zoomed in, so a small spot can be picked.
+                                    fun picked(p: Offset): Offset {
+                                        if (!live) return at(p)
+                                        val g = geometryRef.value
+                                        val (sx, sy) = currentReframe.sourceOf(p.x, p.y, g.boxW, g.boxH, g.pictureW, g.pictureH)
+                                        return Offset((sx / g.pictureW).coerceIn(0f, 1f), (sy / g.pictureH).coerceIn(0f, 1f))
+                                    }
+                                    val width = if (live) (SAMPLE_WIDTH * viewZoom * 2f).toInt().coerceIn(SAMPLE_WIDTH, 1536) else SAMPLE_WIDTH
                                     liveMarker = at(down.position)
                                     var last = down.position
+                                    var lastLiveMs = 0L
+                                    var cancelled = false
                                     while (true) {
                                         val event = awaitPointerEvent()
+                                        // A second finger: zooming, not picking.
+                                        if (live && event.changes.count { it.pressed } >= 2) { cancelled = true; break }
                                         val change = event.changes.firstOrNull { it.id == down.id } ?: break
                                         if (!change.pressed) {
                                             change.consume()
@@ -1384,9 +1532,17 @@ fun ClipPreview(
                                         change.consume()
                                         last = change.position
                                         liveMarker = at(last)
+                                        val now = change.uptimeMillis
+                                        if (live && now - lastLiveMs >= 90L) {
+                                            lastLiveMs = now
+                                            val m = picked(last)
+                                            grab(width)?.let { onTap(it, m.x, m.y) }
+                                        }
                                     }
-                                    val m = at(last)
-                                    grab(SAMPLE_WIDTH)?.let { onTap(it, m.x, m.y) }
+                                    if (!cancelled) {
+                                        val m = picked(last)
+                                        grab(width)?.let { onTap(it, m.x, m.y) }
+                                    }
                                     liveMarker = null
                                     return@awaitEachGesture
                                 }
@@ -1419,7 +1575,7 @@ fun ClipPreview(
                         withTransform({
                             translate((geometry.boxW - geometry.pictureW) / 2f + t.translation.x, (geometry.boxH - geometry.pictureH) / 2f + t.translation.y)
                             rotate(reframe.angleDegrees, o)
-                            scale(t.zoom, t.zoom, o)
+                            scale(t.zoom * if (reframe.mirrored) -1f else 1f, t.zoom, o)
                         }) {
                             // The mask is kept on the original picture: drawn through the perspective
                             // correction, so it shows where it applies.
@@ -1481,7 +1637,7 @@ fun ClipPreview(
                         withTransform({
                             translate((geometry.boxW - geometry.pictureW) / 2f + t.translation.x, (geometry.boxH - geometry.pictureH) / 2f + t.translation.y)
                             rotate(reframe.angleDegrees, o)
-                            scale(t.zoom, t.zoom, o)
+                            scale(t.zoom * if (reframe.mirrored) -1f else 1f, t.zoom, o)
                         }) {
                             val path = androidx.compose.ui.graphics.Path()
                             paintPath.chunked(2).forEachIndexed { k, (x, y) ->
@@ -1517,6 +1673,19 @@ fun ClipPreview(
                 }
                 // Texts sit on the frame (not the picture), over the dashboard, as in the export.
                 val textMover by rememberUpdatedState(onMoveText)
+                val textChange by rememberUpdatedState(onTextChange)
+                val textDelete by rememberUpdatedState(onDeleteText)
+                val textSelect by rememberUpdatedState(onSelectText)
+                // Texts stuck to the picture are where the place they follow is now.
+                val shownTexts = if (photo || texts.none { it.follow != null }) texts else {
+                    val srcW = clip.meta.width.takeIf { it > 0 }?.toFloat() ?: 1920f
+                    val srcH = clip.meta.height.takeIf { it > 0 }?.toFloat() ?: 1080f
+                    val (ow, oh) = reframe.outputSize(srcW, srcH)
+                    texts.map { t -> t.placed(clip.id, fileMs) { x, y -> reframe.frameOf(x * srcW, y * srcH, ow, oh, srcW, srcH).let { (fx, fy) -> fx / ow to fy / oh } } }
+                }
+                val textsNow by rememberUpdatedState(shownTexts)
+                val rawTextsNow by rememberUpdatedState(texts)
+                val selectedTextNow by rememberUpdatedState(selectedTextId)
                 // While a text is dragged, guides show the middle and the margins it snaps to.
                 var placing by remember { mutableStateOf(false) }
                 Canvas(
@@ -1525,15 +1694,79 @@ fun ClipPreview(
                             Modifier
                         } else {
                             Modifier.pointerInput(Unit) {
+                                val grab = 28.dp.toPx()
                                 awaitEachGesture {
                                     val down = awaitFirstDown()
                                     down.consume()
-                                    placing = true
-                                    textMover?.invoke(down.position.x / size.width, down.position.y / size.height)
-                                    drag(down.id) { change ->
-                                        change.consume()
-                                        textMover?.invoke((change.position.x / size.width).coerceIn(0f, 1f), (change.position.y / size.height).coerceIn(0f, 1f))
+                                    val w = size.width.toFloat()
+                                    val h = size.height.toFloat()
+                                    val items = textsNow
+                                    val sel = items.firstOrNull { it.id == selectedTextNow }
+                                    fun boxOf(t: TextItem) = TextRenderer.box(t, w, h)
+                                    // A point taken into an item's own (unturned) space.
+                                    fun local(t: TextItem, p: Offset): Offset {
+                                        val b = boxOf(t)
+                                        val a = Math.toRadians(-t.angle.toDouble())
+                                        val dx = p.x - b.centerX()
+                                        val dy = p.y - b.centerY()
+                                        return Offset(b.centerX() + (dx * kotlin.math.cos(a) - dy * kotlin.math.sin(a)).toFloat(), b.centerY() + (dx * kotlin.math.sin(a) + dy * kotlin.math.cos(a)).toFloat())
                                     }
+                                    val pad = TEXT_FRAME_PAD.toPx()
+                                    if (sel != null) {
+                                        val b = boxOf(sel)
+                                        val p = local(sel, down.position)
+                                        // ✕ at the top left: taken away.
+                                        if (kotlin.math.hypot(p.x - (b.left - pad), p.y - (b.top - pad)) < grab) {
+                                            textDelete?.invoke(sel.id)
+                                            return@awaitEachGesture
+                                        }
+                                        // ↘ at the bottom right: dragged, it sizes and turns the item about its middle.
+                                        if (kotlin.math.hypot(p.x - (b.right + pad), p.y - (b.bottom + pad)) < grab) {
+                                            val c = Offset(b.centerX(), b.centerY())
+                                            val d0 = down.position - c
+                                            val len0 = d0.getDistance().coerceAtLeast(1f)
+                                            val a0 = kotlin.math.atan2(d0.y, d0.x)
+                                            // Sized and turned from the item as kept (a stuck one shows sized and turned by its place).
+                                            val kept = rawTextsNow.firstOrNull { it.id == sel.id } ?: sel
+                                            val size0 = kept.size
+                                            val angle0 = kept.angle
+                                            drag(down.id) { change ->
+                                                change.consume()
+                                                val d = change.position - c
+                                                val turned = angle0 + Math.toDegrees((kotlin.math.atan2(d.y, d.x) - a0).toDouble()).toFloat()
+                                                textChange?.invoke(sel.id) { it.copy(size = (size0 * d.getDistance() / len0).coerceIn(0.01f, 2f), angle = snapAngle(turned)) }
+                                            }
+                                            return@awaitEachGesture
+                                        }
+                                    }
+                                    // Touching another text or logo picks it.
+                                    val hit = items.lastOrNull { t ->
+                                        val b = boxOf(t)
+                                        val p = local(t, down.position)
+                                        p.x in b.left - pad..b.right + pad && p.y in b.top - pad..b.bottom + pad
+                                    }
+                                    if (hit != null && hit.id != sel?.id) textSelect?.invoke(hit.id)
+                                    val target = hit ?: sel ?: return@awaitEachGesture
+                                    placing = true
+                                    // Moved by the finger's travel (not jumping to it); two fingers size and turn it.
+                                    val base = rawTextsNow.firstOrNull { it.id == target.id } ?: target
+                                    val start = Offset(base.x * w, base.y * h)
+                                    var moved = Offset.Zero
+                                    do {
+                                        val event = awaitPointerEvent()
+                                        val fingers = event.changes.count { it.pressed }
+                                        if (fingers >= 2) {
+                                            val zoom = event.calculateZoom()
+                                            val turn = event.calculateRotation()
+                                            moved += event.calculatePan()
+                                            textChange?.invoke(target.id) { it.copy(size = (it.size * zoom).coerceIn(0.01f, 2f), angle = snapAngle(it.angle + turn)) }
+                                        } else {
+                                            val ch = event.changes.firstOrNull { it.id == down.id } ?: event.changes.firstOrNull()
+                                            if (ch != null) moved += ch.positionChange()
+                                        }
+                                        textMover?.invoke(((start.x + moved.x) / w).coerceIn(0f, 1f), ((start.y + moved.y) / h).coerceIn(0f, 1f))
+                                        event.changes.forEach { it.consume() }
+                                    } while (event.changes.any { it.pressed })
                                     placing = false
                                 }
                             }
@@ -1551,11 +1784,81 @@ fun ClipPreview(
                     }
                     if (texts.isNotEmpty()) {
                         val values = if (texts.any { app.headsup.core.edit.TextFields.hasFields(it.text) }) textValues(positionMs) else emptyMap()
-                        drawIntoCanvas { TextRenderer.draw(it.nativeCanvas, size.width, size.height, texts, timelineOffsetMs + clipTimelineMs, values) }
+                        // What a text goes behind: its mask, or the subject (the clip's at this moment, or the
+                        // photo's), drawn where the picture is (moved with it, steadied too).
+                        val clipSubject = clip.subject?.takeIf { !photo && texts.any { it.behind && it.behindMask == null } }
+                        val clipMap = clipSubject?.let { app.headsup.color.SubjectMaps.frameAt(context, it, fileMs) }
+                        val photoMap = subjectMap?.takeIf { wantsSubject }
+                        val behind: ((TextItem, android.graphics.Canvas, android.graphics.Paint) -> Unit)? = if (texts.none { it.behind }) null else {
+                            val t = reframeTransform(reframe, geometry)
+                            val c = if (!photo && steady != null && steadyCorrections != null) app.headsup.core.frame.Stabilizer.at(steady, steadyCorrections, fileMs) else null
+                            val warp = reframe.warp?.let { perspectiveMatrix(it, geometry.pictureW, geometry.pictureH) }
+                            val f: (TextItem, android.graphics.Canvas, android.graphics.Paint) -> Unit = { item, cv, p ->
+                                val m = item.behindMask?.let { k -> clip.masks.getOrNull(k)?.let { app.headsup.color.TextMasks.alphaOf(context, it, sourceAspect, fileMs) } }
+                                    ?: if (item.behindMask == null) clipMap ?: photoMap else null
+                                if (m != null) TextRenderer.drawSubject(
+                                    cv, p, m, size.width, size.height, geometry.pictureW, geometry.pictureH,
+                                    t.translation.x + (c?.let { it.dx * size.width * t.zoom } ?: 0f), t.translation.y + (c?.let { it.dy * size.height * t.zoom } ?: 0f),
+                                    reframe.angleDegrees + (c?.degrees ?: 0f), t.zoom * (c?.zoom ?: 1f), reframe.mirrored, warp,
+                                )
+                            }
+                            f
+                        }
+                        drawIntoCanvas { TextRenderer.draw(it.nativeCanvas, size.width, size.height, shownTexts, timelineOffsetMs + clipTimelineMs, values, behind) }
+                    }
+                    // The text or logo being edited: a dashed frame, ✕ to take it away, ↘ to size and turn it.
+                    shownTexts.firstOrNull { it.id == selectedTextId }?.takeIf { onMoveText != null }?.let { t ->
+                        val b = TextRenderer.box(t, size.width, size.height)
+                        val pad = TEXT_FRAME_PAD.toPx()
+                        rotate(t.angle, Offset(b.centerX(), b.centerY())) {
+                            val tl = Offset(b.left - pad, b.top - pad)
+                            val br = Offset(b.right + pad, b.bottom + pad)
+                            drawRect(Color.White, tl, androidx.compose.ui.geometry.Size(br.x - tl.x, br.y - tl.y), style = Stroke(1.5.dp.toPx(), pathEffect = PathEffect.dashPathEffect(floatArrayOf(14f, 10f))))
+                            val r = 12.dp.toPx()
+                            for (c in listOf(tl, br)) {
+                                drawCircle(Color.White, r, c)
+                                drawCircle(Color.Black.copy(alpha = 0.25f), r, c, style = Stroke(1.dp.toPx()))
+                            }
+                            val k = r * 0.42f
+                            // ✕
+                            drawLine(Color.Black, tl + Offset(-k, -k), tl + Offset(k, k), 2.dp.toPx())
+                            drawLine(Color.Black, tl + Offset(-k, k), tl + Offset(k, -k), 2.dp.toPx())
+                            // ↘ with its two heads (size and turn).
+                            drawLine(Color.Black, br + Offset(-k, -k), br + Offset(k, k), 2.dp.toPx())
+                            drawLine(Color.Black, br + Offset(k, k), br + Offset(k, 0f), 2.dp.toPx())
+                            drawLine(Color.Black, br + Offset(k, k), br + Offset(0f, k), 2.dp.toPx())
+                            drawLine(Color.Black, br + Offset(-k, -k), br + Offset(-k, 0f), 2.dp.toPx())
+                            drawLine(Color.Black, br + Offset(-k, -k), br + Offset(0f, -k), 2.dp.toPx())
+                        }
                     }
                 }
                 if (fadeGain < 1f) Box(Modifier.matchParentSize().background(Color.Black.copy(alpha = 1f - fadeGain)))
                 if (showGrid) Canvas(Modifier.matchParentSize()) { drawThirds() }
+                // What bokeh keeps sharp, outlined for a moment after it is found.
+                val outline = bokehOutline
+                if (outline != null && outlineAlpha.value > 0f && !showingOriginal) {
+                    Canvas(Modifier.matchParentSize()) {
+                        val g = geometryRef.value
+                        val t = reframeTransform(reframe, g)
+                        val p = android.graphics.Paint(android.graphics.Paint.FILTER_BITMAP_FLAG).apply { alpha = (255 * outlineAlpha.value).toInt().coerceIn(0, 255) }
+                        drawIntoCanvas {
+                            TextRenderer.drawSubject(
+                                it.nativeCanvas, p, outline, size.width, size.height, g.pictureW, g.pictureH,
+                                t.translation.x, t.translation.y, reframe.angleDegrees, t.zoom, reframe.mirrored,
+                                reframe.warp?.let { w -> perspectiveMatrix(w, g.pictureW, g.pictureH) },
+                            )
+                        }
+                    }
+                }
+                if (bokehWorking && !showingOriginal) {
+                    Text(
+                        "Bokeh…",
+                        Modifier.align(Alignment.TopCenter).padding(top = 10.dp).clip(RoundedCornerShape(50))
+                            .background(Color.Black.copy(alpha = 0.6f)).padding(horizontal = 12.dp, vertical = 4.dp),
+                        color = Color.White,
+                        style = MaterialTheme.typography.labelLarge,
+                    )
+                }
                 if (showingOriginal) {
                     Text(
                         originalLabel,
@@ -1648,9 +1951,15 @@ fun ClipPreview(
             }
         }
 
+        // How wide the bar is (dp): narrow, the frame rate goes; narrower, the view aids share one dot.
+        var barWidth by remember { mutableIntStateOf(1000) }
+        val barDensity = LocalDensity.current.density
+        val roomy = barWidth >= (if (photoMode) 260 else 420)
+        val wide = barWidth >= (if (photoMode) 220 else 360)
         if (showTransport && !compactTransport) Row(
             Modifier
                 .fillMaxWidth()
+                .onSizeChanged { barWidth = (it.width / barDensity).toInt() }
                 // Sideways, a finger going down the transport folds it and the timeline away.
                 .pointerInput(onCompact, sideways) {
                     // Upright the arrow folds them; only sideways does a finger going down.
@@ -1715,7 +2024,7 @@ fun ClipPreview(
                 maxLines = 1,
             )
             // The shown clip's own frame rate (the export's is chosen on the Export page).
-            clip.meta.frameRate?.takeIf { !photo && !photoMode }?.let { fps ->
+            clip.meta.frameRate?.takeIf { !photo && !photoMode && roomy }?.let { fps ->
                 Text(
                     String.format(java.util.Locale.US, "%.4g fps", fps) + (if (clip.speed != 1f) " · ${String.format(java.util.Locale.US, "%.3g", clip.speed)}×" else ""),
                     Modifier.padding(end = 8.dp),
@@ -1726,15 +2035,39 @@ fun ClipPreview(
             }
             // A ramped clip: a little speed graph.
             if (clip.speedCurve.isNotEmpty() && !photoMode) SpeedRampIcon(Modifier.padding(end = 8.dp), tint = HeadsupColors.TextMuted)
-            // Scopes, a tap each: histogram, waveform, RGB parade, off.
-            ToggleDot(if (!histogramOn) "H" else listOf("H", "W", "P")[scopeKind], histogramOn) {
-                if (!histogramOn) { histogramOn = true; scopeKind = 0 }
-                else if (scopeKind < 2) scopeKind++
-                else { histogramOn = false; scopeKind = 0 }
+            if (wide) {
+                // Scopes, a tap each: histogram, waveform, RGB parade, off.
+                ToggleDot(if (!histogramOn) "H" else listOf("H", "W", "P")[scopeKind], histogramOn) {
+                    if (!histogramOn) { histogramOn = true; scopeKind = 0 }
+                    else if (scopeKind < 2) scopeKind++
+                    else { histogramOn = false; scopeKind = 0 }
+                }
+                Spacer(Modifier.width(4.dp))
+                // Exposure aids, a tap each: zebra, clipping, false colour, off.
+                if (Build.VERSION.SDK_INT >= 33) ToggleDot(listOf("Z", "Z", "C", "F")[aid], aid > 0) { aid = (aid + 1) % 4 }
+            } else {
+                // Narrow: the scopes, the exposure aids and before / after behind one dot.
+                Box {
+                    var menu by remember { mutableStateOf(false) }
+                    ToggleDot("◎", histogramOn || aid > 0) { menu = true }
+                    androidx.compose.material3.DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+                        val scopes = listOf("Off", "Histogram", "Waveform", "RGB parade")
+                        val scopeNow = if (histogramOn) scopeKind + 1 else 0
+                        for ((k, label) in scopes.withIndex()) androidx.compose.material3.DropdownMenuItem(
+                            text = { Text((if (k == scopeNow) "● " else "   ") + if (k == 0) "No scope" else label) },
+                            onClick = { menu = false; histogramOn = k > 0; scopeKind = (k - 1).coerceAtLeast(0) },
+                        )
+                        if (Build.VERSION.SDK_INT >= 33) {
+                            androidx.compose.material3.HorizontalDivider()
+                            val aids = listOf("No exposure aid", "Zebra", "Clipping", "False colour")
+                            for ((k, label) in aids.withIndex()) androidx.compose.material3.DropdownMenuItem(
+                                text = { Text((if (k == aid) "● " else "   ") + label) },
+                                onClick = { menu = false; aid = k },
+                            )
+                        }
+                    }
+                }
             }
-            Spacer(Modifier.width(4.dp))
-            // Exposure aids, a tap each: zebra, clipping, false colour, off.
-            if (Build.VERSION.SDK_INT >= 33) ToggleDot(listOf("Z", "Z", "C", "F")[aid], aid > 0) { aid = (aid + 1) % 4 }
             // Sideways: fold the transport and the timeline away for a bigger picture (upright the
             // arrow is beside the handle under the transport: the transport has no room).
             onCompact?.takeIf { sideways }?.let { fold ->
@@ -1749,6 +2082,16 @@ fun ClipPreview(
 }
 
 private const val SAMPLE_WIDTH = 192
+
+/** Room between a selected text and its frame. */
+private val TEXT_FRAME_PAD = 8.dp
+
+/** A turn near level or a quarter: made exact. */
+private fun snapAngle(a: Float): Float {
+    val wrapped = ((a + 180f) % 360f + 360f) % 360f - 180f
+    val nearest = Math.round(wrapped / 90f) * 90f
+    return if (kotlin.math.abs(wrapped - nearest) < 4f) nearest else wrapped
+}
 
 
 /** How long before a cut the next clip starts (hidden), and when the picture switches to it. */
@@ -1793,7 +2136,8 @@ internal fun reframeTransform(reframe: Reframe, g: FrameGeometry): ReframeTransf
     val z = r.effectiveZoom(g.boxW, g.boxH, width, height)
     val a = Math.toRadians(r.angleDegrees.toDouble())
     // T = z·R(θ)·(O − C), clockwise rotation with y down; the picture is already centred in the frame.
-    val vx = width / 2f - r.centerX * width
+    // Mirrored: the layer is flipped about the picture's middle, so the centre's side turns round.
+    val vx = (width / 2f - r.centerX * width) * if (r.mirrored) -1f else 1f
     val vy = height / 2f - r.centerY * height
     val tx = z * (vx * kotlin.math.cos(a) - vy * kotlin.math.sin(a)).toFloat()
     val ty = z * (vx * kotlin.math.sin(a) + vy * kotlin.math.cos(a)).toFloat()
@@ -1818,7 +2162,7 @@ private const val ANALYSIS_WIDTH = 256
  * the corrected picture's fractions to the original's): what is drawn on the original shows where
  * it is on screen.
  */
-private fun perspectiveMatrix(warp: DoubleArray, w: Float, h: Float): android.graphics.Matrix {
+internal fun perspectiveMatrix(warp: DoubleArray, w: Float, h: Float): android.graphics.Matrix {
     val back = app.headsup.core.frame.Perspective.invert(warp)
     // In pixels: S · back · S⁻¹, S scaling fractions to pixels.
     val m = floatArrayOf(

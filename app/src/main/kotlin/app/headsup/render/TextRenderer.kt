@@ -26,6 +26,14 @@ object TextRenderer {
         TextFont.HAND -> Typeface.create("cursive", Typeface.NORMAL)
     }
 
+    /** Fonts of the user's own, read once per file. */
+    private val fontFiles = java.util.concurrent.ConcurrentHashMap<String, Typeface>()
+
+    /** [item]'s typeface: its own font file when it has one (and it can be read), else its font. */
+    fun typefaceOf(item: TextItem): Typeface = item.fontFile?.let { path ->
+        fontFiles[path] ?: runCatching { Typeface.createFromFile(path) }.getOrNull()?.also { fontFiles[path] = it }
+    } ?: typeface(item.font)
+
     /** Changes whenever what [draw] would draw changes (for reusing an export overlay's bitmap). */
     fun key(items: List<TextItem>, timelineMs: Long, values: Map<String, String> = emptyMap()): String =
         items.mapNotNull { raw -> val item = filled(raw, values); TextAnimation.frame(item, timelineMs)?.let { "${item.hashCode()}:$it" } }.joinToString("|")
@@ -34,13 +42,51 @@ object TextRenderer {
     private fun filled(item: TextItem, values: Map<String, String>) =
         if (TextFields.hasFields(item.text)) item.copy(text = TextFields.fill(item.text, values)) else item
 
-    fun draw(canvas: Canvas, width: Float, height: Float, items: List<TextItem>, timelineMs: Long, values: Map<String, String> = emptyMap()) {
+    /**
+     * Draws [items]; [subject], when given, draws what a text set to stand behind something goes
+     * behind (the subject, or its mask: an alpha map) where it is in the frame, with the paint it
+     * is handed; that is taken out of the text.
+     */
+    fun draw(
+        canvas: Canvas, width: Float, height: Float, items: List<TextItem>, timelineMs: Long, values: Map<String, String> = emptyMap(),
+        subject: ((TextItem, Canvas, Paint) -> Unit)? = null,
+    ) {
         for (raw in items) {
             val item = filled(raw, values)
             val f = TextAnimation.frame(item, timelineMs) ?: continue
             if (f.alpha <= 0.003f) continue
-            drawItem(canvas, width, height, item, f)
+            if (item.behind && subject != null) {
+                val layer = canvas.saveLayer(0f, 0f, width, height, null)
+                drawItem(canvas, width, height, item, f)
+                subject(item, canvas, Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG).apply {
+                    // Behind what the mask covers: taken out there; behind the rest: kept only there.
+                    xfermode = android.graphics.PorterDuffXfermode(if (item.behindOutside) android.graphics.PorterDuff.Mode.DST_IN else android.graphics.PorterDuff.Mode.DST_OUT)
+                })
+                canvas.restoreToCount(layer)
+            } else {
+                drawItem(canvas, width, height, item, f)
+            }
         }
+    }
+
+    /**
+     * Draws [map] (over the whole upright picture) where the picture lies in a [fw]×[fh] frame:
+     * centred, moved by ([tx], [ty]), turned by [degrees], scaled by [zoom] (mirrored when asked),
+     * the picture [picW]×[picH] before that, as the preview and the export lay it out.
+     */
+    fun drawSubject(
+        canvas: Canvas, paint: Paint, map: android.graphics.Bitmap, fw: Float, fh: Float, picW: Float, picH: Float,
+        tx: Float, ty: Float, degrees: Float, zoom: Float, mirrored: Boolean, warp: android.graphics.Matrix? = null,
+    ) {
+        canvas.save()
+        canvas.translate(fw / 2f + tx, fh / 2f + ty)
+        canvas.rotate(degrees)
+        canvas.scale(zoom * if (mirrored) -1f else 1f, zoom)
+        canvas.translate(-picW / 2f, -picH / 2f)
+        // Found on the original picture: through the perspective correction, as the picture is.
+        warp?.let { canvas.concat(it) }
+        canvas.drawBitmap(map, null, android.graphics.RectF(0f, 0f, picW, picH), paint)
+        canvas.restore()
     }
 
     /** The text as shown at frame [f]: typed so far, a decoding letter and the cursor. */
@@ -53,7 +99,59 @@ object TextRenderer {
         return sb.toString()
     }
 
+    /** Logos, read once per file (the preview and an export draw them on every frame). */
+    private val logos = android.util.LruCache<String, android.graphics.Bitmap>(6)
+
+    private fun logo(path: String): android.graphics.Bitmap? = logos.get(path) ?: runCatching {
+        val bounds = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        android.graphics.BitmapFactory.decodeFile(path, bounds)
+        // At most 1024 px across: plenty for a corner of a 4K frame.
+        var sample = 1
+        while (maxOf(bounds.outWidth, bounds.outHeight) / (sample * 2) >= 1024) sample *= 2
+        android.graphics.BitmapFactory.decodeFile(path, android.graphics.BitmapFactory.Options().apply { inSampleSize = sample })
+    }.getOrNull()?.also { logos.put(path, it) }
+
+    /**
+     * Where [item] sits on a [w]×[h] frame before it is turned: its box in pixels (the letters'
+     * block, or the logo's picture). Turned by [TextItem.angle] about the box's middle.
+     */
+    fun box(item: TextItem, w: Float, h: Float, values: Map<String, String> = emptyMap()): android.graphics.RectF {
+        val it2 = filled(item, values)
+        if (it2.isLogo) {
+            val bmp = it2.image?.let { logo(it) }
+            val width = it2.size * 3f * minOf(w, h)
+            val height = if (bmp != null) width * bmp.height / bmp.width.coerceAtLeast(1) else width
+            val cx = it2.x * w
+            val cy = it2.y * h
+            return android.graphics.RectF(cx - width / 2f, cy - height / 2f, cx + width / 2f, cy + height / 2f)
+        }
+        val size = it2.size * minOf(w, h)
+        val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply { typeface = typefaceOf(it2); textSize = size }
+        val lines = it2.text.split('\n')
+        val blockW = lines.maxOf { paint.measureText(it) }
+        val blockH = size * 1.2f * lines.size
+        val cx = it2.x * w
+        val cy = it2.y * h
+        val left = if (it2.align == TextAlign.LEFT) cx else cx - blockW / 2f
+        return android.graphics.RectF(left, cy - blockH / 2f, left + blockW, cy + blockH / 2f)
+    }
+
+    /** A logo: its picture at the text's place and timing, as wide as size × 3 of the frame's short side. */
+    private fun drawLogo(canvas: Canvas, w: Float, h: Float, item: TextItem, f: TextFrame) {
+        val bmp = logo(item.image ?: return) ?: return
+        val width = item.size * 3f * minOf(w, h) * f.scale
+        val height = width * bmp.height / bmp.width.coerceAtLeast(1)
+        val cx = item.x * w
+        val cy = item.y * h - f.offset * height
+        val paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG).apply { alpha = (255f * f.alpha * item.opacity).toInt().coerceIn(0, 255) }
+        canvas.save()
+        canvas.rotate(item.angle, cx, cy)
+        canvas.drawBitmap(bmp, null, android.graphics.RectF(cx - width / 2f, cy - height / 2f, cx + width / 2f, cy + height / 2f), paint)
+        canvas.restore()
+    }
+
     private fun drawItem(canvas: Canvas, w: Float, h: Float, item: TextItem, f: TextFrame) {
+        if (item.isLogo) { drawLogo(canvas, w, h, item, f); return }
         val size = item.size * minOf(w, h)
         val text = shownText(item, f)
         // Laid out for the whole text, so typing does not move what is already there.
@@ -61,7 +159,7 @@ object TextRenderer {
         val fullLines = item.text.split('\n')
         // Its own paint: the preview and an export may draw at the same time.
         val paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.SUBPIXEL_TEXT_FLAG)
-        paint.typeface = typeface(item.font)
+        paint.typeface = typefaceOf(item)
         paint.textSize = size
         val lineH = size * 1.2f
         val blockW = fullLines.maxOf { paint.measureText(it) }
@@ -71,9 +169,30 @@ object TextRenderer {
         val left = if (item.align == TextAlign.LEFT) cx else cx - blockW / 2f
         val top = cy - blockH / 2f
         canvas.save()
+        // Turned about the middle of its block.
+        if (item.angle != 0f) canvas.rotate(item.angle, left + blockW / 2f, cy)
         canvas.scale(f.scale, f.scale, if (item.align == TextAlign.LEFT) left else cx, cy)
         val alpha = (f.alpha * Color.alpha(item.colour)).toInt().coerceIn(0, 255)
         val baseline0 = top + size
+        if (item.cutout) {
+            // The frame covered in the colour, the letters cut out of it: the picture shows through them.
+            canvas.restore()
+            val layer = canvas.saveLayer(0f, 0f, w, h, null)
+            canvas.drawColor(withAlpha(item.colour, alpha))
+            canvas.save()
+            if (item.angle != 0f) canvas.rotate(item.angle, left + blockW / 2f, cy)
+            canvas.scale(f.scale, f.scale, if (item.align == TextAlign.LEFT) left else cx, cy)
+            paint.color = Color.BLACK
+            paint.xfermode = android.graphics.PorterDuffXfermode(android.graphics.PorterDuff.Mode.DST_OUT)
+            lines.forEachIndexed { i, line ->
+                val lineW = paint.measureText(fullLines.getOrElse(i) { line })
+                val x = if (item.align == TextAlign.LEFT) left else cx - lineW / 2f
+                canvas.drawText(line, x, baseline0 + i * lineH, paint)
+            }
+            canvas.restore()
+            canvas.restoreToCount(layer)
+            return
+        }
         fun pass(colour: Int, shadowRadius: Float, shadowDy: Float, shadowColour: Int) {
             paint.color = colour
             paint.alpha = alpha
@@ -94,6 +213,25 @@ object TextRenderer {
             pass(item.colour, size * 0.08f, size * 0.04f, withAlpha(Color.BLACK, (150 * f.alpha).toInt()))
         } else {
             pass(item.colour, 0f, 0f, 0)
+        }
+        // Filled with a picture: drawn over the letters, the picture covering the whole block.
+        item.fillImage?.let { logo(it) }?.let { bmp ->
+            val shader = android.graphics.BitmapShader(bmp, android.graphics.Shader.TileMode.CLAMP, android.graphics.Shader.TileMode.CLAMP)
+            val k = maxOf(blockW / bmp.width, blockH / bmp.height)
+            shader.setLocalMatrix(android.graphics.Matrix().apply {
+                postScale(k, k)
+                postTranslate(left + (blockW - bmp.width * k) / 2f, top + (blockH - bmp.height * k) / 2f)
+            })
+            paint.clearShadowLayer()
+            paint.shader = shader
+            paint.color = Color.BLACK
+            paint.alpha = (f.alpha * 255).toInt().coerceIn(0, 255)
+            lines.forEachIndexed { i, line ->
+                val lineW = paint.measureText(fullLines.getOrElse(i) { line })
+                val x = if (item.align == TextAlign.LEFT) left else cx - lineW / 2f
+                canvas.drawText(line, x, baseline0 + i * lineH, paint)
+            }
+            paint.shader = null
         }
         canvas.restore()
     }

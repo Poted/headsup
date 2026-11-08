@@ -62,6 +62,8 @@ class PhotoRequest(
     val longSide: Int? = null,
     val quality: Int = 92,
     val format: PhotoFormat = PhotoFormat.JPEG,
+    /** The photo's masks, for texts that go behind one. */
+    val textMasks: List<ColourMask> = emptyList(),
 )
 
 /**
@@ -83,10 +85,19 @@ object PhotoExporter {
         // Raw photos are developed by the app at full size in half floats; others decoded by Android.
         val full = if (request.raw) RawPhotos.developFull(context, request.uri, request.rawDevelop, onProgress) else null
         onProgress(0.8f)
-        val photo = full?.bitmap
+        var photo = full?.bitmap
             ?: (if (request.raw) RawPhotos.decode(context, request.uri, request.rawDevelop, MAX_SIDE) else null)
             ?: decodeUpright(context, request.uri) ?: error("Could not read ${request.name}")
         val degrees = full?.degrees ?: 0
+        // Bokeh: the background blurred on a smaller upright copy, laid over the photo.
+        if (request.effects.bokeh > 0f) {
+            runCatching {
+                val small = app.headsup.color.Segmenter.scaled(photo, app.headsup.render.Bokeh.EXPORT)
+                val upright = if (degrees == 0) small else android.graphics.Bitmap.createBitmap(small, 0, 0, small.width, small.height, Matrix().apply { postRotate(degrees.toFloat()) }, true)
+                app.headsup.render.Bokeh.layer(context, upright, request.uri.toString(), request.effects, request.textMasks, app.headsup.render.Bokeh.EXPORT)
+                    ?.let { photo = app.headsup.render.Bokeh.over(photo, it, degrees, inPlace = true) }
+            }.onFailure { it.printStackTrace() }
+        }
         val turned = degrees == 90 || degrees == 270
         val pw = (if (turned) photo.height else photo.width).toFloat()
         val ph = (if (turned) photo.width else photo.height).toFloat()
@@ -123,6 +134,15 @@ object PhotoExporter {
             setBrush(brush)
         }
         val graded = android.graphics.Paint().apply { this.shader = shader.paintShader(request.effects, picW, picH, request.masks, patched, request.rawDevelop.takeIf { request.raw }, request.presence, request.reframe.warp) }
+        // Texts behind the subject: its map as found for the preview (found here when it never was).
+        val subject = if (request.texts.none { it.behind && it.behindMask == null }) null else runCatching {
+            val key = request.uri.toString()
+            app.headsup.color.SubjectMaps.get(context, key) ?: run {
+                val small = app.headsup.color.Segmenter.scaled(photo, 1024)
+                val upright = if (degrees == 0) small else android.graphics.Bitmap.createBitmap(small, 0, 0, small.width, small.height, Matrix().apply { postRotate(degrees.toFloat()) }, true)
+                app.headsup.color.SubjectMaps.find(context, key, upright)
+            }
+        }.getOrNull()
         val renderer = DashboardRenderer(context.assets)
         val root = RenderNode("frame").apply {
             setPosition(0, 0, fw, fh)
@@ -131,7 +151,7 @@ object PhotoExporter {
             c.save()
             c.translate(fw / 2f + t.translation.x, fh / 2f + t.translation.y)
             c.rotate(request.reframe.angleDegrees)
-            c.scale(t.zoom, t.zoom)
+            c.scale(t.zoom * if (request.reframe.mirrored) -1f else 1f, t.zoom)
             c.translate(-picW / 2f, -picH / 2f)
             c.drawRect(0f, 0f, picW, picH, graded)
             c.restore()
@@ -139,7 +159,16 @@ object PhotoExporter {
             val data = request.dashboard
             if (data != null) renderer.draw(c, fw.toFloat(), fh.toFloat(), request.style, data, request.effects) else renderer.drawBars(c, fw.toFloat(), fh.toFloat(), request.effects)
             app.headsup.render.RouteMapRenderer.draw(c, fw.toFloat(), fh.toFloat(), request.routeMap, request.mapTrack, request.mapMarker?.first, request.mapMarker?.second)
-            TextRenderer.draw(c, fw.toFloat(), fh.toFloat(), request.texts, request.textMs)
+            TextRenderer.draw(c, fw.toFloat(), fh.toFloat(), request.texts, request.textMs, subject = { item, canvas, paint ->
+                // Behind its mask, or behind the subject.
+                val m = item.behindMask?.let { i -> request.textMasks.getOrNull(i)?.let { app.headsup.color.TextMasks.alphaOf(context, it, picW / picH, 0L) } }
+                    ?: subject.takeIf { item.behindMask == null }
+                if (m != null) TextRenderer.drawSubject(
+                    canvas, paint, m, fw.toFloat(), fh.toFloat(), picW, picH, t.translation.x, t.translation.y,
+                    request.reframe.angleDegrees, t.zoom, request.reframe.mirrored,
+                    request.reframe.warp?.let { app.headsup.ui.perspectiveMatrix(it, picW, picH) },
+                )
+            })
             endRecording()
         }
         if (request.format == PhotoFormat.TIFF16) {
@@ -401,7 +430,7 @@ object PhotoExporter {
             c.scale(gw.toFloat() / fw, gh.toFloat() / fh)
             c.translate(fw / 2f + t.translation.x, fh / 2f + t.translation.y)
             c.rotate(reframe.angleDegrees)
-            c.scale(t.zoom, t.zoom)
+            c.scale(t.zoom * if (reframe.mirrored) -1f else 1f, t.zoom)
             c.translate(-picW / 2f, -picH / 2f)
             c.drawRect(0f, 0f, picW, picH, paint)
             endRecording()

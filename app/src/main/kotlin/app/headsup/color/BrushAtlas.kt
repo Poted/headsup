@@ -104,6 +104,22 @@ object BrushAtlas {
     /** True when a mask changes from frame to frame (tracked with AI): the atlas is drawn again for each. */
     fun changesOverTime(masks: List<ColourMask>): Boolean = masks.take(ColourMask.MAX_PER_CLIP).any { it.kind == MaskKind.BRUSH && it.sequence != null }
 
+    /**
+     * One painted mask's coverage ([w]×[h] for a frame of [aspect]) at [timeMs], as the shaders get
+     * it (tracked, Edge moved, feathered) but not yet moved to its place; null when nothing is painted.
+     */
+    fun coverageAt(context: Context, m: ColourMask, aspect: Float, timeMs: Long): Triple<FloatArray, Int, Int>? {
+        if (m.kind != MaskKind.BRUSH || (m.strokes.isEmpty() && m.sequence == null)) return null
+        val (w, h) = slotSize(aspect)
+        val unmoved = tracked(context, m, w, h, timeMs) ?: if (m.strokes.isEmpty()) return null else coverage(context, OWN_SLOT, m, w, h)
+        val moved = moveEdge(context, m, unmoved, w, h)
+        val map = if (m.feather > 0f) app.headsup.core.color.MaskFeather.apply(moved, w, h, m.feather * ColourMask.FEATHER_REACH * h) else moved
+        return Triple(map, w, h)
+    }
+
+    /** The cache slot of [coverageAt] (apart from the atlas's own). */
+    private const val OWN_SLOT = 1000
+
     /** Null when no mask is painted. [timeMs] (file time) is the moment for masks tracked with AI. */
     fun build(context: Context, masks: List<ColourMask>, aspect: Float, timeMs: Long = 0L): Bitmap? {
         if (masks.none { it.kind == MaskKind.BRUSH && (it.strokes.isNotEmpty() || it.sequence != null) }) return null

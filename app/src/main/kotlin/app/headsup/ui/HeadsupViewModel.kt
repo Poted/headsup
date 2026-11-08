@@ -135,6 +135,8 @@ data class ClipState(
     val gradeKeys: List<app.headsup.core.color.GradeKey> = emptyList(),
     /** The shot steadied: its measured camera path and how much of the shake goes; null: as shot. */
     val stabilize: app.headsup.core.frame.Stabilizer.Path? = null,
+    /** The clip's subject found on its frames (a [app.headsup.color.MaskSequences] id), for texts behind it. */
+    val subject: String? = null,
     /** Picture effects of this clip. */
     val effects: EffectSettings = EffectSettings(),
     /** Windows with their own corrections (graduated lines, ovals), at most [ColourMask.MAX_PER_CLIP]. */
@@ -404,6 +406,12 @@ data class UiState(
     val removing: Boolean = false,
     /** The next tap on the picture picks the selected mask's colour ([HeadsupViewModel.pickMaskColour]). */
     val pickingColour: Boolean = false,
+    /** Point colour: the next tap on the picture picks a colour. */
+    val pickingPoint: Boolean = false,
+    /** Point colour: the colour whose sliders are shown (and that a finger on the picture moves). */
+    val pointSelected: Int = 0,
+    /** Bumped when a photo's subject is to be found again. */
+    val subjectVersion: Int = 0,
     /** When the brush's size (softness, strength) was last set: it shows on the picture for a moment. */
     val brushSizedAt: Long = 0L,
     /** The clip measured for looks ([HeadsupViewModel.analyseClip]): its id and what was measured. */
@@ -656,6 +664,33 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
 
     /** Marks or unmarks an album photo for export. */
     fun togglePicked(index: Int) = updateClip(index) { it.copy(picked = !it.picked) }
+
+    /**
+     * The marked photos, an exposure bracket (AEB), merged into one photo with the detail of each
+     * (HDR): lined up, fused, saved next to the exports and added to the album. In the background.
+     */
+    fun mergeMarked() {
+        val s = _state.value
+        val marked = s.clips.filter { it.meta.isPhoto && it.picked }
+        if (marked.size < 2) return
+        val context: Application = getApplication()
+        runInBackground("Merging ${marked.size} exposures", null, null) { report, _ ->
+            val uri = withContext(Dispatchers.Default) {
+                runCatching {
+                    app.headsup.media.Bracket.merge(context, marked.map { it.meta.uri }, raw = { u ->
+                        // A raw photo developed as it is set in the album.
+                        marked.firstOrNull { it.meta.uri == u }?.takeIf { it.meta.isRaw }?.let { c -> app.headsup.media.RawPhotos.decode(context, u, c.rawDevelop, 2560) }
+                    }, onProgress = report)
+                }.onFailure { it.printStackTrace() }.getOrNull()
+            }
+            if (uri == null) {
+                _state.update { it.copy(messages = it.messages + "Could not merge the photos (too large for the phone's memory, or unreadable).") }
+                return@runInBackground
+            }
+            _state.update { st -> st.copy(clips = st.clips.map { if (it.picked) it.copy(picked = false) else it }, messages = st.messages + "${marked.size} exposures merged into one photo (HDR): saved to DCIM/Sweet Spot and added to the album.") }
+            addClips(listOf(uri))
+        }
+    }
 
     /** An album photo's stars, by hand (the same stars again take them off). */
     fun setRating(index: Int, stars: Int) = updateClip(index) {
@@ -923,6 +958,9 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
         if (c.meta.isPhoto) {
             val info = withContext(Dispatchers.IO) { app.headsup.media.PhotoInfo.read(getApplication(), c.meta.uri) }
             if (info.latitude != null && info.longitude != null) return info.latitude to info.longitude
+        } else {
+            val v = withContext(Dispatchers.IO) { app.headsup.media.VideoInfo.read(getApplication(), c.meta.uri) }
+            if (v.latitude != null && v.longitude != null) return v.latitude to v.longitude
         }
         val track = activityOf(s, c) ?: return null
         val utc = c.telemetryUtc(0L) ?: return null
@@ -942,7 +980,10 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
         val frame = if (track != null && utc != null) synchronized(samplers) { samplers.getOrPut(track) { app.headsup.core.track.TelemetrySampler(track) } }.frameAt(utc) else null
         val offset = track?.utcOffsetSeconds ?: utc?.let { java.time.ZoneId.systemDefault().rules.getOffset(java.time.Instant.ofEpochMilli(it)).totalSeconds }
         val photo = if (c.meta.isPhoto) app.headsup.media.PhotoInfo.read(getApplication(), c.meta.uri) else null
-        return app.headsup.render.TextValues.activity(track) + app.headsup.render.TextValues.moment(frame, utc, offset) + app.headsup.render.TextValues.photo(photo)
+        // A video's own time and place (the watch's, when synced, win).
+        val video = if (!c.meta.isPhoto) app.headsup.media.VideoInfo.read(getApplication(), c.meta.uri) else null
+        val own = video?.let { v -> app.headsup.render.TextValues.video(v.startUtcMs?.plus(c.trimStartMs + positionMs), v.latitude, v.longitude) }.orEmpty()
+        return app.headsup.render.TextValues.activity(track) + own + app.headsup.render.TextValues.moment(frame, utc, offset) + app.headsup.render.TextValues.photo(photo)
     }
 
     fun updateRouteMap(transform: (app.headsup.render.RouteMap) -> app.headsup.render.RouteMap) = _state.update { it.copy(routeMap = transform(it.routeMap)) }
@@ -967,7 +1008,10 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
     /** The values that do not change within a clip (for the export, which adds the moment's). */
     private fun staticTextValues(s: UiState, c: ClipState): Map<String, String> {
         val photo = if (c.meta.isPhoto) app.headsup.media.PhotoInfo.read(getApplication(), c.meta.uri) else null
-        return app.headsup.render.TextValues.activity(activityOf(s, c)) + app.headsup.render.TextValues.photo(photo)
+        // A video's place (its time runs: added at each moment by the export).
+        val video = if (!c.meta.isPhoto) app.headsup.media.VideoInfo.read(getApplication(), c.meta.uri) else null
+        val place = video?.let { app.headsup.render.TextValues.video(null, it.latitude, it.longitude) }.orEmpty()
+        return app.headsup.render.TextValues.activity(activityOf(s, c)) + place + app.headsup.render.TextValues.photo(photo)
     }
 
     /** Adds a text at timeline time [atMs] (3 s, or up to the video's end) and selects it. */
@@ -988,7 +1032,260 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
         s.copy(texts = s.texts + item, selectedText = id)
     }
 
+    /**
+     * A logo from [uri] (a PNG keeps its transparency) over the whole film or album, in the
+     * bottom right corner as a camera app puts its mark; copied into the app, so it stays.
+     */
+    fun addLogo(uri: Uri) = placeLogo { context ->
+        val dir = java.io.File(context.filesDir, "logos").apply { mkdirs() }
+        val file = java.io.File(dir, java.util.UUID.randomUUID().toString())
+        context.contentResolver.openInputStream(uri)?.use { input -> file.outputStream().use { input.copyTo(it) } } ?: return@placeLogo null
+        file.absolutePath
+    }
+
+    /** A sticker from the library ([file]) placed as a logo; copied, so deleting its pack leaves it. */
+    fun addSticker(file: java.io.File) = placeLogo(x = 0.5f, y = 0.5f, size = 0.1f) { context ->
+        val dir = java.io.File(context.filesDir, "logos").apply { mkdirs() }
+        file.copyTo(java.io.File(dir, java.util.UUID.randomUUID().toString()), overwrite = true).absolutePath
+    }
+
+    /** The selected logo or sticker kept in the library (My stickers), for other projects. */
+    fun saveAsSticker(id: Long) {
+        val path = _state.value.texts.firstOrNull { it.id == id }?.image ?: return
+        val context = getApplication<Application>()
+        viewModelScope.launch {
+            val ok = withContext(Dispatchers.IO) { app.headsup.media.StickerLibrary.save(context, path) }
+            _state.update { it.copy(messages = it.messages + if (ok) "Saved to ${app.headsup.media.StickerLibrary.MINE}." else "Could not save the sticker.") }
+        }
+    }
+
+    private fun placeLogo(x: Float = 0.86f, y: Float = 0.9f, size: Float = 0.07f, copy: (android.content.Context) -> String?) {
+        val context = getApplication<Application>()
+        viewModelScope.launch {
+            val path = withContext(Dispatchers.IO) { runCatching { copy(context) }.getOrNull() }
+            if (path == null) {
+                _state.update { it.copy(messages = it.messages + "Could not read that picture.") }
+                return@launch
+            }
+            _state.update { s ->
+                val end = s.clips.sumOf { it.timelineDurationMs }.coerceAtLeast(500L)
+                val id = (s.texts.maxOfOrNull { it.id } ?: 0L) + 1
+                val item = TextItem(
+                    id = id, text = "Logo", startMs = 0L, lengthMs = end, x = x, y = y, size = size,
+                    animIn = TextAnim.NONE, animOut = TextAnim.NONE, image = path, shadow = false,
+                    // In an album a sticker belongs to the photo it is put on (All photos is a touch away).
+                    onlyClip = if (s.photoProject) s.selected?.id else null,
+                )
+                s.copy(texts = s.texts + item, selectedText = id)
+            }
+        }
+    }
+
     fun selectText(id: Long?) = _state.update { it.copy(selectedText = id) }
+
+    /**
+     * Text [id] as large as the frame takes it (a full-screen title): centred, its block 92 % of
+     * the frame's width or height, whichever it reaches first.
+     */
+    fun fitText(id: Long) {
+        val s = _state.value
+        val clip = s.selected ?: return
+        val item = s.texts.firstOrNull { it.id == id }?.takeIf { !it.isLogo } ?: return
+        val srcW = clip.meta.width.takeIf { it > 0 }?.toFloat() ?: 1920f
+        val srcH = clip.meta.height.takeIf { it > 0 }?.toFloat() ?: 1080f
+        val (ow, oh) = s.framing(clip).outputSize(srcW, srcH)
+        val centred = item.copy(x = 0.5f, y = 0.5f, align = app.headsup.core.edit.TextAlign.CENTER, angle = 0f)
+        val box = app.headsup.render.TextRenderer.box(centred, ow, oh)
+        if (box.width() <= 0f || box.height() <= 0f) return
+        val k = minOf(0.92f * ow / box.width(), 0.92f * oh / box.height())
+        updateText(id) { centred.copy(size = (item.size * k).coerceIn(0.01f, 2f)) }
+    }
+
+    /** The letters of text [id] filled with the picture at [uri] (kept by the app); null: their colour again. */
+    fun setTextFill(id: Long, uri: Uri?) {
+        if (uri == null) { updateText(id) { it.copy(fillImage = null) }; return }
+        val context = getApplication<Application>()
+        viewModelScope.launch {
+            val path = withContext(Dispatchers.IO) {
+                runCatching {
+                    val dir = java.io.File(context.filesDir, "logos").apply { mkdirs() }
+                    val file = java.io.File(dir, java.util.UUID.randomUUID().toString())
+                    context.contentResolver.openInputStream(uri)?.use { input -> file.outputStream().use { input.copyTo(it) } } ?: return@runCatching null
+                    file.absolutePath
+                }.getOrNull()
+            }
+            if (path == null) _state.update { it.copy(messages = it.messages + "Could not read that picture.") }
+            else updateText(id) { it.copy(fillImage = path, cutout = false) }
+        }
+    }
+
+    /** Source fractions of [clip] to the frame's (as framed now). */
+    private fun frameMapping(s: UiState, clip: ClipState): (Float, Float) -> Pair<Float, Float> {
+        val srcW = clip.meta.width.takeIf { it > 0 }?.toFloat() ?: 1920f
+        val srcH = clip.meta.height.takeIf { it > 0 }?.toFloat() ?: 1080f
+        val r = s.framing(clip)
+        val (ow, oh) = r.outputSize(srcW, srcH)
+        return { x, y -> r.frameOf(x * srcW, y * srcH, ow, oh, srcW, srcH).let { (fx, fy) -> fx / ow to fy / oh } }
+    }
+
+    /**
+     * Sticks text or sticker [id] to the place under it in the clip at the playhead: that place
+     * is followed through the clip (a planar tracker, as for masks) and the item moves, turns and
+     * grows with it. Dragging it afterwards still places it; the path keeps its motion.
+     */
+    fun followText(id: Long) {
+        val s = _state.value
+        val clip = s.selected?.takeIf { !it.meta.isPhoto } ?: return
+        val raw = s.texts.firstOrNull { it.id == id } ?: return
+        val t0 = playheadFileMs.coerceIn(clip.trimStartMs, clip.trimEndMs)
+        val srcW = clip.meta.width.takeIf { it > 0 }?.toFloat() ?: 1920f
+        val srcH = clip.meta.height.takeIf { it > 0 }?.toFloat() ?: 1080f
+        val r = s.framing(clip)
+        val (ow, oh) = r.outputSize(srcW, srcH)
+        val shown = raw.placed(clip.id, t0, frameMapping(s, clip))
+        val box = app.headsup.render.TextRenderer.box(shown, ow, oh)
+        val corners = listOf(box.left to box.top, box.right to box.top, box.left to box.bottom, box.right to box.bottom)
+            .map { (x, y) -> r.sourceOf(x, y, ow, oh, srcW, srcH) }
+        val (cx, cy) = r.sourceOf(box.centerX(), box.centerY(), ow, oh, srcW, srcH)
+        val hw = ((corners.maxOf { it.first } - corners.minOf { it.first }) / 2f / srcW).coerceIn(0.03f, 0.3f)
+        val hh = ((corners.maxOf { it.second } - corners.minOf { it.second }) / 2f / srcH).coerceIn(0.03f, 0.3f)
+        val start = ColourMask(
+            kind = MaskKind.ELLIPSE, centerX = (cx / srcW).coerceIn(0f, 1f), centerY = (cy / srcH).coerceIn(0f, 1f),
+            sizeX = hw * 2f * srcW / srcH, sizeY = hh * 2f,
+        )
+        val uri = s.previewSource(clip)
+        val context: Application = getApplication()
+        runInBackground("Following the place", clip.id, null) { report, stopped ->
+            val result = withContext(Dispatchers.Default) {
+                val step = maxOf(50L, (clip.trimEndMs - clip.trimStartMs) / 400)
+                val frames = TrackingFrames.read(context, uri, clip.trimStartMs, clip.trimEndMs, step) { p -> report(p * 0.7f) }
+                if (stopped()) return@withContext null
+                val first = frames.indices.minByOrNull { kotlin.math.abs(frames[it].first - t0) } ?: return@withContext null
+                fun follow(range: IntProgression): Pair<List<MaskKey>, Long?> {
+                    val tracker = MaskTracker(start, frames[first].second, frames[first].first, start.centerX to start.centerY, hw to hh)
+                    val keys = mutableListOf<MaskKey>()
+                    for (i in range) {
+                        val (ms, frame) = frames[i]
+                        val key = tracker.next(frame, ms) ?: return keys to ms.takeIf { !tracker.leftFrame }
+                        keys += key
+                    }
+                    return keys to null
+                }
+                val (ahead, lostAhead) = follow(first + 1 until frames.size)
+                report(0.85f)
+                val (behind, lostBehind) = follow(first - 1 downTo 0)
+                val keys = behind.reversed() + MaskKey.of(start, frames[first].first) + ahead
+                Triple(keys, lostAhead, lostBehind)
+            } ?: return@runInBackground
+            val (keys, lostAhead, lostBehind) = result
+            // The place followed, evened out: a text or sticker takes its movement and how near it
+            // comes (size), not its turns (a planar fit on a small patch turns it wildly on a pan).
+            fun smooth(v: List<Float>, reach: Int) = v.indices.map { i ->
+                val from = maxOf(0, i - reach)
+                val to = minOf(v.size - 1, i + reach)
+                (from..to).sumOf { v[it].toDouble() }.toFloat() / (to - from + 1)
+            }
+            val follow = app.headsup.core.edit.TextFollow(
+                clip.id, keys.map { it.timeMs }, smooth(keys.map { it.centerX }, 1), smooth(keys.map { it.centerY }, 1),
+                keys.map { 0f }, smooth(keys.map { (it.sizeX / start.sizeX).coerceIn(0.5f, 2f) }, 3),
+                fromMs = frames0(keys, t0),
+            )
+            fun at(ms: Long) = Formats.duration(ms - clip.trimStartMs)
+            _state.update { st ->
+                st.copy(
+                    texts = st.texts.map { if (it.id == id) it.copy(x = shown.x, y = shown.y, angle = shown.angle, size = shown.size, follow = follow) else it },
+                    messages = st.messages + listOfNotNull(
+                        "Follows the place ${at(keys.first().timeMs)}–${at(keys.last().timeMs)}.",
+                        lostAhead?.let { "Lost at ${at(it)}: it holds its place from there." },
+                        lostBehind?.let { "Going back, lost at ${at(it)}: it holds its place before that." },
+                    ),
+                )
+            }
+        }
+    }
+
+    /** The key time nearest [t0] (where the item was set to follow). */
+    private fun frames0(keys: List<MaskKey>, t0: Long): Long = keys.minByOrNull { kotlin.math.abs(it.timeMs - t0) }?.timeMs ?: t0
+
+    /** Text or sticker [id] no longer follows: it stays where it shows now. */
+    fun unfollowText(id: Long) {
+        val s = _state.value
+        val clip = s.selected
+        _state.update { st ->
+            st.copy(texts = st.texts.map { t ->
+                if (t.id != id) t else {
+                    val shown = if (clip != null) t.placed(clip.id, playheadFileMs, frameMapping(st, clip)) else t
+                    shown.copy(follow = null)
+                }
+            })
+        }
+    }
+
+    /**
+     * Finds the subject (people, animals, vehicles) on clip [index]'s frames, for texts behind
+     * it: found where it first shows, then followed (MobileSAM, told where it was), looked for
+     * again whenever it is gone. In the background; the maps are kept with the clip.
+     */
+    fun findSubject(index: Int) {
+        val s = _state.value
+        val clip = s.clips.getOrNull(index)?.takeIf { !it.meta.isPhoto } ?: return
+        if (s.work.any { it.clipId == clip.id && it.label.startsWith("Finding the subject") }) return
+        val uri = s.previewSource(clip)
+        val context: Application = getApplication()
+        runInBackground("Finding the subject", clip.id, null) { report, stopped ->
+            val id = withContext(Dispatchers.Default) {
+                val aspect = if (clip.meta.width > 0 && clip.meta.height > 0) clip.meta.width.toFloat() / clip.meta.height else 16f / 9f
+                val side = app.headsup.color.SubjectMaps.CLIP_SIDE
+                val w = if (aspect >= 1f) side else (side * aspect).toInt().coerceAtLeast(1)
+                val h = if (aspect >= 1f) (side / aspect).toInt().coerceAtLeast(1) else side
+                val times = ArrayList<Long>()
+                val maps = ArrayList<ByteArray>()
+                var follower: app.headsup.color.MaskFollower? = null
+                var wait = 0
+                var n = 0
+                val length = (clip.trimEndMs - clip.trimStartMs).coerceAtLeast(1L)
+                TrackingFrames.forEachPicture(context, uri, clip.trimStartMs, clip.trimEndMs, AI_TRACK_STEP_MS, app.headsup.color.Segmenter.INPUT) { ms, picture ->
+                    if (stopped()) return@forEachPicture false
+                    report(((ms - clip.trimStartMs).toFloat() / length).coerceIn(0f, 1f))
+                    var map: FloatArray? = null
+                    follower?.let { f ->
+                        n++
+                        // The model reads every other frame; the ones between follow the picture.
+                        map = (if (n % 2 == 1) f.between(picture) else f.next(picture))
+                            ?.takeIf { app.headsup.core.color.MaskFollow.area(it) > 0.002f }
+                        if (map == null) follower = null
+                    }
+                    if (map == null && wait-- <= 0) {
+                        val found = runCatching { app.headsup.color.SubjectMaps.detect(context, picture, w, h, centre = false) }.getOrNull()
+                        if (found != null) {
+                            follower = app.headsup.color.MaskFollower(context, w, h, null, false, found).also { it.begin(picture) }
+                            n = 0
+                            map = found
+                        } else {
+                            // Looked for again a moment later (each look is a few model runs).
+                            wait = 4
+                        }
+                    }
+                    times += ms
+                    maps += app.headsup.core.color.PackedFrames.pack(map?.let { app.headsup.core.color.MaskSequence.bytes(it) } ?: ByteArray(w * h))
+                    true
+                }
+                if (times.isEmpty()) return@withContext null
+                val seq = app.headsup.core.color.MaskSequence(w, h, times.toLongArray(), app.headsup.core.color.PackedFrames(maps, w * h))
+                app.headsup.color.MaskSequences.create(context, seq)
+            }
+            if (id == null) {
+                _state.update { it.copy(messages = it.messages + "Could not read the clip's frames.") }
+                return@runInBackground
+            }
+            _state.update { st ->
+                st.copy(
+                    clips = st.clips.map { c -> if (c.id == clip.id) c.copy(subject = id) else c },
+                    messages = st.messages + (if (stopped()) "Subject found up to where it was stopped." else "Subject found on the clip: texts set Behind stand behind it."),
+                )
+            }
+        }
+    }
 
     fun updateText(id: Long, transform: (TextItem) -> TextItem) =
         _state.update { s -> s.copy(texts = s.texts.map { if (it.id == id) transform(it) else it }) }
@@ -1011,6 +1308,9 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
 
     /** The project as it was when opened: kept apart, as the history drops its oldest steps. */
     private var historyBase: EditSnapshot? = null
+
+    /** The project as it was when opened in this session: where "Since opened" goes back to. */
+    private var openedSnapshot: EditSnapshot? = null
     private var historyStartsAgain = true
     private var historyIndex = -1
 
@@ -1042,6 +1342,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
             history.clear()
             history += snapshot
             historyBase = snapshot
+            openedSnapshot = snapshot
             historyIndex = 0
         } else {
             while (history.size > historyIndex + 1) history.removeAt(history.lastIndex)
@@ -1106,6 +1407,8 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
         history += steps
         historyIndex = saved.index
         historyBase = saved.base?.let { withContext(Dispatchers.Default) { snapshotOf(it) } } ?: steps.first()
+        // The earlier sessions' steps can be undone one by one; "Since opened" stops here.
+        openedSnapshot = steps[saved.index]
         historyStartsAgain = false
         updateHistoryFlags()
         // A step recorded while this was read would otherwise be saved over it.
@@ -1215,7 +1518,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun undoAll() {
-        val base = historyBase ?: return
+        val base = openedSnapshot ?: historyBase ?: return
         record(_state.value.snapshot())
         if (history.getOrNull(historyIndex) == base) return
         restore(base)
@@ -1225,7 +1528,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
     /**
      * Every picture edit gone, however long ago it was made (also in earlier sessions): colour,
      * masks, LUTs, framing and perspective, effects, speed, cuts, fades, blends, raw development and
-     * the groups' and all clips' corrections. The files, their order, sound and texts stay; pieces
+     * the groups' and all clips' corrections, texts and stickers. The files, their order and sound stay; pieces
      * of one file cut apart become one clip again. A step of its own, so undo brings it all back.
      */
     fun resetAllEdits() {
@@ -1254,6 +1557,8 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                 fast = null,
                 matchSession = null,
                 scope = null,
+                texts = emptyList(),
+                selectedText = null,
             )
         }
         record(_state.value.snapshot())
@@ -1352,6 +1657,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                 rating = it.rating, suggested = it.suggested, cullGroup = it.cullGroup, cullBest = it.cullBest,
                 gradeKeys = it.gradeKeys,
                 stabilize = it.stabilize,
+                subject = it.subject,
             )
         },
         groups = groups.map { SavedGroup(it.id, it.name, it.grade, it.lutName) },
@@ -1500,6 +1806,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
             cullBest = c.cullBest,
             gradeKeys = c.gradeKeys,
             stabilize = c.stabilize,
+            subject = c.subject,
             groupId = c.groupId,
         )
     }
@@ -2046,7 +2353,8 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
 
     fun selectClip(index: Int) {
         scopeFrame = null
-        _state.update { it.copy(selectedClip = index, scope = null, selectedMask = 0, compareGrade = null, cine = null, fast = null) }
+        // What was being done on the photo before is let go: a colour being picked for it or for a mask.
+        _state.update { it.copy(selectedClip = index, scope = null, selectedMask = 0, compareGrade = null, cine = null, fast = null, pickingPoint = false, pointSelected = 0, pickingColour = false) }
         refreshPreview()
     }
 
@@ -2228,7 +2536,13 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
             val before = s.effects
             val effects = transform(before)
             s.copy(
-                defaultEffects = if (s.effectsOnAll) s.defaultEffects.synced(before, effects) else effects,
+                // What is set on one photo of an album stays that photo's; in a film a clip's effects
+                // carry on to clips added later, but never a photo's bokeh (it is made for that picture).
+                defaultEffects = when {
+                    s.effectsOnAll -> s.defaultEffects.synced(before, effects)
+                    s.photoProject -> s.defaultEffects
+                    else -> effects
+                }.copy(bokeh = 0f, bokehMask = null),
                 clips = s.clips.mapIndexed { i, c ->
                     when {
                         i == s.selectedClip -> c.copy(effects = effects)
@@ -2327,7 +2641,8 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun setClipLut(index: Int, name: String?) {
-        if (name != null) _state.update { it.copy(defaultLut = name) }
+        // In an album one photo's LUT stays its own (All photos sets it on the new ones too).
+        if (name != null) _state.update { if (it.photoProject) it else it.copy(defaultLut = name) }
         updateClip(index) { it.copy(lutName = name) }
     }
 
@@ -3048,6 +3363,58 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
         if (n == 0) return
         updateMask { it.copy(colour = app.headsup.core.color.ColourRange(sr / n, sg / n, sb / n, it.colour?.tolerance ?: 0.35f)) }
         _state.update { it.copy(pickingColour = false) }
+    }
+
+    /** Point colour: the next tap on the picture picks a colour (or stops waiting for it). */
+    fun setPickingPoint(on: Boolean) = _state.update { it.copy(pickingPoint = on) }
+
+    /** The selected photo's subject found again (what was kept for it forgotten). */
+    fun findPhotoSubjectAgain() {
+        val clip = _state.value.selected?.takeIf { it.meta.isPhoto } ?: return
+        app.headsup.color.SubjectMaps.forget(getApplication(), clip.meta.uri.toString())
+        _state.update { it.copy(subjectVersion = it.subjectVersion + 1) }
+    }
+
+    fun selectPoint(i: Int) = _state.update { it.copy(pointSelected = i, pickingPoint = false) }
+
+    /**
+     * The colour around ([x], [y]) (fractions of the picture) of [frame] for Point colour: a new
+     * colour after + Pick (or when there is none), else the chosen colour moved to it (its changes
+     * kept). Told again as the finger moves, so the colour and the picture follow it.
+     */
+    fun pickPointColour(frame: Bitmap, x: Float, y: Float) {
+        val (r, g, b) = patchColour(frame, x, y) ?: return
+        val s = _state.value
+        val points = s.grade.points
+        if (s.pickingPoint || points.isEmpty()) {
+            if (points.size >= app.headsup.core.color.PointColours.MAX) return
+            _state.update { it.copy(pickingPoint = false, pointSelected = points.size) }
+            updateGrade { gr -> gr.copy(points = gr.points + app.headsup.core.color.PointColour(r, g, b)) }
+        } else {
+            val i = s.pointSelected.coerceIn(0, points.size - 1)
+            updateGrade { gr -> gr.copy(points = gr.points.mapIndexed { k, p -> if (k == i) p.copy(r = r, g = g, b = b) else p }) }
+        }
+    }
+
+    /** The mean colour of a small patch around ([x], [y]) (fractions) of [frame], which is then let go. */
+    private fun patchColour(frame: Bitmap, x: Float, y: Float): Triple<Float, Float, Float>? {
+        val cx = (x * frame.width).toInt().coerceIn(0, frame.width - 1)
+        val cy = (y * frame.height).toInt().coerceIn(0, frame.height - 1)
+        val r = maxOf(1, frame.width / 200)
+        var sr = 0f
+        var sg = 0f
+        var sb = 0f
+        var n = 0
+        for (yy in (cy - r)..(cy + r)) for (xx in (cx - r)..(cx + r)) {
+            if (xx !in 0 until frame.width || yy !in 0 until frame.height) continue
+            val c = frame.getPixel(xx, yy)
+            sr += (c shr 16 and 0xFF) / 255f
+            sg += (c shr 8 and 0xFF) / 255f
+            sb += (c and 0xFF) / 255f
+            n++
+        }
+        frame.recycle()
+        return if (n == 0) null else Triple(sr / n, sg / n, sb / n)
     }
 
     /** How the selected mask works with the one before it: its own layer, or added, subtracted, intersected. */
@@ -3845,6 +4212,26 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    /** Takes off the key at [timeMs] (file time). */
+    fun removeGradeKeyAt(timeMs: Long) {
+        val index = _state.value.selectedClip ?: return
+        updateClip(index) { c ->
+            val left = c.gradeKeys.filter { it.timeMs != timeMs }
+            if (left.isEmpty()) c.copy(grade = c.gradeAt(timeMs), gradeKeys = emptyList()) else c.copy(gradeKeys = left)
+        }
+    }
+
+    /** Moves the key at [fromMs] (file time) to the playhead, with the corrections it holds. */
+    fun moveGradeKey(fromMs: Long) {
+        val index = _state.value.selectedClip ?: return
+        updateClip(index) { c ->
+            val key = c.gradeKeys.firstOrNull { it.timeMs == fromMs } ?: return@updateClip c
+            val to = playheadFileMs.coerceIn(c.trimStartMs, c.trimEndMs)
+            c.copy(gradeKeys = app.headsup.core.color.GradeKeys.set(c.gradeKeys.filter { it !== key }, to, key.grade))
+        }
+        _state.update { it.copy(playheadKeyMs = playheadFileMs) }
+    }
+
     /** No keys: the corrections at the playhead stay, all through the clip. */
     fun clearGradeKeys() {
         val index = _state.value.selectedClip ?: return
@@ -4173,7 +4560,10 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
         _state.update { s ->
             val grade = transform(s.grade)
             s.copy(
-                defaultGrade = grade,
+                // One photo's corrections stay its own in an album (All photos is for every photo,
+                // new ones too); in a film they carry on to clips added later, but not the colours
+                // picked from this picture.
+                defaultGrade = if (s.photoProject) s.defaultGrade else grade.copy(points = emptyList(), colourPop = 0f),
                 clips = s.clips.mapIndexed { i, c ->
                     when {
                         i != s.selectedClip -> c
@@ -4376,13 +4766,14 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                     val request = app.headsup.export.PhotoRequest(
                         uri = clip.meta.uri, name = clip.meta.name, cube = cube,
                         masks = if (graded) clip.masks.map { it.at(clip.trimStartMs) } else emptyList(), maskCubes = maskCubes,
+                        textMasks = clip.masks,
                         effects = clip.effects, vignette = if (graded) s.appliedGrade(clip).vignette else 0f,
                         presence = if (graded) s.appliedGrade(clip).presence else app.headsup.core.color.Presence.NONE,
                         reframe = s.framing(clip), style = s.style, dashboard = dashboard,
                         // Texts as they are in the middle of the photo's time on the timeline (after any fade in).
                         // Data fields filled in for this photo.
                         texts = withContext(Dispatchers.IO) { textValues(s, clip, 0L) }.let { values ->
-                            s.texts.filter { it.showsOn(clip.id, clip.groupId) }.map { t -> t.copy(text = app.headsup.core.edit.TextFields.fill(t.text, values)) }
+                            s.texts.filter { it.showsOn(clip.id, clip.groupId) }.map { t -> (if (s.photoProject) t.shownAlways() else t).copy(text = app.headsup.core.edit.TextFields.fill(t.text, values)) }
                         },
                         textMs = start + clip.timelineDurationMs / 2,
                         routeMap = s.routeMap,
@@ -4593,6 +4984,9 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                     },
                     reframe = s.framing(clip),
                     stabilize = clip.stabilize?.takeIf { it.strength > 0f },
+                    clipId = clip.id,
+                    subject = clip.subject,
+                    textMasks = clip.masks,
                     speed = clip.speed,
                     isPhoto = clip.meta.isPhoto,
                     muteChangedSpeed = clip.muteChangedSpeed,
@@ -4606,6 +5000,9 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                         s.texts.filter { it.startMs < start + clip.timelineDurationMs && it.endMs > start }
                     } else emptyList(),
                     textValues = if (kind == ExportKind.VIDEO && s.texts.isNotEmpty()) withContext(Dispatchers.IO) { staticTextValues(s, clip) } else emptyMap(),
+                    videoStartUtcMs = if (kind == ExportKind.VIDEO && !clip.meta.isPhoto && s.texts.any { app.headsup.core.edit.TextFields.hasFields(it.text) }) {
+                        withContext(Dispatchers.IO) { app.headsup.media.VideoInfo.read(getApplication(), clip.meta.uri).startUtcMs }
+                    } else null,
                     routeMap = if (kind == ExportKind.VIDEO) s.routeMap else app.headsup.render.RouteMap(),
                     mapTrack = if (kind == ExportKind.VIDEO && s.routeMap.enabled) mapTrack(s, clip) else null,
                     // A photo's place is fixed; a video's follows the watch frame by frame.

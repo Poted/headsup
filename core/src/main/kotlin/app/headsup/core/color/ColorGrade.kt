@@ -72,6 +72,10 @@ data class ColorGrade(
     val hueCurves: List<List<Float>> = HueCurves.NEUTRAL,
     /** Lens fringes taken out along hard edges (0..1); not a colour operation ([Presence.defringe]). */
     val defringe: Float = 0f,
+    /** Colours picked from the picture and changed on their own ([PointColour]). */
+    val points: List<PointColour> = emptyList(),
+    /** Colour pop: how much everything but the picked colours loses its colour, 0..1. */
+    val colourPop: Float = 0f,
 ) {
     /** The corrections that look at a pixel's surroundings, drawn by the shader before the colour table. */
     val presence: Presence get() = Presence(texture, clarity, dehaze, defringe)
@@ -82,7 +86,7 @@ data class ColorGrade(
             blacks == 0f && whites == 0f && vibrance == 0f && tint == 0f && skinHue == 0f &&
             rolloff == 0f && toneAmount == 0f && tame == 0f && mixer.all { it == 0f } && look == null && curves.all { it.isEmpty() } && wheels.all { it == 0f } &&
             channelMix.all { it == 0f } && bw.all { it == 0f } && calibration.all { it == 0f } && dehaze == 0f && density == 0f &&
-            hueCurves.all { it.isEmpty() }
+            hueCurves.all { it.isEmpty() } && (points.isEmpty() || (colourPop == 0f && points.all { it.isNeutral }))
 
     /** The corrections scaled by [k] (hues stay), e.g. a suggestion at partial strength. */
     operator fun times(k: Float) = ColorGrade(
@@ -101,6 +105,8 @@ data class ColorGrade(
         // The curves' changes scale; where they are stays.
         hueCurves.map { c -> c.mapIndexed { i, v -> if (i % 2 == 1) v * k else v } },
         defringe * k,
+        points.map { it.copy(hue = it.hue * k, saturation = it.saturation * k, luminance = it.luminance * k) },
+        colourPop * k,
     )
 
     /**
@@ -155,6 +161,9 @@ data class ColorGrade(
         // Curves cannot be added; one set on top wins, curve by curve.
         hueCurves = List(4) { c -> other.hueCurves.getOrNull(c).orEmpty().ifEmpty { hueCurves.getOrNull(c).orEmpty() } },
         defringe = (defringe + other.defringe).coerceIn(0f, 1f),
+        // Picked colours cannot be added: those set on top win.
+        points = other.points.ifEmpty { points },
+        colourPop = maxOf(colourPop, other.colourPop),
     )
 
     /**
@@ -217,6 +226,8 @@ data class ColorGrade(
             if (a != before.hueCurves.getOrNull(c).orEmpty()) a else hueCurves.getOrNull(c).orEmpty()
         },
         defringe = if (after.defringe != before.defringe) after.defringe else defringe,
+        points = if (after.points != before.points) after.points else points,
+        colourPop = if (after.colourPop != before.colourPop) after.colourPop else colourPop,
     )
 
     companion object {
@@ -321,6 +332,8 @@ object LutBaker {
      */
     fun apply(lut: CubeLut?, grade: ColorGrade, rgb: FloatArray, wideGamut: Boolean = false) {
         val look = Look.of(grade.look)
+        // Picked colours are told by the colour as it came in (as the picker sees the picture).
+        val source = if (grade.points.isEmpty()) null else rgb.copyOf()
         if (lut == null) {
             if (wideGamut) Gamut.bt2020ToBt709(rgb)
             // The look is the starting rendering; the corrections go on top of it.
@@ -342,6 +355,7 @@ object LutBaker {
         FilmLook.apply(grade, rgb)
         ColourMixer.apply(grade.mixer, rgb)
         HueCurves.apply(grade.hueCurves, rgb)
+        PointColours.apply(grade.points, grade.colourPop, rgb, source)
         ColourDensity.apply(grade.density, rgb)
         // Black and white after the colour mixer; curves and grading wheels can still tint it.
         BlackAndWhite.apply(grade.bw, rgb)

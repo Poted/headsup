@@ -15,6 +15,23 @@ route map.
 photo strip (move, remove, mark for export, remove the marked), export of all / this / the
 marked photos, texts per photo, activity data and the photo's GPS in texts and the map.
 
+**Album culling (2026-11):** the album large (grid, sets All / ★1+ / ★4+ / ★5 / No stars / Marked),
+stars by hand or for all marked, Auto pick (takes of one shot grouped; the best take of each, by
+sharpness from edge width in the worse direction, light and level, gets suggested stars; screenshots
+and graphics left out; nothing is ever rejected), a full-screen viewer (swipe, zoom, pull down to
+close, stars, looks to try and keep), thumbnails as edited, the editor working through a chosen set.
+
+**Photo and video tools (2026-11):** waveform and RGB parade; zebra, clipping and false colour;
+hue curves (Hue vs Hue/Sat/Lum, Lum vs Sat); defringe; lens distortion and vignette; presets of
+one's own; camera log → Rec.709 built in (S-Log3, V-Log, LogC3/4, Canon Log 3, F-Log/F-Log2,
+D-Log; D-Log M from DJI's .cube); masks: Lightroom-like adding, pins removed, red overlay while
+shaped, Linear turning all the way round, Blend (a wide fade of a selected mask into the picture);
+Retouch on photos: Remove (LaMa), Heal and Clone from the best matching place nearby; corrections
+with keys over a shot (eased, set at the playhead, a key strip); Steady (handheld shake measured
+from the frames, a strength; see the note under Later); export loudness (BS.1770: −14 / −16 / −23
+LUFS for the whole film, its balance kept) and music ducked under the clips' own sound; LUT on all
+photos/clips; left-handed layout (Settings › Layout).
+
 **Corrections sync:** "All" and "Group" set a changed value on every clip or photo they reach
 (as Lightroom's sync), so "This clip/photo" shows what it really has.
 
@@ -168,11 +185,11 @@ project's files), the preview resized left/right when held sideways, Edit called
 - [x] Mixer: RGB channel mixer, B&W mixer (brightness per colour in black and white), calibration
       (hue and saturation of the red, green and blue primaries).
 - [ ] Later: stabilization from the camera's gyro (GoPro GPMF, DJI and phone metadata), which also
-      undoes rolling shutter. A picture-only attempt (motion read from frames) was tried and
-      removed: it lost the path on fast walking and FPV footage and could not fix the wobble.
-- [ ] Mixer, still to do: point colour (pick a hue from the picture, widen or narrow its range,
-      change its hue/saturation/luminance), selective colour (CMYK per colour family, whites,
-      neutrals, blacks).
+      undoes rolling shutter. A first picture-only attempt lost the path on fast walking and FPV
+      footage; Steady (2026-11) reads the shift and turn from frame blocks with outliers left out
+      and smooths the path; to be judged on such footage, the gyro remains the better source.
+- [x] Mixer: point colour and colour pop. Still to do: selective colour (CMYK per colour family,
+      whites, neutrals, blacks).
 
 ## Next (in this order)
 
@@ -188,16 +205,42 @@ project's files), the preview resized left/right when held sideways, Edit called
 5. **Formats (last):** camera raws that are not DNG (CR3, NEF, ARW, RAF, …) through LibRaw,
    GoPro GPR (VC-5), lossy DNG.
 
+## Plan (2026-11-07)
+
+1. [x] Swipes over photos: up full screen and down out (upright); sideways up/down fold the album,
+       right full screen; the sideways album handle gone.
+2. [x] Keys of corrections: a key strip (go to a key, step between, move the chosen key to the
+       playhead, delete).
+3. [x] Left-handed layout held sideways (Settings › Layout).
+4. [x] ⓘ texts checked; the projects' note in its list's ⓘ.
+5. [x] Before / after with a split line (hold the picture and slide).
+6. [x] Layers: logos and stickers over the picture (their own tab, a library of packs), stuck to
+       the picture by tracking, texts behind the subject or with the picture inside the letters.
+       Picture in picture dropped for now (no use found yet).
+7. [x] Field theme switching itself on in bright light, with a switch to turn that off.
+8. [x] Point colour (a hue picked from the picture, its range, its hue/saturation/luminance) and
+       colour pop. Still open: selective colour in CMYK per family (whites, neutrals, blacks).
+9. [x] Videos' own data in texts without a watch: date, time, a running clock, place (GPS).
+10. [x] HDR from an exposure bracket (AEB, e.g. a drone): marked photos lined up and fused.
+
+## For 1.0.0
+
+- [x] Text behind: choose what the text goes behind instead of the subject found by itself (people,
+      animals, vehicles; else MobileSAM's guess in the middle, which can look random): any mask
+      of the photo or clip (a tapped object, a wall painted with the brush, the sky, people…),
+      with AI masks tracked on video as they are now. The text's Subject › Behind becomes
+      "Behind: [mask]". Done, with Fill the frame, fonts of one's own and image-filled letters.
+
 ## Pro features (proposed with the redesign, 2026-11)
 
-- [ ] Before / after with a split line across the picture, dragged left and right (today only
-      holding the picture shows the original).
+- [x] Before / after with a split line across the picture, dragged left and right.
 - [ ] Layers: an image (PNG, logo, photo) over a photo or video; a second video as picture in
       picture (also under Later above).
-- [ ] Mask edges at full resolution in export (masks are kept at 640 px today).
+- [x] Mask edges at full resolution in export: the 640 px mask is laid onto the picture's edges at
+      full size in the shaders (joint bilateral); a feathered or blended mask keeps that shape.
 - [ ] Stabilisation from the camera's gyro (GoPro GPMF, DJI and phone metadata), alongside the
       watch data already used.
-- [ ] Field theme switching itself on in bright light (the phone's light sensor).
+- [x] Field theme switching itself on in bright light (the phone's light sensor).
 - [ ] Translations: the texts are written in the code (no string resources yet); a Polish version
       first needs them moved to resources.
 

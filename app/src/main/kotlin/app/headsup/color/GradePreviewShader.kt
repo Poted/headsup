@@ -67,6 +67,9 @@ class GradePreviewShader {
      */
     var overlayLayer: Int = -1
 
+    /** Before / after: the picture left of this fraction of its width as shot, right of it as edited; −1 off. */
+    var split: Float = -1f
+
     /** With zebra on: 1 zebra stripes, 2 clipping (red where a channel is full, blue where all are black), 3 false colour. */
     var exposureAid: Int = 1
 
@@ -170,6 +173,7 @@ class GradePreviewShader {
         shader.setFloatUniform("lcDehaze", presence.dehaze)
         shader.setFloatUniform("lcDefringe", presence.defringe)
         shader.setFloatUniform("n", tableSize.toFloat())
+        shader.setFloatUniform("splitAt", split)
         shader.setFloatUniform("zebra", if (zebra) exposureAid.coerceIn(1, 3).toFloat() else 0f)
         shader.setFloatUniform("overlay", overlayLayer.takeIf { it in 0 until masks.size.coerceAtMost(ColourMask.MAX_PER_CLIP) }?.toFloat() ?: -1f)
         shader.setFloatUniform("time", frame)
@@ -346,6 +350,7 @@ class GradePreviewShader {
             uniform float fromWeight;
             uniform float zebra;
             uniform float overlay;
+            uniform float splitAt;
             uniform float time;
             uniform float shortSide;
             uniform float grain;
@@ -654,6 +659,13 @@ class GradePreviewShader {
                 // Android draws an effect beyond the layer it is on: outside the picture nothing is
                 // drawn (the picture's edge, repeated there, showed as streaks over blurred bars).
                 if (coord.x < 0.0 || coord.y < 0.0 || coord.x > size.x || coord.y > size.y) return half4(0.0);
+                // Before / after: left of the line the picture as shot, a thin line between.
+                if (splitAt >= 0.0) {
+                    float lineX = splitAt * size.x;
+                    float lineW = max(1.0, shortSide * 0.0025);
+                    if (abs(coord.x - lineX) <= lineW) return half4(1.0, 1.0, 1.0, 1.0);
+                    if (coord.x < lineX) return half4(half3(imgSrc(coord).rgb), 1.0);
+                }
                 half4 src = (lensCA > 0.0 || lensSoft > 0.0) ? lensed(coord) : img(coord);
                 if (sharpen > 0.0 || chromaNR > 0.0) src = half4(half3(detailed(coord, float3(src.rgb))), src.a);
                 if (lcDefringe > 0.0) src = half4(half3(defringed(coord, float3(src.rgb))), src.a);

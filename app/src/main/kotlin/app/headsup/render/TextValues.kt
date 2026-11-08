@@ -53,8 +53,31 @@ object TextValues {
             if (utcMs != null && offsetSeconds != null) {
                 put(TextField.DATE.key, Formats.date(utcMs, offsetSeconds))
                 put(TextField.TIME.key, Formats.clock(utcMs, offsetSeconds).take(5))
+                put(TextField.CLOCK.key, Formats.clock(utcMs, offsetSeconds))
             }
         }
+    }
+
+    /**
+     * What a video recorded itself, without a watch: the time at that moment ([utcMs], in the
+     * phone's zone then) and where it was filmed.
+     */
+    fun video(utcMs: Long?, latitude: Double?, longitude: Double?): Map<String, String> = buildMap {
+        if (utcMs != null) putAll(clock(utcMs))
+        if (latitude != null && longitude != null) {
+            put(TextField.COORDS.key, coords(latitude, longitude))
+            put(TextField.PLACE.key, Places.known(latitude, longitude) ?: coords(latitude, longitude))
+        }
+    }
+
+    /** Date, time of day and the running clock at [utcMs], in the phone's zone then. */
+    fun clock(utcMs: Long): Map<String, String> {
+        val offset = java.time.ZoneId.systemDefault().rules.getOffset(java.time.Instant.ofEpochMilli(utcMs)).totalSeconds
+        return mapOf(
+            TextField.DATE.key to Formats.date(utcMs, offset),
+            TextField.TIME.key to Formats.clock(utcMs, offset).take(5),
+            TextField.CLOCK.key to Formats.clock(utcMs, offset),
+        )
     }
 
     /** What the photo recorded; it wins over the watch for place, date and time. */

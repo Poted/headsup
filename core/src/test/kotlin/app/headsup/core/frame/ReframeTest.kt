@@ -73,4 +73,58 @@ class ReframeTest {
         val (x, _) = fit.sourceOf(ow / 2f - 540f, oh / 2f, ow, oh, 1080f, 1920f)
         assertEquals(0f, x, 0.5f)
     }
+
+    @Test
+    fun aQuarterTurnStandsThePictureTheOtherWay() {
+        val r = Reframe().turned(1)
+        assertEquals(1, r.quarterTurns)
+        assertEquals(90f, r.angleDegrees, 1e-4f)
+        val (w, h) = r.outputSize(4000f, 3000f)
+        assertEquals(3000f, w, 1e-3f)
+        assertEquals(4000f, h, 1e-3f)
+        // The turned picture covers its own frame exactly: no zoom needed.
+        assertEquals(1f, Reframe.baseScale(w, h, 4000f, 3000f) * r.effectiveZoom(w, h, 4000f, 3000f), 1e-3f)
+        // The frame's top-left corner shows the picture's bottom-left (turned right).
+        val (sx, sy) = r.sourceOf(0f, 0f, w, h, 4000f, 3000f)
+        assertEquals(0f, sx, 1f)
+        assertEquals(3000f, sy, 1f)
+    }
+
+    @Test
+    fun turnsComeRoundAndKeepTheStraightening() {
+        val r = Reframe(angleDegrees = 2.5f).turned(-1)
+        assertEquals(-1, r.quarterTurns)
+        assertEquals(2.5f, r.straighten, 1e-4f)
+        assertEquals(0, r.turned(1).quarterTurns)
+        assertEquals(2, Reframe().turned(2).quarterTurns)
+        assertEquals(-1, Reframe().turned(3).quarterTurns)
+    }
+
+    @Test
+    fun mirroredShowsTheLeftOnTheRight() {
+        val r = Reframe(mirrored = true)
+        val (sx, sy) = r.sourceOf(0f, 50f, 100f, 100f)
+        assertEquals(100f, sx, 1e-3f)
+        assertEquals(50f, sy, 1e-3f)
+        assertEquals(false, Reframe().mirroredLeftRight().mirroredLeftRight().mirrored)
+    }
+
+    @Test
+    fun frameOfUndoesSourceOf() {
+        val cases = listOf(
+            Reframe(),
+            Reframe(aspect = 9f / 16f, zoom = 1.4f, centerX = 0.3f, centerY = 0.6f, angleDegrees = 12f),
+            Reframe(aspect = 1f, zoom = 1.2f, centerX = 0.6f, angleDegrees = -7f).mirroredLeftRight(),
+            Reframe().turned(1),
+        )
+        for (r in cases) {
+            val (ow, oh) = r.outputSize(1920f, 1080f)
+            for ((x, y) in listOf(100f to 200f, ow / 2f to oh / 2f, ow - 50f to 30f)) {
+                val (sx, sy) = r.sourceOf(x, y, ow, oh, 1920f, 1080f)
+                val (fx, fy) = r.frameOf(sx, sy, ow, oh, 1920f, 1080f)
+                assertEquals(x, fx, 0.05f, "$r")
+                assertEquals(y, fy, 0.05f, "$r")
+            }
+        }
+    }
 }

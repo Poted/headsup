@@ -34,13 +34,18 @@ class TelemetryOverlay(
     private val texts: List<TextItem> = emptyList(),
     private val timelineMsOf: (positionMs: Long) -> Long = { it },
     /** Values of the texts' data fields at a moment (with the watch data there, if any). */
-    private val textValues: (DashboardData?) -> Map<String, String> = { emptyMap() },
+    private val textValues: (DashboardData?, positionMs: Long) -> Map<String, String> = { _, _ -> emptyMap() },
     /** Draws the route map (under the texts); its content key at the same moment. */
     private val drawMap: ((Canvas, Float, Float, DashboardData?) -> Unit)? = null,
     private val mapKey: (DashboardData?) -> String = { "" },
     private val dataAt: (positionMs: Long) -> DashboardData?,
     /** How far in the bars are at a moment of the timeline (sliding in), 0..1. */
     private val barsAt: (timelineMs: Long) -> Float = { 1f },
+    /** The texts as shown at a moment (those stuck to the picture moved with it). */
+    private val placeTexts: (List<TextItem>, positionMs: Long) -> List<TextItem> = { t, _ -> t },
+    /** Draws what a text goes behind (the clip's subject, or a mask) at a moment into a [w]×[h] frame; which maps those are. */
+    private val subject: ((TextItem, Canvas, android.graphics.Paint, positionMs: Long, w: Float, h: Float) -> Unit)? = null,
+    private val subjectKey: (positionMs: Long) -> String = { "" },
 ) : BitmapOverlay() {
     private var width = fallbackWidth
     private var height = fallbackHeight
@@ -72,8 +77,9 @@ class TelemetryOverlay(
         val data = dataAt(positionMs)
         val timelineMs = timelineMsOf(positionMs)
         val effects = if (this.effects.barsRatio != null) this.effects.copy(barsAmount = barsAt(timelineMs)) else this.effects
-        val values = if (texts.isEmpty()) emptyMap() else textValues(data)
-        val textKey = if (texts.isEmpty()) "" else TextRenderer.key(texts, timelineMs, values)
+        val values = if (texts.isEmpty()) emptyMap() else textValues(data, positionMs)
+        val shownTexts = if (texts.isEmpty()) texts else placeTexts(texts, positionMs)
+        val textKey = if (texts.isEmpty()) "" else TextRenderer.key(shownTexts, timelineMs, values) + subjectKey(positionMs)
         val key = "${width}x$height ${(effects.barsAmount * 200).toInt()} " + (data?.let { renderer.contentKey(style, it, w, h, effects) } ?: "-") + textKey + mapKey(data)
         buffers[current]?.let { if (key == lastKey) return it }
 
@@ -85,7 +91,7 @@ class TelemetryOverlay(
         renderer.drawVignette(canvas, w, h, vignette)
         if (data != null) renderer.draw(canvas, w, h, style, data, effects) else renderer.drawBars(canvas, w, h, effects)
         drawMap?.invoke(canvas, w, h, data)
-        if (texts.isNotEmpty()) TextRenderer.draw(canvas, w, h, texts, timelineMs, values)
+        if (texts.isNotEmpty()) TextRenderer.draw(canvas, w, h, shownTexts, timelineMs, values, subject?.let { s -> { t, c, p -> s(t, c, p, positionMs, w, h) } })
         lastKey = key
         return bitmap
     }

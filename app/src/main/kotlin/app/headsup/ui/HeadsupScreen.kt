@@ -2,6 +2,10 @@
 
 package app.headsup.ui
 
+import androidx.compose.foundation.layout.heightIn
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import androidx.compose.runtime.produceState
 import android.Manifest
 import android.content.Context
 import android.content.Intent
@@ -79,6 +83,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.composed
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalConfiguration
@@ -238,7 +243,20 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
     // An album's Edit page is its crop; a film's Frame tool.
     val framing = tool == Tool.EDIT && (editTab == EditTab.FRAME || state.photoProject)
     // Texts are edited among the effects.
-    val editingTexts = tool == Tool.OVERLAYS && effectKind == EffectKind.TEXT
+    val editingTexts = tool == Tool.OVERLAYS && (effectKind == EffectKind.TEXT || effectKind == EffectKind.STICKER)
+    // Stickers and logos have a tab of their own; a touch on one from the other tab goes there.
+    val editingStickers = effectKind == EffectKind.STICKER
+    val pickLayer: (Long?) -> Unit = { id ->
+        state.texts.firstOrNull { it.id == id }?.let { t -> effectKind = if (t.isLogo) EffectKind.STICKER else EffectKind.TEXT }
+        vm.selectText(id)
+    }
+    // The text being edited belongs to what is shown: another photo, or the other tab, lets it go.
+    LaunchedEffect(state.selected?.id, state.photoProject, effectKind) {
+        val t = state.texts.firstOrNull { it.id == state.selectedText } ?: return@LaunchedEffect
+        val photo = state.selected
+        val elsewhere = state.photoProject && photo != null && !t.showsOn(photo.id, photo.groupId)
+        if (elsewhere || (editingTexts && t.isLogo != editingStickers)) vm.selectText(null)
+    }
     // Set when a clip ended during playback, so the next one starts playing on its own.
     var continuePlaying by remember { mutableStateOf(false) }
     // Where to jump in the selected clip, e.g. after tapping a highlight.
@@ -249,6 +267,8 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
     // A range mask has no window to move; while a colour is being picked a tap picks it.
     val editingRange = state.selected?.masks?.getOrNull(state.selectedMask)?.kind == MaskKind.RANGE
     val pickingColour = editingMasks && state.pickingColour
+    // Point colour: a finger on the picture picks a colour (+ Pick: a new one; else the chosen one is moved).
+    val pickingPoint = tool == Tool.COLOUR && adjustment == Adjustment.POINT && state.target != GradeTarget.MASK
     // Only while a mask's shape is being changed (Shape) does a finger on the picture change it;
     // with its corrections the picture is left alone (the outline still shows).
     var maskTools by rememberSaveable { mutableStateOf(false) }
@@ -328,7 +348,7 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
     var compact by rememberSaveable { mutableStateOf(false) }
     val folded = compact && !fullscreen && !state.photoProject
     // An album's photo with its info row and the album folded away (any way the phone is held).
-    val photoFolded = compact && state.photoProject && !fullscreen && tool != Tool.FILES
+    val photoFolded = compact && state.photoProject && !fullscreen
     // Full screen keeps a line to scrub along under a film's picture, and play on it.
     val fullscreenFilm = fullscreen && !state.photoProject && state.clips.isNotEmpty()
     // The picture grows and shrinks smoothly when the transport folds or full screen changes.
@@ -373,6 +393,10 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
     }
 
     // The picture, its transport and the timeline.
+    // The photo zoomed in on (its own view zoom): a finger then moves it, no screen swipe.
+    var photoZoomed by remember { mutableStateOf(false) }
+    // What a swipe on an album's photo does (set below, where the screen's swipes are handled).
+    val photoSwipe = remember { arrayOf<(Swipe) -> Unit>({}) }
     val pictureAndTimeline: @Composable ColumnScope.() -> Unit = {
             if (state.busy) {
                 CineLoader(
@@ -394,7 +418,8 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
                     Modifier.padding(horizontal = 16.dp).fillMaxWidth().height(120.dp).clip(RoundedCornerShape(20.dp)).background(HeadsupColors.Surface),
                     contentAlignment = Alignment.Center,
                 ) { Hint("Preview paused while exporting") }
-                else -> Box {
+                // An album's photo: its swipes watched here, on the photo (never on the album under it).
+                else -> Box(if (state.photoProject && !fullscreen) Modifier.observedSwipe(pictureFree && !photoZoomed) { photoSwipe[0](it) } else Modifier) {
                     ClipPreview(
                         clip = selected,
                         activity = selected.sync?.let { state.activities.getOrNull(it.trackIndex) },
@@ -432,7 +457,9 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
                         effects = if (showOriginal) app.headsup.render.EffectSettings(dashboard = false) else state.compareEffects ?: state.effects,
                         // Held on the picture: without this mask while a mask is adjusted, else the original.
                         // (Not while the finger shapes a mask or measures a colour.)
-                        onHoldOriginal = if (tool == Tool.COLOUR && !measuring && !shaping && !pickingColour) { held ->
+                        // On every page where a finger on the picture has nothing else to do (not
+                        // while framing, writing, shaping a mask or measuring a colour).
+                        onHoldOriginal = if (!measuring && !shaping && !pickingColour && !pickingPoint && !framing && !(editingTexts && state.selectedText != null)) { held ->
                             if (editingMasks) hideMask = held else showOriginal = held
                         } else null,
                         showingOriginal = showOriginal || hideMask,
@@ -441,8 +468,11 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
                             fullscreen -> null
                             measuring -> vm::sampleFrame
                             pickingColour -> vm::pickMaskColour
+                            pickingPoint -> vm::pickPointColour
                             else -> null
                         },
+                        liveSample = pickingPoint,
+                        subjectVersion = state.subjectVersion,
                         marker = if (measuring) state.scope?.let { Offset(it.markerX, it.markerY) } else null,
                         maxHeight = previewMaxHeight,
                         edgeToEdge = fullscreen,
@@ -473,17 +503,27 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
                         neighbourFrom = state.previewNeighbourFrom,
                         cubesFor = state.previewCubesFor,
                         // In an album each photo shows only its own texts (or its group's, or all photos').
-                        texts = if (state.photoProject) state.texts.filter { it.showsOn(selected.id, selected.groupId) } else state.texts,
+                        texts = if (state.photoProject) state.texts.filter { it.showsOn(selected.id, selected.groupId) }.map { it.shownAlways() } else state.texts,
                         photoMode = state.photoProject,
                         showTransport = fullscreenFilm || (!fullscreen && (!state.photoProject || tool == Tool.EDIT || tool == Tool.COLOUR)),
                         compactTransport = folded || fullscreenFilm || photoFolded,
                         onCompact = if (!fullscreen) { c -> compact = c } else null,
+                        onViewZoomed = { photoZoomed = it },
                         // Read here so arriving place names redraw the texts.
                         textValues = state.placesVersion.let { _ -> { pos -> vm.textValues(state, selected, pos) } },
                         routeOverlay = if (state.routeMap.enabled) routeOverlayFor(vm, state, selected) else null,
                         // A finger on the picture places the text being edited, or the route map.
-                        onMoveText = if (fullscreen) null else state.selectedText?.takeIf { editingTexts }?.let { id -> { x, y -> vm.updateText(id) { snapText(it, x, y) } } }
-                            ?: if (tool == Tool.OVERLAYS && effectKind == EffectKind.MAP && state.routeMap.enabled) { x: Float, y: Float -> vm.updateRouteMap { it.copy(x = x, y = y) } } else null,
+                        // Texts and logos on the picture: picked by a touch, moved, sized and turned (as in a phone editor).
+                        onMoveText = when {
+                            fullscreen -> null
+                            editingTexts -> { x: Float, y: Float -> val id = state.selectedText; if (id != null) vm.updateText(id) { snapText(it, x, y) } }
+                            tool == Tool.OVERLAYS && effectKind == EffectKind.MAP && state.routeMap.enabled -> { x: Float, y: Float -> vm.updateRouteMap { it.copy(x = x, y = y) } }
+                            else -> null
+                        },
+                        selectedTextId = state.selectedText.takeIf { editingTexts },
+                        onTextChange = { id, change -> vm.updateText(id, change) },
+                        onDeleteText = { id -> vm.removeText(id) },
+                        onSelectText = pickLayer,
                         cutScrub = cutScrub,
                         onFrameSource = { frameSource.value = it },
                         onPictureSource = { pictureSource.value = it },
@@ -539,7 +579,7 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
                 // A double tap on it folds the transport and the timeline (or the album) away and
                 // brings them back.
                 PreviewHandle(
-                    onToggle = { if (!state.photoProject || tool != Tool.FILES) compact = !compact },
+                    onToggle = { compact = !compact },
                     onDragging = { handleDragging = it; if (!it) pullPast = 0f },
                 ) { dy ->
                     val d = dy / (configuration.screenHeightDp * density.density)
@@ -563,20 +603,7 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
                 if (photoFolded) {
                     // Folded: sideways a small arrow brings the info row and the album back (or a
                     // swipe up); upright a double tap on the handle above does.
-                    if (wide) {
-                        // A handle, pulled up (or tapped), brings the album back, as the film's timeline.
-                        var pulled by remember { mutableStateOf(0f) }
-                        val drag = androidx.compose.foundation.gestures.rememberDraggableState { dy ->
-                            pulled += dy
-                            if (pulled < -with(density) { 24.dp.toPx() }) { pulled = 0f; compact = false }
-                        }
-                        Box(
-                            Modifier.fillMaxWidth().height(28.dp)
-                                .draggable(drag, Orientation.Vertical, onDragStopped = { pulled = 0f })
-                                .clickable { compact = false },
-                            contentAlignment = Alignment.Center,
-                        ) { Box(Modifier.width(40.dp).height(4.dp).clip(RoundedCornerShape(2.dp)).background(HeadsupColors.Outline)) }
-                    }
+                    // Folded sideways: nothing under the photo; a swipe up brings the album back.
                 } else if (state.clips.isNotEmpty()) {
                     // The album's photos are always shown (also on Export, where the marked ones
                     // are exported); a double tap on the handle folds them away.
@@ -643,8 +670,8 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
                     },
                     onAdd = addVideos,
                     onAddSound = { addingSound = true },
-                    texts = if (editingTexts) state.texts else emptyList(),
-                    onSelectText = vm::selectText,
+                    texts = if (editingTexts) state.texts.filter { it.isLogo == editingStickers } else emptyList(),
+                    onSelectText = pickLayer,
                     onMoveText = { id, start -> vm.updateText(id) { it.copy(startMs = start) } },
                     showAudio = tool == Tool.AUDIO,
                     playing = { previewPlaying.value },
@@ -715,9 +742,9 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
                     Tool.OVERLAYS -> {
                         // Saved from before the looks moved to Adjust: back to an overlay.
                         val kind = effectKind.takeIf { it in OVERLAY_KINDS } ?: EffectKind.DASHBOARD
-                        if (kind == EffectKind.TEXT) {
+                        if (kind == EffectKind.TEXT || kind == EffectKind.STICKER) {
                             EffectKinds(state, kind, OVERLAY_KINDS) { effectKind = it }
-                            TextPanel(state, vm, at = { scrubT.value ?: timelineOf(playhead.longValue) })
+                            TextPanel(state, vm, stickers = kind == EffectKind.STICKER, at = { scrubT.value ?: timelineOf(playhead.longValue) })
                         } else {
                             EffectsPanel(state, vm, kind, playhead, OVERLAY_KINDS) { effectKind = it }
                         }
@@ -746,9 +773,25 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
     // Swipes over the picture and timeline. Sideways: in the upper part up (or right) goes full
     // screen, in the lower part down folds the transport and timeline away and up brings them back.
     // Upright: up goes full screen; folding is by the arrows on the transport only.
+    /** Left-handed sideways (picture on the right): left and right swipes turned round. */
+    fun mirrored(swipe: Swipe): Swipe = if (!(wide && AppSettings.pictureRight)) swipe else when (swipe) {
+        Swipe.LEFT -> Swipe.RIGHT
+        Swipe.RIGHT -> Swipe.LEFT
+        else -> swipe
+    }
     fun onScreenSwipe(swipe: Swipe, upper: Boolean) {
         if (!wide) {
             if (swipe == Swipe.UP) fullscreen = true
+            return
+        }
+        // Albums sideways: up and down fold the album away and back, right goes full screen.
+        if (state.photoProject) {
+            when (swipe) {
+                Swipe.RIGHT -> fullscreen = true
+                Swipe.UP -> compact = false
+                Swipe.DOWN -> compact = true
+                else -> Unit
+            }
             return
         }
         when {
@@ -759,6 +802,7 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
             else -> Unit
         }
     }
+    photoSwipe[0] = { onScreenSwipe(mirrored(it), true) }
     Box(Modifier.fillMaxSize().background(HeadsupColors.BackgroundGradient)) {
         // No title bar: the picture starts at the top, adding files lives in the Project tool.
         if (fullscreen) {
@@ -770,7 +814,10 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
                         .fillMaxSize()
                         .background(HeadsupColors.Picture)
                         .graphicsLayer { scaleX = settle.value; scaleY = settle.value; alpha = 0.4f + 0.6f * ((settle.value - 0.96f) / 0.04f) }
-                        .freeSwipe(pictureFree) { if (it == Swipe.DOWN || (wide && it == Swipe.LEFT)) fullscreen = false },
+                        .then(
+                            if (state.photoProject) Modifier.observedSwipe(pictureFree && !photoZoomed) { if (it == Swipe.DOWN || (wide && mirrored(it) == Swipe.LEFT)) fullscreen = false }
+                            else Modifier.freeSwipe(pictureFree) { if (it == Swipe.DOWN || (wide && mirrored(it) == Swipe.LEFT)) fullscreen = false },
+                        ),
                     verticalArrangement = Arrangement.Center,
                     content = pictureAndTimeline,
                 )
@@ -782,34 +829,42 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
                 val minTools = with(density) { MIN_TOOLS_WIDTH.toPx() }
                 val maxShare = minOf(0.75f, 1f - minTools / total).coerceAtLeast(0.36f)
                 val pictureShare = wideShare.coerceIn(0.35f, maxShare)
+                // Left-handed (Settings › Layout): the tools first, under the left thumb.
+                val right = AppSettings.pictureRight
                 Row(Modifier.fillMaxSize()) {
                     // Clipped: the timeline scrolls inside its column, never under the tools.
                     // A swipe down anywhere here folds the transport and timeline, up unfolds them.
-                    Column(
-                        Modifier
-                            .weight(pictureShare)
-                            .fillMaxHeight()
-                            .clipToBounds()
-                            .graphicsLayer { scaleX = settle.value; scaleY = settle.value }
-                            .zonedSwipe(pictureFree, ::onScreenSwipe),
-                        content = pictureAndTimeline,
-                    )
+                    val picture: @Composable androidx.compose.foundation.layout.RowScope.() -> Unit = {
+                        Column(
+                            Modifier
+                                .weight(pictureShare)
+                                .fillMaxHeight()
+                                .clipToBounds()
+                                .graphicsLayer { scaleX = settle.value; scaleY = settle.value }
+                                // An album's swipes are watched on the photo itself (below).
+                                .then(if (state.photoProject) Modifier else Modifier.zonedSwipe(pictureFree) { swipe, upper -> onScreenSwipe(mirrored(swipe), upper) }),
+                            content = pictureAndTimeline,
+                        )
+                    }
+                    // A swipe away from the picture over the tools (where nothing scrolls or slides) goes full screen.
+                    val toolsColumn: @Composable androidx.compose.foundation.layout.RowScope.() -> Unit = {
+                        Column(
+                            Modifier
+                                .weight(1f - pictureShare)
+                                .fillMaxHeight()
+                                .freeSwipe(true) { if (mirrored(it) == Swipe.RIGHT) fullscreen = true },
+                            content = tools,
+                        )
+                    }
                     // Dragging this moves the line between the picture and the tools, left and right.
-                    SideHandle { dx -> wideShare = (pictureShare + dx / total).coerceIn(0.35f, maxShare) }
-                    // A swipe to the right over the tools (where nothing scrolls or slides) goes full screen.
-                    Column(
-                        Modifier
-                            .weight(1f - pictureShare)
-                            .fillMaxHeight()
-                            .freeSwipe(true) { if (it == Swipe.RIGHT) fullscreen = true },
-                        content = tools,
-                    )
+                    val handle: @Composable () -> Unit = { SideHandle { dx -> wideShare = (pictureShare + (if (right) -dx else dx) / total).coerceIn(0.35f, maxShare) } }
+                    if (right) { toolsColumn(); handle(); picture() } else { picture(); handle(); toolsColumn() }
                 }
             }
         } else {
             Column(Modifier.fillMaxSize().systemBarsPadding().padding(top = 8.dp)) {
                 // Upright, a swipe up on the picture goes full screen (down in full screen leaves it).
-                Column(Modifier.zonedSwipe(pictureFree, ::onScreenSwipe), content = pictureAndTimeline)
+                Column(if (state.photoProject) Modifier else Modifier.zonedSwipe(pictureFree, ::onScreenSwipe), content = pictureAndTimeline)
                 // In an album, a swipe down over the tools folds the photo's info row and the album
                 // away (more room for the photo), up brings them back.
                 Column(
@@ -917,8 +972,8 @@ private fun UndoRedo(
             text = {
                 Text(
                     "Since opened: back to how the project was when you opened it.\n\nEvery edit: colour, masks, " +
-                        (if (album) "framing and effects removed from every photo, however long ago they were made; the photos and texts stay."
-                        else "framing, effects, speed and cuts removed from every clip, however long ago they were made; the files, sound and texts stay.") + "\n\nEither way, undo brings the changes back.",
+                        (if (album) "framing, effects, texts and stickers removed from every photo, however long ago they were made; the photos stay."
+                        else "framing, effects, speed, cuts, texts and stickers removed from every clip, however long ago they were made; the files and sound stay.") + "\n\nEither way, undo brings the changes back.",
                 )
             },
             confirmButton = {
@@ -1068,7 +1123,10 @@ private fun Modifier.scrollBar(state: androidx.compose.foundation.ScrollState): 
  * A clear swipe (one finger, mostly one way, at least 56 dp) that nothing inside used: sliders,
  * scrolling, the timeline and the picture's own tools consume their moves, and then this stays out.
  */
-private fun Modifier.freeSwipe(enabled: Boolean, onSwipe: (Swipe) -> Unit): Modifier = if (!enabled) this else pointerInput(Unit) {
+private fun Modifier.freeSwipe(enabled: Boolean, onSwipe: (Swipe) -> Unit): Modifier = if (!enabled) this else composed {
+    // The gesture outlives a composition: it calls what the screen gives now.
+    val call by rememberUpdatedState(onSwipe)
+    pointerInput(Unit) {
     val distance = 56.dp.toPx()
     awaitEachGesture {
         val down = awaitFirstDown(requireUnconsumed = false, pass = androidx.compose.ui.input.pointer.PointerEventPass.Final)
@@ -1088,10 +1146,11 @@ private fun Modifier.freeSwipe(enabled: Boolean, onSwipe: (Swipe) -> Unit): Modi
                 abs(d.y) > 2 * abs(d.x) -> if (d.y > 0) Swipe.DOWN else Swipe.UP
                 else -> null
             }
-            if (swipe != null) onSwipe(swipe)
+            if (swipe != null) call(swipe)
             break
         }
     }
+}
 }
 
 /**
@@ -1100,7 +1159,9 @@ private fun Modifier.freeSwipe(enabled: Boolean, onSwipe: (Swipe) -> Unit): Modi
  * lower half (the transport, timeline, the picture's foot) they always count, as anything there
  * that uses the finger takes the moves first.
  */
-private fun Modifier.zonedSwipe(upperFree: Boolean, onSwipe: (Swipe, Boolean) -> Unit): Modifier = pointerInput(upperFree) {
+private fun Modifier.zonedSwipe(upperFree: Boolean, onSwipe: (Swipe, Boolean) -> Unit): Modifier = composed {
+    val call by rememberUpdatedState(onSwipe)
+    pointerInput(upperFree) {
     val distance = 56.dp.toPx()
     awaitEachGesture {
         val down = awaitFirstDown(requireUnconsumed = false, pass = androidx.compose.ui.input.pointer.PointerEventPass.Final)
@@ -1121,8 +1182,43 @@ private fun Modifier.zonedSwipe(upperFree: Boolean, onSwipe: (Swipe, Boolean) ->
                 abs(d.y) > 2 * abs(d.x) -> if (d.y > 0) Swipe.DOWN else Swipe.UP
                 else -> null
             }
-            if (swipe != null) onSwipe(swipe, upper)
+            if (swipe != null) call(swipe, upper)
             break
+        }
+    }
+}
+}
+
+/**
+ * Swipes over an album's photo, read before anything under the finger uses it (the photo's
+ * zoom, the hold for the original, a double tap): only watched, never taken, so those still work,
+ * and a clear swipe (one finger, mostly one way, at least 56 dp) is always seen. Off while the
+ * finger shapes a mask, frames or writes ([enabled] false).
+ */
+private fun Modifier.observedSwipe(enabled: Boolean, onSwipe: (Swipe) -> Unit): Modifier = if (!enabled) this else composed {
+    val call by rememberUpdatedState(onSwipe)
+    pointerInput(Unit) {
+        val distance = 56.dp.toPx()
+        // Sideways a deliberate stroke (a third more), so moving a little is never full screen.
+        val sideways = 96.dp.toPx()
+        awaitEachGesture {
+            val down = awaitFirstDown(requireUnconsumed = false, pass = androidx.compose.ui.input.pointer.PointerEventPass.Initial)
+            while (true) {
+                val event = awaitPointerEvent(androidx.compose.ui.input.pointer.PointerEventPass.Initial)
+                // Two fingers: a pinch, not a swipe.
+                if (event.changes.count { it.pressed } > 1) break
+                val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                if (!change.pressed) break
+                val d = change.position - down.position
+                if (d.getDistance() < distance) continue
+                val swipe = when {
+                    abs(d.x) > 2 * abs(d.y) -> if (abs(d.x) < sideways) continue else if (d.x > 0) Swipe.RIGHT else Swipe.LEFT
+                    abs(d.y) > 2 * abs(d.x) -> if (d.y > 0) Swipe.DOWN else Swipe.UP
+                    else -> null
+                }
+                if (swipe != null) call(swipe)
+                break
+            }
         }
     }
 }
@@ -1812,6 +1908,105 @@ private fun AddSoundDialog(state: UiState, onPick: (AudioFile) -> Unit, onImport
     )
 }
 
+/** The sticker library (Settings › Sticker packs): a pack's pictures; a touch puts one on, a hold deletes it from the library. */
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
+@Composable
+private fun StickerLibraryGrid(onPick: (java.io.File) -> Unit) {
+    val context = LocalContext.current
+    var version by remember { mutableStateOf(0) }
+    val packs by produceState<List<app.headsup.media.StickerLibrary.Pack>?>(null, version) {
+        value = withContext(Dispatchers.IO) { app.headsup.media.StickerLibrary.packs(context) }
+    }
+    var pack by rememberSaveable { mutableStateOf<String?>(null) }
+    var deleting by remember { mutableStateOf<java.io.File?>(null) }
+    // Taking stickers out of the library: each gets a ✕, a touch asks to delete it.
+    var removing by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
+    ToolSection("Library", info = "The packs imported in Settings › Sticker packs, and My stickers (pictures saved from here). A touch puts a sticker on; Remove… takes stickers out of the library (where one is already placed, it stays).") {
+        val all = packs
+        if (!all.isNullOrEmpty()) Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            SmallAction(if (removing) "Done" else "Remove…", { removing = !removing })
+        }
+        when {
+            all == null -> Hint("Loading…")
+            all.isEmpty() -> Hint("No sticker packs yet. Import pictures or a ZIP in Settings › Sticker packs (PNG keeps transparency).")
+            else -> {
+                val shown = all.firstOrNull { it.name == pack } ?: all.first()
+                if (all.size > 1) Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    for (p in all) FilterChip(selected = p.name == shown.name, onClick = { pack = p.name }, label = { Text(p.name, maxLines = 1) })
+                }
+                androidx.compose.foundation.lazy.grid.LazyVerticalGrid(
+                    columns = androidx.compose.foundation.lazy.grid.GridCells.Adaptive(64.dp),
+                    modifier = Modifier.fillMaxWidth().heightIn(max = 280.dp),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    items(shown.stickers.size, key = { shown.stickers[it].path }) { i ->
+                        val f = shown.stickers[i]
+                        Box {
+                            StickerThumb(f, onLongClick = { deleting = f }) { if (removing) deleting = f else onPick(f) }
+                            if (removing) Box(
+                                Modifier
+                                    .align(Alignment.TopEnd)
+                                    .padding(2.dp)
+                                    .size(22.dp)
+                                    .clip(CircleShape)
+                                    .background(Color(0xFFD7263D))
+                                    .clickable { deleting = f },
+                                contentAlignment = Alignment.Center,
+                            ) { Text("✕", color = Color.White, style = MaterialTheme.typography.labelSmall) }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    deleting?.let { f ->
+        AlertDialog(
+            onDismissRequest = { deleting = null },
+            title = { Text("Delete sticker?") },
+            text = { Text("It goes from the library; where it is already placed, it stays.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    deleting = null
+                    scope.launch {
+                        withContext(Dispatchers.IO) { app.headsup.media.StickerLibrary.deleteSticker(context, f) }
+                        version++
+                    }
+                }) { Text("Delete") }
+            },
+            dismissButton = { TextButton(onClick = { deleting = null }) { Text("Cancel") } },
+        )
+    }
+}
+
+@Composable
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
+private fun StickerThumb(file: java.io.File, onLongClick: (() -> Unit)? = null, onClick: () -> Unit) {
+    val bitmap by produceState<androidx.compose.ui.graphics.ImageBitmap?>(null, file) {
+        value = withContext(Dispatchers.IO) {
+            runCatching {
+                val bounds = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                android.graphics.BitmapFactory.decodeFile(file.path, bounds)
+                var sample = 1
+                while (maxOf(bounds.outWidth, bounds.outHeight) / (sample * 2) >= 160) sample *= 2
+                android.graphics.BitmapFactory.decodeFile(file.path, android.graphics.BitmapFactory.Options().apply { inSampleSize = sample })?.asImageBitmap()
+            }.getOrNull()
+        }
+    }
+    Box(
+        Modifier
+            .aspectRatio(1f)
+            .clip(RoundedCornerShape(10.dp))
+            .background(HeadsupColors.TextMuted.copy(alpha = 0.15f))
+            .combinedClickable(onLongClick = onLongClick, onClick = onClick)
+            .padding(6.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        bitmap?.let { androidx.compose.foundation.Image(it, contentDescription = file.nameWithoutExtension, modifier = Modifier.fillMaxSize(), contentScale = androidx.compose.ui.layout.ContentScale.Fit) }
+    }
+}
+
 private fun fadeLabel(ms: Long) = if (ms <= 0) "Off" else String.format(Locale.US, "%.1f s", ms / 1000f)
 
 
@@ -2008,55 +2203,60 @@ private fun ProjectRow(state: UiState, vm: HeadsupViewModel, onOpen: () -> Unit,
     }
     // In an order that does not change with what is open: starred first, then the latest changed.
     val listed = state.projects.filter { it.kind == kindShown }.sortedWith(compareByDescending<ProjectInfo> { it.starred }.thenByDescending { it.modifiedMs })
-    if (listed.isEmpty()) Hint(if (kindShown == ProjectKind.PHOTOS) "No albums yet. An album is saved once it has photos." else "No films yet. A film is saved once it has files.")
-    for (p in listed) {
-        val current = p.name == state.projectName
-        Row(
-            Modifier
-                .fillMaxWidth()
-                .clip(RoundedCornerShape(12.dp))
-                .background(if (current) HeadsupColors.SurfaceHigh else Color.Transparent)
-                // Opening one (or tapping the open one) goes on to its files.
-                .clickable {
-                    if (!current) vm.openProject(p.name)
-                    onOpen()
-                }
-                .padding(horizontal = 8.dp, vertical = 6.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            // The star: tap to mark the project (starred ones come first).
-            Text(
-                if (p.starred) "★" else "☆",
+    ToolSection(
+        if (kindShown == ProjectKind.PHOTOS) "Albums" else "Films",
+        info = "Tap a project to open it. ★ puts it first." + (if (kindShown == ProjectKind.PHOTOS) " ⊞ opens the album straight in its album view (stars, Auto pick)." else "") +
+            " ⋮ renames or deletes it. Each project keeps its own copies of its files; deleting one frees that space (Settings › Storage shows it). The gallery is never touched.",
+    ) {
+        if (listed.isEmpty()) Hint(if (kindShown == ProjectKind.PHOTOS) "No albums yet. An album is saved once it has photos." else "No films yet. A film is saved once it has files.")
+        for (p in listed) {
+            val current = p.name == state.projectName
+            Row(
                 Modifier
-                    .clip(RoundedCornerShape(50))
-                    .clickable { vm.setProjectStarred(p.name, !p.starred) }
-                    .padding(horizontal = 8.dp, vertical = 4.dp),
-                style = MaterialTheme.typography.titleLarge,
-                color = if (p.starred) HeadsupColors.Accent else HeadsupColors.TextMuted,
-            )
-            Column(Modifier.weight(1f)) {
-                Text(p.name, style = MaterialTheme.typography.bodyMedium, maxLines = 2)
-                Hint(
-                    Instant.ofEpochMilli(p.modifiedMs).atZone(ZoneId.systemDefault()).toLocalDateTime()
-                        .withNano(0).toString().replace('T', ' ') +
-                        if (p.bytes > 0) " · " + formatBytes(p.bytes) else "",
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(if (current) HeadsupColors.SurfaceHigh else Color.Transparent)
+                    // Opening one (or tapping the open one) goes on to its files.
+                    .clickable {
+                        if (!current) vm.openProject(p.name)
+                        onOpen()
+                    }
+                    .padding(horizontal = 8.dp, vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                // The star: tap to mark the project (starred ones come first).
+                Text(
+                    if (p.starred) "★" else "☆",
+                    Modifier
+                        .clip(RoundedCornerShape(50))
+                        .clickable { vm.setProjectStarred(p.name, !p.starred) }
+                        .padding(horizontal = 8.dp, vertical = 4.dp),
+                    style = MaterialTheme.typography.titleLarge,
+                    color = if (p.starred) HeadsupColors.Accent else HeadsupColors.TextMuted,
                 )
-            }
-            // Rename and delete behind ⋮, so the name has the row's width.
-            Box {
-                var open by remember { mutableStateOf(false) }
-                Box(
-                    Modifier.size(36.dp).clip(CircleShape).clickable { open = true },
-                    contentAlignment = Alignment.Center,
-                ) { Icon(HeadsupIcons.More, "More", Modifier.size(20.dp), tint = HeadsupColors.TextMuted) }
-                DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
-                    DropdownMenuItem(text = { Text("Rename") }, onClick = { open = false; renamingOther = p.name })
-                    DropdownMenuItem(text = { Text("Delete") }, onClick = { open = false; deletingOther = p.name })
+                Column(Modifier.weight(1f)) {
+                    Text(p.name, style = MaterialTheme.typography.bodyMedium, maxLines = 2)
+                    Hint(
+                        Instant.ofEpochMilli(p.modifiedMs).atZone(ZoneId.systemDefault()).toLocalDateTime()
+                            .withNano(0).toString().replace('T', ' ') +
+                            if (p.bytes > 0) " · " + formatBytes(p.bytes) else "",
+                    )
+                }
+                // Rename and delete behind ⋮, so the name has the row's width.
+                Box {
+                    var open by remember { mutableStateOf(false) }
+                    Box(
+                        Modifier.size(36.dp).clip(CircleShape).clickable { open = true },
+                        contentAlignment = Alignment.Center,
+                    ) { Icon(HeadsupIcons.More, "More", Modifier.size(20.dp), tint = HeadsupColors.TextMuted) }
+                    DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+                        DropdownMenuItem(text = { Text("Rename") }, onClick = { open = false; renamingOther = p.name })
+                        DropdownMenuItem(text = { Text("Delete") }, onClick = { open = false; deletingOther = p.name })
+                    }
                 }
             }
         }
     }
-    if (state.projects.isNotEmpty()) Hint("Projects keep their own copies of their files; deleting one frees that space (Settings › Storage shows it all). The gallery is never touched.")
     deletingOther?.let { name ->
         AlertDialog(
             onDismissRequest = { deletingOther = null },
@@ -2781,6 +2981,8 @@ private fun AdjustHeader(
     clip: ClipState,
     index: Int,
     vm: HeadsupViewModel,
+    playhead: LongState,
+    onSeek: (Long) -> Unit,
     pictureSource: ((Int) -> Bitmap?)?,
     maskTools: Boolean,
     onMaskTools: (Boolean) -> Unit,
@@ -2814,7 +3016,7 @@ private fun AdjustHeader(
             false
         }
         else -> {
-            if (!clip.meta.isPhoto && state.target == GradeTarget.CLIP) GradeKeyRow(state, clip, vm)
+            if (!clip.meta.isPhoto && state.target == GradeTarget.CLIP) GradeKeyRow(state, clip, vm, playhead, onSeek)
             Layers(state, clip, vm, pictureSource, maskTools, onMaskTools)
         }
     }
@@ -2831,7 +3033,7 @@ private val Adjustment.section: ColourSection
         Adjustment.SPLIT, Adjustment.SHADOW_HUE, Adjustment.HIGHLIGHT_HUE, Adjustment.TAME, Adjustment.VIGNETTE, Adjustment.WHEELS -> ColourSection.FILM
         Adjustment.TEXTURE, Adjustment.CLARITY, Adjustment.DEHAZE, Adjustment.DEFRINGE -> ColourSection.PRESENCE
         Adjustment.CINE, Adjustment.LUT, Adjustment.MATCH, Adjustment.BLEND -> ColourSection.TOOLS
-        Adjustment.MIXER, Adjustment.HUE_CURVES, Adjustment.CHANNELS, Adjustment.BW, Adjustment.CALIBRATION -> ColourSection.MIXER
+        Adjustment.MIXER, Adjustment.POINT, Adjustment.HUE_CURVES, Adjustment.CHANNELS, Adjustment.BW, Adjustment.CALIBRATION -> ColourSection.MIXER
         // Looks sit with the other tools that set a whole look (LUT, shot match).
         Adjustment.LOOK -> ColourSection.TOOLS
         Adjustment.GLOW, Adjustment.HALATION -> ColourSection.EFFECTS
@@ -2918,6 +3120,9 @@ internal enum class Adjustment(
     /** Not a single ruler: hue, saturation and luminance per hue band. */
     MIXER("HSL", "Colour mixer", 0f..1f, 1f, "", { 0f }, { g, _ -> g }),
 
+    /** Not a single ruler: colours picked from the picture and changed on their own, and colour pop. */
+    POINT("◉", "Point colour", 0f..1f, 1f, "", { 0f }, { g, _ -> g }),
+
     /** Not a single ruler: curves by hue and brightness (Hue vs Hue, Sat, Lum; Lum vs Sat). */
     HUE_CURVES("H∿", "Hue curves", 0f..1f, 1f, "", { 0f }, { g, _ -> g }),
 
@@ -2967,7 +3172,7 @@ private fun ColourPage(
     LaunchedEffect(target, selectedMask == null) { if (target == GradeTarget.MASK && selectedMask == null) vm.setTarget(GradeTarget.CLIP) }
     // While something is removed from a photo only that shows; otherwise the scope and layers stay
     // at the top in both of a mask's modes (Mask and Adjust).
-    if (!(target == GradeTarget.MASK && state.removing && selectedMask != null) && AdjustHeader(state, clip, index, vm, pictureSource, maskTools, onMaskTools)) return
+    if (!(target == GradeTarget.MASK && state.removing && selectedMask != null) && AdjustHeader(state, clip, index, vm, playhead, onSeek, pictureSource, maskTools, onMaskTools)) return
     if (target != GradeTarget.GLOBAL && !clip.colorGrade) {
         // HDR files (already graded, e.g. Mimo exports) start with their own colours.
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -2993,7 +3198,9 @@ private fun ColourPage(
         GradeTarget.GROUP -> Adjustment.entries - Adjustment.BLEND - Adjustment.CINE - Adjustment.MATCH - maskOnly
         GradeTarget.GLOBAL -> Adjustment.entries - Adjustment.BLEND - Adjustment.CINE - Adjustment.MATCH - maskOnly
         GradeTarget.MASK -> Adjustment.entries - Adjustment.LUT - Adjustment.SKIN - Adjustment.VIGNETTE - Adjustment.BLEND -
-            Adjustment.CINE - Adjustment.MATCH - Adjustment.LOOK
+            Adjustment.CINE - Adjustment.MATCH - Adjustment.LOOK -
+            // A finger on the picture edits the mask there, so colours are picked on the whole picture.
+            Adjustment.POINT
     }
     val adjustment = if (adjustment in options) adjustment else Adjustment.EXPOSURE
     // On the Masks tab the ruler edits either a shape control or a correction.
@@ -3135,7 +3342,9 @@ private fun ColourPage(
     if (onEffects && baseEffects) {
         // Set on all clips exactly when Adjust works on all of them.
         LaunchedEffect(target) { vm.setEffectsOnAll(target == GradeTarget.GLOBAL) }
-        EffectsPanel(state, vm, lookKind, playhead, LOOK_KINDS) { lookKind = it }
+        // Bokeh is worked out on a photo (a whole video would take too long).
+        val looks = if (state.selected?.meta?.isPhoto == true) LOOK_KINDS else LOOK_KINDS - EffectKind.BOKEH
+        EffectsPanel(state, vm, lookKind.takeIf { it in looks } ?: looks.first(), playhead, looks) { lookKind = it }
         return
     }
     LazyRow(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
@@ -3147,6 +3356,7 @@ private fun ColourPage(
                 Adjustment.CINE -> state.cine != null
                 Adjustment.MATCH -> state.matchReference?.clipId == clip.id
                 Adjustment.MIXER -> state.grade.mixer.any { it != 0f }
+                Adjustment.POINT -> state.grade.points.isNotEmpty() || state.grade.colourPop > 0f
                 Adjustment.CHANNELS -> state.grade.channelMix.any { it != 0f }
                 Adjustment.BW -> app.headsup.core.color.BlackAndWhite.on(state.grade.bw)
                 Adjustment.CALIBRATION -> state.grade.calibration.any { it != 0f }
@@ -3201,6 +3411,10 @@ private fun ColourPage(
     }
     if (adjustment == Adjustment.CHANNELS) {
         ChannelMixerControls(state, vm)
+        return
+    }
+    if (adjustment == Adjustment.POINT) {
+        PointColourControls(state, vm)
         return
     }
     if (adjustment == Adjustment.BW) {
@@ -3673,6 +3887,61 @@ private fun CalibrationControls(state: UiState, vm: HeadsupViewModel) {
 
 /** Colour mixer: a hue band, which of its hue, saturation and luminance, and a ruler for it. */
 @Composable
+private fun PointColourControls(state: UiState, vm: HeadsupViewModel) {
+    val points = state.grade.points
+    val selected = state.pointSelected
+    ToolSection(
+        "Point colour",
+        info = "Put a finger on the picture and move it to the colour you want: the circle shows the colour under it, and the picture follows. " +
+            "+ Pick adds another colour; without it, the finger moves the chosen colour. Two fingers zoom in to pick a small spot. " +
+            "Then change just that colour and its family: Range is how much of the family, " +
+            "then its hue, saturation and luminance. Up to ${app.headsup.core.color.PointColours.MAX} colours. Colour pop takes the colour out of everything else, " +
+            "leaving only the picked colours (a red coat in a grey street). Hold a ruler to compare.",
+        onReset = if (points.isNotEmpty() || state.grade.colourPop > 0f) ({ vm.updateGrade { it.copy(points = emptyList(), colourPop = 0f) } }) else null,
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            if (points.size < app.headsup.core.color.PointColours.MAX) {
+                SmallAction(if (state.pickingPoint || points.isEmpty()) "Touch a colour…" else "+ Pick", { vm.setPickingPoint(!state.pickingPoint) })
+            }
+            Row(Modifier.weight(1f).horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                points.forEachIndexed { i, p ->
+                    Box(
+                        Modifier
+                            .size(34.dp)
+                            .clip(CircleShape)
+                            .background(Color(p.r, p.g, p.b))
+                            .border(if (i == selected) 3.dp else 1.dp, if (i == selected) HeadsupColors.Ink else HeadsupColors.Outline, CircleShape)
+                            .clickable { vm.selectPoint(i) },
+                    )
+                }
+            }
+            if (points.isNotEmpty()) SmallAction("Delete", {
+                val i = selected.coerceIn(0, points.size - 1)
+                vm.updateGrade { g -> g.copy(points = g.points.filterIndexed { k, _ -> k != i }) }
+            })
+        }
+        val i = selected.coerceIn(0, (points.size - 1).coerceAtLeast(0))
+        points.getOrNull(i)?.let { p ->
+            fun set(change: (app.headsup.core.color.PointColour) -> app.headsup.core.color.PointColour) =
+                vm.updateGrade { g -> g.copy(points = g.points.mapIndexed { k, q -> if (k == i) change(q) else q }) }
+            ValueHeader("Range", String.format(Locale.US, "%.0f %%", p.range * 100))
+            RulerSlider(p.range, 0f..1f, 0.02f, { v -> set { it.copy(range = v) } }, onReset = { set { it.copy(range = 0.35f) } })
+            ValueHeader("Hue", String.format(Locale.US, "%+.0f°", p.hue * 60))
+            RulerSlider(p.hue, -1f..1f, 0.02f, { v -> set { it.copy(hue = v) } }, onReset = { set { it.copy(hue = 0f) } })
+            ValueHeader("Saturation", String.format(Locale.US, "%+.0f", p.saturation * 100))
+            RulerSlider(p.saturation, -1f..1f, 0.02f, { v -> set { it.copy(saturation = v) } }, onReset = { set { it.copy(saturation = 0f) } })
+            ValueHeader("Luminance", String.format(Locale.US, "%+.0f", p.luminance * 100))
+            RulerSlider(p.luminance, -1f..1f, 0.02f, { v -> set { it.copy(luminance = v) } }, onReset = { set { it.copy(luminance = 0f) } })
+        }
+        if (points.isEmpty()) Hint("Put a finger on the picture and move it to a colour.")
+        else {
+            ValueHeader("Colour pop", String.format(Locale.US, "%.0f %%", state.grade.colourPop * 100))
+            RulerSlider(state.grade.colourPop, 0f..1f, 0.02f, { v -> vm.updateGrade { it.copy(colourPop = v) } }, onReset = { vm.updateGrade { it.copy(colourPop = 0f) } })
+        }
+    }
+}
+
+@Composable
 private fun MixerControls(state: UiState, vm: HeadsupViewModel) {
     var band by rememberSaveable { mutableStateOf(app.headsup.core.color.ColourMixer.Band.RED) }
     var property by rememberSaveable { mutableStateOf(app.headsup.core.color.ColourMixer.Property.SATURATION) }
@@ -3952,7 +4221,7 @@ private fun ShotMatchPanel(state: UiState, clip: ClipState, vm: HeadsupViewModel
     var wholeGroup by rememberSaveable(group?.id) { mutableStateOf(group != null) }
     ToolSection(
         "Shot match",
-        info = "Pause on a good frame of the clip whose colours you like and set it as the reference; then on another clip pause on a similar frame and match: exposure, contrast, white balance and saturation are set so both look alike (skin hue too when both show skin). In a group, Group matches the camera's colour for every clip of it, each keeping its own brightness. Hold the ruler to compare.",
+        info = "Makes one clip look like another. Set a good frame of the clip you like as the reference, then on another clip pause on a similar frame and Match: exposure, contrast, white balance, saturation (and skin, when both show it). Hold the ruler to compare.",
     ) {
     // Where you are in the two steps: shown, not behind ⓘ.
     Hint(
@@ -4182,7 +4451,7 @@ private fun Layers(
             "New mask",
             info = "Object: tap what to correct (tap more of it to take it in, with Subtract what is not it), draw round it or split the picture with a line. Sky: the sky found at once (on video followed when tracked). " +
                 "Brush: paint it. Linear: a gradient across the picture (drag its dashed lines to set where it starts and ends). Radial: a gradient round a point (a face, a light, a vignette of your own). Colour: everything of a colour you tap. Light: a range of brightness." +
-                if (clip.meta.isPhoto) " Retouch: select something and it is taken out of the photo, filled from what is around it." else "",
+                if (clip.meta.isPhoto) " Retouch: paint what should go; Remove fills it from what is around it, Heal and Clone cover it from a matching place nearby." else "",
         ) {
         LazyRow(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
             item { CircleOption("◎", "Object", selected = false, modified = false) { add { vm.addBrushMask(BrushMode.SELECT) } } }
@@ -4678,7 +4947,8 @@ private fun EffectKinds(state: UiState, kind: EffectKind, kinds: List<EffectKind
     LazyRow(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
         items(kinds) { e ->
             val active = when (e) {
-                EffectKind.TEXT -> state.texts.isNotEmpty()
+                EffectKind.TEXT -> state.texts.any { !it.isLogo }
+                EffectKind.STICKER -> state.texts.any { it.isLogo }
                 EffectKind.MAP -> state.routeMap.enabled
                 EffectKind.DASHBOARD -> state.style.enabled && state.effects.dashboard && state.activities.isNotEmpty()
                 EffectKind.GRAPH -> effects.graph != null
@@ -4686,6 +4956,7 @@ private fun EffectKinds(state: UiState, kind: EffectKind, kinds: List<EffectKind
                 EffectKind.GLOW -> effects.glow > 0f
                 EffectKind.HALATION -> effects.halation > 0f
                 EffectKind.LENS -> effects.lens
+                EffectKind.BOKEH -> effects.bokeh > 0f
                 EffectKind.BARS -> effects.barsRatio != null
             }
             CircleOption(e.symbol, e.label, selected = e == kind, modified = active) { onKind(e) }
@@ -4695,6 +4966,7 @@ private fun EffectKinds(state: UiState, kind: EffectKind, kinds: List<EffectKind
 
 private enum class EffectKind(val symbol: String, val label: String) {
     TEXT("T", "Text"),
+    STICKER("St", "Stickers"),
     MAP("Map", "Route map"),
     DASHBOARD("HUD", "Dashboard"),
     GRAPH("Gr", "Graph"),
@@ -4703,13 +4975,14 @@ private enum class EffectKind(val symbol: String, val label: String) {
     HALATION("Ha", "Halation"),
     BARS("Cin", "Bars"),
     LENS("Lens", "Lens"),
+    BOKEH("Bk", "Bokeh"),
 }
 
 /** Drawn over the picture: the Overlays tool. */
-private val OVERLAY_KINDS = listOf(EffectKind.TEXT, EffectKind.MAP, EffectKind.DASHBOARD, EffectKind.GRAPH)
+private val OVERLAY_KINDS = listOf(EffectKind.TEXT, EffectKind.STICKER, EffectKind.MAP, EffectKind.DASHBOARD, EffectKind.GRAPH)
 
 /** Part of the picture's look: the base layer's Effects in Adjust. */
-private val LOOK_KINDS = listOf(EffectKind.GRAIN, EffectKind.GLOW, EffectKind.HALATION, EffectKind.LENS, EffectKind.BARS)
+private val LOOK_KINDS = listOf(EffectKind.BOKEH, EffectKind.GRAIN, EffectKind.GLOW, EffectKind.HALATION, EffectKind.LENS, EffectKind.BARS)
 
 /** Effects over the picture, picked from round options like the colour corrections. */
 @Composable
@@ -4729,7 +5002,7 @@ private fun EffectsPanel(state: UiState, vm: HeadsupViewModel, kind: EffectKind,
         )
     }
     when (kind) {
-        EffectKind.TEXT -> Unit
+        EffectKind.TEXT, EffectKind.STICKER -> Unit
         EffectKind.MAP -> RouteMapControls(state, vm)
         EffectKind.DASHBOARD -> {
             // The dashboard shows the activity's data: without a FIT file there is nothing to set up.
@@ -4803,6 +5076,26 @@ private fun EffectsPanel(state: UiState, vm: HeadsupViewModel, kind: EffectKind,
                 ),
             )
 
+        }
+        EffectKind.BOKEH -> ToolSection(
+            "Bokeh",
+            info = "The background blurred as by a wide-open lens: what stays sharp is the subject the phone finds (people, animals, vehicles; else what is in the middle) " +
+                "or a mask of yours (Adjust › Masks: Select, the brush…). Highlights: how much bright points open into bright discs. Worked out on the photo, a moment after the ruler stops.",
+        ) {
+            EffectRuler(
+                listOf(
+                    EffectParam("Blur", effects.bokeh, 0f..1f, 0.02f, 0f, percent = true) { v -> updateEffects { it.copy(bokeh = v) } },
+                    EffectParam("Highlights", effects.bokehHighlights, 0f..1f, 0.02f, 0.5f, percent = true) { v -> updateEffects { it.copy(bokehHighlights = v) } },
+                ),
+            )
+            val photoNow = state.selected
+            val choices = photoNow?.masks?.withIndex()?.filter { app.headsup.color.TextMasks.usable(it.value) }.orEmpty()
+            val labels = listOf("Subject") + choices.map { "Mask ${it.index + 1}" }
+            val current = effects.bokehMask?.let { m -> choices.indexOfFirst { it.index == m }.let { if (it < 0) -1 else it + 1 } } ?: 0
+            LabeledChoice("Sharp", labels, { it == current }, { i -> updateEffects { it.copy(bokehMask = if (i == 0) null else choices[i - 1].index) } })
+            // Which side is blurred, without turning the mask itself inside out.
+            LabeledChoice("Blurred", listOf("The rest", "What it covers"), { (it == 1) == effects.bokehInvert }, { i -> updateEffects { it.copy(bokehInvert = i == 1) } })
+            if (effects.bokehMask == null) SmallAction("Find the subject again", { vm.findPhotoSubjectAgain() })
         }
         EffectKind.LENS -> ToolSection("Lens", info = "An older lens: colour fringes and softness that grow towards the corners; the middle stays sharp. A little goes a long way.") {
             EffectRuler(
@@ -5137,6 +5430,9 @@ private enum class TextTool(val symbol: String, val label: String) {
     TIME("⏱", "Time"),
 }
 
+/** What a logo has of a text's tools: its size (and opacity) and its timing. */
+private val LOGO_TOOLS = setOf(TextTool.SIZE, TextTool.IN, TextTool.OUT, TextTool.TIME)
+
 /** Ready looks: one tap sets font, colour, glow, placement and animations. */
 private enum class TextLook(val label: String, val apply: (TextItem) -> TextItem) {
     TITLE("Title", { it.copy(font = TextFont.SANS, colour = 0xFFFFFFFF.toInt(), size = 0.09f, glow = 0f, shadow = true, align = TextAlign.CENTER, x = 0.5f, y = 0.5f, animIn = TextAnim.POP, animOut = TextAnim.FADE) }),
@@ -5158,29 +5454,53 @@ private val TEXT_COLOURS = listOf(
  * on the timeline its bar moves it in time.
  */
 @Composable
-private fun TextPanel(state: UiState, vm: HeadsupViewModel, at: () -> Long) {
+private fun TextPanel(state: UiState, vm: HeadsupViewModel, stickers: Boolean, at: () -> Long) {
     var tool by rememberSaveable { mutableStateOf(TextTool.LOOK) }
-    val item = state.texts.firstOrNull { it.id == state.selectedText }
+    val item = state.texts.firstOrNull { it.id == state.selectedText && it.isLogo == stickers }
+    // A logo: any picture from the gallery (a PNG keeps its transparency).
+    val logoPicker = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri -> uri?.let(vm::addLogo) }
+    LaunchedEffect(item?.id) { if (item?.isLogo == true && tool !in LOGO_TOOLS) tool = TextTool.SIZE }
     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-        SmallAction("+ Text", { vm.addText(at()) })
+        if (stickers) SmallAction("+ From gallery", { logoPicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) })
+        else SmallAction("+ Text", { vm.addText(at()) })
         if (item != null) {
             SmallAction("Delete", { vm.removeText(item.id) })
             SmallAction("Done", { vm.selectText(null) })
         }
     }
     if (item == null) {
-        ToolSection(
-            "Texts",
-            info = (if (state.photoProject) "+ Text adds a text to the photo. Drag it on the picture to place it. Tap a text below to edit it."
-            else "+ Text adds a text at the playhead. Drag it on the picture to place it; its bar on the timeline moves it in time. Tap a text's bar on the timeline, or a text below, to edit it."),
-        ) {
-            val photoNow = state.selected
-            val shown = if (state.photoProject && photoNow != null) state.texts.filter { it.showsOn(photoNow.id, photoNow.groupId) } else state.texts
-            if (shown.isEmpty()) {
-                Text("No texts yet.", style = MaterialTheme.typography.bodySmall, color = HeadsupColors.TextMuted)
-            } else {
-                Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    for (t in shown) FilterChip(selected = false, onClick = { vm.selectText(t.id) }, label = { Text(t.text.replace('\n', ' ').take(18)) })
+        val photoNow = state.selected
+        val shown = (if (state.photoProject && photoNow != null) state.texts.filter { it.showsOn(photoNow.id, photoNow.groupId) } else state.texts)
+            .filter { it.isLogo == stickers }
+        if (stickers) {
+            ToolSection(
+                "Stickers",
+                info = "Stickers, frames and logos over the " + (if (state.photoProject) "photo" else "film") + ": a touch on one in the library below puts it on" +
+                    (if (state.photoProject) " this photo (All photos puts it on every one, like a camera app's mark)" else "") +
+                    "; + From gallery takes any picture (a PNG keeps its transparency). On the picture: drag it, ✕ takes it away, ↘ or two fingers size and turn it. " +
+                    "Packs are imported in Settings › Sticker packs; hold a sticker in the library to delete it from there.",
+            ) {
+                if (shown.isEmpty()) {
+                    Text(if (state.photoProject) "No stickers on this photo." else "No stickers yet.", style = MaterialTheme.typography.bodySmall, color = HeadsupColors.TextMuted)
+                } else {
+                    Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        for (t in shown) Box(Modifier.size(56.dp)) { StickerThumb(java.io.File(t.image.orEmpty())) { vm.selectText(t.id) } }
+                    }
+                }
+            }
+            StickerLibraryGrid(onPick = vm::addSticker)
+        } else {
+            ToolSection(
+                "Texts",
+                info = if (state.photoProject) "+ Text adds a text to the photo. Drag it on the picture to place it. Tap a text below to edit it."
+                else "+ Text adds a text at the playhead. Drag it on the picture to place it; its bar on the timeline moves it in time. Tap a text's bar on the timeline, or a text below, to edit it.",
+            ) {
+                if (shown.isEmpty()) {
+                    Text(if (state.photoProject) "No texts on this photo." else "No texts yet.", style = MaterialTheme.typography.bodySmall, color = HeadsupColors.TextMuted)
+                } else {
+                    Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        for (t in shown) FilterChip(selected = false, onClick = { vm.selectText(t.id) }, label = { Text(t.text.replace('\n', ' ').take(18)) })
+                    }
                 }
             }
         }
@@ -5189,7 +5509,7 @@ private fun TextPanel(state: UiState, vm: HeadsupViewModel, at: () -> Long) {
     val update: ((TextItem) -> TextItem) -> Unit = { vm.updateText(item.id, it) }
     // In an album: which photos the text is on.
     val photo = state.selected
-    ToolSection("Text", info = if (state.photoProject) "The text, and which photos it is on." else "The text. Its look, data, font and timing are in the tools below.") {
+    ToolSection(if (item.isLogo) "Sticker" else "Text", info = if (item.isLogo) (if (state.photoProject) "Which photos the sticker is on. Drag it on the picture to place it; ✕ takes it away, ↘ or two fingers size and turn it." else "Drag the sticker on the picture to place it; Size, Opacity and its timing are below. Stick to picture: placed over something in the clip, it moves, turns and grows with it (followed through the clip in the background). Behind: the subject or a mask of yours (Adjust › Masks) passes in front of it.") else if (state.photoProject) "The text, and which photos it is on. Behind: Subject puts it behind the people, animals or vehicles the phone finds; a mask (made in Adjust › Masks: a wall, a tree, a person) puts it behind that, e.g. coming out from behind a building." else "The text. Its look, data, font and timing are in the tools below. Stick to picture: placed over something in the clip, it moves, turns and grows with it. Behind: the subject (found once, in the background) or a mask of yours (Adjust › Masks, tracked on video) passes in front of the letters.") {
         if (state.photoProject && photo != null) {
             ChoiceGrid(
                 listOf("This photo", "All photos"),
@@ -5197,7 +5517,71 @@ private fun TextPanel(state: UiState, vm: HeadsupViewModel, at: () -> Long) {
                 { i -> update { if (i == 0) it.copy(onlyClip = photo.id, onlyGroup = null) else it.copy(onlyClip = null, onlyGroup = null) } },
             )
         }
-        OutlinedTextField(
+        // What it goes behind: nothing, the subject found by itself, or a mask of the picture (a wall it comes out from…).
+        run {
+            val clipNow = state.selected
+            val clipIndex = state.selectedClip
+            val choices = clipNow?.masks?.withIndex()?.filter { app.headsup.color.TextMasks.usable(it.value) }.orEmpty()
+            val labels = listOf("Nothing", "Subject") + choices.map { "Mask ${it.index + 1}" }
+            val current = when {
+                !item.behind -> 0
+                item.behindMask == null -> 1
+                else -> choices.indexOfFirst { it.index == item.behindMask }.let { if (it < 0) -1 else it + 2 }
+            }
+            LabeledChoice("Behind", labels, { it == current }, { i ->
+                when (i) {
+                    0 -> update { it.copy(behind = false, behindMask = null) }
+                    1 -> {
+                        update { it.copy(behind = true, behindMask = null) }
+                        // A clip's subject is found in the background the first time.
+                        if (!state.photoProject && clipNow != null && clipNow.subject == null && clipIndex != null) vm.findSubject(clipIndex)
+                    }
+                    else -> update { it.copy(behind = true, behindMask = choices[i - 2].index) }
+                }
+            })
+            if (state.photoProject && item.behind && item.behindMask == null) SmallAction("Find the subject again", { vm.findPhotoSubjectAgain() })
+            if (item.behind) LabeledChoice(
+                "Side", listOf("Behind it", "Behind the rest"), { (it == 1) == item.behindOutside },
+                { i -> update { it.copy(behindOutside = i == 1) } },
+            )
+            val chosenMask = item.behindMask
+            // On video a mask that is neither tracked nor keyed stays where it was drawn while the camera moves.
+            val still = chosenMask?.let { clipNow?.masks?.getOrNull(it) }?.takeIf { m ->
+                !state.photoProject && m.sequence == null && m.keys.isEmpty()
+            }
+            if (item.behind && still != null && chosenMask != null) Hint("Mask ${chosenMask + 1} is not tracked: it stays where it was drawn while the camera moves. Track it in Adjust › Masks (Track ▶) so the text goes behind it as it moves.")
+            if (item.behind && chosenMask != null && current < 0) Hint("Mask ${chosenMask + 1} is not on this ${if (state.photoProject) "photo" else "clip"}: nothing is in front of the text here.")
+            if (choices.isEmpty()) Hint("To go behind something of your own (a wall, a tree, a person), make a mask of it in Adjust › Masks (Select, Subject, Sky or the brush), then choose it here.")
+        }
+        if (!state.photoProject) {
+            val clipNow = state.selected
+            val clipIndex = state.selectedClip
+            val finding = clipNow != null && state.work.any { it.clipId == clipNow.id && it.label.startsWith("Finding the subject") }
+            if (item.behind && item.behindMask == null && clipNow != null) Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(
+                    when {
+                        finding -> "Finding the subject in this clip…"
+                        clipNow.subject == null -> "This clip's subject is not found yet."
+                        else -> "Behind the subject of this clip."
+                    },
+                    Modifier.weight(1f), style = MaterialTheme.typography.bodySmall, color = HeadsupColors.TextMuted,
+                )
+                if (!finding && clipIndex != null) SmallAction(if (clipNow.subject == null) "Find" else "Find again", { vm.findSubject(clipIndex) })
+            }
+            // Stuck to a place in the picture: it moves, turns and grows with it.
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                val following = item.follow != null
+                Text(
+                    if (following) "Stuck to the picture: moves with what is under it." else "Stays put in the frame.",
+                    Modifier.weight(1f), style = MaterialTheme.typography.bodySmall, color = HeadsupColors.TextMuted,
+                )
+                if (following) {
+                    SmallAction("Again", { vm.followText(item.id) })
+                    SmallAction("Unstick", { vm.unfollowText(item.id) })
+                } else SmallAction("Stick to picture", { vm.followText(item.id) })
+            }
+        }
+        if (!item.isLogo) OutlinedTextField(
             value = item.text,
             onValueChange = { v -> update { it.copy(text = v) } },
             modifier = Modifier.fillMaxWidth(),
@@ -5206,7 +5590,7 @@ private fun TextPanel(state: UiState, vm: HeadsupViewModel, at: () -> Long) {
         )
     }
     LazyRow(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
-        items(TextTool.entries.filter { !state.photoProject || it !in setOf(TextTool.IN, TextTool.OUT, TextTool.TIME) }) { t ->
+        items(TextTool.entries.filter { (!state.photoProject || it !in setOf(TextTool.IN, TextTool.OUT, TextTool.TIME)) && (!item.isLogo || it in LOGO_TOOLS) }) { t ->
             val modified = when (t) {
                 TextTool.GLOW -> item.glow > 0f
                 TextTool.IN -> item.animIn != TextAnim.NONE
@@ -5220,8 +5604,8 @@ private fun TextPanel(state: UiState, vm: HeadsupViewModel, at: () -> Long) {
         TextTool.LOOK -> "A ready-made style: font, size, colour, glow" + (if (state.photoProject) "." else " and animation.") + " Everything stays adjustable after."
         TextTool.DATA -> "Fields show as {name} in the text; type around them, e.g. \"↑ {ascent} · {distance}\". Values come from the selected ${if (state.photoProject) "photo" else "clip"}; tap one to add it."
         TextTool.FONT -> "The typeface, and Left (from the frame's left margin) or Centre."
-        TextTool.COLOUR -> "The text's colour."
-        TextTool.SIZE -> "How large the text is, against the frame's height. Double-tap the ruler for the usual size."
+        TextTool.COLOUR -> "The text's colour. Image: the letters filled with a picture of yours (a texture, a sky, another photo). Picture inside: the frame covered in this colour, the " + (if (state.photoProject) "photo" else "video") + " showing only through the letters (large, bold letters work best)."
+        TextTool.SIZE -> if (item.isLogo) "How wide the logo is, and how see-through (Opacity). Double-tap a ruler for the usual." else "How large the text is, against the frame's height. Double-tap the ruler for the usual size."
         TextTool.GLOW -> "Light round the letters, and a soft shadow under them to lift the text off the picture. Double-tap the ruler to turn the glow off."
         TextTool.IN, TextTool.OUT -> "How the text comes in or goes out. Type and HUD write it a letter every ${TextAnimation.CHAR_MS} ms; Fade, Rise and Pop take the time on the ruler."
         TextTool.TIME -> "How long the text stays. Start here and End here set it at the playhead; double-tap the ruler for 3 seconds."
@@ -5245,7 +5629,17 @@ private fun TextPanel(state: UiState, vm: HeadsupViewModel, at: () -> Long) {
                         val v = values[f.key]
                         FilterChip(
                             selected = item.text.contains("{${f.key}}"),
-                            onClick = { update { it.copy(text = if (it.text == "Text") "{${f.key}}" else it.text + " {${f.key}}") } },
+                            // In the text: tapped again, taken out (every copy of it); else added at the end.
+                            onClick = {
+                                update {
+                                    val tag = "{${f.key}}"
+                                    when {
+                                        it.text.contains(tag) -> it.copy(text = it.text.replace(tag, "").replace(Regex(" {2,}"), " ").trim().ifEmpty { "Text" })
+                                        it.text == "Text" -> it.copy(text = tag)
+                                        else -> it.copy(text = it.text + " " + tag)
+                                    }
+                                }
+                            },
                             label = { Text(if (v != null) "${f.label}: $v" else f.label, maxLines = 1) },
                             enabled = v != null,
                         )
@@ -5255,13 +5649,50 @@ private fun TextPanel(state: UiState, vm: HeadsupViewModel, at: () -> Long) {
         }
         TextTool.FONT -> {
             val fonts = TextFont.entries
-            LabeledChoice("Font", fonts.map { it.label }, { fonts[it] == item.font }, { i -> update { it.copy(font = fonts[i]) } })
+            LabeledChoice("Font", fonts.map { it.label }, { item.fontFile == null && fonts[it] == item.font }, { i -> update { it.copy(font = fonts[i], fontFile = null) } })
+            // Fonts of one's own (TTF, OTF), kept for every project.
+            val context = LocalContext.current
+            var ownVersion by remember { mutableStateOf(0) }
+            val own = remember(ownVersion) { app.headsup.media.FontLibrary.fonts(context) }
+            val fontScope = rememberCoroutineScope()
+            val fontPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+                if (uri != null) fontScope.launch {
+                    val f = withContext(Dispatchers.IO) { app.headsup.media.FontLibrary.import(context, uri) }
+                    if (f != null) { ownVersion++; update { it.copy(fontFile = f.absolutePath) } }
+                }
+            }
+            Row(Modifier.horizontalScroll(rememberScrollState()), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                SmallAction("+ Import font", { fontPicker.launch(arrayOf("font/ttf", "font/otf", "font/*", "application/x-font-ttf", "application/x-font-otf", "application/vnd.ms-opentype", "application/octet-stream")) })
+                for (f in own) FilterChip(
+                    selected = item.fontFile == f.absolutePath,
+                    onClick = { update { it.copy(fontFile = if (it.fontFile == f.absolutePath) null else f.absolutePath) } },
+                    label = { Text(f.nameWithoutExtension, maxLines = 1) },
+                )
+            }
             // Left starts at the frame's left margin, centre sits in the middle.
             LabeledChoice("Align", listOf("Left", "Centre"), { (it == 0) == (item.align == TextAlign.LEFT) && (it == 1) == (item.align == TextAlign.CENTER) }, { i ->
                 update { if (i == 0) it.copy(align = TextAlign.LEFT, x = 0.08f) else it.copy(align = TextAlign.CENTER, x = 0.5f) }
             })
         }
-        TextTool.COLOUR -> Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+        TextTool.COLOUR -> {
+          // Letters in the colour, the picture inside them (the frame covered in the colour), or an image in them.
+          val fillPicker = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri -> if (uri != null) vm.setTextFill(item.id, uri) }
+          LabeledChoice("Fill", listOf("Letters", "Picture inside", "Image"), { i -> when (i) { 1 -> item.cutout; 2 -> item.fillImage != null; else -> !item.cutout && item.fillImage == null } }, { i ->
+              when (i) {
+                  2 -> fillPicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+                  else -> update { t ->
+                      val inside = i == 1
+                      // Picture inside starts on black (white over everything rarely is what is wanted), and large.
+                      t.copy(
+                          cutout = inside,
+                          fillImage = null,
+                          colour = if (inside && t.colour == 0xFFFFFFFF.toInt()) 0xFF000000.toInt() else t.colour,
+                          size = if (inside) maxOf(t.size, 0.2f) else t.size,
+                      )
+                  }
+              }
+          })
+          Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             for (c in TEXT_COLOURS) {
                 Box(
                     Modifier
@@ -5272,10 +5703,17 @@ private fun TextPanel(state: UiState, vm: HeadsupViewModel, at: () -> Long) {
                         .clickable { update { it.copy(colour = c) } },
                 )
             }
+          }
         }
         TextTool.SIZE -> {
-            ValueHeader("", String.format(Locale.US, "%.0f %%", item.size * 100))
-            RulerSlider(item.size, 0.02f..0.25f, 0.005f, { v -> update { it.copy(size = v) } }, onReset = { update { it.copy(size = 0.07f) } })
+            ValueHeader(if (item.isLogo) "Size" else "", String.format(Locale.US, "%.0f %%", item.size * 100))
+            if (!item.isLogo) SmallAction("Fill the frame", { vm.fitText(item.id) })
+            RulerSlider(item.size, 0.02f..1f, 0.005f, { v -> update { it.copy(size = v) } }, onReset = { update { it.copy(size = 0.07f) } })
+            if (item.isLogo) {
+                ValueHeader("Opacity", String.format(Locale.US, "%.0f %%", item.opacity * 100))
+                RulerSlider(item.opacity, 0.1f..1f, 0.02f, { v -> update { it.copy(opacity = v) } }, onReset = { update { it.copy(opacity = 1f) } })
+                SmallAction("Save to library", { vm.saveAsSticker(item.id) })
+            }
         }
         TextTool.GLOW -> {
             ValueHeader("Glow", String.format(Locale.US, "%.2f", item.glow))
@@ -5468,23 +5906,31 @@ private fun PhotoStrip(state: UiState, vm: HeadsupViewModel, onAdd: () -> Unit, 
  * there; between keys they change smoothly. With keys, an edit sets the key at the playhead.
  */
 @Composable
-private fun GradeKeyRow(state: UiState, clip: ClipState, vm: HeadsupViewModel) {
-    val keys = clip.gradeKeys
-    val onKey = keys.any { kotlin.math.abs(it.timeMs - state.playheadKeyMs) <= app.headsup.core.color.GradeKeys.SAME_MS }
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        PillAction(if (onKey) "◆" else "◇", if (onKey) "Key here" else "Add key", { if (onKey) vm.removeGradeKey() else vm.addGradeKey() }, selected = onKey)
-        Spacer(Modifier.width(8.dp))
-        Text(
-            when {
-                keys.isEmpty() -> "Same all through"
-                keys.size == 1 -> "1 key"
-                else -> "${keys.size} keys: changes between them"
-            },
-            Modifier.weight(1f), style = MaterialTheme.typography.labelMedium, color = HeadsupColors.TextMuted, maxLines = 1,
-        )
-        if (keys.isNotEmpty()) SmallAction("Clear", { vm.clearGradeKeys() })
+private fun GradeKeyRow(state: UiState, clip: ClipState, vm: HeadsupViewModel, playhead: LongState, onSeek: (Long) -> Unit) {
+    ToolSection(
+        "Keys",
+        info = "Corrections that change during the shot. For example, walking from shade into sun: put the playhead at the start, correct for the shade (Exposure +1) and tap + Key; move the playhead to the end and correct for the sun (Exposure 0): a second key is made by itself, and between the two the exposure goes smoothly from +1 to 0. " +
+            "Diamonds show the keys: tap one to go there and change it; ◀ ▶ step between keys; Move here takes the chosen key to the playhead. With no key, one correction holds for the whole clip.",
+    ) {
+        if (clip.gradeKeys.isEmpty()) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("Same all through", Modifier.weight(1f), style = MaterialTheme.typography.labelMedium, color = HeadsupColors.TextMuted)
+                SmallAction("+ Key", { vm.addGradeKey() })
+            }
+        } else {
+            KeyStrip(
+                times = clip.gradeKeys.map { it.timeMs },
+                cutStartMs = clip.trimStartMs,
+                cutEndMs = clip.trimEndMs,
+                playhead = playhead,
+                onSeek = onSeek,
+                onAdd = { vm.addGradeKey() },
+                onDelete = { t -> vm.removeGradeKeyAt(t) },
+                onClear = { vm.clearGradeKeys() },
+                onMove = { from -> vm.moveGradeKey(from) },
+            )
+        }
     }
-    if (keys.isNotEmpty()) Hint(if (onKey) "Edits now set this key; tap ◆ to take it off." else "Edits now set a new key here.")
 }
 
 /** An album photo's crop: its shape (or its own), zoom and straightening; drag the picture to place it. */
@@ -5500,7 +5946,7 @@ private fun PhotoCrop(state: UiState, clip: ClipState, vm: HeadsupViewModel) {
             presets.map { it.second },
             presets.indexOfFirst { it.first == r.aspect },
             { i -> vm.updateReframe { it.copy(aspect = presets[i].first) } },
-            glyph = { i, on -> AspectGlyph(presets[i].first ?: clip.meta.let { m -> m.width.toFloat() / m.height.coerceAtLeast(1) }, on) },
+            glyph = { i, on -> AspectGlyph(presets[i].first ?: clip.meta.let { m -> if (r.quarterTurns % 2 != 0) m.height.toFloat() / m.width.coerceAtLeast(1) else m.width.toFloat() / m.height.coerceAtLeast(1) }, on) },
         )
     }
     GeometrySections(r, vm)
@@ -5513,13 +5959,40 @@ private fun PhotoCrop(state: UiState, clip: ClipState, vm: HeadsupViewModel) {
 @Composable
 private fun GeometrySections(r: Reframe, vm: HeadsupViewModel) {
     ToolSection(
+        "Rotate",
+        info = "Left and Right turn the picture a quarter (a photo or clip shot sideways); its frame turns with it. Mirror swaps left and right, Flip top and bottom. Straightening below stays as set.",
+    ) {
+        val deg = ((r.quarterTurns % 4 + 4) % 4) * 90
+        ChoiceGrid(
+            listOf("Left", "Right", "Mirror", "Flip"),
+            isOn = { i -> i == 2 && r.mirrored },
+            onSelect = { i ->
+                vm.updateReframe {
+                    when (i) {
+                        0 -> it.turned(-1)
+                        1 -> it.turned(1)
+                        2 -> it.mirroredLeftRight()
+                        else -> it.flippedUpsideDown()
+                    }
+                }
+            },
+            glyph = { i, on -> Text(listOf("⟲", "⟳", "⇋", "⇵")[i], style = MaterialTheme.typography.titleMedium, color = if (on) HeadsupColors.OnHighlight else HeadsupColors.Ink) },
+        )
+        Text(
+            (if (deg == 0) "Upright" else "Turned $deg°") + if (r.mirrored) " · mirrored" else "",
+            style = MaterialTheme.typography.labelMedium, color = HeadsupColors.TextMuted,
+        )
+    }
+    ToolSection(
         "Geometry",
         info = "Zoom into the picture, and turn it level (double-tap a ruler to reset it, hold it to compare).",
     ) {
         ValueHeader("Zoom", String.format(Locale.US, "%.2f×", r.zoom))
         RulerSlider(r.zoom, 1f..4f, 0.02f, { v -> vm.updateReframe { it.copy(zoom = v) } }, onReset = { vm.updateReframe { it.copy(zoom = 1f) } })
-        ValueHeader("Straighten", String.format(Locale.US, "%+.1f°", r.angleDegrees))
-        RulerSlider(r.angleDegrees, -15f..15f, 0.1f, { v -> vm.updateReframe { it.copy(angleDegrees = v) } }, onReset = { vm.updateReframe { it.copy(angleDegrees = 0f) } })
+        // Straightening: the angle besides the quarter turns.
+        val turns = r.quarterTurns
+        ValueHeader("Straighten", String.format(Locale.US, "%+.1f°", r.straighten))
+        RulerSlider(r.straighten, -15f..15f, 0.1f, { v -> vm.updateReframe { it.copy(angleDegrees = 90f * turns + v) } }, onReset = { vm.updateReframe { it.copy(angleDegrees = 90f * turns) } })
     }
     ToolSection(
         "Perspective",

@@ -48,7 +48,47 @@ data class TextItem(
     /** In an album: shown only on this photo, or on the photos of this group (both null: on all). */
     val onlyClip: Long? = null,
     val onlyGroup: Long? = null,
+    /**
+     * A logo instead of letters: the picture kept at this path (a PNG keeps its transparency),
+     * its width [size] × 3 of the frame's short side, its [opacity] 0..1. Null: a text.
+     */
+    val image: String? = null,
+    val opacity: Float = 1f,
+    /** Turned about its middle, degrees clockwise. */
+    val angle: Float = 0f,
+    /**
+     * The picture inside the letters: the whole frame covered in [colour] with the letters cut out
+     * of it, so the video (or photo) shows only through them.
+     */
+    val cutout: Boolean = false,
+    /** Behind the subject of the photo or clip (the person in front stands over the letters). */
+    val behind: Boolean = false,
+    /**
+     * With [behind]: the mask (its place in the clip's or photo's list of masks) it goes behind,
+     * e.g. a wall it comes out from; null: the subject found by itself.
+     */
+    val behindMask: Int? = null,
+    /**
+     * With [behind]: it goes behind everything but the mask (or subject) instead, so it shows only
+     * over it, without turning the mask itself inside out.
+     */
+    val behindOutside: Boolean = false,
+    /** Stuck to a place in a clip's picture: carried, turned and sized with it. */
+    val follow: TextFollow? = null,
+    /** A font of the user's own (a TTF or OTF kept by the app) in place of [font]. */
+    val fontFile: String? = null,
+    /** The letters filled with this picture (kept by the app) instead of [colour]. */
+    val fillImage: String? = null,
 ) {
+    val isLogo: Boolean get() = image != null
+
+    /**
+     * As shown on an album's photo: there is no timeline, so it is there all the time, still (an
+     * album's texts once kept the album's length when they were made, and photos added after
+     * that fell outside it).
+     */
+    fun shownAlways(): TextItem = copy(startMs = 0L, lengthMs = 315_000_000_000L, animIn = TextAnim.NONE, animOut = TextAnim.NONE)
+
     /** Whether it shows on the photo [clipId] in group [groupId]. */
     fun showsOn(clipId: Long, groupId: Long?): Boolean = when {
         onlyClip != null -> onlyClip == clipId
@@ -57,6 +97,49 @@ data class TextItem(
     }
 
     val endMs: Long get() = startMs + lengthMs
+
+    /**
+     * As shown at [fileMs] of the clip [clipId]: moved with the place it follows (by how far that
+     * place is from where it was when it was set to follow, so dragging it still places it),
+     * turned and sized with it. [toFrame] takes a source point (fractions) to the frame's.
+     */
+    fun placed(clipId: Long, fileMs: Long, toFrame: (Float, Float) -> Pair<Float, Float>): TextItem {
+        val f = follow?.takeIf { it.clipId == clipId && it.timesMs.isNotEmpty() } ?: return this
+        val now = f.at(fileMs)
+        val then = f.at(f.fromMs)
+        val (x0, y0) = toFrame(then.x, then.y)
+        val (x1, y1) = toFrame(now.x, now.y)
+        return copy(x = x + (x1 - x0), y = y + (y1 - y0), angle = angle + now.angle - then.angle, size = size * now.scale / then.scale.coerceAtLeast(0.01f))
+    }
+}
+
+/**
+ * A place in a clip followed through it: at each of [timesMs] (file time, rising) the place in
+ * the source picture ([xs], [ys], fractions), how much it turned (degrees) and grew since the
+ * first. Between two it moves evenly; before the first and after the last it holds.
+ */
+data class TextFollow(
+    val clipId: Long,
+    val timesMs: List<Long>,
+    val xs: List<Float>,
+    val ys: List<Float>,
+    val angles: List<Float>,
+    val scales: List<Float>,
+    /** The moment it was set to follow: where it was then is where it is placed (x, y), and moves from. */
+    val fromMs: Long = timesMs.firstOrNull() ?: 0L,
+) {
+    data class At(val x: Float, val y: Float, val angle: Float, val scale: Float)
+
+    fun at(fileMs: Long): At {
+        val n = timesMs.size
+        if (n == 0) return At(0.5f, 0.5f, 0f, 1f)
+        val i = timesMs.binarySearch(fileMs).let { if (it >= 0) it else -it - 2 }
+        if (i < 0) return At(xs[0], ys[0], angles[0], scales[0])
+        if (i >= n - 1) return At(xs[n - 1], ys[n - 1], angles[n - 1], scales[n - 1])
+        val t = (fileMs - timesMs[i]).toFloat() / (timesMs[i + 1] - timesMs[i]).coerceAtLeast(1)
+        fun mix(v: List<Float>) = v[i] + (v[i + 1] - v[i]) * t
+        return At(mix(xs), mix(ys), mix(angles), mix(scales))
+    }
 }
 
 /** What a text looks like at one moment. */

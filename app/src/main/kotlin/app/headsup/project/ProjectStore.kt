@@ -60,6 +60,7 @@ data class SavedClip(
     val gradeKeys: List<app.headsup.core.color.GradeKey> = emptyList(),
     /** The shot steadied (its measured path and strength), or null. */
     val stabilize: app.headsup.core.frame.Stabilizer.Path? = null,
+    val subject: String? = null,
 )
 
 /** A reversed clip's source: [originalUri] from [startMs] to [endMs], played backwards. */
@@ -273,6 +274,16 @@ internal object Json {
         .put("font", t.font.name).put("colour", t.colour).put("glow", t.glow.toDouble()).put("shadow", t.shadow)
         .put("align", t.align.name).put("animIn", t.animIn.name).put("animOut", t.animOut.name).put("animMs", t.animMs)
         .putOpt("onlyClip", t.onlyClip).putOpt("onlyGroup", t.onlyGroup)
+        .putOpt("image", t.image).put("opacity", t.opacity.toDouble()).put("angle", t.angle.toDouble())
+        .put("cutout", t.cutout).put("behind", t.behind).putOpt("behindMask", t.behindMask).put("behindOutside", t.behindOutside)
+        .putOpt("fontFile", t.fontFile).putOpt("fillImage", t.fillImage)
+        .apply {
+            t.follow?.let { f ->
+                put("follow", JSONObject().put("clip", f.clipId)
+                    .put("t", JSONArray(f.timesMs)).put("x", JSONArray(f.xs.map { it.toDouble() })).put("y", JSONArray(f.ys.map { it.toDouble() }))
+                    .put("a", JSONArray(f.angles.map { it.toDouble() })).put("s", JSONArray(f.scales.map { it.toDouble() })))
+            }
+        }
 
     private fun text(o: JSONObject) = TextItem(
         id = o.optLong("id"),
@@ -292,6 +303,22 @@ internal object Json {
         animMs = o.optLong("animMs", 500L),
         onlyClip = if (o.has("onlyClip")) o.getLong("onlyClip") else null,
         onlyGroup = if (o.has("onlyGroup")) o.getLong("onlyGroup") else null,
+        image = o.optStringOrNull("image"),
+        opacity = o.optDouble("opacity", 1.0).toFloat(),
+        angle = o.optDouble("angle", 0.0).toFloat(),
+        cutout = o.optBoolean("cutout", false),
+        behind = o.optBoolean("behind", false),
+        behindMask = if (o.has("behindMask")) o.optInt("behindMask") else null,
+        behindOutside = o.optBoolean("behindOutside", false),
+        fontFile = o.optStringOrNull("fontFile"),
+        fillImage = o.optStringOrNull("fillImage"),
+        follow = o.optJSONObject("follow")?.let { j ->
+            fun floats(k: String) = j.optJSONArray(k)?.let { a -> List(a.length()) { a.optDouble(it).toFloat() } }.orEmpty()
+            val times = j.optJSONArray("t")?.let { a -> List(a.length()) { a.optLong(it) } }.orEmpty()
+            val xs = floats("x"); val ys = floats("y"); val an = floats("a"); val sc = floats("s")
+            if (times.isEmpty() || listOf(xs, ys, an, sc).any { it.size != times.size }) null
+            else app.headsup.core.edit.TextFollow(j.optLong("clip"), times, xs, ys, an, sc)
+        },
     )
 
     private fun audioClip(c: AudioClip) = JSONObject()
@@ -372,13 +399,14 @@ internal object Json {
                 put("stabilize", JSONObject().put("start", p.startMs).put("frame", p.frameMs.toDouble()).put("strength", p.strength.toDouble()).put("steps", flat))
             }
         }
+        .putOpt("subject", c.subject)
         .apply { if (c.gradeKeys.isNotEmpty()) put("gradeKeys", JSONArray(c.gradeKeys.map { k -> JSONObject().put("t", k.timeMs).put("grade", grade(k.grade)) })) }
         .put("raw", JSONObject().put("exposure", c.rawDevelop.exposure.toDouble()).put("highlights", c.rawDevelop.highlights.toDouble())
             .put("shadows", c.rawDevelop.shadows.toDouble()).put("temperature", c.rawDevelop.temperature.toDouble()).put("tint", c.rawDevelop.tint.toDouble())
             .put("sharpen", c.rawDevelop.sharpen.toDouble()).put("colourNoise", c.rawDevelop.colourNoise.toDouble()))
         .put("reframe", JSONObject().put("zoom", c.reframe.zoom).put("centerX", c.reframe.centerX).put("centerY", c.reframe.centerY).put("angleDegrees", c.reframe.angleDegrees).put("fit", c.reframe.fit).put("blur", c.reframe.blur)
             .put("vertical", c.reframe.vertical).put("horizontal", c.reframe.horizontal)
-            .put("distortion", c.reframe.distortion.toDouble()).put("lensVignette", c.reframe.lensVignette.toDouble()))
+            .put("distortion", c.reframe.distortion.toDouble()).put("lensVignette", c.reframe.lensVignette.toDouble()).put("mirrored", c.reframe.mirrored))
 
     private fun clip(o: JSONObject) = SavedClip(
         uri = Uri.parse(o.getString("uri")),
@@ -414,6 +442,7 @@ internal object Json {
         suggested = o.optBoolean("suggested", false),
         cullGroup = if (o.has("cullGroup")) o.optInt("cullGroup") else null,
         cullBest = o.optBoolean("cullBest", false),
+        subject = o.optStringOrNull("subject"),
         stabilize = o.optJSONObject("stabilize")?.let { j ->
             val flat = j.optJSONArray("steps") ?: return@let null
             app.headsup.core.frame.Stabilizer.Path(
@@ -442,6 +471,7 @@ internal object Json {
                 vertical = r.optDouble("vertical", 0.0).toFloat(),
                 distortion = r.optDouble("distortion", 0.0).toFloat(),
                 lensVignette = r.optDouble("lensVignette", 0.0).toFloat(),
+                mirrored = r.optBoolean("mirrored", false),
                 horizontal = r.optDouble("horizontal", 0.0).toFloat(),
             )
         } ?: Reframe(),
@@ -487,6 +517,11 @@ internal object Json {
         .put("wheels", JSONArray(g.wheels.map { it.toDouble() }))
         .put("texture", g.texture)
         .put("defringe", g.defringe.toDouble())
+        .put("colourPop", g.colourPop.toDouble())
+        .put("points", JSONArray(g.points.map { p ->
+            JSONObject().put("r", p.r.toDouble()).put("g", p.g.toDouble()).put("b", p.b.toDouble()).put("range", p.range.toDouble())
+                .put("hue", p.hue.toDouble()).put("sat", p.saturation.toDouble()).put("lum", p.luminance.toDouble())
+        }))
         .put("clarity", g.clarity)
         .put("dehaze", g.dehaze)
         .put("glow", g.glow)
@@ -532,6 +567,15 @@ internal object Json {
                 ?: app.headsup.core.color.ColourWheels.NEUTRAL,
             texture = f("texture"),
             defringe = f("defringe"),
+            colourPop = f("colourPop"),
+            points = o.optJSONArray("points")?.let { a ->
+                List(a.length()) { k -> a.getJSONObject(k) }.map { p ->
+                    app.headsup.core.color.PointColour(
+                        p.optDouble("r").toFloat(), p.optDouble("g").toFloat(), p.optDouble("b").toFloat(), p.optDouble("range", 0.35).toFloat(),
+                        p.optDouble("hue", 0.0).toFloat(), p.optDouble("sat", 0.0).toFloat(), p.optDouble("lum", 0.0).toFloat(),
+                    )
+                }
+            }.orEmpty(),
             clarity = f("clarity"),
             dehaze = f("dehaze"),
             glow = f("glow"),
@@ -557,6 +601,7 @@ internal object Json {
         .put("glowWarmth", e.glowWarmth.toDouble())
         .put("lensAberration", e.lensAberration.toDouble())
         .put("lensSoftness", e.lensSoftness.toDouble())
+        .put("bokeh", e.bokeh.toDouble()).put("bokehHighlights", e.bokehHighlights.toDouble()).putOpt("bokehMask", e.bokehMask).put("bokehInvert", e.bokehInvert)
         .putOpt("barsRatio", e.barsRatio)
         .put("barsMotion", e.barsMotion.name)
         .putOpt("graph", e.graph?.name)
@@ -576,6 +621,10 @@ internal object Json {
             glowWarmth = o.optDouble("glowWarmth", d.glowWarmth.toDouble()).toFloat(),
             lensAberration = o.optDouble("lensAberration", d.lensAberration.toDouble()).toFloat(),
             lensSoftness = o.optDouble("lensSoftness", d.lensSoftness.toDouble()).toFloat(),
+            bokeh = o.optDouble("bokeh", 0.0).toFloat(),
+            bokehHighlights = o.optDouble("bokehHighlights", 0.5).toFloat(),
+            bokehMask = if (o.has("bokehMask")) o.optInt("bokehMask") else null,
+            bokehInvert = o.optBoolean("bokehInvert", false),
             barsRatio = if (o.has("barsRatio")) o.getDouble("barsRatio").toFloat() else null,
             barsMotion = app.headsup.render.BarsMotion.entries.firstOrNull { it.name == o.optString("barsMotion") } ?: app.headsup.render.BarsMotion.STILL,
             graph = GraphMetric.entries.firstOrNull { it.name == o.optStringOrNull("graph") },

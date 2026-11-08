@@ -43,7 +43,27 @@ fun MaskKeyStrip(
     onAdd: () -> Unit,
     onDelete: (timeMs: Long) -> Unit,
     onClear: () -> Unit,
+) = KeyStrip(keys.map { it.timeMs }, cutStartMs, cutEndMs, playhead, onSeek, onAdd, onDelete, onClear)
+
+/**
+ * Keys along a clip's cut ([times], file time): diamonds at their moments and the playhead as a
+ * line. Tap a diamond to go there and select it, elsewhere to jump; arrows step from key to key;
+ * with [onMove], the selected key is moved to the playhead (what it holds goes with it).
+ */
+@Composable
+fun KeyStrip(
+    times: List<Long>,
+    cutStartMs: Long,
+    cutEndMs: Long,
+    playhead: LongState,
+    onSeek: (clipMs: Long) -> Unit,
+    onAdd: () -> Unit,
+    onDelete: (timeMs: Long) -> Unit,
+    onClear: () -> Unit,
+    onMove: ((fromMs: Long) -> Unit)? = null,
 ) {
+    data class K(val timeMs: Long)
+    val keys = times.sorted().map { K(it) }
     var selected by remember { mutableStateOf<Long?>(null) }
     val length = (cutEndMs - cutStartMs).coerceAtLeast(1L)
     // The key under the playhead counts as selected, so stopping on one is enough to delete it.
@@ -98,6 +118,12 @@ fun MaskKeyStrip(
                 color = HeadsupColors.TextMuted,
             )
             Spacer(Modifier.weight(1f))
+            // A key chosen (tapped) and the playhead moved away: the key goes to the playhead.
+            val chosen = selected?.takeIf { t -> keys.any { it.timeMs == t } }
+            if (onMove != null && chosen != null && abs(chosen - here) > 20) SmallAction("Move here", {
+                onMove(chosen)
+                selected = here
+            })
             SmallAction("+ Key", onAdd)
             if (current != null) SmallAction("Delete key", {
                 onDelete(current)

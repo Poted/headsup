@@ -73,6 +73,11 @@ data class ExportRequest(
     val reframe: Reframe = Reframe(),
     /** The shot steadied ([app.headsup.core.frame.Stabilizer]), or null. */
     val stabilize: app.headsup.core.frame.Stabilizer.Path? = null,
+    /** The clip's id (texts follow places in it) and its subject's maps (texts behind it). */
+    val clipId: Long = -1L,
+    val subject: String? = null,
+    /** The clip's masks, for texts that go behind one. */
+    val textMasks: List<app.headsup.core.color.ColourMask> = emptyList(),
     /** Playback speed (0.5 = half speed); the dashboard follows the picture. */
     val speed: Float = 1f,
     /** Silence the sound when the speed is changed (otherwise it is stretched, keeping its pitch). */
@@ -89,6 +94,8 @@ data class ExportRequest(
     val texts: List<TextItem> = emptyList(),
     /** Text field values that do not change within the clip (activity summary, photo data). */
     val textValues: Map<String, String> = emptyMap(),
+    /** When the video was started (its own clock, UTC), for texts showing the time as it runs. */
+    val videoStartUtcMs: Long? = null,
     /** The route map, the activity it shows and (for a photo) its fixed place on it. */
     val routeMap: app.headsup.render.RouteMap = app.headsup.render.RouteMap(),
     val mapTrack: ActivityTrack? = null,
