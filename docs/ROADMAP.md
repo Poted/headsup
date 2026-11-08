@@ -225,11 +225,11 @@ project's files), the preview resized left/right when held sideways, Edit called
 
 ## For 1.0.0
 
-- [ ] Text behind: choose what the text goes behind instead of the subject found by itself (people,
+- [x] Text behind: choose what the text goes behind instead of the subject found by itself (people,
       animals, vehicles; else MobileSAM's guess in the middle, which can look random): any mask
       of the photo or clip (a tapped object, a wall painted with the brush, the sky, people…),
       with AI masks tracked on video as they are now. The text's Subject › Behind becomes
-      "Behind: [mask]".
+      "Behind: [mask]". Done, with Fill the frame, fonts of one's own and image-filled letters.
 
 ## Pro features (proposed with the redesign, 2026-11)
 
