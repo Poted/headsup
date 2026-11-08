@@ -5514,7 +5514,8 @@ private fun TextPanel(state: UiState, vm: HeadsupViewModel, stickers: Boolean, a
                     else -> update { it.copy(behind = true, behindMask = choices[i - 2].index) }
                 }
             })
-            if (item.behind && item.behindMask != null && current < 0) Hint("Mask ${item.behindMask + 1} is not on this ${if (state.photoProject) "photo" else "clip"}: nothing is in front of the text here.")
+            val chosenMask = item.behindMask
+            if (item.behind && chosenMask != null && current < 0) Hint("Mask ${chosenMask + 1} is not on this ${if (state.photoProject) "photo" else "clip"}: nothing is in front of the text here.")
             if (choices.isEmpty()) Hint("To go behind something of your own (a wall, a tree, a person), make a mask of it in Adjust › Masks (Select, Subject, Sky or the brush), then choose it here.")
         }
         if (!state.photoProject) {
