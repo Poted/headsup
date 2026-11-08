@@ -223,6 +223,14 @@ project's files), the preview resized left/right when held sideways, Edit called
 9. [x] Videos' own data in texts without a watch: date, time, a running clock, place (GPS).
 10. [x] HDR from an exposure bracket (AEB, e.g. a drone): marked photos lined up and fused.
 
+## For 1.0.0
+
+- [ ] Text behind: choose what the text goes behind instead of the subject found by itself (people,
+      animals, vehicles; else MobileSAM's guess in the middle, which can look random): any mask
+      of the photo or clip (a tapped object, a wall painted with the brush, the sky, people…),
+      with AI masks tracked on video as they are now. The text's Subject › Behind becomes
+      "Behind: [mask]".
+
 ## Pro features (proposed with the redesign, 2026-11)
 
 - [x] Before / after with a split line across the picture, dragged left and right.
