@@ -188,9 +188,8 @@ project's files), the preview resized left/right when held sideways, Edit called
       undoes rolling shutter. A first picture-only attempt lost the path on fast walking and FPV
       footage; Steady (2026-11) reads the shift and turn from frame blocks with outliers left out
       and smooths the path; to be judged on such footage, the gyro remains the better source.
-- [ ] Mixer, still to do: point colour (pick a hue from the picture, widen or narrow its range,
-      change its hue/saturation/luminance), selective colour (CMYK per colour family, whites,
-      neutrals, blacks).
+- [x] Mixer: point colour and colour pop. Still to do: selective colour (CMYK per colour family,
+      whites, neutrals, blacks).
 
 ## Next (in this order)
 
@@ -214,23 +213,26 @@ project's files), the preview resized left/right when held sideways, Edit called
        playhead, delete).
 3. [x] Left-handed layout held sideways (Settings › Layout).
 4. [x] ⓘ texts checked; the projects' note in its list's ⓘ.
-5. [ ] Before / after with a split line.
-6. [ ] Layers: a logo or image over the picture (as DJI Mimo's watermark), then picture in picture.
-7. [ ] Field theme switching itself on in bright light, with a switch to turn that off.
-8. [ ] Point colour (a hue picked from the picture, its range, its hue/saturation/luminance) and
-       selective colour.
+5. [x] Before / after with a split line (hold the picture and slide).
+6. [x] Layers: logos and stickers over the picture (their own tab, a library of packs), stuck to
+       the picture by tracking, texts behind the subject or with the picture inside the letters.
+       Picture in picture dropped for now (no use found yet).
+7. [x] Field theme switching itself on in bright light, with a switch to turn that off.
+8. [x] Point colour (a hue picked from the picture, its range, its hue/saturation/luminance) and
+       colour pop. Still open: selective colour in CMYK per family (whites, neutrals, blacks).
+9. [x] Videos' own data in texts without a watch: date, time, a running clock, place (GPS).
+10. [x] HDR from an exposure bracket (AEB, e.g. a drone): marked photos lined up and fused.
 
 ## Pro features (proposed with the redesign, 2026-11)
 
-- [ ] Before / after with a split line across the picture, dragged left and right (today only
-      holding the picture shows the original).
+- [x] Before / after with a split line across the picture, dragged left and right.
 - [ ] Layers: an image (PNG, logo, photo) over a photo or video; a second video as picture in
       picture (also under Later above).
 - [x] Mask edges at full resolution in export: the 640 px mask is laid onto the picture's edges at
       full size in the shaders (joint bilateral); a feathered or blended mask keeps that shape.
 - [ ] Stabilisation from the camera's gyro (GoPro GPMF, DJI and phone metadata), alongside the
       watch data already used.
-- [ ] Field theme switching itself on in bright light (the phone's light sensor).
+- [x] Field theme switching itself on in bright light (the phone's light sensor).
 - [ ] Translations: the texts are written in the code (no string resources yet); a Polish version
       first needs them moved to resources.
 
