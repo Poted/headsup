@@ -719,3 +719,24 @@ fun OptionsSheet(title: String, onDismiss: () -> Unit, content: @Composable andr
         }
     }
 }
+
+/**
+ * A line that sums up what a sheet holds ("12 clips · 2 photos", "1920×1080 · HEVC"), tapped to
+ * open it: the page keeps the summary, the sheet the whole list or every setting.
+ */
+@Composable
+fun SheetLine(summary: String, action: String, onClick: () -> Unit, modifier: Modifier = Modifier) {
+    Row(
+        modifier
+            .fillMaxWidth()
+            .clip(MaterialTheme.shapes.small)
+            .background(HeadsupColors.SurfaceHigh)
+            .clickable(onClick = onClick)
+            .padding(horizontal = 12.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(summary, Modifier.weight(1f), style = MaterialTheme.typography.labelLarge, color = HeadsupColors.AccentInk, maxLines = 2)
+        Spacer(Modifier.width(8.dp))
+        Text("$action ▾", style = MaterialTheme.typography.labelLarge, color = HeadsupColors.Ink)
+    }
+}

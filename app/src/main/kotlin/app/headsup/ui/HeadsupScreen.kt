@@ -1373,59 +1373,88 @@ private fun FilesPanel(
     onShowClip: (Int) -> Unit,
     onAddPhotos: () -> Unit,
 ) {
-    // Two levels: all projects, and the open project with its files (pictures, sound, activity),
-    // going back and forth between them. Everything the project uses is copied in here.
-    var browsing by rememberSaveable { mutableStateOf(false) }
+    // The open project and its files on the page; the list of all projects and the project's own
+    // lists (files, sounds, activities) in sheets from the bottom, summed up by a line each.
+    var projects by rememberSaveable { mutableStateOf(false) }
     var section by rememberSaveable { mutableStateOf("Video") }
-    if (browsing) {
-        ProjectRow(
-            state, vm,
-            onOpen = { browsing = false },
-            onNew = { kind ->
-                // A new project goes straight to its files, and to the picker.
-                vm.newProject(kind)
-                browsing = false
-                section = "Video"
-                if (kind == ProjectKind.PHOTOS) onAddPhotos() else onAddVideos()
-            },
-        )
-        return
+    if (projects) {
+        OptionsSheet("Projects", onDismiss = { projects = false }) {
+            ProjectRow(
+                state, vm,
+                onOpen = { projects = false },
+                onNew = { kind ->
+                    // A new project goes straight to its files, and to the picker.
+                    vm.newProject(kind)
+                    projects = false
+                    section = "Video"
+                    if (kind == ProjectKind.PHOTOS) onAddPhotos() else onAddVideos()
+                },
+            )
+        }
     }
-    ProjectHeader(state, vm, onBack = { browsing = true })
+    ProjectHeader(state, vm, onProjects = { projects = true })
     // The project's files, by kind.
     LazyRow(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
         item { CircleOption("▶", if (state.photoProject) "Photos" else "Video", selected = section == "Video", modified = state.clips.isNotEmpty()) { section = "Video" } }
         if (!state.photoProject) item { CircleOption("♪", "Sound", selected = section == "Sound", modified = state.audioFiles.isNotEmpty()) { section = "Sound" } }
         item { CircleOption("FIT", "Activity", selected = section == "FIT", modified = state.activities.isNotEmpty()) { section = "FIT" } }
     }
+    var list by rememberSaveable { mutableStateOf(false) }
+    fun count(n: Int, one: String, many: String = one + "s") = if (n == 1) "1 $one" else "$n $many"
     when (section) {
         "Sound" -> {
             AddTile(HeadsupIcons.Music, "Sound", onAddSound, Modifier.fillMaxWidth())
-            ToolSection("Sounds", info = "Music, ambience, effects (from Downloads or Music): copied into the project, then placed on the Audio page.") {
+            ToolSection("Sounds", info = "Music, ambience, effects (from Downloads or Music): copied into the project, then placed on the Audio page. The line opens the list.") {
+                val used = state.audioFiles.count { f -> state.audioClips.any { it.uri == f.uri } }
                 if (state.audioFiles.isEmpty()) Text("No sounds yet.", style = MaterialTheme.typography.bodySmall, color = HeadsupColors.TextMuted)
-                SoundLibrary(state, vm)
+                else SheetLine(count(state.audioFiles.size, "sound") + " · $used on the tracks", "List", { list = true })
             }
+            if (list) OptionsSheet("Sounds", onDismiss = { list = false }) { SoundLibrary(state, vm) }
         }
         "FIT" -> {
             AddTile(HeadsupIcons.Watch, "FIT file", onAddFit, Modifier.fillMaxWidth())
-            ToolSection("Activities", info = "The .FIT file(s) of the activity, from a watch, a band or a chest strap: for the dashboard, the data texts and the map. Each is matched to the ${if (state.photoProject) "photos" else "clips"} by time.") {
+            ToolSection("Activities", info = "The .FIT file(s) of the activity, from a watch, a band or a chest strap: for the dashboard, the data texts and the map. Each is matched to the ${if (state.photoProject) "photos" else "clips"} by time. The line opens the list.") {
                 if (state.activities.isEmpty()) Text("No activity yet.", style = MaterialTheme.typography.bodySmall, color = HeadsupColors.TextMuted)
+                else SheetLine(
+                    count(state.activities.size, "activity", "activities") + " · " + state.activities.joinToString(", ") { a -> a.track.sportName ?: a.track.sport.name.lowercase().replaceFirstChar { it.uppercase() } },
+                    "List", { list = true },
+                )
+            }
+            if (list) OptionsSheet("Activities", onDismiss = { list = false }) {
                 state.activities.forEachIndexed { i, a -> ActivityRow(a, onRemove = { vm.removeActivity(i) }) }
             }
         }
-        else -> VideoFiles(state, vm, if (state.photoProject) onAddPhotos else onAddVideos, onShowClip)
+        else -> {
+            val add = if (state.photoProject) onAddPhotos else onAddVideos
+            AddTile(HeadsupIcons.Video, if (state.photoProject) "Photos" else "Videos and photos", add, Modifier.fillMaxWidth())
+            ToolSection(
+                if (state.photoProject) "Photos" else "Files",
+                info = "From the gallery or the cloud; copied into the project, so the gallery is never changed. The line opens the list: tap a file there to show it." +
+                    if (state.photoProject) "" else " Large clips (above 1080p) play from a light 1080p copy in the preview; the export always uses the original.",
+            ) {
+                val files = state.clips.distinctBy { it.meta.uri }
+                val photos = files.count { it.meta.isPhoto }
+                val making = files.count { state.proxies[it.meta.uri] is ProxyState.Making || state.proxies[it.meta.uri] == ProxyState.Waiting }
+                if (files.isEmpty()) Text(if (state.photoProject) "No photos yet." else "No files yet.", style = MaterialTheme.typography.bodySmall, color = HeadsupColors.TextMuted)
+                else SheetLine(
+                    listOfNotNull(
+                        if (state.photoProject) count(photos, "photo") else count(files.size - photos, "clip").takeIf { files.size > photos },
+                        count(photos, "photo").takeIf { !state.photoProject && photos > 0 },
+                        if (making > 0) count(making, "preview file") + " being made" else null,
+                    ).joinToString(" · "),
+                    "List", { list = true },
+                )
+            }
+            if (list) OptionsSheet(if (state.photoProject) "Photos" else "Files", onDismiss = { list = false }) {
+                VideoFiles(state, vm, onShowClip = { i -> list = false; onShowClip(i) })
+            }
+        }
     }
 }
 
 @Composable
-private fun VideoFiles(state: UiState, vm: HeadsupViewModel, onAdd: () -> Unit, onShowClip: (Int) -> Unit) {
-    AddTile(HeadsupIcons.Video, if (state.photoProject) "Photos" else "Videos and photos", onAdd, Modifier.fillMaxWidth())
-    ToolSection(
-        if (state.photoProject) "Photos" else "Files",
-        info = "From the gallery or the cloud; copied into the project, so the gallery is never changed. Tap a file to show it." +
-            if (state.photoProject) "" else " Large clips (above 1080p) play from a light 1080p copy in the preview; the export always uses the original.",
-    ) {
-        if (state.clips.isEmpty()) Text(if (state.photoProject) "No photos yet." else "No files yet.", style = MaterialTheme.typography.bodySmall, color = HeadsupColors.TextMuted)
+private fun VideoFiles(state: UiState, vm: HeadsupViewModel, onShowClip: (Int) -> Unit) {
+    run {
         // One row per file, however many times it is cut on the timeline.
         val files = state.clips.withIndex().groupBy { it.value.meta.uri }
         for ((uri, uses) in files) {
@@ -2104,11 +2133,24 @@ private fun formatBytes(bytes: Long): String =
 
 /** The open project (saved automatically) and the list of saved ones. */
 @Composable
-private fun ProjectHeader(state: UiState, vm: HeadsupViewModel, onBack: () -> Unit) {
+private fun ProjectHeader(state: UiState, vm: HeadsupViewModel, onProjects: () -> Unit) {
     var renaming by remember { mutableStateOf(false) }
-    // Its actions on a line of their own (back to the list, rename), the name and facts under them.
+    // The app's settings: on the Project page, the one about the projects rather than an edit.
+    var settings by rememberSaveable { mutableStateOf(false) }
+    if (settings) SettingsSheet(vm, onDismiss = { settings = false })
+    // All projects as a line (the list in a sheet), the settings beside it.
+    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        val films = state.projects.count { it.kind == ProjectKind.VIDEO }
+        val albums = state.projects.count { it.kind == ProjectKind.PHOTOS }
+        SheetLine(
+            "All projects · " + listOf(if (films == 1) "1 film" else "$films films", if (albums == 1) "1 album" else "$albums albums").joinToString(", "),
+            "Open", onProjects, Modifier.weight(1f),
+        )
+        RoundIconButton(HeadsupIcons.Settings, "Settings", { settings = true })
+    }
+    LaunchedEffect(Unit) { vm.refreshProjects() }
+    // Its actions on a line of their own (album view, rename), the name and facts under them.
     Row(verticalAlignment = Alignment.CenterVertically) {
-        SmallAction("‹ Projects", onBack)
         Spacer(Modifier.weight(1f))
         // An open album's album view (stars, Auto pick): from the album itself, not the list.
         if (state.photoProject && state.clips.isNotEmpty()) SmallAction("⊞ Album", { vm.openAlbumOf(state.projectName) })
@@ -2176,16 +2218,10 @@ private fun KindHeader(shown: ProjectKind, films: Int, albums: Int, modifier: Mo
 private fun ProjectRow(state: UiState, vm: HeadsupViewModel, onOpen: () -> Unit, onNew: (ProjectKind) -> Unit) {
     // Films and albums kept apart: a header to switch between them, each with its own New and list.
     var kindShown by rememberSaveable { mutableStateOf(if (state.photoProject) ProjectKind.PHOTOS else ProjectKind.VIDEO) }
-    // The app's settings live here, on the one page that is about no project in particular.
-    var settings by rememberSaveable { mutableStateOf(false) }
-    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        KindHeader(
-            kindShown, films = state.projects.count { it.kind == ProjectKind.VIDEO }, albums = state.projects.count { it.kind == ProjectKind.PHOTOS },
-            Modifier.weight(1f),
-        ) { kindShown = it }
-        RoundIconButton(HeadsupIcons.Settings, "Settings", { settings = true })
-    }
-    if (settings) SettingsSheet(vm, onDismiss = { settings = false })
+    KindHeader(
+        kindShown, films = state.projects.count { it.kind == ProjectKind.VIDEO }, albums = state.projects.count { it.kind == ProjectKind.PHOTOS },
+        Modifier.fillMaxWidth(),
+    ) { kindShown = it }
     // A project from the list being renamed, or about to be deleted.
     var renamingOther by remember { mutableStateOf<String?>(null) }
     var deletingOther by remember { mutableStateOf<String?>(null) }
@@ -5291,13 +5327,7 @@ private fun ExportControls(
     ) {
         val presets = ExportPreset.entries
         LabeledChoice("Quick presets", presets.map { it.label }, { presets[it] == active }, { vm.applyPreset(presets[it]) }, minCell = 120.dp)
-        Row(
-            Modifier.fillMaxWidth().clip(MaterialTheme.shapes.small).background(HeadsupColors.SurfaceHigh).clickable { settingsOpen = true }.padding(horizontal = 12.dp, vertical = 10.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text(summary, Modifier.weight(1f), style = MaterialTheme.typography.labelLarge, color = HeadsupColors.AccentInk, maxLines = 2)
-            Text("Settings ▾", style = MaterialTheme.typography.labelLarge, color = HeadsupColors.Ink)
-        }
+        SheetLine(summary, "Settings", { settingsOpen = true })
         Button(onClick = onExportVideos, enabled = state.clips.isNotEmpty(), modifier = Modifier.fillMaxWidth()) {
             Text(if (settings.wholeTimeline) "Export timeline" else "Export ${state.clips.size} clips")
         }
@@ -5402,13 +5432,7 @@ private fun PhotoExport(state: UiState, vm: HeadsupViewModel) {
             settings.photoFormat.label,
             ExportSettings.PHOTO_QUALITIES.firstOrNull { it.first == settings.photoQuality }?.second?.takeIf { settings.photoFormat != app.headsup.export.PhotoFormat.TIFF16 },
         ).joinToString(" · ")
-        Row(
-            Modifier.fillMaxWidth().clip(MaterialTheme.shapes.small).background(HeadsupColors.SurfaceHigh).clickable { settingsOpen = true }.padding(horizontal = 12.dp, vertical = 10.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text(summary, Modifier.weight(1f), style = MaterialTheme.typography.labelLarge, color = HeadsupColors.AccentInk, maxLines = 1)
-            Text("Settings ▾", style = MaterialTheme.typography.labelLarge, color = HeadsupColors.Ink)
-        }
+        SheetLine(summary, "Settings", { settingsOpen = true })
         if (settingsOpen) OptionsSheet("Photo export", onDismiss = { settingsOpen = false }) {
             ToolSection("Photos", info = "Size: the long side in pixels (Full keeps each photo's own)." + formatInfo) {
         val sizes = ExportSettings.PHOTO_SIZES
