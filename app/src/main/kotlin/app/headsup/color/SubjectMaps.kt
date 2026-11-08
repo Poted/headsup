@@ -19,7 +19,7 @@ object SubjectMaps {
     private val memory = LruCache<String, Bitmap>(4)
 
     private fun file(context: Context, key: String) =
-        File(File(context.filesDir, "subject").apply { mkdirs() }, "${key.hashCode().toUInt().toString(16)}_${key.length}.png")
+        File(File(context.filesDir, "subject").apply { mkdirs() }, "v2_${key.hashCode().toUInt().toString(16)}_${key.length}.png")
 
     /** The map kept for the photo [key] (its uri), or null when it was never found. */
     fun get(context: Context, key: String): Bitmap? = memory.get(key) ?: run {
@@ -57,12 +57,19 @@ object SubjectMaps {
         fun enough(m: FloatArray) = m.count { it > 0.5f } >= w * h / 500
         val things = Scene.entries.filter { it.thing }
         val coarse = FloatArray(w * h) { i -> things.maxOf { groups[it.ordinal][i] } }
-        val subject = if (enough(coarse)) seg.exact(context, picture, coarse, w, h) else {
+        // The scene model's people, animals and vehicles when they are a real part of the picture
+        // (it finds people unreliably: a few stray pixels do not count).
+        val area = app.headsup.core.color.MaskFollow.area(coarse)
+        val subject = if (area >= 0.02f) seg.exact(context, picture, coarse, w, h) else {
             if (!centre) return null
+            // MobileSAM asked about the middle and about most of the frame; the largest whole thing
+            // it offers is taken (its smallest answer is often a part: a glass, a hand).
             val reading = seg.read(context, picture)
-            seg.objects(context, reading, listOf(Segmenter.Prompt(0.5f, 0.5f, Segmenter.Prompt.Label.IN)), w, h)
-                .map { it.first }
-                .firstOrNull { m -> app.headsup.core.color.MaskFollow.area(m) in 0.01f..0.6f }
+            val asked = seg.objects(context, reading, listOf(Segmenter.Prompt(0.5f, 0.5f, Segmenter.Prompt.Label.IN)), w, h) +
+                seg.objects(context, reading, listOf(Segmenter.Prompt(0.12f, 0.08f, Segmenter.Prompt.Label.BOX_START), Segmenter.Prompt(0.88f, 0.95f, Segmenter.Prompt.Label.BOX_END)), w, h)
+            asked.map { it.first }
+                .filter { m -> app.headsup.core.color.MaskFollow.area(m) in 0.03f..0.65f }
+                .maxByOrNull { m -> app.headsup.core.color.MaskFollow.area(m) }
                 ?: return null
         }
         if (!enough(subject)) return null

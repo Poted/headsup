@@ -601,7 +601,7 @@ internal object Json {
         .put("glowWarmth", e.glowWarmth.toDouble())
         .put("lensAberration", e.lensAberration.toDouble())
         .put("lensSoftness", e.lensSoftness.toDouble())
-        .put("bokeh", e.bokeh.toDouble()).put("bokehHighlights", e.bokehHighlights.toDouble()).putOpt("bokehMask", e.bokehMask)
+        .put("bokeh", e.bokeh.toDouble()).put("bokehHighlights", e.bokehHighlights.toDouble()).putOpt("bokehMask", e.bokehMask).put("bokehInvert", e.bokehInvert)
         .putOpt("barsRatio", e.barsRatio)
         .put("barsMotion", e.barsMotion.name)
         .putOpt("graph", e.graph?.name)
@@ -624,6 +624,7 @@ internal object Json {
             bokeh = o.optDouble("bokeh", 0.0).toFloat(),
             bokehHighlights = o.optDouble("bokehHighlights", 0.5).toFloat(),
             bokehMask = if (o.has("bokehMask")) o.optInt("bokehMask") else null,
+            bokehInvert = o.optBoolean("bokehInvert", false),
             barsRatio = if (o.has("barsRatio")) o.getDouble("barsRatio").toFloat() else null,
             barsMotion = app.headsup.render.BarsMotion.entries.firstOrNull { it.name == o.optString("barsMotion") } ?: app.headsup.render.BarsMotion.STILL,
             graph = GraphMetric.entries.firstOrNull { it.name == o.optStringOrNull("graph") },

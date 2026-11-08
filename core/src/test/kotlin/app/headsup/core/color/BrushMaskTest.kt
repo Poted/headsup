@@ -222,6 +222,23 @@ class BrushMaskTest {
     }
 
     @Test
+    fun `fitting on a noisy picture keeps one clean edge`() {
+        val w = 100
+        val h = 80
+        val rnd = java.util.Random(7)
+        // Dark left of x = 55, light right of it, with strong noise (a soft video frame).
+        val rgb = FloatArray(w * h * 3) { i -> (if ((i / 3) % w >= 55) 0.7f else 0.3f) + (rnd.nextFloat() - 0.5f) * 0.3f }
+        val ref = BrushReference(w, h, rgb, BrushMask.BASE)
+        val start = FloatArray(w * h) { i -> if (i % w >= 58) 1f else 0f }
+        val map = BrushMask.rasterize(listOf(BrushStroke(listOf(0f, 0f), radius = 0.01f, reference = "p", fit = true)), w, h, references = mapOf("p" to ref), start = start)
+        // No crumbs: well inside stays in, well outside stays out, on every row.
+        for (y in 2 until h - 2) {
+            kotlin.test.assertTrue(at(map, w, 62, y) > 0.5f, "hole at row $y: ${at(map, w, 62, y)}")
+            kotlin.test.assertTrue(at(map, w, 50, y) < 0.5f, "speck at row $y: ${at(map, w, 50, y)}")
+        }
+    }
+
+    @Test
     fun `a stroke keeps its own softness`() {
         val w = 60
         val h = 60

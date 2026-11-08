@@ -671,6 +671,8 @@ object BrushMask {
      * [out]'s edge laid onto the picture's edges near it: along the edge (a few pixels each way),
      * each pixel is given to the side whose colours nearby it looks more like, the inside's and the
      * outside's measured a little way in and out. Where both sides look alike nothing changes.
+     * The choices are then evened out over their neighbours (and the edge kept one smooth line),
+     * so a soft or noisy picture (a video frame) does not break the outline into crumbs.
      */
     private fun fitEdges(out: FloatArray, width: Int, height: Int, ref: BrushReference, gridAspect: Float) {
         if (out.none { it >= 0.5f } || out.all { it >= 0.5f }) return
@@ -685,6 +687,9 @@ object BrushMask {
         val outN = MaskRefine.box(outRing, width, height, win)
         val inMean = Array(3) { c -> MaskRefine.box(FloatArray(n) { colours[it * 3 + c] * inRing[it] }, width, height, win) }
         val outMean = Array(3) { c -> MaskRefine.box(FloatArray(n) { colours[it * 3 + c] * outRing[it] }, width, height, win) }
+        // Each pixel's choice (target) and how sure it is, before they are evened out.
+        val choice = FloatArray(n)
+        val sureness = FloatArray(n)
         for (i in 0 until n) {
             val d = abs(sd[i])
             if (d >= 1.5f * band || inN[i] < 1e-4f || outN[i] < 1e-4f) continue
@@ -700,9 +705,20 @@ object BrushMask {
                 contrast += (a - b) * (a - b)
             }
             val like = sqrt(dOut) / (sqrt(dIn) + sqrt(dOut) + 1e-5f)
-            val target = smoothstep(0.4f, 0.6f, like)
             val sure = smoothstep(0.03f, 0.1f, sqrt(contrast)) * (1f - smoothstep(band, 1.5f * band, d))
-            out[i] += (target - out[i]) * sure
+            choice[i] = smoothstep(0.4f, 0.6f, like) * sure
+            sureness[i] = sure
+        }
+        // Evened out over a small neighbourhood: one noisy pixel no longer flips on its own.
+        val r = (band / 3f).toInt().coerceAtLeast(1)
+        val choiceN = MaskRefine.box(choice, width, height, r)
+        val sureN = MaskRefine.box(sureness, width, height, r)
+        for (i in 0 until n) {
+            val sure = sureN[i]
+            if (sure < 1e-4f) continue
+            val target = smoothstep(0.35f, 0.65f, choiceN[i] / sure)
+            val k = min(1f, sure * 1.5f) * (1f - smoothstep(band, 1.5f * band, abs(sd[i])))
+            out[i] += (target - out[i]) * k
         }
     }
 

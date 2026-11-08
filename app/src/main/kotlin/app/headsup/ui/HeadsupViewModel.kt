@@ -410,6 +410,8 @@ data class UiState(
     val pickingPoint: Boolean = false,
     /** Point colour: the colour whose sliders are shown (and that a finger on the picture moves). */
     val pointSelected: Int = 0,
+    /** Bumped when a photo's subject is to be found again. */
+    val subjectVersion: Int = 0,
     /** When the brush's size (softness, strength) was last set: it shows on the picture for a moment. */
     val brushSizedAt: Long = 0L,
     /** The clip measured for looks ([HeadsupViewModel.analyseClip]): its id and what was measured. */
@@ -2349,7 +2351,8 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
 
     fun selectClip(index: Int) {
         scopeFrame = null
-        _state.update { it.copy(selectedClip = index, scope = null, selectedMask = 0, compareGrade = null, cine = null, fast = null) }
+        // What was being done on the photo before is let go: a colour being picked for it or for a mask.
+        _state.update { it.copy(selectedClip = index, scope = null, selectedMask = 0, compareGrade = null, cine = null, fast = null, pickingPoint = false, pointSelected = 0, pickingColour = false) }
         refreshPreview()
     }
 
@@ -2531,7 +2534,13 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
             val before = s.effects
             val effects = transform(before)
             s.copy(
-                defaultEffects = if (s.effectsOnAll) s.defaultEffects.synced(before, effects) else effects,
+                // What is set on one photo of an album stays that photo's; in a film a clip's effects
+                // carry on to clips added later, but never a photo's bokeh (it is made for that picture).
+                defaultEffects = when {
+                    s.effectsOnAll -> s.defaultEffects.synced(before, effects)
+                    s.photoProject -> s.defaultEffects
+                    else -> effects
+                }.copy(bokeh = 0f, bokehMask = null),
                 clips = s.clips.mapIndexed { i, c ->
                     when {
                         i == s.selectedClip -> c.copy(effects = effects)
@@ -2630,7 +2639,8 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun setClipLut(index: Int, name: String?) {
-        if (name != null) _state.update { it.copy(defaultLut = name) }
+        // In an album one photo's LUT stays its own (All photos sets it on the new ones too).
+        if (name != null) _state.update { if (it.photoProject) it else it.copy(defaultLut = name) }
         updateClip(index) { it.copy(lutName = name) }
     }
 
@@ -3355,6 +3365,13 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
 
     /** Point colour: the next tap on the picture picks a colour (or stops waiting for it). */
     fun setPickingPoint(on: Boolean) = _state.update { it.copy(pickingPoint = on) }
+
+    /** The selected photo's subject found again (what was kept for it forgotten). */
+    fun findPhotoSubjectAgain() {
+        val clip = _state.value.selected?.takeIf { it.meta.isPhoto } ?: return
+        app.headsup.color.SubjectMaps.forget(getApplication(), clip.meta.uri.toString())
+        _state.update { it.copy(subjectVersion = it.subjectVersion + 1) }
+    }
 
     fun selectPoint(i: Int) = _state.update { it.copy(pointSelected = i, pickingPoint = false) }
 
@@ -4541,7 +4558,10 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
         _state.update { s ->
             val grade = transform(s.grade)
             s.copy(
-                defaultGrade = grade,
+                // One photo's corrections stay its own in an album (All photos is for every photo,
+                // new ones too); in a film they carry on to clips added later, but not the colours
+                // picked from this picture.
+                defaultGrade = if (s.photoProject) s.defaultGrade else grade.copy(points = emptyList(), colourPop = 0f),
                 clips = s.clips.mapIndexed { i, c ->
                     when {
                         i != s.selectedClip -> c

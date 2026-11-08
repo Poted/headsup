@@ -50,6 +50,8 @@ data class EffectSettings(
     val bokehHighlights: Float = 0.5f,
     /** What stays sharp: a mask of the photo (its place in the list), or null for the subject found by itself. */
     val bokehMask: Int? = null,
+    /** What the mask (or subject) covers is blurred and the rest kept sharp, instead of the other way. */
+    val bokehInvert: Boolean = false,
 ) {
     val changesPixels: Boolean get() = grain > 0f || glow > 0f || halation > 0f || lens
 
@@ -75,6 +77,7 @@ data class EffectSettings(
         bokeh = if (after.bokeh != before.bokeh) after.bokeh else bokeh,
         bokehHighlights = if (after.bokehHighlights != before.bokehHighlights) after.bokehHighlights else bokehHighlights,
         bokehMask = if (after.bokehMask != before.bokehMask) after.bokehMask else bokehMask,
+        bokehInvert = if (after.bokehInvert != before.bokehInvert) after.bokehInvert else bokehInvert,
     )
 }
 

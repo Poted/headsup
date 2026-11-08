@@ -203,6 +203,8 @@ fun ClipPreview(
      * colour under it shown live), with the picture's own position; two fingers zoom the view.
      */
     liveSample: Boolean = false,
+    /** Changes when the subject is to be found again (the photo's kept one forgotten). */
+    subjectVersion: Int = 0,
     /** Point last measured, 0..1 of the frame, drawn as a target. */
     marker: Offset? = null,
     /** Playhead position within the (trimmed) clip, reported as it changes. */
@@ -655,7 +657,7 @@ fun ClipPreview(
     val reframer by rememberUpdatedState(onReframe)
     val currentReframe by rememberUpdatedState(reframe)
     // Sizes of the frame and the picture under it, for gestures (read when they happen).
-    LaunchedEffect(clip.meta.uri, wantsSubject, photoBitmap) {
+    LaunchedEffect(clip.meta.uri, wantsSubject, photoBitmap, subjectVersion) {
         subjectMap = null
         if (!wantsSubject) return@LaunchedEffect
         val key = clip.meta.uri.toString()
@@ -668,7 +670,7 @@ fun ClipPreview(
     }
     // Bokeh: the photo's background blurred as by a wide-open lens, laid over it (worked out on a
     // smaller copy, a moment after the ruler stops).
-    val bokehPhoto by produceState<ImageBitmap?>(null, photoBitmap, effects.bokeh, effects.bokehHighlights, effects.bokehMask, clip.masks) {
+    val bokehPhoto by produceState<ImageBitmap?>(null, photoBitmap, effects.bokeh, effects.bokehHighlights, effects.bokehMask, effects.bokehInvert, clip.masks, subjectVersion) {
         val src = photoBitmap?.asAndroidBitmap()
         if (!photo || src == null || effects.bokeh <= 0f) { value = null; return@produceState }
         delay(150)

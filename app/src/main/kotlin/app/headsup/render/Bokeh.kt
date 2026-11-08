@@ -36,6 +36,8 @@ object Bokeh {
         val alpha = IntArray(w * h)
         keepBmp.getPixels(alpha, 0, w, 0, 0, w, h)
         val keep = FloatArray(w * h) { i -> (alpha[i] ushr 24) / 255f }
+        // The other side: what the mask covers blurred, the rest sharp.
+        if (effects.bokehInvert) for (i in keep.indices) keep[i] = 1f - keep[i]
         val px = IntArray(w * h)
         small.getPixels(px, 0, w, 0, 0, w, h)
         val out = LensBlur.background(px, w, h, keep, LensBlur.radiusFor(effects.bokeh, maxOf(w, h)), effects.bokehHighlights)

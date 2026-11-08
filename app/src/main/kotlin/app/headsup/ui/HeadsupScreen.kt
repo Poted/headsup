@@ -472,6 +472,7 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
                             else -> null
                         },
                         liveSample = pickingPoint,
+                        subjectVersion = state.subjectVersion,
                         marker = if (measuring) state.scope?.let { Offset(it.markerX, it.markerY) } else null,
                         maxHeight = previewMaxHeight,
                         edgeToEdge = fullscreen,
@@ -5092,6 +5093,9 @@ private fun EffectsPanel(state: UiState, vm: HeadsupViewModel, kind: EffectKind,
             val labels = listOf("Subject") + choices.map { "Mask ${it.index + 1}" }
             val current = effects.bokehMask?.let { m -> choices.indexOfFirst { it.index == m }.let { if (it < 0) -1 else it + 1 } } ?: 0
             LabeledChoice("Sharp", labels, { it == current }, { i -> updateEffects { it.copy(bokehMask = if (i == 0) null else choices[i - 1].index) } })
+            // Which side is blurred, without turning the mask itself inside out.
+            LabeledChoice("Blurred", listOf("The rest", "What it covers"), { (it == 1) == effects.bokehInvert }, { i -> updateEffects { it.copy(bokehInvert = i == 1) } })
+            if (effects.bokehMask == null) SmallAction("Find the subject again", { vm.findPhotoSubjectAgain() })
         }
         EffectKind.LENS -> ToolSection("Lens", info = "An older lens: colour fringes and softness that grow towards the corners; the middle stays sharp. A little goes a long way.") {
             EffectRuler(
@@ -5535,6 +5539,7 @@ private fun TextPanel(state: UiState, vm: HeadsupViewModel, stickers: Boolean, a
                     else -> update { it.copy(behind = true, behindMask = choices[i - 2].index) }
                 }
             })
+            if (state.photoProject && item.behind && item.behindMask == null) SmallAction("Find the subject again", { vm.findPhotoSubjectAgain() })
             if (item.behind) LabeledChoice(
                 "Side", listOf("Behind it", "Behind the rest"), { (it == 1) == item.behindOutside },
                 { i -> update { it.copy(behindOutside = i == 1) } },
