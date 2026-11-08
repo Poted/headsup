@@ -84,6 +84,15 @@ object StickerLibrary {
         true
     }.getOrDefault(false)
 
+    /** One sticker taken out of the library (only a file inside a pack); an emptied pack goes too. */
+    fun deleteSticker(context: Context, file: File): Boolean {
+        val pack = file.canonicalFile.parentFile ?: return false
+        if (pack.parentFile != root(context).canonicalFile) return false
+        val gone = file.delete()
+        if (pack.listFiles().isNullOrEmpty()) pack.delete()
+        return gone
+    }
+
     fun delete(context: Context, pack: String) {
         File(root(context), safe(pack)).takeIf { it.parentFile == root(context) }?.deleteRecursively()
     }

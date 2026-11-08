@@ -243,7 +243,20 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
     // An album's Edit page is its crop; a film's Frame tool.
     val framing = tool == Tool.EDIT && (editTab == EditTab.FRAME || state.photoProject)
     // Texts are edited among the effects.
-    val editingTexts = tool == Tool.OVERLAYS && effectKind == EffectKind.TEXT
+    val editingTexts = tool == Tool.OVERLAYS && (effectKind == EffectKind.TEXT || effectKind == EffectKind.STICKER)
+    // Stickers and logos have a tab of their own; a touch on one from the other tab goes there.
+    val editingStickers = effectKind == EffectKind.STICKER
+    val pickLayer: (Long?) -> Unit = { id ->
+        state.texts.firstOrNull { it.id == id }?.let { t -> effectKind = if (t.isLogo) EffectKind.STICKER else EffectKind.TEXT }
+        vm.selectText(id)
+    }
+    // The text being edited belongs to what is shown: another photo, or the other tab, lets it go.
+    LaunchedEffect(state.selected?.id, state.photoProject, effectKind) {
+        val t = state.texts.firstOrNull { it.id == state.selectedText } ?: return@LaunchedEffect
+        val photo = state.selected
+        val elsewhere = state.photoProject && photo != null && !t.showsOn(photo.id, photo.groupId)
+        if (elsewhere || (editingTexts && t.isLogo != editingStickers)) vm.selectText(null)
+    }
     // Set when a clip ended during playback, so the next one starts playing on its own.
     var continuePlaying by remember { mutableStateOf(false) }
     // Where to jump in the selected clip, e.g. after tapping a highlight.
@@ -505,7 +518,7 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
                         selectedTextId = state.selectedText.takeIf { editingTexts },
                         onTextChange = { id, change -> vm.updateText(id, change) },
                         onDeleteText = { id -> vm.removeText(id) },
-                        onSelectText = { id -> vm.selectText(id) },
+                        onSelectText = pickLayer,
                         cutScrub = cutScrub,
                         onFrameSource = { frameSource.value = it },
                         onPictureSource = { pictureSource.value = it },
@@ -652,8 +665,8 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
                     },
                     onAdd = addVideos,
                     onAddSound = { addingSound = true },
-                    texts = if (editingTexts) state.texts else emptyList(),
-                    onSelectText = vm::selectText,
+                    texts = if (editingTexts) state.texts.filter { it.isLogo == editingStickers } else emptyList(),
+                    onSelectText = pickLayer,
                     onMoveText = { id, start -> vm.updateText(id) { it.copy(startMs = start) } },
                     showAudio = tool == Tool.AUDIO,
                     playing = { previewPlaying.value },
@@ -724,9 +737,9 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
                     Tool.OVERLAYS -> {
                         // Saved from before the looks moved to Adjust: back to an overlay.
                         val kind = effectKind.takeIf { it in OVERLAY_KINDS } ?: EffectKind.DASHBOARD
-                        if (kind == EffectKind.TEXT) {
+                        if (kind == EffectKind.TEXT || kind == EffectKind.STICKER) {
                             EffectKinds(state, kind, OVERLAY_KINDS) { effectKind = it }
-                            TextPanel(state, vm, at = { scrubT.value ?: timelineOf(playhead.longValue) })
+                            TextPanel(state, vm, stickers = kind == EffectKind.STICKER, at = { scrubT.value ?: timelineOf(playhead.longValue) })
                         } else {
                             EffectsPanel(state, vm, kind, playhead, OVERLAY_KINDS) { effectKind = it }
                         }
@@ -1890,46 +1903,64 @@ private fun AddSoundDialog(state: UiState, onPick: (AudioFile) -> Unit, onImport
     )
 }
 
-/** The sticker library (Settings › Sticker packs): a pack's pictures; a touch puts one on the picture. */
+/** The sticker library (Settings › Sticker packs): a pack's pictures; a touch puts one on, a hold deletes it from the library. */
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
-private fun StickerDialog(onPick: (java.io.File) -> Unit, onDismiss: () -> Unit) {
+private fun StickerLibraryGrid(onPick: (java.io.File) -> Unit) {
     val context = LocalContext.current
-    val packs by produceState<List<app.headsup.media.StickerLibrary.Pack>?>(null) {
+    var version by remember { mutableStateOf(0) }
+    val packs by produceState<List<app.headsup.media.StickerLibrary.Pack>?>(null, version) {
         value = withContext(Dispatchers.IO) { app.headsup.media.StickerLibrary.packs(context) }
     }
     var pack by rememberSaveable { mutableStateOf<String?>(null) }
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("Stickers") },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                val all = packs
-                when {
-                    all == null -> Hint("Loading…")
-                    all.isEmpty() -> Hint("No sticker packs yet. Import pictures or a ZIP in Settings › Sticker packs (PNG keeps transparency).")
-                    else -> {
-                        val shown = all.firstOrNull { it.name == pack } ?: all.first()
-                        if (all.size > 1) Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                            for (p in all) FilterChip(selected = p.name == shown.name, onClick = { pack = p.name }, label = { Text(p.name, maxLines = 1) })
-                        }
-                        androidx.compose.foundation.lazy.grid.LazyVerticalGrid(
-                            columns = androidx.compose.foundation.lazy.grid.GridCells.Adaptive(72.dp),
-                            modifier = Modifier.fillMaxWidth().heightIn(max = 360.dp),
-                            horizontalArrangement = Arrangement.spacedBy(6.dp),
-                            verticalArrangement = Arrangement.spacedBy(6.dp),
-                        ) {
-                            items(shown.stickers.size, key = { shown.stickers[it].path }) { i -> StickerThumb(shown.stickers[i]) { onPick(shown.stickers[i]) } }
-                        }
+    var deleting by remember { mutableStateOf<java.io.File?>(null) }
+    val scope = rememberCoroutineScope()
+    ToolSection("Library") {
+        val all = packs
+        when {
+            all == null -> Hint("Loading…")
+            all.isEmpty() -> Hint("No sticker packs yet. Import pictures or a ZIP in Settings › Sticker packs (PNG keeps transparency).")
+            else -> {
+                val shown = all.firstOrNull { it.name == pack } ?: all.first()
+                if (all.size > 1) Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    for (p in all) FilterChip(selected = p.name == shown.name, onClick = { pack = p.name }, label = { Text(p.name, maxLines = 1) })
+                }
+                androidx.compose.foundation.lazy.grid.LazyVerticalGrid(
+                    columns = androidx.compose.foundation.lazy.grid.GridCells.Adaptive(64.dp),
+                    modifier = Modifier.fillMaxWidth().heightIn(max = 280.dp),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    items(shown.stickers.size, key = { shown.stickers[it].path }) { i ->
+                        val f = shown.stickers[i]
+                        StickerThumb(f, onLongClick = { deleting = f }) { onPick(f) }
                     }
                 }
             }
-        },
-        confirmButton = { TextButton(onClick = onDismiss) { Text("Close") } },
-    )
+        }
+    }
+    deleting?.let { f ->
+        AlertDialog(
+            onDismissRequest = { deleting = null },
+            title = { Text("Delete sticker?") },
+            text = { Text("It goes from the library; where it is already placed, it stays.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    deleting = null
+                    scope.launch {
+                        withContext(Dispatchers.IO) { app.headsup.media.StickerLibrary.deleteSticker(context, f) }
+                        version++
+                    }
+                }) { Text("Delete") }
+            },
+            dismissButton = { TextButton(onClick = { deleting = null }) { Text("Cancel") } },
+        )
+    }
 }
 
 @Composable
-private fun StickerThumb(file: java.io.File, onClick: () -> Unit) {
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
+private fun StickerThumb(file: java.io.File, onLongClick: (() -> Unit)? = null, onClick: () -> Unit) {
     val bitmap by produceState<androidx.compose.ui.graphics.ImageBitmap?>(null, file) {
         value = withContext(Dispatchers.IO) {
             runCatching {
@@ -1946,7 +1977,7 @@ private fun StickerThumb(file: java.io.File, onClick: () -> Unit) {
             .aspectRatio(1f)
             .clip(RoundedCornerShape(10.dp))
             .background(HeadsupColors.TextMuted.copy(alpha = 0.15f))
-            .clickable(onClick = onClick)
+            .combinedClickable(onLongClick = onLongClick, onClick = onClick)
             .padding(6.dp),
         contentAlignment = Alignment.Center,
     ) {
@@ -4827,7 +4858,8 @@ private fun EffectKinds(state: UiState, kind: EffectKind, kinds: List<EffectKind
     LazyRow(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
         items(kinds) { e ->
             val active = when (e) {
-                EffectKind.TEXT -> state.texts.isNotEmpty()
+                EffectKind.TEXT -> state.texts.any { !it.isLogo }
+                EffectKind.STICKER -> state.texts.any { it.isLogo }
                 EffectKind.MAP -> state.routeMap.enabled
                 EffectKind.DASHBOARD -> state.style.enabled && state.effects.dashboard && state.activities.isNotEmpty()
                 EffectKind.GRAPH -> effects.graph != null
@@ -4844,6 +4876,7 @@ private fun EffectKinds(state: UiState, kind: EffectKind, kinds: List<EffectKind
 
 private enum class EffectKind(val symbol: String, val label: String) {
     TEXT("T", "Text"),
+    STICKER("St", "Stickers"),
     MAP("Map", "Route map"),
     DASHBOARD("HUD", "Dashboard"),
     GRAPH("Gr", "Graph"),
@@ -4855,7 +4888,7 @@ private enum class EffectKind(val symbol: String, val label: String) {
 }
 
 /** Drawn over the picture: the Overlays tool. */
-private val OVERLAY_KINDS = listOf(EffectKind.TEXT, EffectKind.MAP, EffectKind.DASHBOARD, EffectKind.GRAPH)
+private val OVERLAY_KINDS = listOf(EffectKind.TEXT, EffectKind.STICKER, EffectKind.MAP, EffectKind.DASHBOARD, EffectKind.GRAPH)
 
 /** Part of the picture's look: the base layer's Effects in Adjust. */
 private val LOOK_KINDS = listOf(EffectKind.GRAIN, EffectKind.GLOW, EffectKind.HALATION, EffectKind.LENS, EffectKind.BARS)
@@ -4878,7 +4911,7 @@ private fun EffectsPanel(state: UiState, vm: HeadsupViewModel, kind: EffectKind,
         )
     }
     when (kind) {
-        EffectKind.TEXT -> Unit
+        EffectKind.TEXT, EffectKind.STICKER -> Unit
         EffectKind.MAP -> RouteMapControls(state, vm)
         EffectKind.DASHBOARD -> {
             // The dashboard shows the activity's data: without a FIT file there is nothing to set up.
@@ -5310,37 +5343,53 @@ private val TEXT_COLOURS = listOf(
  * on the timeline its bar moves it in time.
  */
 @Composable
-private fun TextPanel(state: UiState, vm: HeadsupViewModel, at: () -> Long) {
+private fun TextPanel(state: UiState, vm: HeadsupViewModel, stickers: Boolean, at: () -> Long) {
     var tool by rememberSaveable { mutableStateOf(TextTool.LOOK) }
-    val item = state.texts.firstOrNull { it.id == state.selectedText }
+    val item = state.texts.firstOrNull { it.id == state.selectedText && it.isLogo == stickers }
     // A logo: any picture from the gallery (a PNG keeps its transparency).
     val logoPicker = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri -> uri?.let(vm::addLogo) }
     LaunchedEffect(item?.id) { if (item?.isLogo == true && tool !in LOGO_TOOLS) tool = TextTool.SIZE }
-    var stickers by remember { mutableStateOf(false) }
-    if (stickers) StickerDialog(onPick = { f -> vm.addSticker(f); stickers = false }, onDismiss = { stickers = false })
     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-        SmallAction("+ Text", { vm.addText(at()) })
-        SmallAction("+ Logo", { logoPicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) })
-        SmallAction("+ Sticker", { stickers = true })
+        if (stickers) SmallAction("+ From gallery", { logoPicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) })
+        else SmallAction("+ Text", { vm.addText(at()) })
         if (item != null) {
             SmallAction("Delete", { vm.removeText(item.id) })
             SmallAction("Done", { vm.selectText(null) })
         }
     }
     if (item == null) {
-        ToolSection(
-            "Texts",
-            info = (if (state.photoProject) "+ Text adds a text to the photo. Drag it on the picture to place it. Tap a text below to edit it."
-            else "+ Text adds a text at the playhead. Drag it on the picture to place it; its bar on the timeline moves it in time. Tap a text's bar on the timeline, or a text below, to edit it.") +
-                " + Logo puts a picture of your own (a PNG keeps its transparency) in the corner of " + (if (state.photoProject) "every photo" else "the whole film") + ", like a camera app's mark; drag it to place it, Size and Opacity set it.",
-        ) {
-            val photoNow = state.selected
-            val shown = if (state.photoProject && photoNow != null) state.texts.filter { it.showsOn(photoNow.id, photoNow.groupId) } else state.texts
-            if (shown.isEmpty()) {
-                Text("No texts yet.", style = MaterialTheme.typography.bodySmall, color = HeadsupColors.TextMuted)
-            } else {
-                Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    for (t in shown) FilterChip(selected = false, onClick = { vm.selectText(t.id) }, label = { Text(if (t.isLogo) "◩ Logo" else t.text.replace('\n', ' ').take(18)) })
+        val photoNow = state.selected
+        val shown = (if (state.photoProject && photoNow != null) state.texts.filter { it.showsOn(photoNow.id, photoNow.groupId) } else state.texts)
+            .filter { it.isLogo == stickers }
+        if (stickers) {
+            ToolSection(
+                "Stickers",
+                info = "Stickers, frames and logos over the " + (if (state.photoProject) "photo" else "film") + ": a touch on one in the library below puts it on" +
+                    (if (state.photoProject) " this photo (All photos puts it on every one, like a camera app's mark)" else "") +
+                    "; + From gallery takes any picture (a PNG keeps its transparency). On the picture: drag it, ✕ takes it away, ↘ or two fingers size and turn it. " +
+                    "Packs are imported in Settings › Sticker packs; hold a sticker in the library to delete it from there.",
+            ) {
+                if (shown.isEmpty()) {
+                    Text(if (state.photoProject) "No stickers on this photo." else "No stickers yet.", style = MaterialTheme.typography.bodySmall, color = HeadsupColors.TextMuted)
+                } else {
+                    Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        for (t in shown) Box(Modifier.size(56.dp)) { StickerThumb(java.io.File(t.image.orEmpty())) { vm.selectText(t.id) } }
+                    }
+                }
+            }
+            StickerLibraryGrid(onPick = vm::addSticker)
+        } else {
+            ToolSection(
+                "Texts",
+                info = if (state.photoProject) "+ Text adds a text to the photo. Drag it on the picture to place it. Tap a text below to edit it."
+                else "+ Text adds a text at the playhead. Drag it on the picture to place it; its bar on the timeline moves it in time. Tap a text's bar on the timeline, or a text below, to edit it.",
+            ) {
+                if (shown.isEmpty()) {
+                    Text(if (state.photoProject) "No texts on this photo." else "No texts yet.", style = MaterialTheme.typography.bodySmall, color = HeadsupColors.TextMuted)
+                } else {
+                    Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        for (t in shown) FilterChip(selected = false, onClick = { vm.selectText(t.id) }, label = { Text(t.text.replace('\n', ' ').take(18)) })
+                    }
                 }
             }
         }
@@ -5349,7 +5398,7 @@ private fun TextPanel(state: UiState, vm: HeadsupViewModel, at: () -> Long) {
     val update: ((TextItem) -> TextItem) -> Unit = { vm.updateText(item.id, it) }
     // In an album: which photos the text is on.
     val photo = state.selected
-    ToolSection(if (item.isLogo) "Logo" else "Text", info = if (item.isLogo) (if (state.photoProject) "Which photos the logo is on. Drag it on the picture to place it." else "Drag the logo on the picture to place it; Size, Opacity and its timing are below.") else if (state.photoProject) "The text, and which photos it is on." else "The text. Its look, data, font and timing are in the tools below.") {
+    ToolSection(if (item.isLogo) "Sticker" else "Text", info = if (item.isLogo) (if (state.photoProject) "Which photos the sticker is on. Drag it on the picture to place it; ✕ takes it away, ↘ or two fingers size and turn it." else "Drag the sticker on the picture to place it; Size, Opacity and its timing are below.") else if (state.photoProject) "The text, and which photos it is on." else "The text. Its look, data, font and timing are in the tools below.") {
         if (state.photoProject && photo != null) {
             ChoiceGrid(
                 listOf("This photo", "All photos"),
@@ -5449,7 +5498,7 @@ private fun TextPanel(state: UiState, vm: HeadsupViewModel, at: () -> Long) {
             if (item.isLogo) {
                 ValueHeader("Opacity", String.format(Locale.US, "%.0f %%", item.opacity * 100))
                 RulerSlider(item.opacity, 0.1f..1f, 0.02f, { v -> update { it.copy(opacity = v) } }, onReset = { update { it.copy(opacity = 1f) } })
-                SmallAction("Save as sticker", { vm.saveAsSticker(item.id) })
+                SmallAction("Save to library", { vm.saveAsSticker(item.id) })
             }
         }
         TextTool.GLOW -> {

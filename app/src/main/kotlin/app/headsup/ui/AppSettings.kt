@@ -295,7 +295,7 @@ private fun StickerSection(context: Context) {
     }
     ToolSection(
         "Sticker packs",
-        info = "Stickers, frames and marks of your own, for every project: a few pictures at once, or a ZIP of them (PNG keeps its transparency). Overlays › Text › + Sticker puts one on; a logo there can be saved here too (My stickers).",
+        info = "Stickers, frames and marks of your own, for every project: a few pictures at once, or a ZIP of them (PNG keeps its transparency). Overlays › Stickers puts them on; a picture from the gallery can be saved here too (My stickers). Hold a sticker there to delete it.",
     ) {
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             SmallAction("+ Pictures", { pictures.launch(androidx.activity.result.PickVisualMediaRequest(androidx.activity.result.contract.ActivityResultContracts.PickVisualMedia.ImageOnly)) })

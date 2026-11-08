@@ -1029,6 +1029,8 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                 val item = TextItem(
                     id = id, text = "Logo", startMs = 0L, lengthMs = end, x = x, y = y, size = size,
                     animIn = TextAnim.NONE, animOut = TextAnim.NONE, image = path, shadow = false,
+                    // In an album a sticker belongs to the photo it is put on (All photos is a touch away).
+                    onlyClip = if (s.photoProject) s.selected?.id else null,
                 )
                 s.copy(texts = s.texts + item, selectedText = id)
             }
