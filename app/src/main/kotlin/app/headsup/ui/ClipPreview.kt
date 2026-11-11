@@ -1927,18 +1927,27 @@ fun ClipPreview(
                         .offset { androidx.compose.ui.unit.IntOffset(scopeDrag.x.toInt(), scopeDrag.y.toInt()) }
                         .pointerInput(Unit) {
                             val far = 28.dp.toPx()
-                            androidx.compose.foundation.gestures.detectDragGestures(
-                                onDragEnd = {
+                            awaitEachGesture {
+                                val down = awaitFirstDown(requireUnconsumed = false)
+                                val slop = viewConfiguration.touchSlop
+                                var total = Offset.Zero
+                                var dragging = false
+                                // Moved past the slop: it follows the finger (a touch that stays put is the tap below).
+                                drag(down.id) { change ->
+                                    total += change.positionChange()
+                                    if (!dragging && total.getDistance() > slop) dragging = true
+                                    if (dragging) {
+                                        change.consume()
+                                        scopeDrag = total
+                                    }
+                                }
+                                if (dragging) {
                                     var c = scopeCorner
-                                    if (scopeDrag.x > far) c = c or 1 else if (scopeDrag.x < -far) c = c and 2
-                                    if (scopeDrag.y > far) c = c or 2 else if (scopeDrag.y < -far) c = c and 1
+                                    if (total.x > far) c = c or 1 else if (total.x < -far) c = c and 2
+                                    if (total.y > far) c = c or 2 else if (total.y < -far) c = c and 1
                                     scopeCorner = c
-                                    scopeDrag = Offset.Zero
-                                },
-                                onDragCancel = { scopeDrag = Offset.Zero },
-                            ) { change, amount ->
-                                change.consume()
-                                scopeDrag += amount
+                                }
+                                scopeDrag = Offset.Zero
                             }
                         }
                         .clickable { scopeKind = (scopeKind + 1) % 3 }
