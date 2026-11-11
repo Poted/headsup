@@ -379,6 +379,21 @@ class ExportManager(private val context: Context) {
         // The timeline's frame scaled to the output size (the same shape), so every clip of a joined
         // export has the same frame.
         effects += Presentation.createForWidthAndHeight(out.width, out.height, Presentation.LAYOUT_SCALE_TO_FIT_WITH_CROP)
+        // Blurred effect bars: the finished frame's own colours, blurred, where the bars are.
+        if (request.effects.barsBlur && request.effects.barsRatio != null) {
+            val bars = DashboardRenderer(context.assets)
+            val w = out.width.toFloat()
+            val h = out.height.toFloat()
+            effects += BarsBlurEffect { positionMs ->
+                val timelineMs = request.timelineStartMs + if (request.isPhoto) positionMs else (positionMs / request.speed).toLong()
+                val now = request.effects.copy(barsAmount = request.effects.barsMotion.amount(timelineMs - request.clipStartMs, request.clipLengthMs))
+                val out = FloatArray(8) { -1f }
+                bars.barRects(w, h, now).take(2).forEachIndexed { k, r ->
+                    out[k * 4] = r.left / w; out[k * 4 + 1] = r.top / h; out[k * 4 + 2] = r.right / w; out[k * 4 + 3] = r.bottom / h
+                }
+                out
+            }
+        }
         val speed = request.speed
         val timelineMs = if (request.isPhoto) request.durationMs else (request.durationMs / speed).toLong()
         val fade = if (request.fadeInMs > 0 || request.fadeOutMs > 0) {

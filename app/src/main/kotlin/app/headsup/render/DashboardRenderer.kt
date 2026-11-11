@@ -299,6 +299,8 @@ class DashboardRenderer(private val assets: AssetManager) {
 
     /** [rects] filled with the bars' picture (covering the whole frame, so both bars are cut from one picture), else their colour. */
     private fun fillBars(canvas: Canvas, width: Float, height: Float, effects: EffectSettings, rects: List<RectF>) {
+        // Blurred bars are the picture itself: drawn where the picture is (preview, exports), not here.
+        if (effects.barsBlur) return
         val picture = effects.barsImage?.let { barPicture(it) }
         if (picture == null) {
             for (r in rects) canvas.drawRect(r, barPaint)
@@ -325,6 +327,15 @@ class DashboardRenderer(private val assets: AssetManager) {
         // on 16:9: a true 2.39:1 crop of a vertical frame would leave only a thin strip.
         if (aspect < WIDE) return height * ((1f - WIDE / ratio) / 2f).coerceAtLeast(0f)
         return if (aspect >= ratio) 0f else (height - width / ratio) / 2
+    }
+
+    /** Where the bars are on a [width]×[height] frame (none when off). */
+    fun barRects(width: Float, height: Float, effects: EffectSettings): List<RectF> {
+        val side = barWidth(width, height, effects)
+        if (side > 0f) return listOf(RectF(0f, 0f, side, height), RectF(width - side, 0f, width, height))
+        val bar = barHeight(width, height, effects)
+        if (bar <= 0f) return emptyList()
+        return listOf(RectF(0f, 0f, width, bar), RectF(0f, height - bar, width, height))
     }
 
     /** Black bars that crop the picture to a wider (cinema) aspect ratio; drawn even without watch data. */

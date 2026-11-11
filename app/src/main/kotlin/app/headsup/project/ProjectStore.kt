@@ -611,7 +611,7 @@ internal object Json {
         .put("bokeh", e.bokeh.toDouble()).put("bokehHighlights", e.bokehHighlights.toDouble()).putOpt("bokehMask", e.bokehMask).put("bokehInvert", e.bokehInvert)
         .putOpt("barsRatio", e.barsRatio)
         .put("barsMotion", e.barsMotion.name)
-        .put("barsVertical", e.barsVertical).put("barsColour", e.barsColour).putOpt("barsImage", e.barsImage)
+        .put("barsVertical", e.barsVertical).put("barsColour", e.barsColour).putOpt("barsImage", e.barsImage).put("barsBlur", e.barsBlur)
         .putOpt("graph", e.graph?.name)
         .put("dashboard", e.dashboard)
 
@@ -638,6 +638,7 @@ internal object Json {
             barsVertical = o.optBoolean("barsVertical", false),
             barsColour = o.optInt("barsColour", 0xFF000000.toInt()),
             barsImage = o.optStringOrNull("barsImage"),
+            barsBlur = o.optBoolean("barsBlur", false),
             graph = GraphMetric.entries.firstOrNull { it.name == o.optStringOrNull("graph") },
             dashboard = o.optBoolean("dashboard", true),
         )

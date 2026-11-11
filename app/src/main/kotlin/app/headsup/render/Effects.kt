@@ -44,6 +44,8 @@ data class EffectSettings(
     val barsColour: Int = 0xFF000000.toInt(),
     /** A picture (kept by the app) the bars are cut from, in place of the colour. */
     val barsImage: String? = null,
+    /** The bars the picture itself, blurred (drawn with the picture, not over it). */
+    val barsBlur: Boolean = false,
     /** How far in the bars are at the moment drawn, 0..1 (set while drawing, not saved). */
     val barsAmount: Float = 1f,
     /** Activity profile drawn along the bottom edge, or null for none. */
@@ -81,6 +83,7 @@ data class EffectSettings(
         barsVertical = if (after.barsVertical != before.barsVertical) after.barsVertical else barsVertical,
         barsColour = if (after.barsColour != before.barsColour) after.barsColour else barsColour,
         barsImage = if (after.barsImage != before.barsImage) after.barsImage else barsImage,
+        barsBlur = if (after.barsBlur != before.barsBlur) after.barsBlur else barsBlur,
         graph = if (after.graph != before.graph) after.graph else graph,
         dashboard = if (after.dashboard != before.dashboard) after.dashboard else dashboard,
         // Bokeh is made for one photo (its subject, its masks' numbers): never set on others.

@@ -85,6 +85,22 @@ object PhotoExporter {
      * frame, or the photo itself blurred into a cloud of its colours (as the preview shows it).
      * [photo] is stored turned by [degrees].
      */
+    /** The photo's colours as a smooth cloud covering the frame (tiny, drawn large with filtering), a touch darker. */
+    private fun drawCloud(c: android.graphics.Canvas, fw: Float, fh: Float, photo: Bitmap, degrees: Int) {
+        runCatching {
+            val tiny = app.headsup.color.Segmenter.scaled(photo, 24)
+            val upright = if (degrees == 0) tiny else Bitmap.createBitmap(tiny, 0, 0, tiny.width, tiny.height, Matrix().apply { postRotate(degrees.toFloat()) }, true)
+            val k = maxOf(fw / upright.width, fh / upright.height)
+            val w = upright.width * k
+            val h = upright.height * k
+            val paint = android.graphics.Paint(android.graphics.Paint.FILTER_BITMAP_FLAG).apply {
+                colorFilter = android.graphics.ColorMatrixColorFilter(android.graphics.ColorMatrix().apply { setSaturation(1.3f) })
+            }
+            c.drawBitmap(upright, null, android.graphics.RectF((fw - w) / 2f, (fh - h) / 2f, (fw + w) / 2f, (fh + h) / 2f), paint)
+            c.drawColor(android.graphics.Color.argb(31, 0, 0, 0))
+        }
+    }
+
     // Drawn into a recording: the pictures it draws must stay alive until the frame is rendered.
     private fun drawBackdrop(context: Context, c: android.graphics.Canvas, fw: Float, fh: Float, r: Reframe, photo: Bitmap, degrees: Int) {
         c.drawColor(if (r.fit && !r.blur) r.backdropColour else android.graphics.Color.BLACK)
@@ -97,13 +113,7 @@ object PhotoExporter {
         }
         val smooth = android.graphics.Paint(android.graphics.Paint.FILTER_BITMAP_FLAG)
         if (r.blur) {
-            runCatching {
-                // Tiny, then drawn large with filtering: a smooth cloud of the photo's colours.
-                val tiny = app.headsup.color.Segmenter.scaled(photo, 24)
-                val upright = if (degrees == 0) tiny else Bitmap.createBitmap(tiny, 0, 0, tiny.width, tiny.height, Matrix().apply { postRotate(degrees.toFloat()) }, true)
-                cover(upright, smooth.apply { colorFilter = android.graphics.ColorMatrixColorFilter(android.graphics.ColorMatrix().apply { setSaturation(1.3f) }) })
-                c.drawColor(android.graphics.Color.argb(31, 0, 0, 0))
-            }
+            drawCloud(c, fw, fh, photo, degrees)
             return
         }
         r.backdropImage?.let { path ->
@@ -194,6 +204,16 @@ object PhotoExporter {
             c.restore()
             renderer.drawVignette(c, fw.toFloat(), fh.toFloat(), request.vignette)
             val data = request.dashboard
+            // Blurred bars: the photo's colours, blurred, in the bars (under the dashboard and texts).
+            if (request.effects.barsBlur) {
+                val bars = renderer.barRects(fw.toFloat(), fh.toFloat(), request.effects)
+                for (b in bars) {
+                    c.save()
+                    c.clipRect(b)
+                    drawCloud(c, fw.toFloat(), fh.toFloat(), photo, degrees)
+                    c.restore()
+                }
+            }
             if (data != null) renderer.draw(c, fw.toFloat(), fh.toFloat(), request.style, data, request.effects) else renderer.drawBars(c, fw.toFloat(), fh.toFloat(), request.effects)
             app.headsup.render.RouteMapRenderer.draw(c, fw.toFloat(), fh.toFloat(), request.routeMap, request.mapTrack, request.mapMarker?.first, request.mapMarker?.second)
             TextRenderer.draw(c, fw.toFloat(), fh.toFloat(), request.texts, request.textMs, subject = { item, canvas, paint ->

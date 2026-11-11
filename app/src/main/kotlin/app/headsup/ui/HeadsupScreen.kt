@@ -5256,14 +5256,16 @@ private fun EffectsPanel(state: UiState, vm: HeadsupViewModel, kind: EffectKind,
             if (effects.barsRatio != null) {
                 val barsPicker = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri -> if (uri != null) vm.setBarsImage(uri) }
                 val look = when {
-                    effects.barsImage != null -> 2
+                    effects.barsBlur -> 2
+                    effects.barsImage != null -> 3
                     effects.barsColour == 0xFFFFFFFF.toInt() -> 1
                     else -> 0
                 }
-                LabeledChoice("Bars", listOf("Black", "White", "Picture"), { it == look }, { i ->
+                LabeledChoice("Bars", listOf("Black", "White", "Blur", "Picture"), { it == look }, { i ->
                     when (i) {
-                        2 -> barsPicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
-                        else -> updateEffects { it.copy(barsImage = null, barsColour = if (i == 1) 0xFFFFFFFF.toInt() else 0xFF000000.toInt()) }
+                        2 -> updateEffects { it.copy(barsBlur = true, barsImage = null) }
+                        3 -> barsPicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+                        else -> updateEffects { it.copy(barsBlur = false, barsImage = null, barsColour = if (i == 1) 0xFFFFFFFF.toInt() else 0xFF000000.toInt()) }
                     }
                 })
             }

@@ -22,6 +22,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.graphics.drawscope.clipRect
+import androidx.compose.ui.graphics.drawscope.clipPath
 import androidx.compose.ui.graphics.Color
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -1195,7 +1196,8 @@ fun ClipPreview(
             // recordings), small, every few tenths of a second while playing.
             // Only inside the frame unless Settings › Ambient light round the picture: the frame's edge shows.
             val ambient = AppSettings.ambientPreview
-            if (reframe.fit && reframe.blur) {
+            // Also for blurred effect bars: the same small frames, blurred, show in the bars.
+            if ((reframe.fit && reframe.blur) || effects.barsBlur) {
                 val momentNow by rememberUpdatedState(fileMs)
                 val source = if (photo) null else sourceOf(clip)
                 val retriever = remember(source) {
@@ -1220,7 +1222,7 @@ fun ClipPreview(
                         delay(if (wantsPlay) 300L else 500L)
                     }
                 }
-                backdrop?.takeIf { ambient }?.let {
+                backdrop?.takeIf { ambient && reframe.fit && reframe.blur }?.let {
                     // Richer colours, a touch darker; blurred by the system where it can (Android 12+),
                     // else smooth enough from being so small.
                     val richer = androidx.compose.ui.graphics.ColorMatrix().apply { setToSaturation(1.3f) }
@@ -1412,6 +1414,25 @@ fun ClipPreview(
                             },
                         )
                     }
+                }
+                // Blurred effect bars: the picture's colours, blurred, cut to where the bars are
+                // (cut outside the blur's layer, so its edges stay inside them).
+                if (effects.barsBlur) backdrop?.let { cloud ->
+                    val richer = androidx.compose.ui.graphics.ColorMatrix().apply { setToSaturation(1.3f) }
+                    Image(
+                        cloud, contentDescription = null, contentScale = ContentScale.Crop,
+                        colorFilter = androidx.compose.ui.graphics.ColorFilter.colorMatrix(richer),
+                        modifier = Modifier.matchParentSize().drawWithContent {
+                            val bars = renderer.barRects(size.width, size.height, barsNow)
+                            if (bars.isEmpty()) return@drawWithContent
+                            val path = androidx.compose.ui.graphics.Path().apply {
+                                for (b in bars) addRect(androidx.compose.ui.geometry.Rect(b.left, b.top, b.right, b.bottom))
+                            }
+                            clipPath(path) { this@drawWithContent.drawContent() }
+                        }.graphicsLayer {
+                            if (Build.VERSION.SDK_INT >= 31) renderEffect = androidx.compose.ui.graphics.BlurEffect(30.dp.toPx(), 30.dp.toPx(), androidx.compose.ui.graphics.TileMode.Clamp)
+                        },
+                    )
                 }
                 Canvas(
                     Modifier

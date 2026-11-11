@@ -3346,7 +3346,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                 }.getOrNull()
             }
             if (path == null) _state.update { it.copy(messages = it.messages + "Could not read that picture.") }
-            else updateEffects { it.copy(barsImage = path) }
+            else updateEffects { it.copy(barsImage = path, barsBlur = false) }
         }
     }
 
