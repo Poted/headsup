@@ -187,6 +187,16 @@ fun AlbumBrowser(state: UiState, vm: HeadsupViewModel, onAdd: () -> Unit, onClos
             Column(
                 Modifier.fillMaxWidth().background(HeadsupColors.Surface).padding(horizontal = 12.dp, vertical = 8.dp),
             ) {
+                // What was just done (auto pick's result, a merge): said here for a while, a touch lets it go.
+                state.albumNote?.let { note ->
+                    androidx.compose.runtime.LaunchedEffect(note) { kotlinx.coroutines.delay(8000); vm.clearAlbumNote() }
+                    Text(
+                        note,
+                        Modifier.fillMaxWidth().padding(bottom = 8.dp).clip(RoundedCornerShape(12.dp)).background(HeadsupColors.Highlight.copy(alpha = 0.14f))
+                            .clickable { vm.clearAlbumNote() }.padding(horizontal = 12.dp, vertical = 8.dp),
+                        style = MaterialTheme.typography.labelMedium,
+                    )
+                }
                 when {
                     state.busy && state.loadingMessage != null -> {
                         // Auto pick at work (shown here: the album covers the screen's loader).

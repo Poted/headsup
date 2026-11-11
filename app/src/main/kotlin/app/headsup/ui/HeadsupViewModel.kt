@@ -408,6 +408,8 @@ data class UiState(
     val pickingColour: Boolean = false,
     /** Point colour: the next tap on the picture picks a colour. */
     val pickingPoint: Boolean = false,
+    /** What was just done in the album (auto pick, a merge), said there for a moment. */
+    val albumNote: String? = null,
     /** Point colour: the colour whose sliders are shown (and that a finger on the picture moves). */
     val pointSelected: Int = 0,
     /** Bumped when a photo's subject is to be found again. */
@@ -684,10 +686,10 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                 }.onFailure { it.printStackTrace() }.getOrNull()
             }
             if (uri == null) {
-                _state.update { it.copy(messages = it.messages + "Could not merge the photos (too large for the phone's memory, or unreadable).") }
+                _state.update { it.copy(albumNote = "Could not merge the photos (too large for the phone's memory, or unreadable).") }
                 return@runInBackground
             }
-            _state.update { st -> st.copy(clips = st.clips.map { if (it.picked) it.copy(picked = false) else it }, messages = st.messages + "${marked.size} exposures merged into one photo (HDR): saved to DCIM/Sweet Spot and added to the album.") }
+            _state.update { st -> st.copy(clips = st.clips.map { if (it.picked) it.copy(picked = false) else it }, albumNote = "${marked.size} exposures merged into one photo (HDR): saved to DCIM/Sweet Spot and added to the album.") }
             addClips(listOf(uri))
         }
     }
@@ -748,7 +750,24 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                     groupOf[id] = result.group[k]
                     if (k in result.suggested) chosen += id
                 }
-                var starred = 0
+                // What it did, said in the album (where it was asked for): how many were picked, of how many shots.
+                val before = _state.value.clips
+                val starred = before.count { c -> c.meta.isPhoto && c.id in chosen && (c.rating == 0 || c.suggested) }
+                val kept = before.count { c -> c.meta.isPhoto && c.id in chosen && c.rating != 0 && !c.suggested }
+                val shots = result.group.toSet().size
+                val unread = photos.size - known.size
+                val note = buildString {
+                    append(
+                        when (starred) {
+                            0 -> if (kept > 0) "No new photo picked: the best ones already have your stars." else "No photo picked as best: none stood out as sharp and well lit."
+                            1 -> "1 photo picked as best (★$SUGGESTED_STARS)"
+                            else -> "$starred photos picked as best (★$SUGGESTED_STARS)"
+                        },
+                    )
+                    if (starred > 0) append(if (shots < known.size) ", one for each of $shots shots." else ".")
+                    if (unread > 0) append(" $unread could not be read.")
+                    append(" Nothing was removed.")
+                }
                 _state.update { st ->
                     st.copy(
                         busy = false, loadingMessage = null, loadingProgress = null,
@@ -758,11 +777,10 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                             val base = if (c.suggested) c.copy(rating = 0, suggested = false) else c
                             val g = groupOf[c.id] ?: return@map base
                             if (c.id in chosen && base.rating == 0) {
-                                starred++
                                 base.copy(cullGroup = g, cullBest = true, rating = SUGGESTED_STARS, suggested = true)
                             } else base.copy(cullGroup = g, cullBest = c.id in chosen)
                         },
-                        messages = st.messages + "Auto pick: $starred suggested in ${result.group.toSet().size} shots. Nothing was removed.",
+                        albumNote = note,
                     )
                 }
             } catch (e: kotlinx.coroutines.CancellationException) {
@@ -773,6 +791,8 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun openAlbum() = _state.update { it.copy(albumOpen = true) }
+
+    fun clearAlbumNote() = _state.update { it.copy(albumNote = null) }
 
     /** Opens the album [name] (from the projects list) straight into its album view. */
     private var albumAfterOpen = false
@@ -1095,7 +1115,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
         val srcH = clip.meta.height.takeIf { it > 0 }?.toFloat() ?: 1080f
         val (ow, oh) = s.framing(clip).outputSize(srcW, srcH)
         val centred = item.copy(x = 0.5f, y = 0.5f, align = app.headsup.core.edit.TextAlign.CENTER, angle = 0f)
-        val box = app.headsup.render.TextRenderer.box(centred, ow, oh)
+        val box = app.headsup.render.TextRenderer.box(centred, ow, oh, textValues(s, clip, 0L))
         if (box.width() <= 0f || box.height() <= 0f) return
         val k = minOf(0.92f * ow / box.width(), 0.92f * oh / box.height())
         updateText(id) { centred.copy(size = (item.size * k).coerceIn(0.01f, 2f)) }
@@ -1143,7 +1163,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
         val r = s.framing(clip)
         val (ow, oh) = r.outputSize(srcW, srcH)
         val shown = raw.placed(clip.id, t0, frameMapping(s, clip))
-        val box = app.headsup.render.TextRenderer.box(shown, ow, oh)
+        val box = app.headsup.render.TextRenderer.box(shown, ow, oh, textValues(s, clip, 0L))
         val corners = listOf(box.left to box.top, box.right to box.top, box.left to box.bottom, box.right to box.bottom)
             .map { (x, y) -> r.sourceOf(x, y, ow, oh, srcW, srcH) }
         val (cx, cy) = r.sourceOf(box.centerX(), box.centerY(), ow, oh, srcW, srcH)

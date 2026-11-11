@@ -561,17 +561,18 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
                     if (!fullscreen) UndoRedo(state.canUndo, state.canRedo, vm::undo, vm::redo, vm::undoAll, vm::resetAllEdits, Modifier.align(Alignment.TopEnd).padding(top = 8.dp, end = 24.dp), canResetAll = state.clips.isNotEmpty(), album = state.photoProject,
                         milestones = state.milestones, onAddMilestone = vm::addMilestone, onBackToMilestone = vm::backToMilestone, onRemoveMilestone = vm::removeMilestone,
                     )
-                    // Full screen: the picture alone, to see it as it will look.
-                    Box(
+                    // Full screen: the picture alone, to see it as it will look. (Its way out is in the
+                    // screen's corner, off the picture: full screen is for looking.)
+                    if (!fullscreen) Box(
                         Modifier
-                            .align(if (fullscreen) Alignment.TopEnd else Alignment.TopStart)
+                            .align(Alignment.TopStart)
                             .padding(top = 8.dp, start = 24.dp, end = 24.dp)
                             .size(36.dp)
                             .clip(CircleShape)
                             .background(Color.Black.copy(alpha = 0.45f))
-                            .clickable { fullscreen = !fullscreen },
+                            .clickable { fullscreen = true },
                         contentAlignment = Alignment.Center,
-                    ) { Text(if (fullscreen) "✕" else "⤢", color = Color.White, style = MaterialTheme.typography.titleMedium) }
+                    ) { Text("⤢", color = Color.White, style = MaterialTheme.typography.titleMedium) }
                 }
             }
             if (!fullscreen && !wide && state.clips.isNotEmpty()) {
@@ -811,6 +812,23 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
             // The picture alone on black, centred, whichever way the phone is held; a swipe down leaves.
             // On black the controls are those of the dark theme, in light mode too.
             HeadsupTheme(AppSettings.current(androidx.compose.foundation.isSystemInDarkTheme()).onPicture) {
+              // The way out (✕) in the screen's top corner: shown on entering and after a touch
+              // anywhere, gone again a moment later, so nothing lies over the picture being looked at.
+              var exitShownAt by remember { mutableStateOf(android.os.SystemClock.uptimeMillis()) }
+              var exitShown by remember { mutableStateOf(true) }
+              LaunchedEffect(exitShownAt) {
+                  exitShown = true
+                  kotlinx.coroutines.delay(2_500)
+                  exitShown = false
+              }
+              Box(
+                  Modifier.fillMaxSize().pointerInput(Unit) {
+                      awaitEachGesture {
+                          awaitFirstDown(requireUnconsumed = false, pass = androidx.compose.ui.input.pointer.PointerEventPass.Initial)
+                          exitShownAt = android.os.SystemClock.uptimeMillis()
+                      }
+                  },
+              ) {
                 Column(
                     Modifier
                         .fillMaxSize()
@@ -823,6 +841,16 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
                     verticalArrangement = Arrangement.Center,
                     content = pictureAndTimeline,
                 )
+                androidx.compose.animation.AnimatedVisibility(
+                    visible = exitShown, modifier = Modifier.align(Alignment.TopEnd).padding(top = 12.dp, end = 12.dp),
+                    enter = androidx.compose.animation.fadeIn(), exit = androidx.compose.animation.fadeOut(),
+                ) {
+                    Box(
+                        Modifier.size(40.dp).clip(CircleShape).background(Color.Black.copy(alpha = 0.55f)).clickable { fullscreen = false },
+                        contentAlignment = Alignment.Center,
+                    ) { Text("✕", color = Color.White, style = MaterialTheme.typography.titleMedium) }
+                }
+              }
             }
         } else if (wide) {
             androidx.compose.foundation.layout.BoxWithConstraints(Modifier.fillMaxSize().systemBarsPadding().padding(top = 8.dp)) {
@@ -1212,6 +1240,12 @@ private fun Modifier.observedSwipe(enabled: Boolean, onSwipe: (Swipe) -> Unit): 
                 val change = event.changes.firstOrNull { it.id == down.id } ?: break
                 if (!change.pressed) break
                 val d = change.position - down.position
+                // Held still first (the hold that shows the original, then its before / after line
+                // dragged sideways): not a swipe, however far the finger goes after.
+                if (d.getDistance() < viewConfiguration.touchSlop) {
+                    if (change.uptimeMillis - down.uptimeMillis > 300L) break
+                    continue
+                }
                 if (d.getDistance() < distance) continue
                 val swipe = when {
                     abs(d.x) > 2 * abs(d.y) -> if (abs(d.x) < sideways) continue else if (d.x > 0) Swipe.RIGHT else Swipe.LEFT
@@ -1318,6 +1352,8 @@ private fun UndoNotice(text: String?, at: Long, modifier: Modifier) {
     var shown by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(at) {
         if (text == null || at == 0L) return@LaunchedEffect
+        // Only a notice just made: coming back on screen (out of full screen) does not say an old one again.
+        if (android.os.SystemClock.uptimeMillis() - at > 1_500L) return@LaunchedEffect
         shown = text
         kotlinx.coroutines.delay(1_800)
         shown = null
@@ -2116,29 +2152,44 @@ private fun ProjectHeader(state: UiState, vm: HeadsupViewModel, onProjects: () -
     if (settings) SettingsSheet(vm, onDismiss = { settings = false })
     LaunchedEffect(Unit) { vm.refreshProjects() }
     // The page starts with the project: its name and facts, its few actions as icons beside them.
-    Row(verticalAlignment = Alignment.Top) {
-        Column(Modifier.weight(1f).padding(top = 4.dp)) {
-            val album = state.photoProject
-            Text(state.projectName, style = MaterialTheme.typography.titleMedium, maxLines = 2)
-            Text(
-                (if (album) "Photo album" else "Film") + " · saved automatically" + when {
-                    state.clips.isEmpty() -> ""
-                    album -> " · ${state.clips.size} photos"
-                    else -> {
-                        // On the timeline: after speed changes, at the timeline's frame rate.
-                        val total = state.clips.sumOf { it.timelineDurationMs }
-                        " · ${state.clips.size} clips, ${Formats.duration(total)}, ${frameCount(total, state.effectiveTimelineFps) ?: 0L} frames"
-                    }
-                },
-                style = MaterialTheme.typography.labelSmall,
-                color = HeadsupColors.TextMuted,
-            )
-        }
+    val facts: @Composable () -> Unit = {
+        val album = state.photoProject
+        Text(state.projectName, style = MaterialTheme.typography.titleMedium, maxLines = 2, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
+        Text(
+            (if (album) "Photo album" else "Film") + " · saved automatically" + when {
+                state.clips.isEmpty() -> ""
+                album -> " · ${state.clips.size} photos"
+                else -> {
+                    // On the timeline: after speed changes, at the timeline's frame rate.
+                    val total = state.clips.sumOf { it.timelineDurationMs }
+                    " · ${state.clips.size} clips, ${Formats.duration(total)}, ${frameCount(total, state.effectiveTimelineFps) ?: 0L} frames"
+                }
+            },
+            style = MaterialTheme.typography.labelSmall,
+            color = HeadsupColors.TextMuted,
+        )
+    }
+    val actions: @Composable () -> Unit = {
         IconAction(HeadsupIcons.Switch, "Switch project", onProjects)
         // An open album's album view (stars, Auto pick): from the album itself, not the list.
         if (state.photoProject && state.clips.isNotEmpty()) IconAction(HeadsupIcons.Grid, "Album view", { vm.openAlbumOf(state.projectName) })
         IconAction(HeadsupIcons.Pencil, "Rename", { renaming = true })
         IconAction(HeadsupIcons.Settings, "Settings", { settings = true })
+    }
+    // In a narrow column (held sideways with the tools drawn in) the name goes above its icons,
+    // so it keeps the column's whole width instead of a sliver beside them.
+    androidx.compose.foundation.layout.BoxWithConstraints {
+        if (maxWidth < 340.dp) {
+            Column {
+                Column(Modifier.fillMaxWidth().padding(top = 4.dp)) { facts() }
+                Row(verticalAlignment = Alignment.CenterVertically) { actions() }
+            }
+        } else {
+            Row(verticalAlignment = Alignment.Top) {
+                Column(Modifier.weight(1f).padding(top = 4.dp)) { facts() }
+                actions()
+            }
+        }
     }
     if (renaming) {
         RenameDialog(state.projectName, onDismiss = { renaming = false }, title = "Project name") { vm.renameProject(it); renaming = false }
@@ -4881,10 +4932,10 @@ private fun SkinToneTool(scope: ScopeResult?, onMatch: () -> Unit) {
         "Skin line",
         info = "On a vectorscope, skin of every complexion falls close to one line. Tap a face on the picture to measure it; Match line turns the skin tones onto that line, leaving greys and other colours alone.",
     ) {
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        VectorscopeView(scope, Modifier.size(140.dp))
-        Spacer(Modifier.width(14.dp))
-        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+    // In a narrow column (held sideways with the tools drawn in) the reading goes under the scope.
+    androidx.compose.foundation.layout.BoxWithConstraints {
+        val narrow = maxWidth < 300.dp
+        val reading: @Composable () -> Unit = {
             val measured = scope?.measured
             if (measured == null) {
                 Hint(if (scope == null) "Tap a face on the picture to measure skin tone." else "That point is too grey to measure; tap skin.")
@@ -4895,7 +4946,21 @@ private fun SkinToneTool(scope: ScopeResult?, onMatch: () -> Unit) {
                     String.format(Locale.US, "%+.0f° from the skin line (%s)", off, if (off > 0) "towards yellow/green" else "towards red/magenta"),
                 )
             }
-            Button(onClick = onMatch, enabled = measured != null) { Text("Match line") }
+            Button(onClick = onMatch, enabled = measured != null, modifier = if (narrow) Modifier.fillMaxWidth() else Modifier) {
+                Text("Match line", maxLines = 1, softWrap = false)
+            }
+        }
+        if (narrow) {
+            Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                VectorscopeView(scope, Modifier.size(140.dp))
+                reading()
+            }
+        } else {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                VectorscopeView(scope, Modifier.size(140.dp))
+                Spacer(Modifier.width(14.dp))
+                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) { reading() }
+            }
         }
     }
     }

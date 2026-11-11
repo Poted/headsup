@@ -588,6 +588,9 @@ fun ClipPreview(
     var histogram by remember { mutableStateOf<FloatArray?>(null) }
     // Which scope shows (a tap on it steps through them): histogram, waveform, RGB parade.
     var scopeKind by androidx.compose.runtime.saveable.rememberSaveable { mutableIntStateOf(0) }
+    // Which corner of the picture the scope sits in (bit 0: right, bit 1: bottom), and how far a finger has dragged it.
+    var scopeCorner by androidx.compose.runtime.saveable.rememberSaveable { mutableIntStateOf(2) }
+    var scopeDrag by remember { mutableStateOf(Offset.Zero) }
     var scopeImage by remember { mutableStateOf<androidx.compose.ui.graphics.ImageBitmap?>(null) }
     val previewShader = remember { if (Build.VERSION.SDK_INT >= 33) GradePreviewShader() else null }
     var tableVersion by remember { mutableIntStateOf(0) }
@@ -1000,7 +1003,9 @@ fun ClipPreview(
     var viewZoom by remember(clip.id) { mutableStateOf(1f) }
     val zoomedNow = viewZoom > 1.01f
     val tellZoomed by rememberUpdatedState(onViewZoomed)
-    LaunchedEffect(zoomedNow) { tellZoomed(zoomedNow) }
+    // Also while the scope is dragged to another corner: the finger is busy, no screen swipe.
+    val scopeMoving = scopeDrag != Offset.Zero
+    LaunchedEffect(zoomedNow, scopeMoving) { tellZoomed(zoomedNow || scopeMoving) }
     var viewPan by remember(clip.id) { mutableStateOf(Offset.Zero) }
     /**
      * The view zoomed by [factor] around [at] (where the fingers are, in a [w]×[h] area) and moved
@@ -1695,6 +1700,8 @@ fun ClipPreview(
                 }
                 val textsNow by rememberUpdatedState(shownTexts)
                 val rawTextsNow by rememberUpdatedState(texts)
+                // The frame round a text is that of the text as shown: its data fields filled in.
+                val boxValues by rememberUpdatedState(if (texts.any { app.headsup.core.edit.TextFields.hasFields(it.text) }) textValues(positionMs) else emptyMap())
                 val selectedTextNow by rememberUpdatedState(selectedTextId)
                 // While a text is dragged, guides show the middle and the margins it snaps to.
                 var placing by remember { mutableStateOf(false) }
@@ -1712,7 +1719,7 @@ fun ClipPreview(
                                     val h = size.height.toFloat()
                                     val items = textsNow
                                     val sel = items.firstOrNull { it.id == selectedTextNow }
-                                    fun boxOf(t: TextItem) = TextRenderer.box(t, w, h)
+                                    fun boxOf(t: TextItem) = TextRenderer.box(t, w, h, boxValues)
                                     // A point taken into an item's own (unturned) space.
                                     fun local(t: TextItem, p: Offset): Offset {
                                         val b = boxOf(t)
@@ -1818,7 +1825,7 @@ fun ClipPreview(
                     }
                     // The text or logo being edited: a dashed frame, ✕ to take it away, ↘ to size and turn it.
                     shownTexts.firstOrNull { it.id == selectedTextId }?.takeIf { onMoveText != null }?.let { t ->
-                        val b = TextRenderer.box(t, size.width, size.height)
+                        val b = TextRenderer.box(t, size.width, size.height, boxValues)
                         val pad = TEXT_FRAME_PAD.toPx()
                         rotate(t.angle, Offset(b.centerX(), b.centerY())) {
                             val tl = Offset(b.left - pad, b.top - pad)
@@ -1905,7 +1912,31 @@ fun ClipPreview(
                     }
                 }
                 if (histogramOn) {
-                    val at = Modifier.align(Alignment.BottomStart).padding(start = 10.dp, end = 10.dp, top = 10.dp, bottom = if (compactTransport) 56.dp else 10.dp)
+                    // In a corner of the picture: dragged, it follows the finger and settles in the corner
+                    // that way (left / right, up / down), out of the way of what is looked at.
+                    val right = scopeCorner % 2 == 1
+                    val bottom = scopeCorner >= 2
+                    val at = Modifier
+                        .align(if (bottom) (if (right) Alignment.BottomEnd else Alignment.BottomStart) else (if (right) Alignment.TopEnd else Alignment.TopStart))
+                        // Clear of the buttons in the top corners and the folded transport at the bottom.
+                        .padding(start = 10.dp, end = 10.dp, top = if (bottom) 10.dp else 52.dp, bottom = if (compactTransport) 56.dp else 10.dp)
+                        .offset { androidx.compose.ui.unit.IntOffset(scopeDrag.x.toInt(), scopeDrag.y.toInt()) }
+                        .pointerInput(Unit) {
+                            val far = 28.dp.toPx()
+                            androidx.compose.foundation.gestures.detectDragGestures(
+                                onDragEnd = {
+                                    var c = scopeCorner
+                                    if (scopeDrag.x > far) c = c or 1 else if (scopeDrag.x < -far) c = c and 2
+                                    if (scopeDrag.y > far) c = c or 2 else if (scopeDrag.y < -far) c = c and 1
+                                    scopeCorner = c
+                                    scopeDrag = Offset.Zero
+                                },
+                                onDragCancel = { scopeDrag = Offset.Zero },
+                            ) { change, amount ->
+                                change.consume()
+                                scopeDrag += amount
+                            }
+                        }
                         .clickable { scopeKind = (scopeKind + 1) % 3 }
                     if (scopeKind == 0) {
                         histogram?.let { bins -> Histogram(bins, at.size(width = 128.dp, height = 56.dp)) }
