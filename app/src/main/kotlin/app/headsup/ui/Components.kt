@@ -48,6 +48,7 @@ import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.clipPath
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.composed
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -59,6 +60,49 @@ import kotlin.math.floor
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
+
+/**
+ * What holding a control still shows when it has no comparison of its own: the original picture
+ * (given by the screen; null where there is no picture to compare).
+ */
+val LocalHoldOriginal = androidx.compose.runtime.staticCompositionLocalOf<((Boolean) -> Unit)?> { null }
+
+/**
+ * A finger held still on this (for the long-press time, without leaving the touch slop) calls
+ * [onHold] with true, and with false when it lifts. Watched before the control's own gestures and
+ * the panel's scrolling, without taking anything until the hold begins; from then on the finger's
+ * small moves are taken, so the panel does not start to scroll and end the hold while it is down.
+ */
+fun Modifier.heldStill(onHold: (Boolean) -> Unit): Modifier = composed {
+    val call by rememberUpdatedState(onHold)
+    pointerInput(Unit) {
+        awaitEachGesture {
+            val pass = androidx.compose.ui.input.pointer.PointerEventPass.Initial
+            val down = awaitFirstDown(requireUnconsumed = false, pass = pass)
+            // Null when the time ran out with the finger still down and in place: a hold.
+            val still = kotlinx.coroutines.withTimeoutOrNull(viewConfiguration.longPressTimeoutMillis) {
+                var ended = false
+                while (!ended) {
+                    val e = awaitPointerEvent(pass)
+                    val c = e.changes.firstOrNull { it.id == down.id }
+                    if (c == null || !c.pressed || e.changes.size > 1 || (c.position - down.position).getDistance() > viewConfiguration.touchSlop) ended = true
+                }
+                false
+            }
+            if (still == null) {
+                call(true)
+                try {
+                    do {
+                        val e = awaitPointerEvent(pass)
+                        e.changes.forEach { it.consume() }
+                    } while (e.changes.any { it.pressed })
+                } finally {
+                    call(false)
+                }
+            }
+        }
+    }
+}
 
 /**
  * A ruler with tick marks that slides under a fixed centre marker, as on camera dials.
@@ -76,7 +120,8 @@ fun RulerSlider(
     onHold: ((Boolean) -> Unit)? = null,
 ) {
     val current by rememberUpdatedState(value)
-    val hold by rememberUpdatedState(onHold)
+    // Its own comparison (the picture without this correction), else the original picture.
+    val hold by rememberUpdatedState(onHold ?: LocalHoldOriginal.current)
     val emit by rememberUpdatedState(onChange)
     val reset by rememberUpdatedState(onReset)
     val tickSpacing = 9.dp
@@ -114,25 +159,7 @@ fun RulerSlider(
                 }
             }
             .pointerInput(Unit) { detectTapGestures(onDoubleTap = { reset?.invoke() }) }
-            .pointerInput(Unit) {
-                // Observes without consuming, so dragging and double-tap keep working.
-                awaitEachGesture {
-                    awaitFirstDown(requireUnconsumed = false)
-                    // True if the finger lifted or started dragging before the long-press time.
-                    val endedEarly = withTimeoutOrNull(viewConfiguration.longPressTimeoutMillis) {
-                        waitForUpOrCancellation()
-                        true
-                    }
-                    if (endedEarly == null) {
-                        hold?.invoke(true)
-                        try {
-                            waitForUpOrCancellation()
-                        } finally {
-                            hold?.invoke(false)
-                        }
-                    }
-                }
-            },
+            .heldStill { held -> hold?.invoke(held) },
     ) {
         val px = tickSpacing.toPx()
         val cx = size.width / 2
@@ -178,9 +205,13 @@ fun ValueHeader(label: String, value: String, modifier: Modifier = Modifier) {
 
 /** Round, outlined option with a short caption, used to pick which correction the ruler edits. */
 @Composable
-fun CircleOption(symbol: String, caption: String, selected: Boolean, modified: Boolean, onClick: () -> Unit) {
+fun CircleOption(symbol: String, caption: String, selected: Boolean, modified: Boolean, onHold: ((Boolean) -> Unit)? = null, onClick: () -> Unit) {
+    // Held: the picture without what this option set (or the original, where that cannot be told).
+    val hold = onHold ?: LocalHoldOriginal.current
     Column(
-        Modifier.width(60.dp).clip(MaterialTheme.shapes.small).clickable(onClick = onClick).padding(vertical = 4.dp),
+        Modifier.width(60.dp).clip(MaterialTheme.shapes.small)
+            .then(if (hold != null && (modified || onHold == null)) Modifier.heldStill(hold) else Modifier)
+            .clickable(onClick = onClick).padding(vertical = 4.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         Box(

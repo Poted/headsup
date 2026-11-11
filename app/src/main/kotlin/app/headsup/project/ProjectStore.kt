@@ -406,7 +406,9 @@ internal object Json {
             .put("sharpen", c.rawDevelop.sharpen.toDouble()).put("colourNoise", c.rawDevelop.colourNoise.toDouble()))
         .put("reframe", JSONObject().put("zoom", c.reframe.zoom).put("centerX", c.reframe.centerX).put("centerY", c.reframe.centerY).put("angleDegrees", c.reframe.angleDegrees).put("fit", c.reframe.fit).put("blur", c.reframe.blur)
             .put("vertical", c.reframe.vertical).put("horizontal", c.reframe.horizontal)
-            .put("distortion", c.reframe.distortion.toDouble()).put("lensVignette", c.reframe.lensVignette.toDouble()).put("mirrored", c.reframe.mirrored))
+            .put("distortion", c.reframe.distortion.toDouble()).put("lensVignette", c.reframe.lensVignette.toDouble()).put("mirrored", c.reframe.mirrored)
+            // A photo's own crop shape (a film's clips take the timeline's frame instead).
+            .putOpt("aspect", c.reframe.aspect?.toDouble()))
 
     private fun clip(o: JSONObject) = SavedClip(
         uri = Uri.parse(o.getString("uri")),
@@ -466,6 +468,7 @@ internal object Json {
                 centerX = r.optDouble("centerX", 0.5).toFloat(),
                 centerY = r.optDouble("centerY", 0.5).toFloat(),
                 angleDegrees = r.optDouble("angleDegrees", 0.0).toFloat(),
+                aspect = if (r.has("aspect")) r.optDouble("aspect").toFloat().takeIf { it > 0f && !it.isNaN() } else null,
                 fit = r.optBoolean("fit", false),
                 blur = r.optBoolean("blur", false),
                 vertical = r.optDouble("vertical", 0.0).toFloat(),

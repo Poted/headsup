@@ -737,11 +737,17 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
                         at = { scrubT.value ?: timelineOf(playhead.longValue) }, videoEnd = clipStarts.last(),
                         onAddSound = { addingSound = true },
                     )
-                    Tool.COLOUR -> ColourPage(
-                        state, vm, adjustment, { adjustment = it }, onAddLut = { lutPicker.launch(arrayOf("*/*")) }, frameSource.value,
-                        playhead, onSeek = { ms -> state.selectedClip?.let { showInClip(it, ms) } ?: run { seekRequest = ms } }, pictureSource = pictureSource.value,
-                        maskTools = maskTools, onMaskTools = { maskTools = it },
-                    )
+                    // Every ruler and round option of Adjust compares when held still: its own correction
+                    // taken out where that can be told, else the original (a mask: the picture without it).
+                    Tool.COLOUR -> androidx.compose.runtime.CompositionLocalProvider(
+                        LocalHoldOriginal provides { held: Boolean -> if (editingMasks) hideMask = held else showOriginal = held },
+                    ) {
+                        ColourPage(
+                            state, vm, adjustment, { adjustment = it }, onAddLut = { lutPicker.launch(arrayOf("*/*")) }, frameSource.value,
+                            playhead, onSeek = { ms -> state.selectedClip?.let { showInClip(it, ms) } ?: run { seekRequest = ms } }, pictureSource = pictureSource.value,
+                            maskTools = maskTools, onMaskTools = { maskTools = it },
+                        )
+                    }
                     Tool.OVERLAYS -> {
                         // Saved from before the looks moved to Adjust: back to an overlay.
                         val kind = effectKind.takeIf { it in OVERLAY_KINDS } ?: EffectKind.DASHBOARD
@@ -3474,7 +3480,25 @@ private fun ColourPage(
                 Adjustment.LOOK -> state.grade.look != null
                 else -> a.get(state.grade) != a.neutral
             }
-            CircleOption(a.symbol, a.label, selected = a == adjustment, modified = modified) { onAdjustment(a) }
+            // Held: the picture without this one correction (the tools that set a whole look: the original).
+            val g = state.grade
+            val without: ColorGrade? = when (a) {
+                Adjustment.LUT, Adjustment.BLEND, Adjustment.CINE, Adjustment.MATCH -> null
+                Adjustment.MIXER -> g.copy(mixer = app.headsup.core.color.ColourMixer.NEUTRAL)
+                Adjustment.POINT -> g.copy(points = emptyList(), colourPop = 0f)
+                Adjustment.CHANNELS -> g.copy(channelMix = app.headsup.core.color.ChannelMixer.NEUTRAL)
+                Adjustment.BW -> g.copy(bw = app.headsup.core.color.BlackAndWhite.NEUTRAL)
+                Adjustment.CALIBRATION -> g.copy(calibration = app.headsup.core.color.Calibration.NEUTRAL)
+                Adjustment.CURVE -> g.copy(curves = app.headsup.core.color.ToneCurve.NEUTRAL)
+                Adjustment.HUE_CURVES -> g.copy(hueCurves = app.headsup.core.color.HueCurves.NEUTRAL)
+                Adjustment.WHEELS -> g.copy(wheels = app.headsup.core.color.ColourWheels.NEUTRAL)
+                Adjustment.LOOK -> g.copy(look = null)
+                else -> a.set(g, a.neutral)
+            }
+            CircleOption(
+                a.symbol, a.label, selected = a == adjustment, modified = modified,
+                onHold = without?.let { w -> { held: Boolean -> vm.setCompareGrade(if (held) w else null) } },
+            ) { onAdjustment(a) }
         }
     }
     if (adjustment == Adjustment.CINE) {

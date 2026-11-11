@@ -168,18 +168,17 @@ class FinishEffect(private val settings: EffectSettings) : GlEffect {
                 vec2 px = vTexSamplingCoord * uSize;
                 if (uGlow > 0.0 || uHalation > 0.0) {
                     float r = shortSide * 0.012 * uGlowSpread;
-                    float turn = fract(52.9829189 * fract(dot(px, vec2(0.06711056, 0.00583715)))) * 6.2832 * smooth01(1.1, 2.0, uGlowSpread);
+                    // Over the whole disc (a golden-angle spiral), turned differently at each pixel, as the
+                    // preview: two fixed rings repeated a small bright thing as copies a ring away.
+                    float turn = fract(52.9829189 * fract(dot(px, vec2(0.06711056, 0.00583715)))) * 6.2832;
                     vec3 acc = vec3(0.0);
-                    for (int i = 0; i < 12; i++) {
-                        float a = float(i) * 0.5236 + turn;
-                        acc += bright(vTexSamplingCoord + vec2(cos(a), sin(a)) * r / uSize);
-                    }
-                    for (int i = 0; i < 6; i++) {
-                        float a = float(i) * 1.0472 + 0.26 + turn;
-                        acc += bright(vTexSamplingCoord + vec2(cos(a), sin(a)) * 2.2 * r / uSize);
+                    for (int i = 0; i < 28; i++) {
+                        float a = float(i) * 2.39996 + turn;
+                        float d = (0.25 + 1.95 * sqrt((float(i) + 0.5) / 28.0)) * r;
+                        acc += bright(vTexSamplingCoord + vec2(cos(a), sin(a)) * d / uSize);
                     }
                     // Halation: film's red-orange bleed around highlights, from the same blurred taps.
-                    vec3 g = clamp(acc / 18.0 * uGlow * 1.5 * uGlowTint + dot(acc / 18.0, vec3(0.33)) * uHalation * 2.0 * vec3(1.0, 0.3, 0.1), 0.0, 1.0);
+                    vec3 g = clamp(acc / 28.0 * uGlow * 1.5 * uGlowTint + dot(acc / 28.0, vec3(0.33)) * uHalation * 2.0 * vec3(1.0, 0.3, 0.1), 0.0, 1.0);
                     c = 1.0 - (1.0 - c) * (1.0 - g);
                 }
                 if (uGrain > 0.0) {

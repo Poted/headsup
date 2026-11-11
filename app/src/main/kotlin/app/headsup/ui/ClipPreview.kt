@@ -998,7 +998,11 @@ fun ClipPreview(
     // Looking closely at a photo: the view's zoom and pan (not the photo's framing).
     val inspect = photoMode && onReframe == null && onMoveMask == null && onTransformMask == null && onBrush == null && onMoveText == null && onSample == null
     // The view's zoom applies while looking at a photo closely or painting a mask.
-    val zoomForSampling = photoMode && onSample != null && liveSample
+    // Wherever one finger has a tool's job on a photo (measuring or picking a colour, placing a
+    // text): two fingers still zoom and move the view. Not where two fingers have a job of their
+    // own: framing, a mask moved and turned, a selected text sized and turned.
+    val zoomForSampling = photoMode && !inspect && !zoomForPainting && onReframe == null && onTransformMask == null &&
+        !(onMoveText != null && selectedTextId != null)
     val viewZoomed = inspect || zoomForPainting || zoomForSampling
     var viewZoom by remember(clip.id) { mutableStateOf(1f) }
     val zoomedNow = viewZoom > 1.01f
@@ -1105,7 +1109,7 @@ fun ClipPreview(
                             })
                         }
                 } else if (zoomForSampling) {
-                    // Picking a colour: two fingers zoom and pan the view (one finger picks).
+                    // A tool has the single finger: two fingers zoom and pan the view.
                     Modifier.pointerInput(Unit) {
                         awaitEachGesture {
                             awaitFirstDown(requireUnconsumed = false, pass = androidx.compose.ui.input.pointer.PointerEventPass.Initial)
@@ -1537,7 +1541,7 @@ fun ClipPreview(
                                     while (true) {
                                         val event = awaitPointerEvent()
                                         // A second finger: zooming, not picking.
-                                        if (live && event.changes.count { it.pressed } >= 2) { cancelled = true; break }
+                                        if (event.changes.count { it.pressed } >= 2) { cancelled = true; break }
                                         val change = event.changes.firstOrNull { it.id == down.id } ?: break
                                         if (!change.pressed) {
                                             change.consume()
