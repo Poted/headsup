@@ -145,7 +145,7 @@ class DashboardRenderer(private val assets: AssetManager) {
      */
     fun contentKey(style: DashboardStyle, data: DashboardData, width: Float, height: Float, effects: EffectSettings = EffectSettings()): String {
         val sb = StringBuilder()
-        sb.append(effects.barsRatio).append(':').append((effects.barsAmount * 200).toInt()).append('|')
+        sb.append(effects.barsRatio).append(':').append((effects.barsAmount * 200).toInt()).append(effects.barsVertical).append(effects.barsColour).append('|')
         val u = unit(width, height, style)
         effects.graph?.let { metric ->
             val g = graphFor(data.track, metric)
@@ -275,7 +275,16 @@ class DashboardRenderer(private val assets: AssetManager) {
         canvas.drawPath(path, paint)
     }
 
-    private fun barHeight(width: Float, height: Float, effects: EffectSettings): Float = fullBarHeight(width, height, effects) * effects.barsAmount.coerceIn(0f, 1f)
+    /** The top and bottom bars' height (none when the bars are at the sides). */
+    private fun barHeight(width: Float, height: Float, effects: EffectSettings): Float =
+        if (effects.barsVertical) 0f else fullBarHeight(width, height, effects) * effects.barsAmount.coerceIn(0f, 1f)
+
+    /** The side bars' width: the picture left [EffectSettings.barsRatio] wide (none when the frame is narrower already). */
+    private fun barWidth(width: Float, height: Float, effects: EffectSettings): Float {
+        if (!effects.barsVertical) return 0f
+        val ratio = effects.barsRatio ?: return 0f
+        return ((width - height * ratio) / 2f).coerceAtLeast(0f) * effects.barsAmount.coerceIn(0f, 1f)
+    }
 
     private fun fullBarHeight(width: Float, height: Float, effects: EffectSettings): Float {
         val ratio = effects.barsRatio ?: return 0f
@@ -288,6 +297,13 @@ class DashboardRenderer(private val assets: AssetManager) {
 
     /** Black bars that crop the picture to a wider (cinema) aspect ratio; drawn even without watch data. */
     fun drawBars(canvas: Canvas, width: Float, height: Float, effects: EffectSettings) {
+        barPaint.color = effects.barsColour
+        val side = barWidth(width, height, effects)
+        if (side > 0f) {
+            canvas.drawRect(0f, 0f, side, height, barPaint)
+            canvas.drawRect(width - side, 0f, width, height, barPaint)
+            return
+        }
         val bar = barHeight(width, height, effects)
         if (bar <= 0f) return
         canvas.drawRect(0f, 0f, width, bar, barPaint)

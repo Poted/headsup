@@ -80,6 +80,43 @@ object PhotoExporter {
     /** How many stops an Ultra HDR photo's brightest parts are lifted on an HDR screen. */
     private const val HDR_STOPS = 2f
 
+    /**
+     * What lies round a fitted photo in its frame: its colour, a picture of one's own covering the
+     * frame, or the photo itself blurred into a cloud of its colours (as the preview shows it).
+     * [photo] is stored turned by [degrees].
+     */
+    // Drawn into a recording: the pictures it draws must stay alive until the frame is rendered.
+    private fun drawBackdrop(context: Context, c: android.graphics.Canvas, fw: Float, fh: Float, r: Reframe, photo: Bitmap, degrees: Int) {
+        c.drawColor(if (r.fit && !r.blur) r.backdropColour else android.graphics.Color.BLACK)
+        if (!r.fit) return
+        fun cover(b: Bitmap, paint: android.graphics.Paint) {
+            val k = maxOf(fw / b.width, fh / b.height)
+            val w = b.width * k
+            val h = b.height * k
+            c.drawBitmap(b, null, android.graphics.RectF((fw - w) / 2f, (fh - h) / 2f, (fw + w) / 2f, (fh + h) / 2f), paint)
+        }
+        val smooth = android.graphics.Paint(android.graphics.Paint.FILTER_BITMAP_FLAG)
+        if (r.blur) {
+            runCatching {
+                // Tiny, then drawn large with filtering: a smooth cloud of the photo's colours.
+                val tiny = app.headsup.color.Segmenter.scaled(photo, 24)
+                val upright = if (degrees == 0) tiny else Bitmap.createBitmap(tiny, 0, 0, tiny.width, tiny.height, Matrix().apply { postRotate(degrees.toFloat()) }, true)
+                cover(upright, smooth.apply { colorFilter = android.graphics.ColorMatrixColorFilter(android.graphics.ColorMatrix().apply { setSaturation(1.3f) }) })
+                c.drawColor(android.graphics.Color.argb(31, 0, 0, 0))
+            }
+            return
+        }
+        r.backdropImage?.let { path ->
+            runCatching {
+                val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                BitmapFactory.decodeFile(path, bounds)
+                var sample = 1
+                while (maxOf(bounds.outWidth, bounds.outHeight) / (sample * 2) >= maxOf(fw, fh)) sample *= 2
+                BitmapFactory.decodeFile(path, BitmapFactory.Options().apply { inSampleSize = sample })?.let { cover(it, smooth) }
+            }
+        }
+    }
+
     /** [onProgress] gets 0..1 as reading, developing, drawing and saving go. */
     fun export(context: Context, request: PhotoRequest, onProgress: (Float) -> Unit = {}): Uri {
         // Raw photos are developed by the app at full size in half floats; others decoded by Android.
@@ -147,7 +184,7 @@ object PhotoExporter {
         val root = RenderNode("frame").apply {
             setPosition(0, 0, fw, fh)
             val c = beginRecording()
-            c.drawColor(android.graphics.Color.BLACK)
+            drawBackdrop(context, c, fw.toFloat(), fh.toFloat(), request.reframe, photo, degrees)
             c.save()
             c.translate(fw / 2f + t.translation.x, fh / 2f + t.translation.y)
             c.rotate(request.reframe.angleDegrees)
@@ -199,6 +236,21 @@ object PhotoExporter {
             Bitmap.createScaledBitmap(rendered, (fw * k).toInt().coerceAtLeast(2), (fh * k).toInt().coerceAtLeast(2), true).also { rendered.recycle() }
         }
         val name = request.name.substringBeforeLast('.') + "_edit.jpg"
+        // A carousel: the frame cut into its panels, saved in order (_1, _2…), the first one's uri returned.
+        val panels = request.reframe.panels.coerceIn(1, 3)
+        if (panels > 1) {
+            val pw2 = bitmap.width / panels
+            var first: Uri? = null
+            for (k in 0 until panels) {
+                val part = Bitmap.createBitmap(bitmap, k * pw2, 0, pw2, bitmap.height)
+                val partName = request.name.substringBeforeLast('.') + "_edit_${k + 1}of$panels.jpg"
+                val uri = MediaStoreOutput.savePhoto(context, partName) { out -> part.compress(Bitmap.CompressFormat.JPEG, request.quality.coerceIn(1, 100), out) }
+                if (first == null) first = uri
+                if (part !== bitmap) part.recycle()
+            }
+            bitmap.recycle()
+            return first!!
+        }
         val saved = if (request.format == PhotoFormat.ULTRA_HDR && android.os.Build.VERSION.SDK_INT >= 34) withGainmap(bitmap, headroom) else bitmap
         return MediaStoreOutput.savePhoto(context, name) { out -> saved.compress(Bitmap.CompressFormat.JPEG, request.quality.coerceIn(1, 100), out) }
             .also { saved.recycle(); if (saved !== bitmap) bitmap.recycle() }

@@ -5239,11 +5239,22 @@ private fun EffectsPanel(state: UiState, vm: HeadsupViewModel, kind: EffectKind,
         }
         EffectKind.BARS -> ToolSection(
             "Bars",
-            info = "Black bars top and bottom for a cinema shape." +
+            info = "Bars over the picture: top and bottom for a cinema shape, or at the sides for a narrower one; black or white. " +
+                "For bars round the whole photo instead (it made smaller in its frame, the bars blurred or a picture), see Crop › In the frame." +
                 if (state.timelineAspect < 16f / 9f - 0.01f) " On this frame they take as much of the height as they would on 16:9, for the same look." else "",
         ) {
-            val ratios = listOf<Float?>(null, 2.39f, 2.0f, 1.85f)
-            ChoiceGrid(ratios.map { r -> when (r) { null -> "Off"; 2.39f -> "2.39:1"; 2.0f -> "2:1"; else -> "1.85:1" } }, ratios.indexOf(effects.barsRatio), { i -> updateEffects { it.copy(barsRatio = ratios[i]) } }, minCell = 60.dp)
+            // Top and bottom (a cinema shape) or at the sides (a narrower picture, as a square or 4:5 post).
+            LabeledChoice("Bars", listOf("Top and bottom", "Sides"), { (it == 1) == effects.barsVertical }, { i ->
+                updateEffects { it.copy(barsVertical = i == 1, barsRatio = null) }
+            })
+            val ratios = if (effects.barsVertical) listOf<Float?>(null, 1f, 0.8f, 0.5625f) else listOf<Float?>(null, 2.39f, 2.0f, 1.85f)
+            val labels = if (effects.barsVertical) listOf("Off", "1:1", "4:5", "9:16") else listOf("Off", "2.39:1", "2:1", "1.85:1")
+            ChoiceGrid(labels, ratios.indexOf(effects.barsRatio), { i -> updateEffects { it.copy(barsRatio = ratios[i]) } }, minCell = 60.dp)
+            if (effects.barsRatio != null) {
+                LabeledChoice("Colour", listOf("Black", "White"), { (it == 1) == (effects.barsColour == 0xFFFFFFFF.toInt()) }, { i ->
+                    updateEffects { it.copy(barsColour = if (i == 1) 0xFFFFFFFF.toInt() else 0xFF000000.toInt()) }
+                })
+            }
             // Sliding in and out is in time: a photo has none.
             if (effects.barsRatio != null && !state.photoProject && state.selected?.meta?.isPhoto != true) {
                 val motions = app.headsup.render.BarsMotion.entries
@@ -6112,9 +6123,58 @@ private fun PhotoCrop(state: UiState, clip: ClipState, vm: HeadsupViewModel) {
         ChoiceGrid(
             presets.map { it.second },
             presets.indexOfFirst { it.first == r.aspect },
-            { i -> vm.updateReframe { it.copy(aspect = presets[i].first) } },
+            { i -> vm.updateReframe { it.copy(aspect = presets[i].first, panels = 1) } },
             glyph = { i, on -> AspectGlyph(presets[i].first ?: clip.meta.let { m -> if (r.quarterTurns % 2 != 0) m.height.toFloat() / m.width.coerceAtLeast(1) else m.width.toFloat() / m.height.coerceAtLeast(1) }, on) },
         )
+    }
+    // A panorama cut into a carousel: 2 or 3 panels side by side, each Instagram's 4:5 or 1:1.
+    ToolSection(
+        "Carousel",
+        info = "A wide photo cut into 2 or 3 posts that join up when swiped (an Instagram carousel). The frame takes their shape side by side; " +
+            "the dashed lines show the cuts. Drag the picture to place it, pinch to zoom. Export saves each part as its own photo (_1of3, _2of3…).",
+    ) {
+        ChoiceGrid(listOf("Off", "2 parts", "3 parts"), (r.panels - 1).coerceIn(0, 2), { i ->
+            val n = i + 1
+            vm.updateReframe {
+                if (n == 1) it.copy(panels = 1)
+                else {
+                    val shape = if (it.panels > 1) (it.aspect ?: 0.8f * it.panels) / it.panels else 0.8f
+                    it.copy(panels = n, aspect = shape * n, fit = false)
+                }
+            }
+        })
+        if (r.panels > 1) {
+            val shape = (r.aspect ?: 0.8f * r.panels) / r.panels
+            val shapes = Reframe.PANEL_SHAPES
+            LabeledChoice("Each part", shapes.map { it.second }, { kotlin.math.abs(shapes[it].first - shape) < 0.01f }, { i ->
+                vm.updateReframe { it.copy(aspect = shapes[i].first * it.panels) }
+            })
+        }
+    }
+    // The whole photo inside its frame, made smaller and moved there: room round it for the bars.
+    ToolSection(
+        "In the frame",
+        info = "Fill: the photo covers the frame (what is outside is cut). Fit: all of it inside the frame, with bars where the shapes differ; " +
+            "zoom below 1× makes it smaller, and dragging it moves it in the frame (e.g. to the top, the bars below). The bars: a colour, the photo blurred, or a picture of your own.",
+    ) {
+        ChoiceGrid(listOf("Fill", "Fit"), if (r.fit) 1 else 0, { i -> vm.updateReframe { it.copy(fit = i == 1, panels = if (i == 1) 1 else it.panels) } })
+        if (r.fit) {
+            val imagePicker = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri -> if (uri != null) vm.setBackdropImage(uri) }
+            val choice = when {
+                r.blur -> 2
+                r.backdropImage != null -> 3
+                r.backdropColour == 0xFFFFFFFF.toInt() -> 1
+                else -> 0
+            }
+            LabeledChoice("Bars", listOf("Black", "White", "Blur", "Picture"), { it == choice }, { i ->
+                when (i) {
+                    0 -> vm.updateReframe { it.copy(blur = false, backdropImage = null, backdropColour = 0xFF000000.toInt()) }
+                    1 -> vm.updateReframe { it.copy(blur = false, backdropImage = null, backdropColour = 0xFFFFFFFF.toInt()) }
+                    2 -> vm.updateReframe { it.copy(blur = true, backdropImage = null) }
+                    else -> imagePicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+                }
+            })
+        }
     }
     GeometrySections(r, vm)
 }
@@ -6155,7 +6215,7 @@ private fun GeometrySections(r: Reframe, vm: HeadsupViewModel) {
         info = "Zoom into the picture, and turn it level (double-tap a ruler to reset it, hold it to compare).",
     ) {
         ValueHeader("Zoom", String.format(Locale.US, "%.2f×", r.zoom))
-        RulerSlider(r.zoom, 1f..4f, 0.02f, { v -> vm.updateReframe { it.copy(zoom = v) } }, onReset = { vm.updateReframe { it.copy(zoom = 1f) } })
+        RulerSlider(r.zoom, r.minZoom..4f, 0.02f, { v -> vm.updateReframe { it.copy(zoom = v) } }, onReset = { vm.updateReframe { it.copy(zoom = 1f) } })
         // Straightening: the angle besides the quarter turns.
         val turns = r.quarterTurns
         ValueHeader("Straighten", String.format(Locale.US, "%+.1f°", r.straighten))

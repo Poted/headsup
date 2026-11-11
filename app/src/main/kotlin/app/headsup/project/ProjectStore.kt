@@ -408,7 +408,8 @@ internal object Json {
             .put("vertical", c.reframe.vertical).put("horizontal", c.reframe.horizontal)
             .put("distortion", c.reframe.distortion.toDouble()).put("lensVignette", c.reframe.lensVignette.toDouble()).put("mirrored", c.reframe.mirrored)
             // A photo's own crop shape (a film's clips take the timeline's frame instead).
-            .putOpt("aspect", c.reframe.aspect?.toDouble()))
+            .putOpt("aspect", c.reframe.aspect?.toDouble())
+            .put("panels", c.reframe.panels).put("backdropColour", c.reframe.backdropColour).putOpt("backdropImage", c.reframe.backdropImage))
 
     private fun clip(o: JSONObject) = SavedClip(
         uri = Uri.parse(o.getString("uri")),
@@ -469,6 +470,9 @@ internal object Json {
                 centerY = r.optDouble("centerY", 0.5).toFloat(),
                 angleDegrees = r.optDouble("angleDegrees", 0.0).toFloat(),
                 aspect = if (r.has("aspect")) r.optDouble("aspect").toFloat().takeIf { it > 0f && !it.isNaN() } else null,
+                panels = r.optInt("panels", 1).coerceIn(1, 3),
+                backdropColour = r.optInt("backdropColour", 0xFF000000.toInt()),
+                backdropImage = r.optStringOrNull("backdropImage"),
                 fit = r.optBoolean("fit", false),
                 blur = r.optBoolean("blur", false),
                 vertical = r.optDouble("vertical", 0.0).toFloat(),
@@ -607,6 +611,7 @@ internal object Json {
         .put("bokeh", e.bokeh.toDouble()).put("bokehHighlights", e.bokehHighlights.toDouble()).putOpt("bokehMask", e.bokehMask).put("bokehInvert", e.bokehInvert)
         .putOpt("barsRatio", e.barsRatio)
         .put("barsMotion", e.barsMotion.name)
+        .put("barsVertical", e.barsVertical).put("barsColour", e.barsColour)
         .putOpt("graph", e.graph?.name)
         .put("dashboard", e.dashboard)
 
@@ -630,6 +635,8 @@ internal object Json {
             bokehInvert = o.optBoolean("bokehInvert", false),
             barsRatio = if (o.has("barsRatio")) o.getDouble("barsRatio").toFloat() else null,
             barsMotion = app.headsup.render.BarsMotion.entries.firstOrNull { it.name == o.optString("barsMotion") } ?: app.headsup.render.BarsMotion.STILL,
+            barsVertical = o.optBoolean("barsVertical", false),
+            barsColour = o.optInt("barsColour", 0xFF000000.toInt()),
             graph = GraphMetric.entries.firstOrNull { it.name == o.optStringOrNull("graph") },
             dashboard = o.optBoolean("dashboard", true),
         )

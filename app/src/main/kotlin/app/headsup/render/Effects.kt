@@ -38,6 +38,10 @@ data class EffectSettings(
     val barsRatio: Float? = null,
     /** How the bars come: there all along, sliding in at the clip's start, or in and out again. */
     val barsMotion: BarsMotion = BarsMotion.STILL,
+    /** The bars at the sides (the picture narrower, [barsRatio] its shape) instead of top and bottom. */
+    val barsVertical: Boolean = false,
+    /** The bars' colour (ARGB): black by default, or white. */
+    val barsColour: Int = 0xFF000000.toInt(),
     /** How far in the bars are at the moment drawn, 0..1 (set while drawing, not saved). */
     val barsAmount: Float = 1f,
     /** Activity profile drawn along the bottom edge, or null for none. */
@@ -72,6 +76,8 @@ data class EffectSettings(
         lensSoftness = if (after.lensSoftness != before.lensSoftness) after.lensSoftness else lensSoftness,
         barsRatio = if (after.barsRatio != before.barsRatio) after.barsRatio else barsRatio,
         barsMotion = if (after.barsMotion != before.barsMotion) after.barsMotion else barsMotion,
+        barsVertical = if (after.barsVertical != before.barsVertical) after.barsVertical else barsVertical,
+        barsColour = if (after.barsColour != before.barsColour) after.barsColour else barsColour,
         graph = if (after.graph != before.graph) after.graph else graph,
         dashboard = if (after.dashboard != before.dashboard) after.dashboard else dashboard,
         // Bokeh is made for one photo (its subject, its masks' numbers): never set on others.

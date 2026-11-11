@@ -1242,6 +1242,25 @@ fun ClipPreview(
                     .clipToBounds(),
                 contentAlignment = Alignment.Center,
             ) {
+                // Fitted, the bars in a colour of one's own or a picture (blurred bars are drawn round the frame above).
+                if (reframe.fit && !reframe.blur) {
+                    Box(Modifier.matchParentSize().background(Color(reframe.backdropColour)))
+                    val imagePath = reframe.backdropImage
+                    val backdropPicture by produceState<ImageBitmap?>(null, imagePath) {
+                        value = imagePath?.let { path ->
+                            withContext(Dispatchers.IO) {
+                                runCatching {
+                                    val bounds = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                                    android.graphics.BitmapFactory.decodeFile(path, bounds)
+                                    var sample = 1
+                                    while (maxOf(bounds.outWidth, bounds.outHeight) / (sample * 2) >= 1600) sample *= 2
+                                    android.graphics.BitmapFactory.decodeFile(path, android.graphics.BitmapFactory.Options().apply { inSampleSize = sample })?.asImageBitmap()
+                                }.getOrNull()
+                            }
+                        }
+                    }
+                    backdropPicture?.let { Image(it, contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.matchParentSize()) }
+                }
                 val boxW = constraints.maxWidth.toFloat()
                 val boxH = constraints.maxHeight.toFloat()
                 val pictureW = if (sourceAspect > boxW / boxH) boxH * sourceAspect else boxW
@@ -1855,6 +1874,15 @@ fun ClipPreview(
                 }
                 if (fadeGain < 1f) Box(Modifier.matchParentSize().background(Color.Black.copy(alpha = 1f - fadeGain)))
                 if (showGrid) Canvas(Modifier.matchParentSize()) { drawThirds() }
+                // A carousel: where the photo is cut into its panels.
+                if (reframe.panels > 1) Canvas(Modifier.matchParentSize()) {
+                    val dash = PathEffect.dashPathEffect(floatArrayOf(14f, 10f))
+                    for (k in 1 until reframe.panels) {
+                        val x = size.width * k / reframe.panels
+                        drawLine(Color.Black.copy(alpha = 0.5f), Offset(x, 0f), Offset(x, size.height), 3.dp.toPx())
+                        drawLine(Color.White, Offset(x, 0f), Offset(x, size.height), 1.5.dp.toPx(), pathEffect = dash)
+                    }
+                }
                 // What bokeh keeps sharp, outlined for a moment after it is found.
                 val outline = bokehOutline
                 if (outline != null && outlineAlpha.value > 0f && !showingOriginal) {

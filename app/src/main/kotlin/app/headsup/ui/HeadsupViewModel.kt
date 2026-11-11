@@ -3309,7 +3309,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
         val h = c.meta.height.toFloat().coerceAtLeast(1f)
         val framed = copy(aspect = aspect)
         val (ow, oh) = framed.outputSize(w, h)
-        return framed.copy(zoom = zoom.coerceIn(1f, 4f)).clamped(ow, oh, w, h)
+        return framed.copy(zoom = zoom.coerceIn(framed.minZoom, 4f)).clamped(ow, oh, w, h)
     }
 
     /** Changes the selected clip's framing; kept inside the picture. */
@@ -3318,6 +3318,23 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
         val s = _state.value
         // An album's photo keeps its own crop shape (null: the photo's); a film's clips take the timeline's.
         updateClip(index) { c -> transform(c.reframe).let { r -> c.copy(reframe = r.clampedFor(c, if (s.photoProject) r.aspect else s.timelineAspect)) } }
+    }
+
+    /** A picture of one's own (kept by the app) filling the bars round the selected fitted photo. */
+    fun setBackdropImage(uri: Uri) {
+        val context = getApplication<Application>()
+        viewModelScope.launch {
+            val path = withContext(Dispatchers.IO) {
+                runCatching {
+                    val dir = java.io.File(context.filesDir, "logos").apply { mkdirs() }
+                    val file = java.io.File(dir, java.util.UUID.randomUUID().toString())
+                    context.contentResolver.openInputStream(uri)?.use { input -> file.outputStream().use { input.copyTo(it) } } ?: return@runCatching null
+                    file.absolutePath
+                }.getOrNull()
+            }
+            if (path == null) _state.update { it.copy(messages = it.messages + "Could not read that picture.") }
+            else updateReframe { it.copy(blur = false, backdropImage = path) }
+        }
     }
 
     /** Fill or fit for every clip, e.g. after changing the frame's shape. */

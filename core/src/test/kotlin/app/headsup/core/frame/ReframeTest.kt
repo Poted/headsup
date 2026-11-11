@@ -127,4 +127,25 @@ class ReframeTest {
             }
         }
     }
+
+    @Test
+    fun aFittedPictureMadeSmallerMovesInsideItsFrame() {
+        // A 3:2 photo in a 4:5 frame, fitted, at half size: it can sit at the top, leaving room below.
+        val r = Reframe(aspect = 0.8f, fit = true, zoom = 0.5f, centerY = 0.9f)
+        val (ow, oh) = r.outputSize(3000f, 2000f)
+        val c = r.clamped(ow, oh, 3000f, 2000f)
+        kotlin.test.assertTrue(c.centerY > 0.6f, "moved: ${c.centerY}")
+        // The picture's top edge is still inside the frame.
+        val (_, top) = c.frameOf(1500f, 0f, ow, oh, 3000f, 2000f)
+        kotlin.test.assertTrue(top >= -0.5f, "top $top")
+        // And what is at the frame's middle is below the picture's middle (the picture went up).
+        val (_, sy) = c.sourceOf(ow / 2f, oh / 2f, ow, oh, 3000f, 2000f)
+        kotlin.test.assertTrue(sy > 1000f)
+    }
+
+    @Test
+    fun filledStaysCovered() {
+        val r = Reframe(aspect = 1f, centerY = 0.95f).clamped(1000f, 1000f, 1500f, 1000f)
+        kotlin.test.assertEquals(0.5f, r.centerY, 1e-4f)
+    }
 }
