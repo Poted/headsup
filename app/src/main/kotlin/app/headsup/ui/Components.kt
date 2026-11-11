@@ -80,7 +80,7 @@ fun Modifier.heldStill(onHold: (Boolean) -> Unit): Modifier = composed {
             val pass = androidx.compose.ui.input.pointer.PointerEventPass.Initial
             val down = awaitFirstDown(requireUnconsumed = false, pass = pass)
             // Null when the time ran out with the finger still down and in place: a hold.
-            val still = kotlinx.coroutines.withTimeoutOrNull(viewConfiguration.longPressTimeoutMillis) {
+            val still = withTimeoutOrNull(viewConfiguration.longPressTimeoutMillis) {
                 var ended = false
                 while (!ended) {
                     val e = awaitPointerEvent(pass)
