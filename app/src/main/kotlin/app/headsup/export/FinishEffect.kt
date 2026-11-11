@@ -170,15 +170,24 @@ class FinishEffect(private val settings: EffectSettings) : GlEffect {
                     float r = shortSide * 0.012 * uGlowSpread;
                     // Over the whole disc (a golden-angle spiral), turned differently at each pixel, as the
                     // preview: two fixed rings repeated a small bright thing as copies a ring away.
-                    float turn = fract(52.9829189 * fract(dot(px, vec2(0.06711056, 0.00583715)))) * 6.2832;
+                    // A Gaussian (σ 1.1 r) over a 7×7 grid, moved by under a cell at each pixel: an even glow.
+                    vec2 jit = vec2(
+                        fract(52.9829189 * fract(dot(px, vec2(0.06711056, 0.00583715)))),
+                        fract(52.9829189 * fract(dot(px.yx + 17.0, vec2(0.06711056, 0.00583715))))
+                    ) - 0.5;
                     vec3 acc = vec3(0.0);
-                    for (int i = 0; i < 28; i++) {
-                        float a = float(i) * 2.39996 + turn;
-                        float d = (0.25 + 1.95 * sqrt((float(i) + 0.5) / 28.0)) * r;
-                        acc += bright(vTexSamplingCoord + vec2(cos(a), sin(a)) * d / uSize);
+                    float wsum = 0.0;
+                    for (int y = -3; y <= 3; y++) {
+                        for (int x = -3; x <= 3; x++) {
+                            vec2 o = (vec2(float(x), float(y)) + jit) * r * 0.8;
+                            float w = exp(-dot(o, o) / (2.42 * r * r));
+                            acc += bright(vTexSamplingCoord + o / uSize) * w;
+                            wsum += w;
+                        }
                     }
+                    acc /= wsum;
                     // Halation: film's red-orange bleed around highlights, from the same blurred taps.
-                    vec3 g = clamp(acc / 28.0 * uGlow * 1.5 * uGlowTint + dot(acc / 28.0, vec3(0.33)) * uHalation * 2.0 * vec3(1.0, 0.3, 0.1), 0.0, 1.0);
+                    vec3 g = clamp(acc * uGlow * 1.5 * uGlowTint + dot(acc, vec3(0.33)) * uHalation * 2.0 * vec3(1.0, 0.3, 0.1), 0.0, 1.0);
                     c = 1.0 - (1.0 - c) * (1.0 - g);
                 }
                 if (uGrain > 0.0) {

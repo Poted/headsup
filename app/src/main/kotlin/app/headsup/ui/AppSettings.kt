@@ -60,6 +60,9 @@ object AppSettings {
 
     /** Every animation of the app shortened to nothing (and the start-up one to its last frame). */
     var reduceMotion by mutableStateOf(false)
+
+    /** Blurred bars glow round the whole preview too (as a TV's ambient light), not only inside the frame. */
+    var ambientPreview by mutableStateOf(false)
         private set
 
     /** A light click from the phone on each step of a ruler. */
@@ -88,6 +91,7 @@ object AppSettings {
         val p = context.getSharedPreferences(FILE, Context.MODE_PRIVATE)
         theme = Theme.entries.firstOrNull { it.name == p.getString("theme", null) }
         reduceMotion = p.getBoolean("reduceMotion", false)
+        ambientPreview = p.getBoolean("ambientPreview", false)
         haptics = p.getBoolean("haptics", true)
         pictureRight = p.getBoolean("pictureRight", false)
         fieldInSun = p.getBoolean("fieldInSun", false)
@@ -100,6 +104,11 @@ object AppSettings {
     fun setTheme(context: Context, value: Theme?) {
         theme = value
         save(context) { putString("theme", value?.name) }
+    }
+
+    fun setAmbientPreview(context: Context, value: Boolean) {
+        ambientPreview = value
+        save(context) { putBoolean("ambientPreview", value) }
     }
 
     fun setReduceMotion(context: Context, value: Boolean) {
@@ -257,6 +266,7 @@ fun SettingsSheet(vm: HeadsupViewModel, onDismiss: () -> Unit) {
             ) {
                 SettingSwitch("Reduce animations", "Everything appears at once.", AppSettings.reduceMotion) { AppSettings.setReduceMotion(context, it) }
                 SettingSwitch("Ruler clicks", "A light tap on every step.", AppSettings.haptics) { AppSettings.setHaptics(context, it) }
+                SettingSwitch("Ambient light", "Blurred bars glow round the whole preview too, not only in the frame.", AppSettings.ambientPreview) { AppSettings.setAmbientPreview(context, it) }
             }
             ToolSection(
                 "Layout",

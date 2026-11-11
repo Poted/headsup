@@ -410,6 +410,8 @@ data class UiState(
     val pickingPoint: Boolean = false,
     /** What was just done in the album (auto pick, a merge), said there for a moment. */
     val albumNote: String? = null,
+    /** The photo last saved by an export (opened in the gallery from its message). */
+    val lastSaved: Uri? = null,
     /** Point colour: the colour whose sliders are shown (and that a finger on the picture moves). */
     val pointSelected: Int = 0,
     /** Bumped when a photo's subject is to be found again. */
@@ -793,6 +795,17 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
     fun openAlbum() = _state.update { it.copy(albumOpen = true) }
 
     fun clearAlbumNote() = _state.update { it.copy(albumNote = null) }
+
+    /** The photo last saved, in the phone's gallery (or whatever shows pictures). */
+    fun openLastSaved(context: android.content.Context) {
+        val uri = _state.value.lastSaved ?: return
+        runCatching {
+            context.startActivity(
+                android.content.Intent(android.content.Intent.ACTION_VIEW).setDataAndType(uri, "image/*")
+                    .addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION or android.content.Intent.FLAG_ACTIVITY_NEW_TASK),
+            )
+        }.onFailure { _state.update { it.copy(messages = it.messages + "No app to open the photo with.") } }
+    }
 
     /** Opens the album [name] (from the projects list) straight into its album view. */
     private var albumAfterOpen = false
@@ -3309,7 +3322,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
         val h = c.meta.height.toFloat().coerceAtLeast(1f)
         val framed = copy(aspect = aspect)
         val (ow, oh) = framed.outputSize(w, h)
-        return framed.copy(zoom = zoom.coerceIn(framed.minZoom, 4f)).clamped(ow, oh, w, h)
+        return framed.copy(zoom = zoom.coerceIn(framed.minZoom, 4f)).clamped(ow, oh, w, h).snappedInFrame(ow, oh, w, h)
     }
 
     /** Changes the selected clip's framing; kept inside the picture. */
@@ -3318,6 +3331,23 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
         val s = _state.value
         // An album's photo keeps its own crop shape (null: the photo's); a film's clips take the timeline's.
         updateClip(index) { c -> transform(c.reframe).let { r -> c.copy(reframe = r.clampedFor(c, if (s.photoProject) r.aspect else s.timelineAspect)) } }
+    }
+
+    /** The effect bars cut from a picture of one's own (kept by the app). */
+    fun setBarsImage(uri: Uri) {
+        val context = getApplication<Application>()
+        viewModelScope.launch {
+            val path = withContext(Dispatchers.IO) {
+                runCatching {
+                    val dir = java.io.File(context.filesDir, "logos").apply { mkdirs() }
+                    val file = java.io.File(dir, java.util.UUID.randomUUID().toString())
+                    context.contentResolver.openInputStream(uri)?.use { input -> file.outputStream().use { input.copyTo(it) } } ?: return@runCatching null
+                    file.absolutePath
+                }.getOrNull()
+            }
+            if (path == null) _state.update { it.copy(messages = it.messages + "Could not read that picture.") }
+            else updateEffects { it.copy(barsImage = path) }
+        }
     }
 
     /** A picture of one's own (kept by the app) filling the bars round the selected fitted photo. */
@@ -4790,7 +4820,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
             return
         }
         loadJob = viewModelScope.launch {
-            val saved = mutableListOf<String>()
+            val saved = mutableListOf<Uri>()
             val failed = mutableListOf<String>()
             try {
                 for ((n, entry) in photos.withIndex()) {
@@ -4837,15 +4867,16 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                             }
                         }
                     }
-                        .onSuccess { saved += clip.meta.name }
+                        .onSuccess { saved += it }
                         .onFailure { failed += "${clip.meta.name}: ${it.message ?: it.javaClass.simpleName}" }
                 }
             } finally {
                 val message = buildString {
-                    if (saved.isNotEmpty()) append("Saved ${saved.size} photo(s) to ${app.headsup.export.MediaStoreOutput.VIDEO_FOLDER}.")
+                    if (saved.isNotEmpty()) append(if (saved.size == 1) "Saved 1 photo to ${app.headsup.export.MediaStoreOutput.VIDEO_FOLDER}." else "Saved ${saved.size} photos to ${app.headsup.export.MediaStoreOutput.VIDEO_FOLDER}.")
                     if (failed.isNotEmpty()) append(" Failed: " + failed.joinToString("; "))
                 }
-                _state.update { it.copy(busy = false, loadingMessage = null, loadingProgress = null, messages = it.messages + message.trim()) }
+                // The first one saved can be opened in the gallery from the message.
+                _state.update { it.copy(busy = false, loadingMessage = null, loadingProgress = null, messages = it.messages + message.trim(), lastSaved = saved.firstOrNull() ?: it.lastSaved) }
             }
         }
     }

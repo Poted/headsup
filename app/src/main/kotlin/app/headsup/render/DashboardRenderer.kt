@@ -145,7 +145,7 @@ class DashboardRenderer(private val assets: AssetManager) {
      */
     fun contentKey(style: DashboardStyle, data: DashboardData, width: Float, height: Float, effects: EffectSettings = EffectSettings()): String {
         val sb = StringBuilder()
-        sb.append(effects.barsRatio).append(':').append((effects.barsAmount * 200).toInt()).append(effects.barsVertical).append(effects.barsColour).append('|')
+        sb.append(effects.barsRatio).append(':').append((effects.barsAmount * 200).toInt()).append(effects.barsVertical).append(effects.barsColour).append(effects.barsImage).append('|')
         val u = unit(width, height, style)
         effects.graph?.let { metric ->
             val g = graphFor(data.track, metric)
@@ -279,12 +279,44 @@ class DashboardRenderer(private val assets: AssetManager) {
     private fun barHeight(width: Float, height: Float, effects: EffectSettings): Float =
         if (effects.barsVertical) 0f else fullBarHeight(width, height, effects) * effects.barsAmount.coerceIn(0f, 1f)
 
-    /** The side bars' width: the picture left [EffectSettings.barsRatio] wide (none when the frame is narrower already). */
+    /** The side bars' width: [EffectSettings.barsRatio] is the share of the width left to the picture (any frame's shape). */
     private fun barWidth(width: Float, height: Float, effects: EffectSettings): Float {
         if (!effects.barsVertical) return 0f
-        val ratio = effects.barsRatio ?: return 0f
-        return ((width - height * ratio) / 2f).coerceAtLeast(0f) * effects.barsAmount.coerceIn(0f, 1f)
+        val share = effects.barsRatio?.takeIf { it < 1f } ?: return 0f
+        return width * (1f - share) / 2f * effects.barsAmount.coerceIn(0f, 1f)
     }
+
+    /** Bars' pictures, read once (they are drawn on every frame). */
+    private val barPictures = android.util.LruCache<String, android.graphics.Bitmap>(2)
+
+    private fun barPicture(path: String): android.graphics.Bitmap? = barPictures.get(path) ?: runCatching {
+        val bounds = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        android.graphics.BitmapFactory.decodeFile(path, bounds)
+        var sample = 1
+        while (maxOf(bounds.outWidth, bounds.outHeight) / (sample * 2) >= 2048) sample *= 2
+        android.graphics.BitmapFactory.decodeFile(path, android.graphics.BitmapFactory.Options().apply { inSampleSize = sample })
+    }.getOrNull()?.also { barPictures.put(path, it) }
+
+    /** [rects] filled with the bars' picture (covering the whole frame, so both bars are cut from one picture), else their colour. */
+    private fun fillBars(canvas: Canvas, width: Float, height: Float, effects: EffectSettings, rects: List<RectF>) {
+        val picture = effects.barsImage?.let { barPicture(it) }
+        if (picture == null) {
+            for (r in rects) canvas.drawRect(r, barPaint)
+            return
+        }
+        val k = maxOf(width / picture.width, height / picture.height)
+        val w = picture.width * k
+        val h = picture.height * k
+        val dst = RectF((width - w) / 2f, (height - h) / 2f, (width + w) / 2f, (height + h) / 2f)
+        for (r in rects) {
+            canvas.save()
+            canvas.clipRect(r)
+            canvas.drawBitmap(picture, null, dst, barPicturePaint)
+            canvas.restore()
+        }
+    }
+
+    private val barPicturePaint = Paint(Paint.FILTER_BITMAP_FLAG)
 
     private fun fullBarHeight(width: Float, height: Float, effects: EffectSettings): Float {
         val ratio = effects.barsRatio ?: return 0f
@@ -300,14 +332,12 @@ class DashboardRenderer(private val assets: AssetManager) {
         barPaint.color = effects.barsColour
         val side = barWidth(width, height, effects)
         if (side > 0f) {
-            canvas.drawRect(0f, 0f, side, height, barPaint)
-            canvas.drawRect(width - side, 0f, width, height, barPaint)
+            fillBars(canvas, width, height, effects, listOf(RectF(0f, 0f, side, height), RectF(width - side, 0f, width, height)))
             return
         }
         val bar = barHeight(width, height, effects)
         if (bar <= 0f) return
-        canvas.drawRect(0f, 0f, width, bar, barPaint)
-        canvas.drawRect(0f, height - bar, width, height, barPaint)
+        fillBars(canvas, width, height, effects, listOf(RectF(0f, 0f, width, bar), RectF(0f, height - bar, width, height)))
     }
 
     private fun graphRect(width: Float, height: Float, u: Float, effects: EffectSettings): RectF {

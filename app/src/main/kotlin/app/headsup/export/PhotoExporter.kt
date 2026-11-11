@@ -118,7 +118,7 @@ object PhotoExporter {
     }
 
     /** [onProgress] gets 0..1 as reading, developing, drawing and saving go. */
-    fun export(context: Context, request: PhotoRequest, onProgress: (Float) -> Unit = {}): Uri {
+    fun export(context: Context, request: PhotoRequest, onProgress: (Float) -> Unit = {}): List<Uri> {
         // Raw photos are developed by the app at full size in half floats; others decoded by Android.
         val full = if (request.raw) RawPhotos.developFull(context, request.uri, request.rawDevelop, onProgress) else null
         onProgress(0.8f)
@@ -220,7 +220,7 @@ object PhotoExporter {
                 Bitmap.createScaledBitmap(deep, (fw * k).toInt().coerceAtLeast(2), (fh * k).toInt().coerceAtLeast(2), true).also { deep.recycle() }
             }
             val name = request.name.substringBeforeLast('.') + "_edit.tif"
-            return MediaStoreOutput.savePhoto(context, name, "image/tiff") { out -> writeTiff(sized, out.buffered(1 shl 20)) }.also { sized.recycle() }
+            return listOf(MediaStoreOutput.savePhoto(context, name, "image/tiff") { out -> writeTiff(sized, out.buffered(1 shl 20)) }.also { sized.recycle() })
         }
         val rendered = render(root, fw, fh)
         // A raw's real lights above white, framed as the photo, for an Ultra HDR gain map.
@@ -236,24 +236,24 @@ object PhotoExporter {
             Bitmap.createScaledBitmap(rendered, (fw * k).toInt().coerceAtLeast(2), (fh * k).toInt().coerceAtLeast(2), true).also { rendered.recycle() }
         }
         val name = request.name.substringBeforeLast('.') + "_edit.jpg"
-        // A carousel: the frame cut into its panels, saved in order (_1, _2…), the first one's uri returned.
+        // A carousel: the frame cut into its parts (_1of3, _2of3…), saved last part first, so the
+        // first part is the newest in the gallery (shown first, on the left); returned in order.
         val panels = request.reframe.panels.coerceIn(1, 3)
         if (panels > 1) {
             val pw2 = bitmap.width / panels
-            var first: Uri? = null
-            for (k in 0 until panels) {
+            val uris = arrayOfNulls<Uri>(panels)
+            for (k in panels - 1 downTo 0) {
                 val part = Bitmap.createBitmap(bitmap, k * pw2, 0, pw2, bitmap.height)
                 val partName = request.name.substringBeforeLast('.') + "_edit_${k + 1}of$panels.jpg"
-                val uri = MediaStoreOutput.savePhoto(context, partName) { out -> part.compress(Bitmap.CompressFormat.JPEG, request.quality.coerceIn(1, 100), out) }
-                if (first == null) first = uri
+                uris[k] = MediaStoreOutput.savePhoto(context, partName) { out -> part.compress(Bitmap.CompressFormat.JPEG, request.quality.coerceIn(1, 100), out) }
                 if (part !== bitmap) part.recycle()
             }
             bitmap.recycle()
-            return first!!
+            return uris.filterNotNull()
         }
         val saved = if (request.format == PhotoFormat.ULTRA_HDR && android.os.Build.VERSION.SDK_INT >= 34) withGainmap(bitmap, headroom) else bitmap
-        return MediaStoreOutput.savePhoto(context, name) { out -> saved.compress(Bitmap.CompressFormat.JPEG, request.quality.coerceIn(1, 100), out) }
-            .also { saved.recycle(); if (saved !== bitmap) bitmap.recycle() }
+        return listOf(MediaStoreOutput.savePhoto(context, name) { out -> saved.compress(Bitmap.CompressFormat.JPEG, request.quality.coerceIn(1, 100), out) }
+            .also { saved.recycle(); if (saved !== bitmap) bitmap.recycle() })
     }
 
     /** [photo] ([w] × [h] pixels) sampled through the DNG's WarpRectilinear: each colour from where its lens put it. */

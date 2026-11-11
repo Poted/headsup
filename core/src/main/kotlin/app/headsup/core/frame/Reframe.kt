@@ -142,6 +142,40 @@ data class Reframe(
         return copy(centerX = limit(centerX, hx), centerY = limit(centerY, hy))
     }
 
+    /**
+     * Fitted and smaller than its frame: the picture's middle drawn to the frame's lines of
+     * symmetry (its middle and its thirds) and its edges to the frame's, when within [tolerance]
+     * of the frame's size; as it is otherwise (and when turned, where lines would not hold).
+     */
+    fun snappedInFrame(outW: Float, outH: Float, srcW: Float, srcH: Float, tolerance: Float = 0.02f): Reframe {
+        if (!fit || straighten != 0f) return this
+        val r = clamped(outW, outH, srcW, srcH)
+        val scale = baseScale(outW, outH, srcW, srcH) * r.effectiveZoom(outW, outH, srcW, srcH)
+        val odd = quarterTurns % 2 != 0
+        // The picture's size along the frame's x and y (turned a quarter, its sides swap).
+        val alongX = (if (odd) srcH else srcW) * scale
+        val alongY = (if (odd) srcW else srcH) * scale
+        // Where the picture's middle is in the frame (fractions) for a centre value, and back: a
+        // centre further right in the picture puts the picture's middle further left in the frame.
+        fun snap(centre: Float, out: Float, along: Float, srcSide: Float, sign: Float): Float {
+            if (along >= out) return centre
+            val k = sign * srcSide * scale / out
+            val middle = 0.5f + (0.5f - centre) * k
+            val half = along / out / 2f
+            // The frame's middle and thirds for the picture's middle; its edges for the picture's.
+            val targets = listOf(0.5f, 1f / 3f, 2f / 3f, half, 1f - half)
+            val near = targets.minByOrNull { kotlin.math.abs(it - middle) } ?: return centre
+            return if (kotlin.math.abs(near - middle) <= tolerance) 0.5f - (near - 0.5f) / k else centre
+        }
+        // Mapped like sourceOf: the picture's x is its own x (or y when turned), mirrored when it is.
+        val (sx, sy) = when (((quarterTurns % 4) + 4) % 4) {
+            0 -> (if (mirrored) -1f else 1f) to 1f
+            2 -> (if (mirrored) 1f else -1f) to -1f
+            else -> return r
+        }
+        return r.copy(centerX = snap(r.centerX, outW, alongX, srcW, sx), centerY = snap(r.centerY, outH, alongY, srcH, sy))
+    }
+
     /** The smallest zoom allowed: fitted, the picture may be made smaller inside the frame. */
     val minZoom: Float get() = if (fit) MIN_FIT_ZOOM else 1f
 

@@ -611,7 +611,7 @@ internal object Json {
         .put("bokeh", e.bokeh.toDouble()).put("bokehHighlights", e.bokehHighlights.toDouble()).putOpt("bokehMask", e.bokehMask).put("bokehInvert", e.bokehInvert)
         .putOpt("barsRatio", e.barsRatio)
         .put("barsMotion", e.barsMotion.name)
-        .put("barsVertical", e.barsVertical).put("barsColour", e.barsColour)
+        .put("barsVertical", e.barsVertical).put("barsColour", e.barsColour).putOpt("barsImage", e.barsImage)
         .putOpt("graph", e.graph?.name)
         .put("dashboard", e.dashboard)
 
@@ -637,6 +637,7 @@ internal object Json {
             barsMotion = app.headsup.render.BarsMotion.entries.firstOrNull { it.name == o.optString("barsMotion") } ?: app.headsup.render.BarsMotion.STILL,
             barsVertical = o.optBoolean("barsVertical", false),
             barsColour = o.optInt("barsColour", 0xFF000000.toInt()),
+            barsImage = o.optStringOrNull("barsImage"),
             graph = GraphMetric.entries.firstOrNull { it.name == o.optStringOrNull("graph") },
             dashboard = o.optBoolean("dashboard", true),
         )

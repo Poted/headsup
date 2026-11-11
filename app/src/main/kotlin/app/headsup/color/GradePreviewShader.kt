@@ -531,9 +531,30 @@ class GradePreviewShader {
             }
 
             // Turns the glow's taps a little per pixel when it reaches far, so its rings do not show.
-            // The glow's taps turned by a different angle at each pixel (interleaved gradient noise).
-            float glowSpin(float2 p) {
-                return fract(52.9829189 * fract(dot(p, float2(0.06711056, 0.00583715)))) * 6.2832;
+            // The glow's grid of taps moved by under a cell at each pixel (interleaved gradient noise),
+            // so its regular spacing never shows as copies of a small bright thing.
+            float2 glowJitter(float2 p) {
+                return float2(
+                    fract(52.9829189 * fract(dot(p, float2(0.06711056, 0.00583715)))),
+                    fract(52.9829189 * fract(dot(p.yx + 17.0, float2(0.06711056, 0.00583715))))
+                ) - 0.5;
+            }
+
+            // The light round p: what is bright gathered over a Gaussian (σ 1.1 r) on a 7×7 grid of
+            // taps, so a small light spreads into an even glow, not into dots or rings of copies.
+            float3 glowGather(float2 p, float r) {
+                float2 jit = glowJitter(p);
+                float3 acc = float3(0.0);
+                float wsum = 0.0;
+                for (int y = -3; y <= 3; y++) {
+                    for (int x = -3; x <= 3; x++) {
+                        float2 o = (float2(float(x), float(y)) + jit) * r * 0.8;
+                        float w = exp(-dot(o, o) / (2.42 * r * r));
+                        acc += bright(p + o) * w;
+                        wsum += w;
+                    }
+                }
+                return acc / wsum;
             }
 
             float glowTurn(float2 p) {
@@ -705,14 +726,8 @@ class GradePreviewShader {
                     // The light gathered over the whole disc (a golden-angle spiral), turned differently
                     // at each pixel: two fixed rings repeated a small bright thing (a lit sign) as
                     // copies of itself a ring away; spread like this it is an even glow round it.
-                    float turn = glowSpin(coord);
-                    float3 acc = float3(0.0);
-                    for (int i = 0; i < 28; i++) {
-                        float a = float(i) * 2.39996 + turn;
-                        float d = (0.25 + 1.95 * sqrt((float(i) + 0.5) / 28.0)) * r;
-                        acc += bright(coord + float2(cos(a), sin(a)) * d);
-                    }
-                    float3 g = clamp(acc / 28.0 * glow * 1.5 * glowTint + dot(acc / 28.0, float3(0.33)) * halation * 2.0 * float3(1.0, 0.3, 0.1), 0.0, 1.0);
+                    float3 acc = glowGather(coord, r);
+                    float3 g = clamp(acc * glow * 1.5 * glowTint + dot(acc, float3(0.33)) * halation * 2.0 * float3(1.0, 0.3, 0.1), 0.0, 1.0);
                     c = 1.0 - (1.0 - c) * (1.0 - g);
                 }
                 // A mask's glow: only what is bright inside the mask gives light, which spreads past
@@ -721,18 +736,25 @@ class GradePreviewShader {
                     float r = shortSide * 0.012 * glowSpread;
                     float3 accG = float3(0.0);
                     float3 accH = float3(0.0);
-                    float spin = glowSpin(coord);
-                    for (int i = 0; i < 28; i++) {
-                        float a = float(i) * 2.39996 + spin;
-                        float2 q = coord + float2(cos(a), sin(a)) * (0.25 + 1.95 * sqrt((float(i) + 0.5) / 28.0)) * r;
-                        float2 k = maskGlowAt(q);
-                        if (k.x <= 0.0 && k.y <= 0.0) continue;
-                        float3 s = float3(gradeNearest(img(q).rgb));
-                        float3 b = s * (max(luma(s) - 0.6, 0.0) / 0.4);
-                        accG += b * k.x;
-                        accH += b * k.y;
+                    float2 jit = glowJitter(coord);
+                    float wsum = 0.0;
+                    for (int y = -2; y <= 2; y++) {
+                        for (int x = -2; x <= 2; x++) {
+                            float2 o = (float2(float(x), float(y)) + jit) * r * 0.9;
+                            float w = exp(-dot(o, o) / (2.42 * r * r));
+                            wsum += w;
+                            float2 q = coord + o;
+                            float2 k = maskGlowAt(q);
+                            if (k.x <= 0.0 && k.y <= 0.0) continue;
+                            float3 s = float3(gradeNearest(img(q).rgb));
+                            float3 b = s * (max(luma(s) - 0.6, 0.0) / 0.4) * w;
+                            accG += b * k.x;
+                            accH += b * k.y;
+                        }
                     }
-                    float3 g = clamp(accG / 28.0 * 1.5 * glowTint + dot(accH / 28.0, float3(0.33)) * 2.0 * float3(1.0, 0.3, 0.1), 0.0, 1.0);
+                    accG /= wsum;
+                    accH /= wsum;
+                    float3 g = clamp(accG * 1.5 * glowTint + dot(accH, float3(0.33)) * 2.0 * float3(1.0, 0.3, 0.1), 0.0, 1.0);
                     c = 1.0 - (1.0 - c) * (1.0 - g);
                 }
                 if (grain > 0.0) c = filmGrain(coord, c);

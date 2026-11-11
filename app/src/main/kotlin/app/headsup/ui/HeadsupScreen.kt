@@ -715,7 +715,7 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
                     .padding(16.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
-                if (state.messages.isNotEmpty()) Messages(state.messages, vm::dismissMessages)
+                if (state.messages.isNotEmpty()) Messages(state.messages, vm::dismissMessages, onOpen = state.lastSaved?.takeIf { state.messages.any { m -> m.startsWith("Saved") } }?.let { { vm.openLastSaved(context) } })
                 when (tool) {
                     Tool.FILES -> FilesPanel(
                         state, vm, onAddVideos = addVideos, onAddFit = addFit, onAddSound = { soundPicker.launch(arrayOf("audio/*")) },
@@ -842,7 +842,7 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
                         .graphicsLayer { scaleX = settle.value; scaleY = settle.value; alpha = 0.4f + 0.6f * ((settle.value - 0.96f) / 0.04f) }
                         .then(
                             if (state.photoProject) Modifier.observedSwipe(pictureFree && !photoZoomed) { if (it == Swipe.DOWN || (wide && mirrored(it) == Swipe.LEFT)) fullscreen = false }
-                            else Modifier.freeSwipe(pictureFree) { if (it == Swipe.DOWN || (wide && mirrored(it) == Swipe.LEFT)) fullscreen = false },
+                            else Modifier.freeSwipe(pictureFree && !photoZoomed) { if (it == Swipe.DOWN || (wide && mirrored(it) == Swipe.LEFT)) fullscreen = false },
                         ),
                     verticalArrangement = Arrangement.Center,
                     content = pictureAndTimeline,
@@ -1388,13 +1388,15 @@ private fun Label(text: String) {
 }
 
 @Composable
-private fun Messages(messages: List<String>, onDismiss: () -> Unit) {
+private fun Messages(messages: List<String>, onDismiss: () -> Unit, onOpen: (() -> Unit)? = null) {
     val clipboard = LocalClipboardManager.current
     val text = messages.joinToString("\n\n")
     Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer)) {
         Column(Modifier.padding(12.dp)) {
             SelectionContainer { Text(text, color = MaterialTheme.colorScheme.onErrorContainer, style = MaterialTheme.typography.bodySmall) }
             Row {
+                // A photo just saved: straight to it in the gallery.
+                if (onOpen != null) TextButton(onClick = onOpen) { Text("Open") }
                 TextButton(onClick = { clipboard.setText(AnnotatedString(text)) }) { Text("Copy") }
                 TextButton(onClick = onDismiss) { Text("Dismiss") }
             }
@@ -5247,12 +5249,22 @@ private fun EffectsPanel(state: UiState, vm: HeadsupViewModel, kind: EffectKind,
             LabeledChoice("Bars", listOf("Top and bottom", "Sides"), { (it == 1) == effects.barsVertical }, { i ->
                 updateEffects { it.copy(barsVertical = i == 1, barsRatio = null) }
             })
-            val ratios = if (effects.barsVertical) listOf<Float?>(null, 1f, 0.8f, 0.5625f) else listOf<Float?>(null, 2.39f, 2.0f, 1.85f)
-            val labels = if (effects.barsVertical) listOf("Off", "1:1", "4:5", "9:16") else listOf("Off", "2.39:1", "2:1", "1.85:1")
+            // At the sides: how much of the width they take (whatever the frame's shape, an upright photo too).
+            val ratios = if (effects.barsVertical) listOf<Float?>(null, 0.92f, 0.84f, 0.72f) else listOf<Float?>(null, 2.39f, 2.0f, 1.85f)
+            val labels = if (effects.barsVertical) listOf("Off", "Thin", "Medium", "Wide") else listOf("Off", "2.39:1", "2:1", "1.85:1")
             ChoiceGrid(labels, ratios.indexOf(effects.barsRatio), { i -> updateEffects { it.copy(barsRatio = ratios[i]) } }, minCell = 60.dp)
             if (effects.barsRatio != null) {
-                LabeledChoice("Colour", listOf("Black", "White"), { (it == 1) == (effects.barsColour == 0xFFFFFFFF.toInt()) }, { i ->
-                    updateEffects { it.copy(barsColour = if (i == 1) 0xFFFFFFFF.toInt() else 0xFF000000.toInt()) }
+                val barsPicker = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri -> if (uri != null) vm.setBarsImage(uri) }
+                val look = when {
+                    effects.barsImage != null -> 2
+                    effects.barsColour == 0xFFFFFFFF.toInt() -> 1
+                    else -> 0
+                }
+                LabeledChoice("Bars", listOf("Black", "White", "Picture"), { it == look }, { i ->
+                    when (i) {
+                        2 -> barsPicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+                        else -> updateEffects { it.copy(barsImage = null, barsColour = if (i == 1) 0xFFFFFFFF.toInt() else 0xFF000000.toInt()) }
+                    }
                 })
             }
             // Sliding in and out is in time: a photo has none.
@@ -6120,12 +6132,23 @@ private fun PhotoCrop(state: UiState, clip: ClipState, vm: HeadsupViewModel) {
         "Aspect",
         info = "The shape the photo is cut to; Original keeps the photo's own. Drag the picture to choose what stays, pinch to zoom.",
     ) {
+        // The usual shapes, and one of one's own (Custom: width and height typed in).
+        var custom by remember { mutableStateOf(false) }
+        val preset = presets.indexOfFirst { it.first == r.aspect }
+        val own = r.panels == 1 && r.aspect != null && preset < 0
         ChoiceGrid(
-            presets.map { it.second },
-            presets.indexOfFirst { it.first == r.aspect },
-            { i -> vm.updateReframe { it.copy(aspect = presets[i].first, panels = 1) } },
-            glyph = { i, on -> AspectGlyph(presets[i].first ?: clip.meta.let { m -> if (r.quarterTurns % 2 != 0) m.height.toFloat() / m.width.coerceAtLeast(1) else m.width.toFloat() / m.height.coerceAtLeast(1) }, on) },
+            presets.map { it.second } + (if (own) "Custom " + aspectLabel(r.aspect!!) else "Custom"),
+            if (r.panels > 1) -1 else if (own) presets.size else preset,
+            { i -> if (i == presets.size) custom = true else vm.updateReframe { it.copy(aspect = presets[i].first, panels = 1) } },
+            glyph = { i, on ->
+                val a = if (i == presets.size) (r.aspect.takeIf { own } ?: 1.5f) else presets[i].first
+                AspectGlyph(a ?: clip.meta.let { m -> if (r.quarterTurns % 2 != 0) m.height.toFloat() / m.width.coerceAtLeast(1) else m.width.toFloat() / m.height.coerceAtLeast(1) }, on)
+            },
         )
+        if (custom) CustomAspectDialog(r.aspect.takeIf { own }, onDismiss = { custom = false }) { a ->
+            custom = false
+            vm.updateReframe { it.copy(aspect = a, panels = 1) }
+        }
     }
     // A panorama cut into a carousel: 2 or 3 panels side by side, each Instagram's 4:5 or 1:1.
     ToolSection(
@@ -6177,6 +6200,46 @@ private fun PhotoCrop(state: UiState, clip: ClipState, vm: HeadsupViewModel) {
         }
     }
     GeometrySections(r, vm)
+}
+
+/** A shape as width:height in small whole numbers where it is one (3:2, 21:9), else to two decimals. */
+private fun aspectLabel(a: Float): String {
+    for (h in 1..20) {
+        val w = a * h
+        if (kotlin.math.abs(w - kotlin.math.round(w)) < 0.01f) return "${kotlin.math.round(w).toInt()}:$h"
+    }
+    return String.format(Locale.US, "%.2f:1", a)
+}
+
+/** A crop shape of one's own: width and height, in any units (3 and 2, or 1080 and 1350). */
+@Composable
+private fun CustomAspectDialog(current: Float?, onDismiss: () -> Unit, onSet: (Float) -> Unit) {
+    val start = current?.let { aspectLabel(it).split(':') }
+    var w by remember { mutableStateOf(start?.getOrNull(0)?.takeIf { !it.contains('.') } ?: "3") }
+    var h by remember { mutableStateOf(start?.getOrNull(1)?.takeIf { !it.contains('.') } ?: "2") }
+    val wv = w.replace(',', '.').toFloatOrNull()
+    val hv = h.replace(',', '.').toFloatOrNull()
+    val aspect = if (wv != null && hv != null && wv > 0f && hv > 0f) wv / hv else null
+    // Very long or very tall shapes are not crops a photo can be cut to sensibly.
+    val ok = aspect != null && aspect in 0.2f..5f
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Custom shape") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(w, { w = it.take(6) }, Modifier.weight(1f), label = { Text("Width") }, singleLine = true,
+                        keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(keyboardType = androidx.compose.ui.text.input.KeyboardType.Decimal))
+                    Text(":", style = MaterialTheme.typography.titleLarge)
+                    OutlinedTextField(h, { h = it.take(6) }, Modifier.weight(1f), label = { Text("Height") }, singleLine = true,
+                        keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(keyboardType = androidx.compose.ui.text.input.KeyboardType.Decimal))
+                }
+                Hint(if (ok) "A frame ${aspectLabel(aspect!!)} (${String.format(Locale.US, "%.2f", aspect)} wide to 1 high)." else "Width and height, e.g. 3 and 2, or 1080 and 1350.")
+            }
+        },
+        confirmButton = { TextButton(onClick = { aspect?.let(onSet) }, enabled = ok) { Text("Set") } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+    )
 }
 
 /**

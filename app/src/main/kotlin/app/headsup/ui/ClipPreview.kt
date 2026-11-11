@@ -683,6 +683,8 @@ fun ClipPreview(
     val bokehSettings = clip.effects
     var bokehWorking by remember { mutableStateOf(false) }
     var bokehOutline by remember { mutableStateOf<Bitmap?>(null) }
+    // What was last outlined (the photo, its mask and side): not outlined again for the same.
+    var outlinedFor by remember { mutableStateOf<List<Any?>?>(null) }
     val outlineAlpha = remember { androidx.compose.animation.core.Animatable(0f) }
     // The photo the layer was made for: the layer is the whole photo with its background blurred,
     // so another photo's must never stay over this one while this one's is worked out.
@@ -707,8 +709,11 @@ fun ClipPreview(
         } finally {
             bokehWorking = false
         }
-        // The outline shows a moment, then fades.
-        if (bokehOutline != null) {
+        // The outline shows a moment, then fades: only when what stays sharp changed (another photo,
+        // mask, side, or found again), not as the blur or highlights are set.
+        val keptKey = listOf(clip.meta.uri, bokehSettings.bokehMask, bokehSettings.bokehInvert, bokehSettings.bokehMask?.let { clip.masks.getOrNull(it) }, subjectVersion)
+        if (bokehOutline != null && keptKey != outlinedFor) {
+            outlinedFor = keptKey
             outlineAlpha.snapTo(1f)
             delay(1200)
             outlineAlpha.animateTo(0f, androidx.compose.animation.core.tween(800))
@@ -996,12 +1001,12 @@ fun ClipPreview(
     }
 
     // Looking closely at a photo: the view's zoom and pan (not the photo's framing).
-    val inspect = photoMode && onReframe == null && onMoveMask == null && onTransformMask == null && onBrush == null && onMoveText == null && onSample == null
+    val inspect = onReframe == null && onMoveMask == null && onTransformMask == null && onBrush == null && onMoveText == null && onSample == null
     // The view's zoom applies while looking at a photo closely or painting a mask.
     // Wherever one finger has a tool's job on a photo (measuring or picking a colour, placing a
     // text): two fingers still zoom and move the view. Not where two fingers have a job of their
     // own: framing, a mask moved and turned, a selected text sized and turned.
-    val zoomForSampling = photoMode && !inspect && !zoomForPainting && onReframe == null && onTransformMask == null &&
+    val zoomForSampling = !inspect && !zoomForPainting && onReframe == null && onTransformMask == null &&
         !(onMoveText != null && selectedTextId != null)
     val viewZoomed = inspect || zoomForPainting || zoomForSampling
     var viewZoom by remember(clip.id) { mutableStateOf(1f) }
@@ -1027,6 +1032,8 @@ fun ClipPreview(
         val maxY = h * (z1 - 1f) / 2f
         viewPan = if (z1 <= 1.001f) Offset.Zero else Offset(moved.x.coerceIn(-maxX, maxX), moved.y.coerceIn(-maxY, maxY))
     }
+    // Fitted with blurred bars: the picture itself, small, blurred behind it (read below).
+    var backdrop by remember { mutableStateOf<ImageBitmap?>(null) }
     Column(Modifier.padding(horizontal = if (edgeToEdge) 0.dp else 16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Box(
             Modifier.fillMaxWidth().clip(RoundedCornerShape(if (edgeToEdge) 0.dp else 20.dp)).background(HeadsupColors.Picture).then(
@@ -1186,8 +1193,9 @@ fun ClipPreview(
             // ambient light lights round its player). Frames are read from
             // the file (not the TextureView, which gives nothing for HDR clips such as screen
             // recordings), small, every few tenths of a second while playing.
+            // Only inside the frame unless Settings › Ambient light round the picture: the frame's edge shows.
+            val ambient = AppSettings.ambientPreview
             if (reframe.fit && reframe.blur) {
-                var backdrop by remember { mutableStateOf<ImageBitmap?>(null) }
                 val momentNow by rememberUpdatedState(fileMs)
                 val source = if (photo) null else sourceOf(clip)
                 val retriever = remember(source) {
@@ -1212,7 +1220,7 @@ fun ClipPreview(
                         delay(if (wantsPlay) 300L else 500L)
                     }
                 }
-                backdrop?.let {
+                backdrop?.takeIf { ambient }?.let {
                     // Richer colours, a touch darker; blurred by the system where it can (Android 12+),
                     // else smooth enough from being so small.
                     val richer = androidx.compose.ui.graphics.ColorMatrix().apply { setToSaturation(1.3f) }
@@ -1242,7 +1250,19 @@ fun ClipPreview(
                     .clipToBounds(),
                 contentAlignment = Alignment.Center,
             ) {
-                // Fitted, the bars in a colour of one's own or a picture (blurred bars are drawn round the frame above).
+                // Fitted with blurred bars: the blur inside the frame (and round it too with the ambient light).
+                if (reframe.fit && reframe.blur) backdrop?.let {
+                    val richer = androidx.compose.ui.graphics.ColorMatrix().apply { setToSaturation(1.3f) }
+                    Image(
+                        it, contentDescription = null, contentScale = ContentScale.Crop,
+                        colorFilter = androidx.compose.ui.graphics.ColorFilter.colorMatrix(richer),
+                        modifier = Modifier.matchParentSize().graphicsLayer {
+                            if (Build.VERSION.SDK_INT >= 31) renderEffect = androidx.compose.ui.graphics.BlurEffect(40.dp.toPx(), 40.dp.toPx(), androidx.compose.ui.graphics.TileMode.Clamp)
+                        },
+                    )
+                    Box(Modifier.matchParentSize().background(Color.Black.copy(alpha = 0.12f)))
+                }
+                // Fitted, the bars in a colour of one's own or a picture.
                 if (reframe.fit && !reframe.blur) {
                     Box(Modifier.matchParentSize().background(Color(reframe.backdropColour)))
                     val imagePath = reframe.backdropImage
@@ -1282,7 +1302,8 @@ fun ClipPreview(
                 val density = LocalDensity.current
                 // A TextureView (unlike PlayerView's default SurfaceView) is drawn by the UI, so the
                 // colour shader can be applied to it.
-                val pictureLayer = Modifier.requiredSize(with(density) { pictureW.toDp() }, with(density) { pictureH.toDp() }).graphicsLayer {
+                val pictureSize = Modifier.requiredSize(with(density) { pictureW.toDp() }, with(density) { pictureH.toDp() })
+                val pictureShade = Modifier.graphicsLayer {
                         // Reading these here re-applies the shader when they change, without recomposing.
                         tableVersion
                         val frame = if (effects.grain > 0f) (positionMs / 33).toFloat() else 0f
@@ -1301,6 +1322,7 @@ fun ClipPreview(
                         translationX = t.translation.x + (c?.let { it.dx * size.width * t.zoom } ?: 0f)
                         translationY = t.translation.y + (c?.let { it.dy * size.height * t.zoom } ?: 0f)
                     }
+                val pictureLayer = pictureSize.then(pictureShade)
                 val bitmap = photoBitmap
                 if (photo) {
                     if (bitmap != null) Image(bitmap, contentDescription = clip.meta.name, contentScale = ContentScale.FillBounds, modifier = pictureLayer)
@@ -1309,10 +1331,17 @@ fun ClipPreview(
                     bokehPhoto?.takeIf { !showingOriginal && bitmap != null }?.let { b ->
                         Image(
                             b, contentDescription = null, contentScale = ContentScale.FillBounds,
-                            modifier = pictureLayer.drawWithContent {
+                            // Cut at the line outside the colour layer: cut inside it, the colour shader turned
+                            // the cut-away part into opaque black over the photo's before side.
+                            modifier = pictureSize.drawWithContent {
                                 val at = split
-                                if (at == null) drawContent() else clipRect(left = at * size.width) { this@drawWithContent.drawContent() }
-                            },
+                                if (at == null) drawContent() else {
+                                    val t = reframeTransform(reframe, geometry)
+                                    val x = size.width / 2f + t.translation.x + (at * size.width - size.width / 2f) * t.zoom * (if (reframe.mirrored) -1f else 1f)
+                                    if (reframe.mirrored) clipRect(right = x) { this@drawWithContent.drawContent() }
+                                    else clipRect(left = x) { this@drawWithContent.drawContent() }
+                                }
+                            }.then(pictureShade),
                         )
                     }
                     if (photoFrom != clip.meta.uri) {
