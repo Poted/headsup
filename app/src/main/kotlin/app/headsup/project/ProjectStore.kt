@@ -61,6 +61,8 @@ data class SavedClip(
     /** The shot steadied (its measured path and strength), or null. */
     val stabilize: app.headsup.core.frame.Stabilizer.Path? = null,
     val subject: String? = null,
+    val cut: app.headsup.core.edit.CutKind = app.headsup.core.edit.CutKind.NONE,
+    val cutMs: Long = 500L,
 )
 
 /** A reversed clip's source: [originalUri] from [startMs] to [endMs], played backwards. */
@@ -400,6 +402,7 @@ internal object Json {
             }
         }
         .putOpt("subject", c.subject)
+        .put("cut", c.cut.name).put("cutMs", c.cutMs)
         .apply { if (c.gradeKeys.isNotEmpty()) put("gradeKeys", JSONArray(c.gradeKeys.map { k -> JSONObject().put("t", k.timeMs).put("grade", grade(k.grade)) })) }
         .put("raw", JSONObject().put("exposure", c.rawDevelop.exposure.toDouble()).put("highlights", c.rawDevelop.highlights.toDouble())
             .put("shadows", c.rawDevelop.shadows.toDouble()).put("temperature", c.rawDevelop.temperature.toDouble()).put("tint", c.rawDevelop.tint.toDouble())
@@ -446,6 +449,8 @@ internal object Json {
         cullGroup = if (o.has("cullGroup")) o.optInt("cullGroup") else null,
         cullBest = o.optBoolean("cullBest", false),
         subject = o.optStringOrNull("subject"),
+        cut = app.headsup.core.edit.CutKind.entries.firstOrNull { it.name == o.optString("cut") } ?: app.headsup.core.edit.CutKind.NONE,
+        cutMs = o.optLong("cutMs", 500L),
         stabilize = o.optJSONObject("stabilize")?.let { j ->
             val flat = j.optJSONArray("steps") ?: return@let null
             app.headsup.core.frame.Stabilizer.Path(

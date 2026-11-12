@@ -137,6 +137,9 @@ data class ClipState(
     val stabilize: app.headsup.core.frame.Stabilizer.Path? = null,
     /** The clip's subject found on its frames (a [app.headsup.color.MaskSequences] id), for texts behind it. */
     val subject: String? = null,
+    /** How the clip comes in from the one before (half of it at that one's end), and how long the whole of it is. */
+    val cut: app.headsup.core.edit.CutKind = app.headsup.core.edit.CutKind.NONE,
+    val cutMs: Long = 500L,
     /** Picture effects of this clip. */
     val effects: EffectSettings = EffectSettings(),
     /** Windows with their own corrections (graduated lines, ovals), at most [ColourMask.MAX_PER_CLIP]. */
@@ -1691,6 +1694,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                 gradeKeys = it.gradeKeys,
                 stabilize = it.stabilize,
                 subject = it.subject,
+                cut = it.cut, cutMs = it.cutMs,
             )
         },
         groups = groups.map { SavedGroup(it.id, it.name, it.grade, it.lutName) },
@@ -1840,6 +1844,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
             gradeKeys = c.gradeKeys,
             stabilize = c.stabilize,
             subject = c.subject,
+            cut = c.cut, cutMs = c.cutMs,
             groupId = c.groupId,
         )
     }
@@ -4613,6 +4618,13 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
     /** Blend from the previous clip's look over [lengthMs] at the start of the clip at [index]; 0 for a cut. */
     fun setTransition(index: Int, lengthMs: Long) = updateClip(index) { it.copy(transitionMs = lengthMs.coerceAtLeast(0L)) }
 
+    /** How clip [index] comes in from the clip before: [kind] over [lengthMs] (half at the end of the one before). */
+    fun setCut(index: Int, kind: app.headsup.core.edit.CutKind, lengthMs: Long) = updateClip(index) { it.copy(cut = kind, cutMs = lengthMs.coerceIn(100L, 4000L)) }
+
+    /** The same way in for every clip after the first. */
+    fun setCutForAll(kind: app.headsup.core.edit.CutKind, lengthMs: Long) =
+        _state.update { s -> s.copy(clips = s.clips.mapIndexed { i, c -> if (i == 0) c else c.copy(cut = kind, cutMs = lengthMs.coerceIn(100L, 4000L)) }) }
+
     /**
      * Changes the selected clip's corrections (they also become the default for clips added
      * later), or the global node's.
@@ -5074,6 +5086,11 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                     isPhoto = clip.meta.isPhoto,
                     muteChangedSpeed = clip.muteChangedSpeed,
                     fadeInMs = clip.fadeInMs,
+                    // Transitions only in a film (its clips joined), at the cuts to the clips beside.
+                    cutIn = if (kind == ExportKind.VIDEO && i > 0) clip.cut else app.headsup.core.edit.CutKind.NONE,
+                    cutInMs = clip.cutMs,
+                    cutOut = if (kind == ExportKind.VIDEO) s.clips.getOrNull(i + 1)?.cut ?: app.headsup.core.edit.CutKind.NONE else app.headsup.core.edit.CutKind.NONE,
+                    cutOutMs = s.clips.getOrNull(i + 1)?.cutMs ?: 0L,
                     fadeOutMs = clip.fadeOutMs,
                     soundLevel = clip.soundLevel,
                     timelineStartMs = s.clips.take(i).sumOf { it.timelineDurationMs },

@@ -433,6 +433,7 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
                         fromMaskCubes = state.previewFromMaskCubes,
                         fromMaskMs = state.previewFromMaskMs,
                         transitionMs = selected.transitionMs,
+                        cutOut = state.selectedClip?.let { state.clips.getOrNull(it + 1) }?.let { it.cut to it.cutMs } ?: (app.headsup.core.edit.CutKind.NONE to 0L),
                         guideMask = selected.masks.getOrNull(state.selectedMask).takeIf { editingMasks && !fullscreen },
                         onMoveMask = if (shaping && !fullscreen && !editingBrush && !editingRange && !pickingColour) { x, y -> vm.updateMask { it.copy(centerX = x, centerY = y) } } else null,
                         // A painted mask moves with two fingers only in Move; otherwise they zoom the view.
@@ -1764,6 +1765,23 @@ private fun FadeTool(clip: ClipState, index: Int, vm: HeadsupViewModel) {
         RulerSlider(clip.fadeInMs / 1000f, 0f..maxS, 0.1f, { v -> vm.setFades(index, (v * 1000).toLong(), clip.fadeOutMs) }, onReset = { vm.setFades(index, 0L, clip.fadeOutMs) })
         ValueHeader("Fade out to black", fadeLabel(clip.fadeOutMs))
         RulerSlider(clip.fadeOutMs / 1000f, 0f..maxS, 0.1f, { v -> vm.setFades(index, clip.fadeInMs, (v * 1000).toLong()) }, onReset = { vm.setFades(index, clip.fadeInMs, 0L) })
+    }
+    // How this clip comes in from the one before: half of it at that one's end, half at this one's start.
+    if (index > 0) ToolSection(
+        "Transition in",
+        info = "How this clip comes in from the one before it: Black or White dips through that colour, Zoom pushes into the cut and settles out of it, " +
+            "Whip flings the picture sideways in a blur and brings the next in from the other side. Half of it is the end of the clip before, half the start of this one.",
+    ) {
+        val kinds = app.headsup.core.edit.CutKind.entries
+        ChoiceGrid(kinds.map { it.label }, kinds.indexOf(clip.cut), { i -> vm.setCut(index, kinds[i], clip.cutMs) })
+        if (clip.cut != app.headsup.core.edit.CutKind.NONE) {
+            val lengths = app.headsup.core.edit.CutTransition.LENGTHS
+            LabeledChoice("Length", lengths.map { String.format(Locale.US, "%.1f s", it / 1000f) }, { lengths[it] == clip.cutMs }, { i -> vm.setCut(index, clip.cut, lengths[i]) })
+            Row {
+                Spacer(Modifier.weight(1f))
+                SmallAction("Use between all clips", { vm.setCutForAll(clip.cut, clip.cutMs) })
+            }
+        }
     }
 }
 

@@ -449,6 +449,10 @@ class ExportManager(private val context: Context) {
         }
         val speed = request.speed
         val timelineMs = if (request.isPhoto) request.durationMs else (request.durationMs / speed).toLong()
+        // Transitions at the cuts: on the finished frame, before the dashboard and texts.
+        if (request.cutIn != app.headsup.core.edit.CutKind.NONE || request.cutOut != app.headsup.core.edit.CutKind.NONE) {
+            effects += CutEffect(timelineMs, request.cutIn, request.cutInMs, request.cutOut, request.cutOutMs, if (request.isPhoto) 1f else request.speed)
+        }
         val fade = if (request.fadeInMs > 0 || request.fadeOutMs > 0) {
             FadeEffect(timelineMs, request.fadeInMs, request.fadeOutMs, if (request.isPhoto) 1f else speed)
         } else null

@@ -84,6 +84,11 @@ data class ExportRequest(
     val muteChangedSpeed: Boolean = false,
     /** Fades from and to black (picture and sound), in timeline time. */
     val fadeInMs: Long = 0L,
+    /** The transitions at the clip's cuts: in from the clip before, out to the next (each its whole length). */
+    val cutIn: app.headsup.core.edit.CutKind = app.headsup.core.edit.CutKind.NONE,
+    val cutInMs: Long = 0L,
+    val cutOut: app.headsup.core.edit.CutKind = app.headsup.core.edit.CutKind.NONE,
+    val cutOutMs: Long = 0L,
     val fadeOutMs: Long = 0L,
     /** Level of the clip's own sound (times the level for all clips). */
     val soundLevel: Float = 1f,

@@ -151,6 +151,8 @@ fun ClipPreview(
     fromMaskCubes: List<Array<Array<IntArray>>> = emptyList(),
     fromMaskMs: Long = 0L,
     transitionMs: Long = 0L,
+    /** How the clip goes into the next (the next clip's way in), for the end of this one. */
+    cutOut: Pair<app.headsup.core.edit.CutKind, Long> = app.headsup.core.edit.CutKind.NONE to 0L,
     /** Mask being edited: its outline is drawn, and dragging on the picture moves it. */
     guideMask: ColourMask? = null,
     onMoveMask: ((Float, Float) -> Unit)? = null,
@@ -892,6 +894,8 @@ fun ClipPreview(
     // Position on the timeline within this clip, for fades and music.
     val clipTimelineMs = if (photo) positionMs else clip.timelineOfSource(positionMs)
     val fadeGain = Fade.gain(clipTimelineMs, clip.timelineDurationMs, clip.fadeInMs, clip.fadeOutMs)
+    // A transition at the cut in or out of this clip: its zoom, move, blur and dip now.
+    val cutLook = if (photo) app.headsup.core.edit.CutLook() else app.headsup.core.edit.CutTransition.at(clipTimelineMs, clip.timelineDurationMs, clip.cut, clip.cutMs, cutOut.first, cutOut.second)
     // Bars sliding in (and out) with the clip's time, as in the export.
     // A photo has no time: its bars are simply there.
     val barsNow = if (effects.barsRatio == null) effects else if (photo) effects.copy(barsAmount = 1f) else effects.copy(barsAmount = effects.barsMotion.amount(clipTimelineMs, clip.timelineDurationMs))
@@ -1243,11 +1247,16 @@ fun ClipPreview(
             BoxWithConstraints(
                 Modifier.heightIn(max = maxHeight).aspectRatio(frameAspect, matchHeightConstraintsFirst = true)
                     .graphicsLayer {
-                        val z = if (viewZoomed) viewZoom else 1f
+                        val z = (if (viewZoomed) viewZoom else 1f) * cutLook.zoom
                         scaleX = z
                         scaleY = z
-                        translationX = if (viewZoomed) viewPan.x else 0f
+                        translationX = (if (viewZoomed) viewPan.x else 0f) + cutLook.shift * size.width
                         translationY = if (viewZoomed) viewPan.y else 0f
+                        // A transition's blur of movement: sideways for a whip, all round for a zoom.
+                        if (cutLook.blur > 0f && Build.VERSION.SDK_INT >= 31) {
+                            val b = cutLook.blur * size.width / 3f
+                            renderEffect = androidx.compose.ui.graphics.BlurEffect(b, if (cutLook.radial) b else 0.5f, androidx.compose.ui.graphics.TileMode.Clamp)
+                        } else renderEffect = null
                     }
                     .clipToBounds(),
                 contentAlignment = Alignment.Center,
@@ -1935,6 +1944,7 @@ fun ClipPreview(
                     }
                 }
                 if (fadeGain < 1f) Box(Modifier.matchParentSize().background(Color.Black.copy(alpha = 1f - fadeGain)))
+                if (cutLook.dip > 0f) Box(Modifier.matchParentSize().background((if (cutLook.dipWhite) Color.White else Color.Black).copy(alpha = cutLook.dip.coerceIn(0f, 1f))))
                 if (showGrid) Canvas(Modifier.matchParentSize()) { drawThirds() }
                 // A carousel: where the photo is cut into its panels.
                 if (reframe.panels > 1) Canvas(Modifier.matchParentSize()) {
