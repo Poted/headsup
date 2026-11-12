@@ -1517,11 +1517,14 @@ private fun VideoFiles(state: UiState, vm: HeadsupViewModel, onShowClip: (Int) -
 
 /** Edit tools, as on the Colour page: one row of tools, one tool's controls under it. */
 private enum class EditTab(val symbol: String, val label: String) {
+    // The selected clip: what of it is used, how fast and which way, steadied, how it fades, how it sits in the frame.
     CUT("✂", "Cut"),
     SPEED("×", "Speed"),
+    STEADY("≋", "Steady"),
     FADE("◐", "Fades"),
     FRAME("▭", "Frame"),
-    RATE("fps", "Frame rate"),
+    // The whole film: its shape and frame rate; and its best moments.
+    TIMELINE("▤", "Timeline"),
     MOMENTS("★", "Moments"),
 }
 
@@ -1545,12 +1548,13 @@ private fun EditPanel(
         return
     }
     LazyRow(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
-        items(EditTab.entries.filter { t -> if (state.photoProject) t == EditTab.FRAME else !(t == EditTab.SPEED && clip?.meta?.isPhoto == true) }) { t ->
+        items(EditTab.entries.filter { t -> if (state.photoProject) t == EditTab.FRAME else !((t == EditTab.SPEED || t == EditTab.STEADY) && clip?.meta?.isPhoto == true) }) { t ->
             val modified = when (t) {
                 EditTab.CUT -> clip?.isTrimmed == true
-                EditTab.SPEED -> clip != null && clip.speedChanged
+                EditTab.SPEED -> clip != null && (clip.speedChanged || clip.reversed != null)
+                EditTab.STEADY -> clip?.stabilize != null
                 EditTab.FADE -> clip != null && (clip.fadeInMs > 0 || clip.fadeOutMs > 0)
-                EditTab.RATE -> state.timelineFps != null
+                EditTab.TIMELINE -> state.timelineFps != null || state.frameAspect != null
                 else -> false
             }
             CircleOption(t.symbol, t.label, selected = t == tab, modified = modified) { onTab(t) }
@@ -1559,7 +1563,7 @@ private fun EditPanel(
     val index = state.selectedClip
     // Photos only: the frame (crop, shape, straightening) is what editing means.
     val tab = if (state.photoProject) EditTab.FRAME else tab
-    val needsClip = tab == EditTab.CUT || tab == EditTab.SPEED || tab == EditTab.FADE
+    val needsClip = tab == EditTab.CUT || tab == EditTab.SPEED || tab == EditTab.STEADY || tab == EditTab.FADE
     if (needsClip && (index == null || clip == null)) {
         Hint("Select a clip.")
         return
@@ -1571,12 +1575,50 @@ private fun EditPanel(
         }
         EditTab.SPEED -> if (clip != null && index != null && !clip.meta.isPhoto) {
             SpeedPanel(clip, index, state.effectiveTimelineFps, vm, playhead)
+            DirectionSection(state, clip, index, vm)
         }
+        EditTab.STEADY -> if (clip != null && index != null && !clip.meta.isPhoto) SteadySection(state, clip, index, vm)
         EditTab.FADE -> if (clip != null && index != null) FadeTool(clip, index, vm)
         EditTab.FRAME -> FramePanel(state, vm)
-        EditTab.RATE -> TimelineRate(state, vm)
+        EditTab.TIMELINE -> {
+            TimelineShape(state, vm)
+            TimelineRate(state, vm)
+        }
         EditTab.MOMENTS -> HighlightControls(state, vm, onShowHighlight)
     }
+}
+
+/** The film's shape (Edit › Timeline): one for every clip, like a DaVinci timeline's resolution. */
+@Composable
+private fun TimelineShape(state: UiState, vm: HeadsupViewModel) {
+    // The timeline's frame: one shape for the whole project, like a DaVinci timeline's resolution.
+    val first = state.clips.firstOrNull()?.meta
+    val presets = Reframe.PRESETS
+    ToolSection(
+        "Timeline frame",
+        info = "One shape for the whole film. First clip takes the shape of the first clip on the timeline." +
+            (vm.outputPreview(state)?.let { " Exported at ${it.width}×${it.height}." } ?: ""),
+    ) {
+        // The usual shapes, and one of one's own (Custom: width and height typed in).
+        var custom by remember { mutableStateOf(false) }
+        val preset = presets.indexOfFirst { it.first == state.frameAspect }
+        val own = state.frameAspect != null && preset < 0
+        ChoiceGrid(
+            presets.map { (aspect, label) -> if (aspect == null) "First clip" else label } + (if (own) "Custom " + aspectLabel(state.frameAspect!!) else "Custom"),
+            if (own) presets.size else preset,
+            { i -> if (i == presets.size) custom = true else vm.setFrameAspect(presets[i].first) },
+            glyph = { i, on ->
+                val a = if (i == presets.size) (state.frameAspect.takeIf { own } ?: 1.5f) else presets[i].first
+                AspectGlyph(a ?: first?.let { m -> m.width.toFloat() / m.height.coerceAtLeast(1) }, on)
+            },
+        )
+        if (custom) CustomAspectDialog(state.frameAspect.takeIf { own }, onDismiss = { custom = false }) { a ->
+            custom = false
+            vm.setFrameAspect(a)
+        }
+        vm.outputPreview(state)?.let { Text("${it.width} × ${it.height}", style = MaterialTheme.typography.labelSmall, color = HeadsupColors.TextMuted) }
+    }
+
 }
 
 /**
@@ -1655,9 +1697,7 @@ private fun CutTool(state: UiState, vm: HeadsupViewModel, playhead: LongState, o
                 onReset = { vm.setTrim(index, 0L, HeadsupViewModel.PHOTO_DEFAULT_MS) },
             )
         }
-        ToolSection("Photo", info = "Delete takes the photo off the timeline (Undo brings it back).") {
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) { PanelAction("Delete photo", { vm.removeClip(index) }, Modifier.weight(1f), danger = true) }
-        }
+        PanelAction("Delete photo", { vm.removeClip(index) }, Modifier.fillMaxWidth(), danger = true)
     } else {
         CutControls(
             clip = clip,
@@ -1668,52 +1708,65 @@ private fun CutTool(state: UiState, vm: HeadsupViewModel, playhead: LongState, o
             onScrub = onCutScrub,
         )
         ShotCut(state, vm, index, clip, playhead)
-        // Backwards: a reversed copy of the cut is made once (it takes a while on long clips).
-        ToolSection(
-            "Direction",
-            info = if (clip.reversed != null) "Plays backwards, without its sound. Tap again to play it forwards."
-            else "Plays the clip backwards (without its sound). Its look and flags stay. The reversed copy is made once; on long clips it takes a while.",
-        ) {
-            ChoiceGrid(listOf("Forwards", "Backwards"), if (clip.reversed != null) 1 else 0, { i ->
-                if ((i == 1) != (clip.reversed != null)) vm.reverseClip(index)
-            }, enabled = { !state.busy })
-        }
-        // Steadied: the shake taken out, the camera's own move kept. Locked: only an even drift
-        // kept and the roll held level, as if on a slider.
-        val steady = clip.stabilize
-        val measuring = state.work.any { it.clipId == clip.id && it.maskIndex == null && it.label.startsWith("Steadying") }
-        ToolSection(
-            "Steady",
-            info = "Steadied takes out handheld shake; pans and walks stay. Locked takes out all the wobble and the tilting left and right, keeping only one even, straight move through the shot (as a slow Ken Burns): for a shaky shot meant to glide. " +
-                "Both zoom in to hide the moved edges, at most as much as Crop allows: more crop, steadier. Measured once, in the background; trimmed wider later, measure again.",
-        ) {
-            val mode = when { steady == null -> 0; steady.locked -> 2; else -> 1 }
-            ChoiceGrid(listOf("As shot", "Steadied", "Locked"), mode, { i ->
-                when {
-                    i == 0 -> if (steady != null) vm.removeStabilize(index)
-                    steady == null -> vm.stabilizeClip(index, locked = i == 2)
-                    else -> vm.setStabilizeLocked(index, i == 2)
-                }
-            }, enabled = { !measuring })
-            if (measuring) Hint("Measuring the shake…")
-            if (steady != null) {
-                if (!steady.locked) {
-                    ValueHeader("Strength", String.format(Locale.US, "%.0f %%", steady.strength * 100))
-                    RulerSlider(steady.strength, 0f..1f, 0.05f, { v -> vm.setStabilizeStrength(index, v) }, onReset = { vm.setStabilizeStrength(index, 0.7f) })
-                }
-                val crops = listOf(1.1f, 1.2f, 1.35f, 1.5f)
-                LabeledChoice("Crop", crops.map { "${kotlin.math.round((it - 1f) * 100).toInt()} %" }, { kotlin.math.abs(crops[it] - steady.maxZoom) < 0.01f }, { vm.setStabilizeCrop(index, crops[it]) })
-                if (steady.startMs > clip.trimStartMs + 100 || steady.startMs + (steady.steps.size * steady.frameMs).toLong() < clip.trimEndMs - 100) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Hint("The cut is wider than what was measured.", Modifier.weight(1f))
-                        SmallAction("Measure again", { vm.stabilizeClip(index, steady.locked) }, enabled = !measuring)
-                    }
+        FlagList(state, vm, onFlag)
+        // The clip's own action, at the bottom of the panel as on every panel.
+        PanelAction("Delete clip", { vm.removeClip(index) }, Modifier.fillMaxWidth(), danger = true)
+    }
+}
+
+/** Which way the clip plays (Speed: how fast and which way). */
+@Composable
+private fun DirectionSection(state: UiState, clip: ClipState, index: Int, vm: HeadsupViewModel) {
+    // Backwards: a reversed copy of the cut is made once (it takes a while on long clips).
+    ToolSection(
+        "Direction",
+        info = if (clip.reversed != null) "Plays backwards, without its sound. Tap again to play it forwards."
+        else "Plays the clip backwards (without its sound). Its look and flags stay. The reversed copy is made once; on long clips it takes a while.",
+    ) {
+        ChoiceGrid(listOf("Forwards", "Backwards"), if (clip.reversed != null) 1 else 0, { i ->
+            if ((i == 1) != (clip.reversed != null)) vm.reverseClip(index)
+        }, enabled = { !state.busy })
+    }
+}
+
+/** The clip steadied: shake taken out, or locked to one even move. */
+@Composable
+private fun SteadySection(state: UiState, clip: ClipState, index: Int, vm: HeadsupViewModel) {
+    // Steadied: the shake taken out, the camera's own move kept. Locked: only an even drift
+    // kept and the roll held level, as if on a slider.
+    val steady = clip.stabilize
+    val measuring = state.work.any { it.clipId == clip.id && it.maskIndex == null && it.label.startsWith("Steadying") }
+    ToolSection(
+        "Steady",
+        info = "Steadied takes out handheld shake; pans and walks stay. Locked takes out all the wobble and the tilting left and right, keeping only one even, straight move through the shot (as a slow Ken Burns): for a shaky shot meant to glide. " +
+            "Both zoom in to hide the moved edges, at most as much as Crop allows: more crop, steadier. Measured once, in the background; trimmed wider later, measure again.",
+    ) {
+        val mode = when { steady == null -> 0; steady.locked -> 2; else -> 1 }
+        ChoiceGrid(listOf("As shot", "Steadied", "Locked"), mode, { i ->
+            when {
+                i == 0 -> if (steady != null) vm.removeStabilize(index)
+                steady == null -> vm.stabilizeClip(index, locked = i == 2)
+                else -> vm.setStabilizeLocked(index, i == 2)
+            }
+        }, enabled = { !measuring })
+        if (measuring) Hint("Measuring the shake…")
+        if (steady != null) {
+            if (!steady.locked) {
+                ValueHeader("Strength", String.format(Locale.US, "%.0f %%", steady.strength * 100))
+                RulerSlider(steady.strength, 0f..1f, 0.05f, { v -> vm.setStabilizeStrength(index, v) }, onReset = { vm.setStabilizeStrength(index, 0.7f) })
+            }
+            val crops = listOf(1.1f, 1.2f, 1.35f, 1.5f)
+            LabeledChoice("Crop", crops.map { "${kotlin.math.round((it - 1f) * 100).toInt()} %" }, { kotlin.math.abs(crops[it] - steady.maxZoom) < 0.01f }, { vm.setStabilizeCrop(index, crops[it]) })
+            if (steady.startMs > clip.trimStartMs + 100 || steady.startMs + (steady.steps.size * steady.frameMs).toLong() < clip.trimEndMs - 100) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Hint("The cut is wider than what was measured.", Modifier.weight(1f))
+                    SmallAction("Measure again", { vm.stabilizeClip(index, steady.locked) }, enabled = !measuring)
                 }
             }
         }
-        FlagList(state, vm, onFlag)
     }
 }
+
 
 /**
  * A cut inside one shot (the clip and its neighbour are pieces of the same file): moved to the
@@ -2812,7 +2865,8 @@ private fun CutControls(
     }
     ToolSection(
         "Cut",
-        info = "Drag the two ends to keep only part of the clip; the picture shows where each end is. The watch data follows every cut.",
+        info = "Drag the two ends to keep only part of the clip; the picture shows where each end is. The watch data follows every cut. Reset takes the cut back to the whole recording.",
+        onReset = if (clip.isTrimmed) ({ onTrim(0L, clip.meta.durationMs) }) else null,
     ) {
     Text(
         "${Formats.duration((range.endInclusive - range.start).toLong())} of ${Formats.duration(clip.meta.durationMs)}",
@@ -2844,12 +2898,6 @@ private fun CutControls(
             PanelAction("Start here", { onTrim(clip.trimStartMs + playhead.longValue, clip.trimEndMs) }, Modifier.weight(1f))
             PanelAction("Split", { onSplit(playhead.longValue) }, Modifier.weight(1f))
             PanelAction("End here", { onTrim(clip.trimStartMs, clip.trimStartMs + playhead.longValue) }, Modifier.weight(1f))
-        }
-    }
-    ToolSection("Clip", info = "Full clip takes the cut back to the whole recording. Delete takes the clip off the timeline (Undo brings it back).") {
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            PanelAction("Full clip", { onTrim(0L, clip.meta.durationMs) }, Modifier.weight(1f), enabled = clip.isTrimmed)
-            PanelAction("Delete clip", onDelete, Modifier.weight(1f), danger = true)
         }
     }
 }
@@ -3213,7 +3261,12 @@ private fun AdjustHeader(
 }
 
 /** Sections of the colour corrections, so the picker row stays short. */
-private enum class ColourSection(val label: String) { LIGHT("Light"), PRESENCE("Presence"), COLOUR("Colour"), MIXER("Mixer"), FILM("Film"), EFFECTS("Effects"), LOOKS("Looks"), TOOLS("Tools") }
+/**
+ * Sections of the corrections, in the order of the work: a whole look first (most people start
+ * there), then light, colour, detail, the finer colour tools, film, effects, and the tools that
+ * match or bring in colour from elsewhere.
+ */
+private enum class ColourSection(val label: String) { LOOKS("Looks"), LIGHT("Light"), COLOUR("Colour"), PRESENCE("Presence"), MIXER("Mixer"), FILM("Film"), EFFECTS("Effects"), TOOLS("Tools") }
 
 private val Adjustment.section: ColourSection
     get() = when (this) {
@@ -3223,9 +3276,10 @@ private val Adjustment.section: ColourSection
         Adjustment.SPLIT, Adjustment.SHADOW_HUE, Adjustment.HIGHLIGHT_HUE, Adjustment.TAME, Adjustment.VIGNETTE, Adjustment.WHEELS, Adjustment.PRINTER -> ColourSection.FILM
         Adjustment.TEXTURE, Adjustment.CLARITY, Adjustment.DEHAZE, Adjustment.DEFRINGE -> ColourSection.PRESENCE
         Adjustment.CINE, Adjustment.LUT, Adjustment.MATCH, Adjustment.BLEND -> ColourSection.TOOLS
+        // Whole looks, each one step from the tab: a cinematic look, a palette, a profile, a preset.
+        Adjustment.CINEMATIC, Adjustment.HARMONY, Adjustment.PRESETS -> ColourSection.LOOKS
         Adjustment.MIXER, Adjustment.POINT, Adjustment.HUE_CURVES, Adjustment.CHANNELS, Adjustment.BW, Adjustment.CALIBRATION -> ColourSection.MIXER
-        // Looks sit with the other tools that set a whole look (LUT, shot match).
-        Adjustment.LOOK -> ColourSection.TOOLS
+        Adjustment.LOOK -> ColourSection.LOOKS
         Adjustment.GLOW, Adjustment.HALATION -> ColourSection.EFFECTS
     }
 
@@ -3320,7 +3374,16 @@ internal enum class Adjustment(
     HUE_CURVES("H∿", "Hue curves", 0f..1f, 1f, "", { 0f }, { g, _ -> g }),
 
     /** Not a single ruler: a look (profile) under the corrections, with its amount. */
-    LOOK("Look", "Looks", 0f..1f, 1f, "", { 0f }, { g, _ -> g }),
+    LOOK("Pr", "Profiles", 0f..1f, 1f, "", { 0f }, { g, _ -> g }),
+
+    /** Not a single ruler: a complete cinematic look (colour, contrast, grain, light), fitted to the clip. */
+    CINEMATIC("Cin", "Cinematic", 0f..1f, 1f, "", { 0f }, { g, _ -> g }),
+
+    /** Not a single ruler: the colours pulled towards a palette (complementary, analogous…). */
+    HARMONY("◔", "Harmony", 0f..1f, 1f, "", { 0f }, { g, _ -> g }),
+
+    /** Not a single ruler: the user's own saved looks. */
+    PRESETS("◆", "Presets", 0f..1f, 1f, "", { 0f }, { g, _ -> g }),
 
     /** Not a single ruler: each output channel made from red, green and blue. */
     CHANNELS("RGB", "Channel mixer", 0f..1f, 1f, "", { 0f }, { g, _ -> g }),
@@ -3384,18 +3447,24 @@ private fun ColourPage(
     // Blending in from the previous clip is a property of the clip, so it is only on its own tab.
     // Glow and halation are a mask's own (the clip's are in Effects).
     val maskOnly = setOf(Adjustment.GLOW, Adjustment.HALATION)
+    val clipLooks = setOf(Adjustment.CINEMATIC, Adjustment.HARMONY, Adjustment.PRESETS)
     val options = when (target) {
         // The Cine look is part of Looks (its Cinematic looks and the clip's analysis).
         // Blending in is from the clip before on the timeline: an album's photos have none.
         GradeTarget.CLIP -> (if (index > 0 && !album) Adjustment.entries else Adjustment.entries - Adjustment.BLEND) - maskOnly - Adjustment.CINE
-        GradeTarget.GROUP -> Adjustment.entries - Adjustment.BLEND - Adjustment.CINE - Adjustment.MATCH - maskOnly
-        GradeTarget.GLOBAL -> Adjustment.entries - Adjustment.BLEND - Adjustment.CINE - Adjustment.MATCH - maskOnly
+        // A cinematic look, a palette and a preset are each clip's own: a group or all take profiles only.
+        GradeTarget.GROUP -> Adjustment.entries - Adjustment.BLEND - Adjustment.CINE - Adjustment.MATCH - maskOnly - clipLooks
+        GradeTarget.GLOBAL -> Adjustment.entries - Adjustment.BLEND - Adjustment.CINE - Adjustment.MATCH - maskOnly - clipLooks
         GradeTarget.MASK -> Adjustment.entries - Adjustment.LUT - Adjustment.SKIN - Adjustment.VIGNETTE - Adjustment.BLEND -
-            Adjustment.CINE - Adjustment.MATCH - Adjustment.LOOK -
+            Adjustment.CINE - Adjustment.MATCH - Adjustment.LOOK - clipLooks -
             // A finger on the picture edits the mask there, so colours are picked on the whole picture.
             Adjustment.POINT
     }
-    val adjustment = if (adjustment in options) adjustment else Adjustment.EXPOSURE
+    val adjustment = when {
+        adjustment == Adjustment.SHADOW_HUE || adjustment == Adjustment.HIGHLIGHT_HUE -> Adjustment.SPLIT
+        adjustment in options -> adjustment
+        else -> Adjustment.EXPOSURE
+    }
     // On the Masks tab the ruler edits either a shape control or a correction.
     var shape by rememberSaveable { mutableStateOf<MaskShape?>(null) }
     // A new mask opens on its own tools (select, paint, shape).
@@ -3533,7 +3602,8 @@ private fun ColourPage(
         return
     }
     LazyRow(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
-        items(options.filter { it.section == adjustment.section }) { a ->
+        // Split tone's two hues are part of its own section, not circles of their own.
+        items(options.filter { it.section == adjustment.section && it != Adjustment.SHADOW_HUE && it != Adjustment.HIGHLIGHT_HUE }) { a ->
             val lut = if (target == GradeTarget.GROUP) group?.lutName else clip.lutName
             val modified = when (a) {
                 Adjustment.LUT -> lut != null
@@ -3550,12 +3620,15 @@ private fun ColourPage(
                 Adjustment.WHEELS -> state.grade.wheels.any { it != 0f }
                 Adjustment.PRINTER -> state.grade.printer.any { it != 0f }
                 Adjustment.LOOK -> state.grade.look != null
+                Adjustment.CINEMATIC -> clip.cineLook != null
+                Adjustment.HARMONY -> clip.harmony != null
+                Adjustment.PRESETS -> clip.preset != null
                 else -> a.get(state.grade) != a.neutral
             }
             // Held: the picture without this one correction (the tools that set a whole look: the original).
             val g = state.grade
             val without: ColorGrade? = when (a) {
-                Adjustment.LUT, Adjustment.BLEND, Adjustment.CINE, Adjustment.MATCH -> null
+                Adjustment.LUT, Adjustment.BLEND, Adjustment.CINE, Adjustment.MATCH, Adjustment.CINEMATIC, Adjustment.HARMONY, Adjustment.PRESETS -> null
                 Adjustment.MIXER -> g.copy(mixer = app.headsup.core.color.ColourMixer.NEUTRAL)
                 Adjustment.POINT -> g.copy(points = emptyList(), colourPop = 0f)
                 Adjustment.CHANNELS -> g.copy(channelMix = app.headsup.core.color.ChannelMixer.NEUTRAL)
@@ -3647,26 +3720,44 @@ private fun ColourPage(
         return
     }
     if (adjustment == Adjustment.LOOK) {
+        LookControls(state, vm)
+        return
+    }
+    if (adjustment == Adjustment.CINEMATIC) {
         LooksPanel(state, vm, frameSource)
+        return
+    }
+    if (adjustment == Adjustment.HARMONY) {
+        HarmonyControls(clip, vm, if (album) "photo" else "clip")
+        return
+    }
+    if (adjustment == Adjustment.PRESETS) {
+        PresetControls(state, vm)
         return
     }
     if (adjustment == Adjustment.SKIN) SkinToneTool(state.scope, onMatch = vm::matchSkinLine)
     // The correction being changed, as a section: its name, ⓘ and Reset in their usual places.
     // Double-tap the ruler to reset, hold it to see the picture without this correction.
     val value = adjustment.get(state.grade)
+    // Split tone is one tool: how strong, and the hue of the shadows and of the lights.
+    val rulers = if (adjustment == Adjustment.SPLIT) listOf(Adjustment.SPLIT, Adjustment.SHADOW_HUE, Adjustment.HIGHLIGHT_HUE) else listOf(adjustment)
     ToolSection(
         adjustment.label,
-        info = adjustment.info + " Double-tap the ruler to reset it, hold it to see the picture without it.",
+        info = (if (adjustment == Adjustment.SPLIT) "Tints the shadows and the lights each with a hue of their own (teal shadows and warm lights, the classic film look): Amount is how strongly, the two hues are which. " else adjustment.info) +
+            " Double-tap a ruler to reset it, hold it to see the picture without it.",
     ) {
-        ValueHeader("", String.format(Locale.US, adjustment.format, value))
-        RulerSlider(
-            value = value,
-            range = adjustment.range,
-            step = adjustment.step,
-            onChange = { v -> vm.updateGrade { adjustment.set(it, v) } },
-            onReset = { vm.updateGrade { adjustment.set(it, adjustment.neutral) } },
-            onHold = { held -> vm.setCompareGrade(if (held) adjustment.set(state.grade, adjustment.neutral) else null) },
-        )
+        for (a in rulers) {
+            val v = a.get(state.grade)
+            ValueHeader(if (rulers.size > 1) (if (a == Adjustment.SPLIT) "Amount" else a.label) else "", String.format(Locale.US, a.format, v))
+            RulerSlider(
+                value = v,
+                range = a.range,
+                step = a.step,
+                onChange = { x -> vm.updateGrade { a.set(it, x) } },
+                onReset = { vm.updateGrade { a.set(it, a.neutral) } },
+                onHold = { held -> vm.setCompareGrade(if (held) a.set(state.grade, a.neutral) else null) },
+            )
+        }
     }
 }
 
@@ -4273,16 +4364,22 @@ private fun PresetControls(state: UiState, vm: HeadsupViewModel) {
         }
         PanelAction("Done", { managing = false }, Modifier.fillMaxWidth())
     } else {
+        // What is on the clip: a choice among the presets (None takes it off). The actions on the
+        // presets themselves are below, set apart, so a preset and an action never look alike.
         val names = state.presets.map { it.name }
         val on = clip?.preset?.name
-        ChoiceGrid(listOf("None") + names, if (on == null) 0 else names.indexOf(on).let { if (it < 0) -1 else it + 1 }, { i ->
-            if (i == 0) vm.removePreset() else vm.applyPreset(state.presets[i - 1])
-        })
+        LabeledChoice(
+            "On this $what", listOf("None") + names,
+            { i -> if (i == 0) on == null else names.getOrNull(i - 1) == on },
+            { i -> if (i == 0) vm.removePreset() else vm.applyPreset(state.presets[i - 1]) },
+        )
     }
     if (!managing) {
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            PanelAction("Save this look", { naming = true }, Modifier.weight(1f))
-            if (state.presets.isNotEmpty()) PanelAction("Manage", { managing = true }, Modifier.weight(1f))
+        Box(Modifier.fillMaxWidth().height(1.dp).background(HeadsupColors.Outline))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            SmallAction("+ Save this look", { naming = true })
+            Spacer(Modifier.weight(1f))
+            if (state.presets.isNotEmpty()) SmallAction("Manage…", { managing = true })
         }
     }
     }
@@ -4312,16 +4409,6 @@ private fun LooksPanel(state: UiState, vm: HeadsupViewModel, frameSource: (() ->
     val clip = state.selected
     if (state.target != GradeTarget.CLIP || clip == null) {
         LookControls(state, vm)
-        return
-    }
-    var category by rememberSaveable { mutableStateOf(0) }
-    Segmented(listOf("Cinematic", "Profiles", "My presets"), category, { category = it })
-    if (category == 1) {
-        LookControls(state, vm)
-        return
-    }
-    if (category == 2) {
-        PresetControls(state, vm)
         return
     }
     val stats = clip.lookStats
@@ -4364,7 +4451,6 @@ private fun LooksPanel(state: UiState, vm: HeadsupViewModel, frameSource: (() ->
         Hint(current.description + if (stats != null) " Fitted to this $what." else " Analyse the $what to fit it.")
     }
     }
-    HarmonyControls(clip, vm, what)
 }
 
 /** A colour-wheel hue in a word. */
@@ -5189,34 +5275,6 @@ private fun FramePanel(state: UiState, vm: HeadsupViewModel) {
         PhotoCrop(state, clip, vm)
         return
     }
-    // The timeline's frame: one shape for the whole project, like a DaVinci timeline's resolution.
-    val first = state.clips.firstOrNull()?.meta
-    val presets = Reframe.PRESETS
-    ToolSection(
-        "Timeline frame",
-        info = "One shape for the whole film. First clip takes the shape of the first clip on the timeline." +
-            (vm.outputPreview(state)?.let { " Exported at ${it.width}×${it.height}." } ?: ""),
-    ) {
-        // The usual shapes, and one of one's own (Custom: width and height typed in).
-        var custom by remember { mutableStateOf(false) }
-        val preset = presets.indexOfFirst { it.first == state.frameAspect }
-        val own = state.frameAspect != null && preset < 0
-        ChoiceGrid(
-            presets.map { (aspect, label) -> if (aspect == null) "First clip" else label } + (if (own) "Custom " + aspectLabel(state.frameAspect!!) else "Custom"),
-            if (own) presets.size else preset,
-            { i -> if (i == presets.size) custom = true else vm.setFrameAspect(presets[i].first) },
-            glyph = { i, on ->
-                val a = if (i == presets.size) (state.frameAspect.takeIf { own } ?: 1.5f) else presets[i].first
-                AspectGlyph(a ?: first?.let { m -> m.width.toFloat() / m.height.coerceAtLeast(1) }, on)
-            },
-        )
-        if (custom) CustomAspectDialog(state.frameAspect.takeIf { own }, onDismiss = { custom = false }) { a ->
-            custom = false
-            vm.setFrameAspect(a)
-        }
-        vm.outputPreview(state)?.let { Text("${it.width} × ${it.height}", style = MaterialTheme.typography.labelSmall, color = HeadsupColors.TextMuted) }
-    }
-
     val r = state.framing(clip)
     ToolSection(
         "This clip in the frame",
