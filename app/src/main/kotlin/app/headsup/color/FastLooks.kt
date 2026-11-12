@@ -60,7 +60,7 @@ enum class FastLook(
         "35 mm film",
         "Colour negative: soft shoulder, film grain, red halation around lights.",
         ColorGrade(saturation = -0.05f, rolloff = 0.25f, toneAmount = 0.25f, tame = 0.35f, density = 0.35f),
-        EffectSettings(grain = 0.32f, grainSize = 1f, grainColour = 0.3f, glow = 0.1f, glowThreshold = 0.78f, halation = 0.25f, lensAberration = 0.08f, lensSoftness = 0.12f),
+        EffectSettings(grain = 0.32f, grainSize = 1f, grainColour = 0.3f, glow = 0.1f, glowThreshold = 0.78f, halation = 0.25f, lensAberration = 0.08f, lensSoftness = 0.12f, weave = 0.15f, flicker = 0.1f),
         1f,
         mapOf(SceneTrait.DAYLIGHT to 1f, SceneTrait.FOLIAGE to 0.8f, SceneTrait.COLOURFUL to 0.5f),
     ),
@@ -109,7 +109,7 @@ enum class FastLook(
         ColorGrade(temperature = 0.1f, saturation = -0.15f, rolloff = 0.3f, tame = 0.3f, density = 0.2f),
         EffectSettings(
             grain = 0.4f, grainSize = 1.8f, grainColour = 0.4f, glow = 0.25f, glowThreshold = 0.72f, glowSpread = 1.4f, glowWarmth = 0.4f,
-            halation = 0.2f, lensAberration = 0.35f, lensSoftness = 0.35f, prism = 0.12f,
+            halation = 0.2f, lensAberration = 0.35f, lensSoftness = 0.35f, prism = 0.12f, weave = 0.3f, flicker = 0.2f,
         ),
         1.2f,
         mapOf(SceneTrait.WARM to 1f, SceneTrait.GOLDEN to 1f, SceneTrait.PEOPLE to 0.5f),
@@ -207,6 +207,7 @@ enum class FastLook(
             mist = mix(base.mist, e.mist),
             streaks = mix(base.streaks, e.streaks), streakLength = if (e.streaks > 0f) e.streakLength else base.streakLength,
             star = mix(base.star, e.star), starLength = if (e.star > 0f) e.starLength else base.starLength,
+            weave = mix(base.weave, e.weave), flicker = mix(base.flicker, e.flicker),
             prism = mix(base.prism, e.prism), prismSpread = if (e.prism > 0f) e.prismSpread else base.prismSpread,
         )
     }
@@ -276,4 +277,28 @@ data class AppliedHarmony(
     val grade: ColorGrade,
 ) {
     fun gradeWithout(current: ColorGrade): ColorGrade = baseGrade.synced(grade, current)
+}
+
+/**
+ * One of the user's presets on a clip: its name, and the clip's corrections, effects and LUT
+ * before it and as it left them, so None takes it off later, keeping what was changed since.
+ */
+data class AppliedPreset(
+    val name: String,
+    val baseGrade: ColorGrade,
+    val baseEffects: EffectSettings,
+    val baseLut: String?,
+    val grade: ColorGrade,
+    val effects: EffectSettings,
+    val lut: String?,
+    /** The look and harmony the clip had before (they come back with None). */
+    val baseLook: AppliedLook? = null,
+    val baseHarmony: AppliedHarmony? = null,
+) {
+    fun gradeWithout(current: ColorGrade): ColorGrade = baseGrade.synced(grade, current)
+
+    fun effectsWithout(current: EffectSettings): EffectSettings = baseEffects.synced(effects, current)
+
+    /** The LUT without the preset: the one before it, unless another was chosen since. */
+    fun lutWithout(current: String?): String? = if (current == lut) baseLut else current
 }

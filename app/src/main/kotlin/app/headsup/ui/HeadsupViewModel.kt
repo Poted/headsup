@@ -141,6 +141,8 @@ data class ClipState(
     val cineLook: app.headsup.color.AppliedLook? = null,
     /** Colour harmony on it (Adjust › Looks), kept so it can be changed or taken off later. */
     val harmony: app.headsup.color.AppliedHarmony? = null,
+    /** One of the user's presets on it (Adjust › Looks › My presets), so it can be taken off later. */
+    val preset: app.headsup.color.AppliedPreset? = null,
     /** How the clip comes in from the one before (half of it at that one's end), and how long the whole of it is. */
     val cut: app.headsup.core.edit.CutKind = app.headsup.core.edit.CutKind.NONE,
     val cutMs: Long = 500L,
@@ -1692,6 +1694,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                 cut = it.cut, cutMs = it.cutMs, frameKeys = it.frameKeys,
                 cineLook = it.cineLook,
                 harmony = it.harmony,
+                preset = it.preset,
             )
         },
         groups = groups.map { SavedGroup(it.id, it.name, it.grade, it.lutName) },
@@ -1844,6 +1847,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
             cut = c.cut, cutMs = c.cutMs, frameKeys = c.frameKeys,
             cineLook = c.cineLook,
             harmony = c.harmony,
+            preset = c.preset,
             groupId = c.groupId,
         )
     }
@@ -2640,16 +2644,37 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
         val index = _state.value.selectedClip ?: return
         val e = preset.effects
         updateClip(index) { c ->
-            c.copy(
-                grade = preset.grade,
-                lutName = preset.lutName,
-                effects = c.effects.copy(
-                    grain = e.grain, grainSize = e.grainSize, grainColour = e.grainColour,
-                    glow = e.glow, glowThreshold = e.glowThreshold, glowSpread = e.glowSpread, glowWarmth = e.glowWarmth,
-                    halation = e.halation, lensAberration = e.lensAberration, lensSoftness = e.lensSoftness,
-                    barsRatio = e.barsRatio, barsMotion = e.barsMotion,
-                ),
+            // On what the clip has without the preset it had (another preset replaces it).
+            val before = c.preset
+            val baseGrade = before?.gradeWithout(c.grade) ?: c.grade
+            val baseEffects = before?.effectsWithout(c.effects) ?: c.effects
+            val baseLut = before?.lutWithout(c.lutName) ?: c.lutName
+            val effects = baseEffects.copy(
+                grain = e.grain, grainSize = e.grainSize, grainColour = e.grainColour,
+                glow = e.glow, glowThreshold = e.glowThreshold, glowSpread = e.glowSpread, glowWarmth = e.glowWarmth,
+                halation = e.halation, lensAberration = e.lensAberration, lensSoftness = e.lensSoftness,
+                barsRatio = e.barsRatio, barsMotion = e.barsMotion,
+                mist = e.mist, streaks = e.streaks, streakLength = e.streakLength, star = e.star, starLength = e.starLength,
+                prism = e.prism, prismSpread = e.prismSpread, prismAngle = e.prismAngle,
             )
+            c.copy(
+                grade = preset.grade, lutName = preset.lutName, effects = effects,
+                preset = app.headsup.color.AppliedPreset(
+                    preset.name, baseGrade, baseEffects, baseLut, preset.grade, effects, preset.lutName,
+                    baseLook = before?.baseLook ?: c.cineLook, baseHarmony = before?.baseHarmony ?: c.harmony,
+                ),
+                // The preset replaces the corrections: a look or harmony in them is gone with it.
+                cineLook = null, harmony = null,
+            )
+        }
+    }
+
+    /** Takes the selected clip's preset off: as before it, with what was changed since kept. */
+    fun removePreset() {
+        val index = _state.value.selectedClip ?: return
+        updateClip(index) { c ->
+            val p = c.preset ?: return@updateClip c
+            c.copy(grade = p.gradeWithout(c.grade), effects = p.effectsWithout(c.effects), lutName = p.lutWithout(c.lutName), preset = null, cineLook = p.baseLook, harmony = p.baseHarmony)
         }
     }
 

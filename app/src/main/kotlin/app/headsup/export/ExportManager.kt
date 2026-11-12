@@ -485,6 +485,10 @@ class ExportManager(private val context: Context) {
         }
         val speed = request.speed
         val timelineMs = if (request.isPhoto) request.durationMs else (request.durationMs / speed).toLong()
+        // Film in a projector: the frame's drift and flicker (video only), before the transitions.
+        if (!request.isPhoto && (request.effects.weave > 0f || request.effects.flicker > 0f)) {
+            effects += GateWeaveEffect(request.effects.weave, request.effects.flicker, request.speed)
+        }
         // Transitions at the cuts: on the finished frame, before the dashboard and texts.
         if (request.cutIn != app.headsup.core.edit.CutKind.NONE || request.cutOut != app.headsup.core.edit.CutKind.NONE) {
             effects += CutEffect(timelineMs, request.cutIn, request.cutInMs, request.cutOut, request.cutOutMs, if (request.isPhoto) 1f else request.speed)

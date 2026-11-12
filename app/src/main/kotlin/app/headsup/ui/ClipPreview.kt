@@ -903,6 +903,8 @@ fun ClipPreview(
     val fadeGain = Fade.gain(clipTimelineMs, clip.timelineDurationMs, clip.fadeInMs, clip.fadeOutMs)
     // A transition at the cut in or out of this clip: its zoom, move, blur and dip now.
     val cutLook = if (photo) app.headsup.core.edit.CutLook() else app.headsup.core.edit.CutTransition.at(clipTimelineMs, clip.timelineDurationMs, clip.cut, clip.cutMs, cutOut.first, cutOut.second)
+    // Film in a projector (gate weave, flicker) at this moment of the clip, as in the export.
+    val weaveNow = if (photo) app.headsup.core.edit.GateWeave.Shift(0f, 0f, 1f) else app.headsup.core.edit.GateWeave.at(clipTimelineMs, effects.weave, effects.flicker)
     // Bars sliding in (and out) with the clip's time, as in the export.
     // A photo has no time: its bars are simply there.
     val barsNow = if (effects.barsRatio == null) effects else if (photo) effects.copy(barsAmount = 1f) else effects.copy(barsAmount = effects.barsMotion.amount(clipTimelineMs, clip.timelineDurationMs))
@@ -1044,6 +1046,8 @@ fun ClipPreview(
         val maxY = h * (z1 - 1f) / 2f
         viewPan = if (z1 <= 1.001f) Offset.Zero else Offset(moved.x.coerceIn(-maxX, maxX), moved.y.coerceIn(-maxY, maxY))
     }
+    // A finger held for the before/after (or its split line): the zoomed view does not move under it.
+    var comparing by remember { mutableStateOf(false) }
     // Fitted with blurred bars: the picture itself, small, blurred behind it (read below).
     var backdrop by remember { mutableStateOf<ImageBitmap?>(null) }
     Column(Modifier.padding(horizontal = if (edgeToEdge) 0.dp else 16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -1067,6 +1071,7 @@ fun ClipPreview(
                             }
                             if (released == null) {
                                 val hold = holdNow ?: return@awaitEachGesture
+                                comparing = true
                                 hold(true)
                                 // Held, then moved sideways: a line follows the finger, the picture as
                                 // shot on its left and as edited on its right; lifted, all as edited.
@@ -1089,6 +1094,7 @@ fun ClipPreview(
                                         }
                                     }
                                 } while (e.changes.any { it.pressed })
+                                comparing = false
                                 if (splitting) split = null else hold(false)
                             }
                         }
@@ -1106,11 +1112,15 @@ fun ClipPreview(
                             // At 1× a single finger is left alone, so the screen's swipes (full
                             // screen, folding the album) still work over the photo.
                             awaitEachGesture {
-                                awaitFirstDown(requireUnconsumed = false)
+                                val first = awaitFirstDown(requireUnconsumed = false)
+                                // One finger moves the zoomed view only once it really moves: a
+                                // finger held still (before/after) leaves it where it is.
+                                var moving = false
                                 do {
                                     val event = awaitPointerEvent()
                                     val fingers = event.changes.count { it.pressed }
-                                    if (fingers >= 2 || viewZoom > 1.01f) {
+                                    if (!moving && (fingers >= 2 || event.changes.any { (it.position - first.position).getDistance() > viewConfiguration.touchSlop })) moving = true
+                                    if (!comparing && moving && (fingers >= 2 || viewZoom > 1.01f)) {
                                         val zoom = event.calculateZoom()
                                         val pan = event.calculatePan()
                                         if (zoom != 1f || pan != Offset.Zero) {
@@ -1334,11 +1344,13 @@ fun ClipPreview(
                         val t = reframeTransform(reframe, geometry)
                         // Steadied: the frame's correction on the picture before it is framed.
                         val c = if (steady != null && steadyCorrections != null && !photo) app.headsup.core.frame.Stabilizer.at(steady, steadyCorrections, fileMs) else null
-                        scaleX = t.zoom * (c?.zoom ?: 1f) * if (reframe.mirrored) -1f else 1f
-                        scaleY = t.zoom * (c?.zoom ?: 1f)
+                        // Film in a projector: the frame drifting (in the frame's own size), enlarged so its edges stay hidden.
+                        val cover = if (weaveNow.isNone) 1f else app.headsup.core.edit.GateWeave.cover(effects.weave)
+                        scaleX = t.zoom * (c?.zoom ?: 1f) * cover * if (reframe.mirrored) -1f else 1f
+                        scaleY = t.zoom * (c?.zoom ?: 1f) * cover
                         rotationZ = reframe.angleDegrees + (c?.degrees ?: 0f)
-                        translationX = t.translation.x + (c?.let { it.dx * size.width * t.zoom } ?: 0f)
-                        translationY = t.translation.y + (c?.let { it.dy * size.height * t.zoom } ?: 0f)
+                        translationX = t.translation.x + (c?.let { it.dx * size.width * t.zoom } ?: 0f) + weaveNow.dx * geometry.boxW
+                        translationY = t.translation.y + (c?.let { it.dy * size.height * t.zoom } ?: 0f) + weaveNow.dy * geometry.boxH
                     }
                 val pictureLayer = pictureSize.then(pictureShade)
                 val bitmap = photoBitmap
@@ -1951,6 +1963,8 @@ fun ClipPreview(
                     }
                 }
                 if (fadeGain < 1f) Box(Modifier.matchParentSize().background(Color.Black.copy(alpha = 1f - fadeGain)))
+                // Its flicker: the light dipping a little, frame by frame.
+                if (weaveNow.gain < 1f) Box(Modifier.matchParentSize().background(Color.Black.copy(alpha = 1f - weaveNow.gain)))
                 if (cutLook.dip > 0f) Box(Modifier.matchParentSize().background((if (cutLook.dipWhite) Color.White else Color.Black).copy(alpha = cutLook.dip.coerceIn(0f, 1f))))
                 if (showGrid) Canvas(Modifier.matchParentSize()) { drawThirds() }
                 // A carousel: where the photo is cut into its panels.

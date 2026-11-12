@@ -48,6 +48,9 @@ data class EffectSettings(
     val barsBlur: Boolean = false,
     /** Light effects ([app.headsup.core.photo.LightFx]): Mist, Anamorphic streaks, Star, Prism; amounts 0..1, reaches 1 = usual. */
     val mist: Float = 0f,
+    /** Film in a projector ([app.headsup.core.edit.GateWeave]): the frame's restless drift, and its light's flicker (0..1). */
+    val weave: Float = 0f,
+    val flicker: Float = 0f,
     val streaks: Float = 0f,
     val streakLength: Float = 1f,
     val star: Float = 0f,
@@ -101,6 +104,8 @@ data class EffectSettings(
         barsImage = if (after.barsImage != before.barsImage) after.barsImage else barsImage,
         barsBlur = if (after.barsBlur != before.barsBlur) after.barsBlur else barsBlur,
         mist = if (after.mist != before.mist) after.mist else mist,
+        weave = if (after.weave != before.weave) after.weave else weave,
+        flicker = if (after.flicker != before.flicker) after.flicker else flicker,
         streaks = if (after.streaks != before.streaks) after.streaks else streaks,
         streakLength = if (after.streakLength != before.streakLength) after.streakLength else streakLength,
         star = if (after.star != before.star) after.star else star,

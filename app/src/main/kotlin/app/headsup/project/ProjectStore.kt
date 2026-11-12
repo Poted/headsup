@@ -63,6 +63,7 @@ data class SavedClip(
     val subject: String? = null,
     val cineLook: app.headsup.color.AppliedLook? = null,
     val harmony: app.headsup.color.AppliedHarmony? = null,
+    val preset: app.headsup.color.AppliedPreset? = null,
     val cut: app.headsup.core.edit.CutKind = app.headsup.core.edit.CutKind.NONE,
     val cutMs: Long = 500L,
     val frameKeys: List<app.headsup.core.frame.FrameKey> = emptyList(),
@@ -360,6 +361,28 @@ internal object Json {
         )
     }
 
+    private fun lookJson(a: app.headsup.color.AppliedLook) = JSONObject().put("name", a.name).put("strength", a.strength.toDouble())
+        .put("baseGrade", grade(a.baseGrade)).put("baseEffects", effects(a.baseEffects))
+        .put("grade", grade(a.grade)).put("effects", effects(a.effects))
+
+    private fun lookFrom(a: JSONObject) = app.headsup.color.AppliedLook(
+        a.optString("name"), a.optDouble("strength", 1.0).toFloat(),
+        grade(a.optJSONObject("baseGrade")), effects(a.optJSONObject("baseEffects")),
+        grade(a.optJSONObject("grade")), effects(a.optJSONObject("effects")),
+    )
+
+    private fun harmonyJson(h: app.headsup.color.AppliedHarmony) = JSONObject()
+        .put("scheme", h.scheme.name).put("hue", h.hue.toDouble()).put("amount", h.amount.toDouble())
+        .put("baseGrade", grade(h.baseGrade)).put("grade", grade(h.grade))
+
+    private fun harmonyFrom(h: JSONObject): app.headsup.color.AppliedHarmony? =
+        app.headsup.core.color.ColourHarmony.Scheme.entries.firstOrNull { it.name == h.optString("scheme") }?.let {
+            app.headsup.color.AppliedHarmony(
+                it, h.optDouble("hue", 30.0).toFloat(), h.optDouble("amount", 0.5).toFloat(),
+                grade(h.optJSONObject("baseGrade")), grade(h.optJSONObject("grade")),
+            )
+        }
+
     private fun clip(c: SavedClip) = JSONObject()
         .put("uri", c.uri.toString())
         .put("trimStartMs", c.trimStartMs)
@@ -405,15 +428,13 @@ internal object Json {
             }
         }
         .putOpt("subject", c.subject)
-        .putOpt("cineLook", c.cineLook?.let { a ->
-            JSONObject().put("name", a.name).put("strength", a.strength.toDouble())
-                .put("baseGrade", grade(a.baseGrade)).put("baseEffects", effects(a.baseEffects))
-                .put("grade", grade(a.grade)).put("effects", effects(a.effects))
+        .putOpt("cineLook", c.cineLook?.let(::lookJson))
+        .putOpt("preset", c.preset?.let { p ->
+            JSONObject().put("name", p.name).put("baseGrade", grade(p.baseGrade)).put("baseEffects", effects(p.baseEffects)).putOpt("baseLut", p.baseLut)
+                .put("grade", grade(p.grade)).put("effects", effects(p.effects)).putOpt("lut", p.lut)
+                .putOpt("look", p.baseLook?.let(::lookJson)).putOpt("harmony", p.baseHarmony?.let(::harmonyJson))
         })
-        .putOpt("harmony", c.harmony?.let { h ->
-            JSONObject().put("scheme", h.scheme.name).put("hue", h.hue.toDouble()).put("amount", h.amount.toDouble())
-                .put("baseGrade", grade(h.baseGrade)).put("grade", grade(h.grade))
-        })
+        .putOpt("harmony", c.harmony?.let(::harmonyJson))
         .put("cut", c.cut.name).put("cutMs", c.cutMs)
         .apply {
             if (c.frameKeys.isNotEmpty()) put("frameKeys", JSONArray(c.frameKeys.map { k ->
@@ -466,22 +487,15 @@ internal object Json {
         cullGroup = if (o.has("cullGroup")) o.optInt("cullGroup") else null,
         cullBest = o.optBoolean("cullBest", false),
         subject = o.optStringOrNull("subject"),
-        cineLook = o.optJSONObject("cineLook")?.let { a ->
-            app.headsup.color.AppliedLook(
-                a.optString("name"), a.optDouble("strength", 1.0).toFloat(),
-                grade(a.optJSONObject("baseGrade")), effects(a.optJSONObject("baseEffects")),
-                grade(a.optJSONObject("grade")), effects(a.optJSONObject("effects")),
+        cineLook = o.optJSONObject("cineLook")?.let(::lookFrom),
+        preset = o.optJSONObject("preset")?.let { p ->
+            app.headsup.color.AppliedPreset(
+                p.optString("name"), grade(p.optJSONObject("baseGrade")), effects(p.optJSONObject("baseEffects")), p.optStringOrNull("baseLut"),
+                grade(p.optJSONObject("grade")), effects(p.optJSONObject("effects")), p.optStringOrNull("lut"),
+                p.optJSONObject("look")?.let(::lookFrom), p.optJSONObject("harmony")?.let(::harmonyFrom),
             )
         },
-        harmony = o.optJSONObject("harmony")?.let { h ->
-            val scheme = app.headsup.core.color.ColourHarmony.Scheme.entries.firstOrNull { it.name == h.optString("scheme") }
-            scheme?.let {
-                app.headsup.color.AppliedHarmony(
-                    it, h.optDouble("hue", 30.0).toFloat(), h.optDouble("amount", 0.5).toFloat(),
-                    grade(h.optJSONObject("baseGrade")), grade(h.optJSONObject("grade")),
-                )
-            }
-        },
+        harmony = o.optJSONObject("harmony")?.let(::harmonyFrom),
         cut = app.headsup.core.edit.CutKind.entries.firstOrNull { it.name == o.optString("cut") } ?: app.headsup.core.edit.CutKind.NONE,
         cutMs = o.optLong("cutMs", 500L),
         frameKeys = o.optJSONArray("frameKeys")?.let { a ->
@@ -568,6 +582,7 @@ internal object Json {
         .put("texture", g.texture)
         .put("defringe", g.defringe.toDouble())
         .put("colourPop", g.colourPop.toDouble())
+        .put("printer", JSONArray(g.printer.map { it.toDouble() }))
         .put("points", JSONArray(g.points.map { p ->
             JSONObject().put("r", p.r.toDouble()).put("g", p.g.toDouble()).put("b", p.b.toDouble()).put("range", p.range.toDouble())
                 .put("hue", p.hue.toDouble()).put("sat", p.saturation.toDouble()).put("lum", p.luminance.toDouble())
@@ -618,6 +633,7 @@ internal object Json {
             texture = f("texture"),
             defringe = f("defringe"),
             colourPop = f("colourPop"),
+            printer = o.optJSONArray("printer")?.let { a -> List(3) { i -> a.optDouble(i, 0.0).toFloat() } } ?: app.headsup.core.color.PrinterLights.NEUTRAL,
             points = o.optJSONArray("points")?.let { a ->
                 List(a.length()) { k -> a.getJSONObject(k) }.map { p ->
                     app.headsup.core.color.PointColour(
@@ -655,6 +671,7 @@ internal object Json {
         .putOpt("barsRatio", e.barsRatio)
         .put("barsMotion", e.barsMotion.name)
         .put("barsVertical", e.barsVertical).put("barsColour", e.barsColour).putOpt("barsImage", e.barsImage).put("barsBlur", e.barsBlur)
+        .put("weave", e.weave.toDouble()).put("flicker", e.flicker.toDouble())
         .put("mist", e.mist.toDouble()).put("streaks", e.streaks.toDouble()).put("streakLength", e.streakLength.toDouble())
         .put("star", e.star.toDouble()).put("starLength", e.starLength.toDouble()).put("prism", e.prism.toDouble()).put("prismSpread", e.prismSpread.toDouble()).put("prismAngle", e.prismAngle.toDouble()).put("bokehOval", e.bokehOval)
         .putOpt("graph", e.graph?.name)
@@ -685,6 +702,8 @@ internal object Json {
             barsImage = o.optStringOrNull("barsImage"),
             barsBlur = o.optBoolean("barsBlur", false),
             mist = o.optDouble("mist", 0.0).toFloat(),
+            weave = o.optDouble("weave", 0.0).toFloat(),
+            flicker = o.optDouble("flicker", 0.0).toFloat(),
             streaks = o.optDouble("streaks", 0.0).toFloat(),
             streakLength = o.optDouble("streakLength", 1.0).toFloat(),
             star = o.optDouble("star", 0.0).toFloat(),

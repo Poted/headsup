@@ -3207,7 +3207,7 @@ private val Adjustment.section: ColourSection
         Adjustment.EXPOSURE, Adjustment.BRIGHTNESS, Adjustment.CONTRAST, Adjustment.HIGHLIGHTS, Adjustment.SHADOWS,
         Adjustment.WHITES, Adjustment.BLACKS, Adjustment.ROLLOFF, Adjustment.CURVE -> ColourSection.LIGHT
         Adjustment.TEMPERATURE, Adjustment.TINT, Adjustment.SATURATION, Adjustment.VIBRANCE, Adjustment.DENSITY, Adjustment.SKIN -> ColourSection.COLOUR
-        Adjustment.SPLIT, Adjustment.SHADOW_HUE, Adjustment.HIGHLIGHT_HUE, Adjustment.TAME, Adjustment.VIGNETTE, Adjustment.WHEELS -> ColourSection.FILM
+        Adjustment.SPLIT, Adjustment.SHADOW_HUE, Adjustment.HIGHLIGHT_HUE, Adjustment.TAME, Adjustment.VIGNETTE, Adjustment.WHEELS, Adjustment.PRINTER -> ColourSection.FILM
         Adjustment.TEXTURE, Adjustment.CLARITY, Adjustment.DEHAZE, Adjustment.DEFRINGE -> ColourSection.PRESENCE
         Adjustment.CINE, Adjustment.LUT, Adjustment.MATCH, Adjustment.BLEND -> ColourSection.TOOLS
         Adjustment.MIXER, Adjustment.POINT, Adjustment.HUE_CURVES, Adjustment.CHANNELS, Adjustment.BW, Adjustment.CALIBRATION -> ColourSection.MIXER
@@ -3290,6 +3290,9 @@ internal enum class Adjustment(
 
     /** Not a single ruler: colour wheels for shadows, midtones and highlights. */
     WHEELS("◎", "Grading", 0f..1f, 1f, "", { 0f }, { g, _ -> g }),
+
+    /** Not a single ruler: printer lights, red, green and blue in printer points, as a film lab. */
+    PRINTER("RGB", "Printer lights", 0f..1f, 1f, "", { 0f }, { g, _ -> g }),
 
     /** Not a single ruler: point tone curves (RGB and per channel). */
     CURVE("∿", "Curve", 0f..1f, 1f, "", { 0f }, { g, _ -> g }),
@@ -3511,7 +3514,8 @@ private fun ColourPage(
         // Set on all clips exactly when Adjust works on all of them.
         LaunchedEffect(target) { vm.setEffectsOnAll(target == GradeTarget.GLOBAL) }
         // Bokeh is worked out on a photo (a whole video would take too long).
-        val looks = if (state.selected?.meta?.isPhoto == true) LOOK_KINDS else LOOK_KINDS - EffectKind.BOKEH
+        // Bokeh is for photos; gate weave is film moving, for video.
+        val looks = if (state.selected?.meta?.isPhoto == true) LOOK_KINDS - EffectKind.WEAVE else LOOK_KINDS - EffectKind.BOKEH
         EffectsPanel(state, vm, lookKind.takeIf { it in looks } ?: looks.first(), playhead, looks) { lookKind = it }
         return
     }
@@ -3531,6 +3535,7 @@ private fun ColourPage(
                 Adjustment.CURVE -> state.grade.curves.any { it.isNotEmpty() }
                 Adjustment.HUE_CURVES -> state.grade.hueCurves.any { it.isNotEmpty() }
                 Adjustment.WHEELS -> state.grade.wheels.any { it != 0f }
+                Adjustment.PRINTER -> state.grade.printer.any { it != 0f }
                 Adjustment.LOOK -> state.grade.look != null
                 else -> a.get(state.grade) != a.neutral
             }
@@ -3546,6 +3551,7 @@ private fun ColourPage(
                 Adjustment.CURVE -> g.copy(curves = app.headsup.core.color.ToneCurve.NEUTRAL)
                 Adjustment.HUE_CURVES -> g.copy(hueCurves = app.headsup.core.color.HueCurves.NEUTRAL)
                 Adjustment.WHEELS -> g.copy(wheels = app.headsup.core.color.ColourWheels.NEUTRAL)
+                Adjustment.PRINTER -> g.copy(printer = app.headsup.core.color.PrinterLights.NEUTRAL)
                 Adjustment.LOOK -> g.copy(look = null)
                 else -> a.set(g, a.neutral)
             }
@@ -3623,6 +3629,10 @@ private fun ColourPage(
         WheelControls(state, vm)
         return
     }
+    if (adjustment == Adjustment.PRINTER) {
+        PrinterControls(state, vm)
+        return
+    }
     if (adjustment == Adjustment.LOOK) {
         LooksPanel(state, vm, frameSource)
         return
@@ -3677,6 +3687,40 @@ private val Adjustment.info: String
         Adjustment.HALATION -> "A warm red halo round bright edges inside the mask, as on film."
         else -> label + "."
     }
+
+/** Printer lights: red, green and blue keys in points (and the master), as a film lab's timer. */
+@Composable
+private fun PrinterControls(state: UiState, vm: HeadsupViewModel) {
+    val P = app.headsup.core.color.PrinterLights
+    val points = state.grade.printer
+    var step by rememberSaveable { mutableStateOf(1f) }
+    fun press(channel: Int, sign: Int) = vm.updateGrade { it.copy(printer = P.pressed(it.printer, channel, step * sign)) }
+    ToolSection(
+        "Printer lights",
+        info = "How a film lab timed a print: the red, green and blue light that exposed it, in points (12 points is one stop of that colour). It moves the colour of the whole picture evenly, shadows to highlights, without bending the ends. + adds that colour; − adds its opposite (cyan, magenta, yellow). Darker/Brighter move all three. Hold the Printer lights circle above to see the picture without them.",
+        onReset = if (points.any { it != 0f }) ({ vm.updateGrade { it.copy(printer = P.NEUTRAL) } }) else null,
+    ) {
+        // The three numbers as a timer reads them.
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
+            for ((i, name) in listOf("R", "G", "B").withIndex()) {
+                val v = points.getOrElse(i) { 0f }
+                Text(
+                    String.format(Locale.US, "%s %+.0f", name, v),
+                    style = MaterialTheme.typography.titleLarge.copy(fontFamily = GeistMonoFamily),
+                    color = if (v == 0f) HeadsupColors.TextMuted else HeadsupColors.Highlight,
+                )
+            }
+        }
+        // A key pair per light: its opposite colour on the left, the colour on the right.
+        for ((i, pair) in listOf("Cyan" to "Red", "Magenta" to "Green", "Yellow" to "Blue", "Darker" to "Brighter").withIndex()) {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                PanelAction("− ${pair.first}", { press(i, -1) }, Modifier.weight(1f))
+                PanelAction("+ ${pair.second}", { press(i, 1) }, Modifier.weight(1f))
+            }
+        }
+        ChoiceGrid(listOf("1 point", "3 points", "6 points"), listOf(1f, 3f, 6f).indexOf(step), { step = listOf(1f, 3f, 6f)[it] })
+    }
+}
 
 /** Colour grading: a wheel per range (drag to the hue, outwards for more), its brightness, and the balance. */
 @Composable
@@ -4190,36 +4234,55 @@ private fun sceneWords(s: app.headsup.core.color.FrameStats): List<String> =
     }
 
 
-/** The user's saved looks: one tap puts it on the clip; the clip's own look can be saved by name. */
+/**
+ * The user's saved looks: one tap puts it on the clip, None takes it off again (what was changed
+ * since stays). Deleting is apart, under Manage, and asks first.
+ */
 @Composable
 private fun PresetControls(state: UiState, vm: HeadsupViewModel) {
     LaunchedEffect(Unit) { vm.loadPresets() }
     var naming by remember { mutableStateOf(false) }
+    var managing by remember { mutableStateOf(false) }
+    var deleting by remember { mutableStateOf<String?>(null) }
     val what = if (state.photoProject) "photo" else "clip"
+    val clip = state.selected
     ToolSection(
         "My presets",
-        info = "Save the look of a $what you like (its corrections, LUT, grain, glow…) and put it on others in any project with one tap. Masks and framing stay each $what's own. Tap a preset to put its look on this $what; ✕ deletes it.",
+        info = "Save the look of a $what you like (its corrections, LUT, grain, glow…) and put it on others in any project with one tap. None takes it off the $what again. Masks and framing stay each $what's own. Manage deletes presets.",
     ) {
     if (state.presets.isEmpty()) {
         Text("No presets yet.", style = MaterialTheme.typography.bodySmall, color = HeadsupColors.TextMuted)
-    } else {
+    } else if (managing) {
+        // Deleting: each with its ✕, asked first.
         FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            for (p in state.presets) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    PillAction("◆", p.name, { vm.applyPreset(p) })
-                    Text(
-                        "✕",
-                        Modifier.clip(CircleShape).clickable { vm.deletePreset(p.name) }.padding(horizontal = 8.dp, vertical = 4.dp),
-                        style = MaterialTheme.typography.labelMedium, color = HeadsupColors.TextMuted,
-                    )
-                }
-            }
+            for (p in state.presets) PillAction("✕", p.name, { deleting = p.name })
+        }
+        PanelAction("Done", { managing = false }, Modifier.fillMaxWidth())
+    } else {
+        val names = state.presets.map { it.name }
+        val on = clip?.preset?.name
+        ChoiceGrid(listOf("None") + names, if (on == null) 0 else names.indexOf(on).let { if (it < 0) -1 else it + 1 }, { i ->
+            if (i == 0) vm.removePreset() else vm.applyPreset(state.presets[i - 1])
+        })
+    }
+    if (!managing) {
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            PanelAction("Save this look", { naming = true }, Modifier.weight(1f))
+            if (state.presets.isNotEmpty()) PanelAction("Manage", { managing = true }, Modifier.weight(1f))
         }
     }
-    PanelAction("Save this look", { naming = true }, Modifier.fillMaxWidth())
     }
     if (naming) {
         RenameDialog("Preset ${state.presets.size + 1}", onDismiss = { naming = false }, title = "Preset name") { vm.savePreset(it); naming = false }
+    }
+    deleting?.let { name ->
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { deleting = null },
+            title = { Text("Delete \"$name\"?") },
+            text = { Text("The preset is removed for good. ${what.replaceFirstChar { it.uppercase() }}s that use it keep their look.") },
+            confirmButton = { androidx.compose.material3.TextButton(onClick = { vm.deletePreset(name); deleting = null }) { Text("Delete") } },
+            dismissButton = { androidx.compose.material3.TextButton(onClick = { deleting = null }) { Text("Cancel") } },
+        )
     }
 }
 
@@ -5229,6 +5292,7 @@ private fun EffectKinds(state: UiState, kind: EffectKind, kinds: List<EffectKind
                 EffectKind.STREAKS -> effects.streaks > 0f
                 EffectKind.STAR -> effects.star > 0f
                 EffectKind.PRISM -> effects.prism > 0f
+                EffectKind.WEAVE -> effects.weave > 0f || effects.flicker > 0f
                 EffectKind.BARS -> effects.barsRatio != null
             }
             CircleOption(e.symbol, e.label, selected = e == kind, modified = active) { onKind(e) }
@@ -5252,6 +5316,7 @@ private enum class EffectKind(val symbol: String, val label: String) {
     STREAKS("An", "Anamorphic"),
     STAR("✶", "Star"),
     PRISM("Pr", "Prism"),
+    WEAVE("Gw", "Gate weave"),
 }
 
 /** Drawn over the picture: the Overlays tool. */
@@ -5260,7 +5325,7 @@ private val OVERLAY_KINDS = listOf(EffectKind.TEXT, EffectKind.STICKER, EffectKi
 /** Part of the picture's look: the base layer's Effects in Adjust. */
 private val LOOK_KINDS = listOf(
     EffectKind.BOKEH, EffectKind.GRAIN, EffectKind.GLOW, EffectKind.HALATION, EffectKind.MIST, EffectKind.STREAKS,
-    EffectKind.STAR, EffectKind.PRISM, EffectKind.LENS, EffectKind.BARS,
+    EffectKind.STAR, EffectKind.PRISM, EffectKind.LENS, EffectKind.WEAVE, EffectKind.BARS,
 )
 
 /** Effects over the picture, picked from round options like the colour corrections. */
@@ -5376,6 +5441,18 @@ private fun EffectsPanel(state: UiState, vm: HeadsupViewModel, kind: EffectKind,
             // Which side is blurred, without turning the mask itself inside out.
             LabeledChoice("Blurred", listOf("The rest", "What it covers"), { (it == 1) == effects.bokehInvert }, { i -> updateEffects { it.copy(bokehInvert = i == 1) } })
             if (effects.bokehMask == null) SmallAction("Find the subject again", { vm.findPhotoSubjectAgain() })
+        }
+        EffectKind.WEAVE -> ToolSection(
+            "Gate weave",
+            info = "Film running through a projector: the frame never sits exactly where the last one did (weave, a small restless drift, more up and down) and the lamp's light is never quite even (flicker). " +
+                "Subtle is right: a little of each reads as film; much of it looks like a fault. The picture is enlarged a touch so the moving edges stay out of sight.",
+        ) {
+            EffectRuler(
+                listOf(
+                    EffectParam("Weave", effects.weave, 0f..1f, 0.02f, 0f, percent = true) { v -> updateEffects { it.copy(weave = v) } },
+                    EffectParam("Flicker", effects.flicker, 0f..1f, 0.02f, 0f, percent = true) { v -> updateEffects { it.copy(flicker = v) } },
+                ),
+            )
         }
         EffectKind.MIST -> ToolSection(
             "Mist",
