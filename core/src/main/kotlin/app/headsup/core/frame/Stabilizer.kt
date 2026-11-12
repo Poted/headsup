@@ -82,7 +82,30 @@ object Stabilizer {
                 }
                 if (sad < best) { best = sad; bdx = dx; bdy = dy }
             }
-            vectors += V(bx + block / 2f - width / 2f, by + block / 2f - height / 2f, bdx.toFloat(), bdy.toFloat())
+            // Between pixels (at high frame rates a frame moves less than a pixel, which whole
+            // pixels would miss): what is left after the whole-pixel match, from how the picture
+            // changes against its slopes (one Lucas–Kanade step), both axes at once.
+            var gxx = 0.0; var gxy = 0.0; var gyy = 0.0; var bxt = 0.0; var byt = 0.0
+            for (y in 0 until block) {
+                val row = (by + y) * width + bx
+                val moved = (by + y + bdy) * width + bx + bdx
+                for (x in 0 until block) {
+                    val p = row + x
+                    val ix = (prev[p + 1] - prev[p - 1]) * 0.5f
+                    val iy = (prev[p + width] - prev[p - width]) * 0.5f
+                    val it = cur[moved + x] - prev[p]
+                    gxx += ix * ix; gxy += ix * iy; gyy += iy * iy
+                    bxt += ix * it; byt += iy * it
+                }
+            }
+            val det = gxx * gyy - gxy * gxy
+            var fx = 0f
+            var fy = 0f
+            if (det > 1e-9) {
+                fx = (-(gyy * bxt - gxy * byt) / det).toFloat().coerceIn(-1f, 1f)
+                fy = (-(gxx * byt - gxy * bxt) / det).toFloat().coerceIn(-1f, 1f)
+            }
+            vectors += V(bx + block / 2f - width / 2f, by + block / 2f - height / 2f, bdx + fx, bdy + fy)
         }
         if (vectors.size < 4) return Step(0f, 0f, 0f)
         // The shift most blocks agree on (median), then those near it fit the turn too.

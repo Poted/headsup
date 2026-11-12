@@ -33,6 +33,13 @@ class StabilizerTest {
     }
 
     @Test
+    fun aMoveSmallerThanAPixelIsMeasured() {
+        val s = Stabilizer.step(frame(0f, 0f), frame(0.4f, -0.3f), w, h)
+        assertEquals(0.4f / w, s.dx, 0.15f / w)
+        assertEquals(-0.3f / h, s.dy, 0.15f / h)
+    }
+
+    @Test
     fun aTurnIsMeasured() {
         val s = Stabilizer.step(frame(0f, 0f), frame(0f, 0f, 1.5f), w, h)
         assertTrue(abs(abs(s.degrees) - 1.5f) < 0.7f, "${s.degrees}")

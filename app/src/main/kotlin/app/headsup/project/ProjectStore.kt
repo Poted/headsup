@@ -64,6 +64,7 @@ data class SavedClip(
     val cineLook: app.headsup.color.AppliedLook? = null,
     val harmony: app.headsup.color.AppliedHarmony? = null,
     val preset: app.headsup.color.AppliedPreset? = null,
+    val lookStats: app.headsup.core.color.FrameStats? = null,
     val cut: app.headsup.core.edit.CutKind = app.headsup.core.edit.CutKind.NONE,
     val cutMs: Long = 500L,
     val frameKeys: List<app.headsup.core.frame.FrameKey> = emptyList(),
@@ -430,6 +431,13 @@ internal object Json {
         }
         .putOpt("subject", c.subject)
         .putOpt("cineLook", c.cineLook?.let(::lookJson))
+        .putOpt("lookStats", c.lookStats?.let { f ->
+            JSONObject().put("low", f.low.toDouble()).put("median", f.median.toDouble()).put("high", f.high.toDouble())
+                .put("clipped", f.clipped.toDouble()).put("crushed", f.crushed.toDouble()).put("colourfulness", f.colourfulness.toDouble())
+                .put("skin", f.skin.toDouble()).put("foliage", f.foliage.toDouble()).put("warmth", f.warmth.toDouble())
+                .put("lights", f.lights.toDouble()).put("green", f.green.toDouble()).put("blue", f.blue.toDouble())
+                .put("orange", f.orange.toDouble()).put("highWarmth", f.highWarmth.toDouble()).putOpt("people", f.people?.toDouble())
+        })
         .putOpt("preset", c.preset?.let { p ->
             JSONObject().put("name", p.name).put("baseGrade", grade(p.baseGrade)).put("baseEffects", effects(p.baseEffects)).putOpt("baseLut", p.baseLut)
                 .put("grade", grade(p.grade)).put("effects", effects(p.effects)).putOpt("lut", p.lut)
@@ -489,6 +497,13 @@ internal object Json {
         cullBest = o.optBoolean("cullBest", false),
         subject = o.optStringOrNull("subject"),
         cineLook = o.optJSONObject("cineLook")?.let(::lookFrom),
+        lookStats = o.optJSONObject("lookStats")?.let { f ->
+            fun v(k: String) = f.optDouble(k, 0.0).toFloat()
+            app.headsup.core.color.FrameStats(
+                v("low"), v("median"), v("high"), v("clipped"), v("crushed"), v("colourfulness"), v("skin"), v("foliage"), v("warmth"),
+                v("lights"), v("green"), v("blue"), v("orange"), v("highWarmth"), if (f.has("people")) v("people") else null,
+            )
+        },
         preset = o.optJSONObject("preset")?.let { p ->
             app.headsup.color.AppliedPreset(
                 p.optString("name"), grade(p.optJSONObject("baseGrade")), effects(p.optJSONObject("baseEffects")), p.optStringOrNull("baseLut"),

@@ -3839,7 +3839,7 @@ private fun CurveControls(state: UiState, vm: HeadsupViewModel) {
             Spacer(Modifier.width(8.dp))
             for ((label, amount) in listOf("Subtle" to 0.5f, "Film" to 1f, "Strong" to 1.4f)) {
                 // Fitted to the clip's tones when it has been analysed (Looks > Analyse clip).
-                val measured = state.lookStats?.takeIf { it.first == state.selected?.id }?.second
+                val measured = state.selected?.lookStats
                 val curve = app.headsup.core.color.ToneCurve.cinematic(amount, low = measured?.low ?: 0.18f, median = measured?.median ?: 0.5f)
                 FilterChip(
                     selected = flat == curve,
@@ -4324,7 +4324,7 @@ private fun LooksPanel(state: UiState, vm: HeadsupViewModel, frameSource: (() ->
         PresetControls(state, vm)
         return
     }
-    val stats = state.lookStats?.takeIf { it.first == clip.id }?.second
+    val stats = clip.lookStats
     val applied = clip.cineLook
     val current = applied?.look
     fun choose(look: app.headsup.color.FastLook) = vm.applyFastLook(look, applied?.strength ?: 1f)

@@ -143,6 +143,8 @@ data class ClipState(
     val harmony: app.headsup.color.AppliedHarmony? = null,
     /** One of the user's presets on it (Adjust › Looks › My presets), so it can be taken off later. */
     val preset: app.headsup.color.AppliedPreset? = null,
+    /** What Analyse measured on it (for the looks it suggests, and why), kept with the project. */
+    val lookStats: app.headsup.core.color.FrameStats? = null,
     /** How the clip comes in from the one before (half of it at that one's end), and how long the whole of it is. */
     val cut: app.headsup.core.edit.CutKind = app.headsup.core.edit.CutKind.NONE,
     val cutMs: Long = 500L,
@@ -420,8 +422,6 @@ data class UiState(
     val subjectVersion: Int = 0,
     /** When the brush's size (softness, strength) was last set: it shows on the picture for a moment. */
     val brushSizedAt: Long = 0L,
-    /** The clip measured for looks ([HeadsupViewModel.analyseClip]): its id and what was measured. */
-    val lookStats: Pair<Long, app.headsup.core.color.FrameStats>? = null,
     /** Long jobs running in the background (tracking with AI, reversing). */
     val work: List<BackgroundWork> = emptyList(),
     /** An outline being drawn around an object (x, y pairs, fractions of the picture), until the finger lifts. */
@@ -1695,6 +1695,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                 cineLook = it.cineLook,
                 harmony = it.harmony,
                 preset = it.preset,
+                lookStats = it.lookStats,
             )
         },
         groups = groups.map { SavedGroup(it.id, it.name, it.grade, it.lutName) },
@@ -1848,6 +1849,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
             cineLook = c.cineLook,
             harmony = c.harmony,
             preset = c.preset,
+            lookStats = c.lookStats,
             groupId = c.groupId,
         )
     }
@@ -2302,7 +2304,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
             val first = (clip.trimStartMs * fps / 1000f).toInt().coerceIn(0, total - 1)
             val last = (clip.trimEndMs * fps / 1000f).toInt().coerceIn(first, total - 1)
             val params = android.media.MediaMetadataRetriever.BitmapParams().apply { preferredConfig = Bitmap.Config.RGB_565 }
-            val width = 192
+            val width = 256
             var prev: FloatArray? = null
             var h = 0
             val steps = ArrayList<app.headsup.core.frame.Stabilizer.Step>()
@@ -3191,7 +3193,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                     _state.update { it.copy(messages = it.messages + "Could not read frames of this clip.") }
                     return@launch
                 }
-                _state.update { it.copy(lookStats = clip.id to stats) }
+                _state.update { st -> st.copy(clips = st.clips.map { c -> if (c.id == clip.id) c.copy(lookStats = stats) else c }) }
                 // A look being tried is fitted to what was just measured.
                 _state.value.selected?.takeIf { it.id == clip.id }?.cineLook?.let { a -> a.look?.let { applyFastLook(it, a.strength) } }
             } finally {
@@ -3317,7 +3319,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
         val baseEffects = before?.effectsWithout(clip.effects) ?: clip.effects
         val k = strength.coerceIn(0f, 1f)
         // Measured: the look's character, plus what this clip needs to suit it.
-        val stats = s.lookStats?.takeIf { it.first == clip.id }?.second
+        val stats = clip.lookStats
         val fit = stats?.let { CineAssistant.fit(it, keepDark = look.keepDark) }
         val grade = if (fit != null) look.grade + fit else look.grade
         // Contrast from the cinematic curve, fitted to the clip's tones once measured (a dark clip

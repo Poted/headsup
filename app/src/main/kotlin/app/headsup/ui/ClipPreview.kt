@@ -48,6 +48,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameMillis
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
 import androidx.compose.ui.graphics.nativeCanvas
@@ -306,6 +307,17 @@ fun ClipPreview(
     // Two players: one shows the clip, the other holds the next one ready (a different shape or
     // file needs a new decoder, which in a single player shows as a pause at the cut).
     val players = remember { List(2) { ExoPlayer.Builder(context).build() } }
+    // The frames each player is about to show (when, and which moment of the media), so steadying
+    // corrects the very frame on screen, not the player's clock (which runs a little apart).
+    val shownFrames = remember { List(2) { ShownFrames() } }
+    DisposableEffect(players) {
+        val listeners = players.mapIndexed { i, p ->
+            androidx.media3.exoplayer.video.VideoFrameMetadataListener { presentationTimeUs, releaseTimeNs, _, _ ->
+                shownFrames[i].add(releaseTimeNs, presentationTimeUs)
+            }.also { p.setVideoFrameMetadataListener(it) }
+        }
+        onDispose { players.forEachIndexed { i, p -> p.clearVideoFrameMetadataListener(listeners[i]) } }
+    }
     DisposableEffect(players) { onDispose { players.forEach { it.release() } } }
     var active by remember { mutableIntStateOf(0) }
     // The player shown, as of this composition; effects that may run after a switch in the same
@@ -764,6 +776,8 @@ fun ClipPreview(
 
     // Player position; in file time while a cut handle is dragged, otherwise within the cut.
     var playerMs by remember { mutableLongStateOf(0L) }
+    // While playing: the player-time of the frame actually on screen (-1: not known, use playerMs).
+    var shownMs by remember { mutableLongStateOf(-1L) }
     val reportPosition by rememberUpdatedState(onPosition)
     val fileTime by rememberUpdatedState(scrubbing)
     var playing by remember { mutableStateOf(false) }
@@ -816,6 +830,8 @@ fun ClipPreview(
                 playerMs = exoPlayer.currentPosition
                 if (!fileTime) reportPosition(playerMs)
             }
+            // The frame on screen now, in the player's time (for steadying it exactly).
+            shownMs = if (exoPlayer.isPlaying) shownFrames[active].shownAt(System.nanoTime(), exoPlayer.currentPosition, clipNow.trimStartMs) else -1L
             // The speed of the clip actually on this player (just after a cut the selection may not
             // have followed yet): its ramp, or its steady speed, so no clip keeps another's speed.
             // Changed at most every 120 ms and by 3 % or more: each change costs the player a jolt.
@@ -1028,13 +1044,21 @@ fun ClipPreview(
     val zoomForSampling = !inspect && !zoomForPainting && onReframe == null && onTransformMask == null &&
         !(onMoveText != null && selectedTextId != null)
     val viewZoomed = inspect || zoomForPainting || zoomForSampling
-    var viewZoom by remember(clip.id) { mutableStateOf(1f) }
+    // Kept for the preview's life (its gestures hold these very states), put back for each clip.
+    var viewZoom by remember { mutableStateOf(1f) }
     val zoomedNow = viewZoom > 1.01f
     val tellZoomed by rememberUpdatedState(onViewZoomed)
     // Also while the scope is dragged to another corner: the finger is busy, no screen swipe.
     val scopeMoving = scopeDrag != Offset.Zero
     LaunchedEffect(zoomedNow, scopeMoving) { tellZoomed(zoomedNow || scopeMoving) }
-    var viewPan by remember(clip.id) { mutableStateOf(Offset.Zero) }
+    var viewPan by remember { mutableStateOf(Offset.Zero) }
+    LaunchedEffect(clip.id) { viewZoom = 1f; viewPan = Offset.Zero }
+    // Where the frame (what zooms) sits in the preview's area: zooming keeps the point under the
+    // fingers there, and the view is kept to the frame's own size, not the area's.
+    val previewArea = remember { arrayOfNulls<androidx.compose.ui.layout.LayoutCoordinates>(1) }
+    val frameBounds = remember { arrayOf(androidx.compose.ui.geometry.Rect.Zero) }
+    fun frameIn(w: Float, h: Float): androidx.compose.ui.geometry.Rect =
+        frameBounds[0].takeIf { it.width > 1f && it.height > 1f } ?: androidx.compose.ui.geometry.Rect(0f, 0f, w, h)
     /**
      * The view zoomed by [factor] around [at] (where the fingers are, in a [w]×[h] area) and moved
      * by [pan]: the picture under the fingers stays under them. It never leaves the frame.
@@ -1043,12 +1067,13 @@ fun ClipPreview(
         val z0 = viewZoom
         val z1 = (z0 * factor).coerceIn(1f, 8f)
         val k = z1 / z0
-        // The view is scaled about its middle: keep the point under [at] where it is.
-        val fromMiddle = at - Offset(w / 2f, h / 2f)
+        // The frame is scaled about its own middle: keep the point under [at] where it is.
+        val frame = frameIn(w, h)
+        val fromMiddle = at - frame.center
         val moved = fromMiddle * (1f - k) + viewPan * k + pan
         viewZoom = z1
-        val maxX = w * (z1 - 1f) / 2f
-        val maxY = h * (z1 - 1f) / 2f
+        val maxX = frame.width * (z1 - 1f) / 2f
+        val maxY = frame.height * (z1 - 1f) / 2f
         viewPan = if (z1 <= 1.001f) Offset.Zero else Offset(moved.x.coerceIn(-maxX, maxX), moved.y.coerceIn(-maxY, maxY))
     }
     // A finger held for the before/after (or its split line): the zoomed view does not move under it.
@@ -1057,7 +1082,7 @@ fun ClipPreview(
     var backdrop by remember { mutableStateOf<ImageBitmap?>(null) }
     Column(Modifier.padding(horizontal = if (edgeToEdge) 0.dp else 16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Box(
-            Modifier.fillMaxWidth().clip(RoundedCornerShape(if (edgeToEdge) 0.dp else 20.dp)).background(HeadsupColors.Picture).then(
+            Modifier.fillMaxWidth().onGloballyPositioned { previewArea[0] = it }.clip(RoundedCornerShape(if (edgeToEdge) 0.dp else 20.dp)).background(HeadsupColors.Picture).then(
                 // Holding a finger still shows the original until it lifts; moving or a second
                 // finger (zoom) is left to the other gestures.
                 if (onHoldOriginal != null) {
@@ -1190,8 +1215,9 @@ fun ClipPreview(
                                 if (event.changes.none { it.pressed }) break
                                 event.changes.firstOrNull()?.let { if ((it.position - first.position).getDistance() > 12.dp.toPx()) moved = true }
                                 if (panNow && event.changes.count { it.pressed } == 1) {
-                                    val maxX = size.width * (viewZoom - 1f) / 2f
-                                    val maxY = size.height * (viewZoom - 1f) / 2f
+                                    val frame = frameIn(size.width.toFloat(), size.height.toFloat())
+                                    val maxX = frame.width * (viewZoom - 1f) / 2f
+                                    val maxY = frame.height * (viewZoom - 1f) / 2f
                                     viewPan = if (viewZoom <= 1.001f) Offset.Zero
                                         else (viewPan + event.calculatePan()).let { Offset(it.x.coerceIn(-maxX, maxX), it.y.coerceIn(-maxY, maxY)) }
                                     event.changes.forEach { it.consume() }
@@ -1268,6 +1294,12 @@ fun ClipPreview(
             }
             BoxWithConstraints(
                 Modifier.heightIn(max = maxHeight).aspectRatio(frameAspect, matchHeightConstraintsFirst = true)
+                    .onGloballyPositioned { c ->
+                        val area = previewArea[0]
+                        if (area != null && area.isAttached && c.isAttached) {
+                            frameBounds[0] = androidx.compose.ui.geometry.Rect(area.localPositionOf(c, Offset.Zero), androidx.compose.ui.geometry.Size(c.size.width.toFloat(), c.size.height.toFloat()))
+                        }
+                    }
                     .graphicsLayer {
                         val z = (if (viewZoomed) viewZoom else 1f) * cutLook.zoom
                         scaleX = z
@@ -1348,7 +1380,7 @@ fun ClipPreview(
                         // Reframing moves the graded picture, as in the export (colour first, then framing).
                         val t = reframeTransform(reframe, geometry)
                         // Steadied: the frame's correction on the picture before it is framed.
-                        val c = if (steady != null && steadyCorrections != null && !photo) app.headsup.core.frame.Stabilizer.at(steady, steadyCorrections, fileMs) else null
+                        val c = if (steady != null && steadyCorrections != null && !photo) app.headsup.core.frame.Stabilizer.at(steady, steadyCorrections, if (shownMs >= 0L && !scrubbing) clip.trimStartMs + shownMs else fileMs) else null
                         // Film in a projector: the frame drifting (in the frame's own size), enlarged so its edges stay hidden.
                         val cover = if (weaveNow.isNone) 1f else app.headsup.core.edit.GateWeave.cover(effects.weave)
                         scaleX = t.zoom * (c?.zoom ?: 1f) * cover * if (reframe.mirrored) -1f else 1f
@@ -1437,7 +1469,7 @@ fun ClipPreview(
                                     }
                                     val t = reframeTransform(r, g)
                                     // Steadied (the selected clip's own player).
-                                    val c = if (fresh && (pictureClip[i] == null || pictureClip[i] == clip.id) && steady != null && steadyCorrections != null) app.headsup.core.frame.Stabilizer.at(steady, steadyCorrections, fileMs) else null
+                                    val c = if (fresh && (pictureClip[i] == null || pictureClip[i] == clip.id) && steady != null && steadyCorrections != null) app.headsup.core.frame.Stabilizer.at(steady, steadyCorrections, if (shownMs >= 0L && !scrubbing) clip.trimStartMs + shownMs else fileMs) else null
                                     scaleX = t.zoom * (c?.zoom ?: 1f) * if (r.mirrored) -1f else 1f
                                     scaleY = t.zoom * (c?.zoom ?: 1f)
                                     rotationZ = r.angleDegrees + (c?.degrees ?: 0f)
@@ -1965,7 +1997,7 @@ fun ClipPreview(
                         val photoMap = subjectMap?.takeIf { wantsSubject }
                         val behind: ((TextItem, android.graphics.Canvas, android.graphics.Paint) -> Unit)? = if (texts.none { it.behind }) null else {
                             val t = reframeTransform(reframe, geometry)
-                            val c = if (!photo && steady != null && steadyCorrections != null) app.headsup.core.frame.Stabilizer.at(steady, steadyCorrections, fileMs) else null
+                            val c = if (!photo && steady != null && steadyCorrections != null) app.headsup.core.frame.Stabilizer.at(steady, steadyCorrections, if (shownMs >= 0L && !scrubbing) clip.trimStartMs + shownMs else fileMs) else null
                             val warp = reframe.warp?.let { perspectiveMatrix(it, geometry.pictureW, geometry.pictureH) }
                             val f: (TextItem, android.graphics.Canvas, android.graphics.Paint) -> Unit = { item, cv, p ->
                                 val m = item.behindMask?.let { k -> clip.masks.getOrNull(k)?.let { app.headsup.color.TextMasks.alphaOf(context, it, sourceAspect, fileMs) } }
@@ -2756,5 +2788,43 @@ private fun Spinner(modifier: Modifier) {
             size = androidx.compose.ui.geometry.Size(size.width - stroke, size.height - stroke),
             style = androidx.compose.ui.graphics.drawscope.Stroke(stroke, cap = androidx.compose.ui.graphics.StrokeCap.Round),
         )
+    }
+}
+
+/**
+ * The last few frames a player handed to the screen: when each is shown (System.nanoTime) and
+ * its moment in the media. Written on the player's thread, read on the main one.
+ */
+private class ShownFrames {
+    private val release = LongArray(8)
+    private val media = LongArray(8)
+    private var next = 0
+
+    @Synchronized
+    fun add(releaseNs: Long, presentationUs: Long) {
+        release[next] = releaseNs
+        media[next] = presentationUs
+        next = (next + 1) % release.size
+    }
+
+    /**
+     * The player-time (ms, as its position) of the frame on screen at [nowNs]: the latest one due
+     * by then. The media time is either the player's own or the file's (a clipped item's frames
+     * keep the file's times), told by which of them [positionMs] is near; -1 when neither.
+     */
+    @Synchronized
+    fun shownAt(nowNs: Long, positionMs: Long, clipStartMs: Long): Long {
+        var best = -1
+        for (i in release.indices) {
+            if (release[i] == 0L || release[i] > nowNs) continue
+            if (best < 0 || release[i] > release[best]) best = i
+        }
+        if (best < 0 || nowNs - release[best] > 200_000_000L) return -1L
+        val ms = media[best] / 1000
+        return when {
+            kotlin.math.abs(ms - positionMs) < 400L -> ms
+            kotlin.math.abs(ms - clipStartMs - positionMs) < 400L -> ms - clipStartMs
+            else -> -1L
+        }
     }
 }
