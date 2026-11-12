@@ -231,6 +231,16 @@ project's files), the preview resized left/right when held sideways, Edit called
       with AI masks tracked on video as they are now. The text's Subject › Behind becomes
       "Behind: [mask]". Done, with Fill the frame, fonts of one's own and image-filled letters.
 
+## To do (from the 1.0.0 review, 2026-11)
+
+- [ ] Freeze frame: a moment of a clip held as a still for a set time.
+- [ ] Sound level over time (keys on a clip's and a track's volume).
+- [ ] Voice-over recorded in the app, onto a sound track at the playhead.
+- [ ] Captions from speech, on the phone (subtitles as texts, timed to the words).
+- [ ] Green screen (chroma key) and picture in picture (a second clip over the first).
+- [ ] Photos: level the horizon by itself (the tilt is already measured for auto pick).
+- [ ] A true dissolve between clips (the clips overlapping: two sequences composed).
+
 ## Pro features (proposed with the redesign, 2026-11)
 
 - [x] Before / after with a split line across the picture, dragged left and right.
