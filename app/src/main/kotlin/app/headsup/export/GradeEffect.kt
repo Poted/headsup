@@ -613,17 +613,24 @@ class GradeEffect(
                     float r = min(uSize.x, uSize.y) * 0.012;
                     vec3 accG = vec3(0.0);
                     vec3 accH = vec3(0.0);
-                    for (int i = 0; i < 18; i++) {
-                        float a = i < 12 ? float(i) * 0.5236 : float(i - 12) * 1.0472 + 0.26;
-                        vec2 q = px + vec2(cos(a), sin(a)) * (i < 12 ? r : 2.2 * r);
+                    vec2 jit = vec2(
+                        fract(52.9829189 * fract(dot(px, vec2(0.06711056, 0.00583715)))),
+                        fract(52.9829189 * fract(dot(px.yx + 17.0, vec2(0.06711056, 0.00583715))))
+                    ) - 0.5;
+                    float wsum = 0.0;
+                    for (int t = 0; t < 25; t++) {
+                        vec2 o = (vec2(float(t - (t / 5) * 5 - 2), float(t / 5 - 2)) + jit) * r * 0.9;
+                        float w = exp(-dot(o, o) / (2.42 * r * r));
+                        wsum += w;
+                        vec2 q = px + o;
                         vec2 k = maskGlowAt(q);
                         if (k.x <= 0.0 && k.y <= 0.0) continue;
                         vec3 s = grade(uLut, source(vec2(q.x / uSize.x, 1.0 - q.y / uSize.y)));
-                        vec3 b = s * (max(luma(s) - 0.6, 0.0) / 0.4);
+                        vec3 b = s * (max(luma(s) - 0.6, 0.0) / 0.4) * w;
                         accG += b * k.x;
                         accH += b * k.y;
                     }
-                    vec3 g = clamp(accG / 18.0 * 1.5 + dot(accH / 18.0, vec3(0.33)) * 2.0 * vec3(1.0, 0.3, 0.1), 0.0, 1.0);
+                    vec3 g = clamp(accG / wsum * 1.5 + dot(accH / wsum, vec3(0.33)) * 2.0 * vec3(1.0, 0.3, 0.1), 0.0, 1.0);
                     c = 1.0 - (1.0 - c) * (1.0 - g);
                 }
                 gl_FragColor = vec4(c, src.a);

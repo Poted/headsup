@@ -76,6 +76,11 @@ data class ColorGrade(
     val points: List<PointColour> = emptyList(),
     /** Colour pop: how much everything but the picked colours loses its colour, 0..1. */
     val colourPop: Float = 0f,
+    /**
+     * Printer lights ([PrinterLights]): red, green and blue in printer points, as a film lab
+     * timed a print (a point is 1/12 stop of that colour's light); 0 is none.
+     */
+    val printer: List<Float> = PrinterLights.NEUTRAL,
 ) {
     /** The corrections that look at a pixel's surroundings, drawn by the shader before the colour table. */
     val presence: Presence get() = Presence(texture, clarity, dehaze, defringe)
@@ -86,7 +91,8 @@ data class ColorGrade(
             blacks == 0f && whites == 0f && vibrance == 0f && tint == 0f && skinHue == 0f &&
             rolloff == 0f && toneAmount == 0f && tame == 0f && mixer.all { it == 0f } && look == null && curves.all { it.isEmpty() } && wheels.all { it == 0f } &&
             channelMix.all { it == 0f } && bw.all { it == 0f } && calibration.all { it == 0f } && dehaze == 0f && density == 0f &&
-            hueCurves.all { it.isEmpty() } && (points.isEmpty() || (colourPop == 0f && points.all { it.isNeutral }))
+            hueCurves.all { it.isEmpty() } && (points.isEmpty() || (colourPop == 0f && points.all { it.isNeutral })) &&
+            printer.all { it == 0f }
 
     /** The corrections scaled by [k] (hues stay), e.g. a suggestion at partial strength. */
     operator fun times(k: Float) = ColorGrade(
@@ -107,6 +113,7 @@ data class ColorGrade(
         defringe * k,
         points.map { it.copy(hue = it.hue * k, saturation = it.saturation * k, luminance = it.luminance * k) },
         colourPop * k,
+        printer.map { it * k },
     )
 
     /**
@@ -164,6 +171,7 @@ data class ColorGrade(
         // Picked colours cannot be added: those set on top win.
         points = other.points.ifEmpty { points },
         colourPop = maxOf(colourPop, other.colourPop),
+        printer = List(3) { i -> (printer.getOrElse(i) { 0f } + other.printer.getOrElse(i) { 0f }).coerceIn(-PrinterLights.MAX, PrinterLights.MAX) },
     )
 
     /**
@@ -228,6 +236,7 @@ data class ColorGrade(
         defringe = if (after.defringe != before.defringe) after.defringe else defringe,
         points = if (after.points != before.points) after.points else points,
         colourPop = if (after.colourPop != before.colourPop) after.colourPop else colourPop,
+        printer = List(3) { i -> if (after.printer.getOrElse(i) { 0f } != before.printer.getOrElse(i) { 0f }) after.printer.getOrElse(i) { 0f } else printer.getOrElse(i) { 0f } },
     )
 
     companion object {
@@ -336,10 +345,12 @@ object LutBaker {
         val source = if (grade.points.isEmpty()) null else rgb.copyOf()
         if (lut == null) {
             if (wideGamut) Gamut.bt2020ToBt709(rgb)
+            PrinterLights.applyDisplay(grade.printer, rgb)
             // The look is the starting rendering; the corrections go on top of it.
             Looks.apply(look, grade.lookAmount, rgb)
             displayCorrections(grade, rgb)
         } else {
+            PrinterLights.applyLog(grade.printer, rgb, LOG_STOP)
             logCorrections(grade, rgb)
             for (i in 0..2) rgb[i] = rgb[i].coerceIn(0f, 1f)
             lut.sample(rgb[0], rgb[1], rgb[2], rgb)

@@ -127,4 +127,41 @@ class ReframeTest {
             }
         }
     }
+
+    @Test
+    fun aFittedPictureMadeSmallerMovesInsideItsFrame() {
+        // A 3:2 photo in a 4:5 frame, fitted, at half size: it can sit at the top, leaving room below.
+        val r = Reframe(aspect = 0.8f, fit = true, zoom = 0.5f, centerY = 0.9f)
+        val (ow, oh) = r.outputSize(3000f, 2000f)
+        val c = r.clamped(ow, oh, 3000f, 2000f)
+        kotlin.test.assertTrue(c.centerY > 0.6f, "moved: ${c.centerY}")
+        // The picture's top edge is still inside the frame.
+        val (_, top) = c.frameOf(1500f, 0f, ow, oh, 3000f, 2000f)
+        kotlin.test.assertTrue(top >= -0.5f, "top $top")
+        // And what is at the frame's middle is below the picture's middle (the picture went up).
+        val (_, sy) = c.sourceOf(ow / 2f, oh / 2f, ow, oh, 3000f, 2000f)
+        kotlin.test.assertTrue(sy > 1000f)
+    }
+
+    @Test
+    fun filledStaysCovered() {
+        val r = Reframe(aspect = 1f, centerY = 0.95f).clamped(1000f, 1000f, 1500f, 1000f)
+        kotlin.test.assertEquals(0.5f, r.centerY, 1e-4f)
+    }
+
+    @Test
+    fun aSmallerPictureSnapsToTheFramesMiddleAndEdges() {
+        val base = Reframe(aspect = 0.8f, fit = true, zoom = 0.5f)
+        val (ow, oh) = base.outputSize(3000f, 2000f)
+        // Nearly centred: centred.
+        val near = base.copy(centerY = 0.505f).clamped(ow, oh, 3000f, 2000f).snappedInFrame(ow, oh, 3000f, 2000f)
+        kotlin.test.assertEquals(0.5f, near.centerY, 1e-4f)
+        // Nearly at the top: its top on the frame's top.
+        val top = base.copy(centerY = 5f).clamped(ow, oh, 3000f, 2000f)
+        val (_, y) = top.snappedInFrame(ow, oh, 3000f, 2000f).frameOf(1500f, 0f, ow, oh, 3000f, 2000f)
+        kotlin.test.assertEquals(0f, y, 1f)
+        // Far from every line: left as it is.
+        val free = base.copy(centerY = 0.62f).clamped(ow, oh, 3000f, 2000f)
+        kotlin.test.assertEquals(free.centerY, free.snappedInFrame(ow, oh, 3000f, 2000f).centerY, 1e-4f)
+    }
 }

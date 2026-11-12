@@ -137,6 +137,19 @@ data class ClipState(
     val stabilize: app.headsup.core.frame.Stabilizer.Path? = null,
     /** The clip's subject found on its frames (a [app.headsup.color.MaskSequences] id), for texts behind it. */
     val subject: String? = null,
+    /** The cinematic look on it (Adjust › Looks), kept so it can be changed or taken off later. */
+    val cineLook: app.headsup.color.AppliedLook? = null,
+    /** Colour harmony on it (Adjust › Looks), kept so it can be changed or taken off later. */
+    val harmony: app.headsup.color.AppliedHarmony? = null,
+    /** One of the user's presets on it (Adjust › Looks › My presets), so it can be taken off later. */
+    val preset: app.headsup.color.AppliedPreset? = null,
+    /** What Analyse measured on it (for the looks it suggests, and why), kept with the project. */
+    val lookStats: app.headsup.core.color.FrameStats? = null,
+    /** How the clip comes in from the one before (half of it at that one's end), and how long the whole of it is. */
+    val cut: app.headsup.core.edit.CutKind = app.headsup.core.edit.CutKind.NONE,
+    val cutMs: Long = 500L,
+    /** The framing moving through the clip (Ken Burns, following the subject); empty: it stays. */
+    val frameKeys: List<app.headsup.core.frame.FrameKey> = emptyList(),
     /** Picture effects of this clip. */
     val effects: EffectSettings = EffectSettings(),
     /** Windows with their own corrections (graduated lines, ovals), at most [ColourMask.MAX_PER_CLIP]. */
@@ -269,15 +282,6 @@ data class BackgroundWork(
     val waiting: Boolean = true,
 )
 
-/** A Fast edit look being tried on clip [clipId]: what it had before, the look and its strength. */
-data class FastSession(
-    val clipId: Long,
-    val baseGrade: ColorGrade,
-    val baseEffects: EffectSettings,
-    val look: app.headsup.color.FastLook,
-    val strength: Float = 1f,
-)
-
 data class CineSession(
     val clipId: Long,
     val stats: FrameStats,
@@ -408,16 +412,16 @@ data class UiState(
     val pickingColour: Boolean = false,
     /** Point colour: the next tap on the picture picks a colour. */
     val pickingPoint: Boolean = false,
+    /** What was just done in the album (auto pick, a merge), said there for a moment. */
+    val albumNote: String? = null,
+    /** The photo last saved by an export (opened in the gallery from its message). */
+    val lastSaved: Uri? = null,
     /** Point colour: the colour whose sliders are shown (and that a finger on the picture moves). */
     val pointSelected: Int = 0,
     /** Bumped when a photo's subject is to be found again. */
     val subjectVersion: Int = 0,
     /** When the brush's size (softness, strength) was last set: it shows on the picture for a moment. */
     val brushSizedAt: Long = 0L,
-    /** The clip measured for looks ([HeadsupViewModel.analyseClip]): its id and what was measured. */
-    val lookStats: Pair<Long, app.headsup.core.color.FrameStats>? = null,
-    /** A Fast edit look being tried ([HeadsupViewModel.applyFastLook]). */
-    val fast: FastSession? = null,
     /** Long jobs running in the background (tracking with AI, reversing). */
     val work: List<BackgroundWork> = emptyList(),
     /** An outline being drawn around an object (x, y pairs, fractions of the picture), until the finger lifts. */
@@ -684,10 +688,10 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                 }.onFailure { it.printStackTrace() }.getOrNull()
             }
             if (uri == null) {
-                _state.update { it.copy(messages = it.messages + "Could not merge the photos (too large for the phone's memory, or unreadable).") }
+                _state.update { it.copy(albumNote = "Could not merge the photos (too large for the phone's memory, or unreadable).") }
                 return@runInBackground
             }
-            _state.update { st -> st.copy(clips = st.clips.map { if (it.picked) it.copy(picked = false) else it }, messages = st.messages + "${marked.size} exposures merged into one photo (HDR): saved to DCIM/Sweet Spot and added to the album.") }
+            _state.update { st -> st.copy(clips = st.clips.map { if (it.picked) it.copy(picked = false) else it }, albumNote = "${marked.size} exposures merged into one photo (HDR): saved to DCIM/Sweet Spot and added to the album.") }
             addClips(listOf(uri))
         }
     }
@@ -748,7 +752,24 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                     groupOf[id] = result.group[k]
                     if (k in result.suggested) chosen += id
                 }
-                var starred = 0
+                // What it did, said in the album (where it was asked for): how many were picked, of how many shots.
+                val before = _state.value.clips
+                val starred = before.count { c -> c.meta.isPhoto && c.id in chosen && (c.rating == 0 || c.suggested) }
+                val kept = before.count { c -> c.meta.isPhoto && c.id in chosen && c.rating != 0 && !c.suggested }
+                val shots = result.group.toSet().size
+                val unread = photos.size - known.size
+                val note = buildString {
+                    append(
+                        when (starred) {
+                            0 -> if (kept > 0) "No new photo picked: the best ones already have your stars." else "No photo picked as best: none stood out as sharp and well lit."
+                            1 -> "1 photo picked as best (★$SUGGESTED_STARS)"
+                            else -> "$starred photos picked as best (★$SUGGESTED_STARS)"
+                        },
+                    )
+                    if (starred > 0) append(if (shots < known.size) ", one for each of $shots shots." else ".")
+                    if (unread > 0) append(" $unread could not be read.")
+                    append(" Nothing was removed.")
+                }
                 _state.update { st ->
                     st.copy(
                         busy = false, loadingMessage = null, loadingProgress = null,
@@ -758,11 +779,10 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                             val base = if (c.suggested) c.copy(rating = 0, suggested = false) else c
                             val g = groupOf[c.id] ?: return@map base
                             if (c.id in chosen && base.rating == 0) {
-                                starred++
                                 base.copy(cullGroup = g, cullBest = true, rating = SUGGESTED_STARS, suggested = true)
                             } else base.copy(cullGroup = g, cullBest = c.id in chosen)
                         },
-                        messages = st.messages + "Auto pick: $starred suggested in ${result.group.toSet().size} shots. Nothing was removed.",
+                        albumNote = note,
                     )
                 }
             } catch (e: kotlinx.coroutines.CancellationException) {
@@ -773,6 +793,19 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun openAlbum() = _state.update { it.copy(albumOpen = true) }
+
+    fun clearAlbumNote() = _state.update { it.copy(albumNote = null) }
+
+    /** The photo last saved, in the phone's gallery (or whatever shows pictures). */
+    fun openLastSaved(context: android.content.Context) {
+        val uri = _state.value.lastSaved ?: return
+        runCatching {
+            context.startActivity(
+                android.content.Intent(android.content.Intent.ACTION_VIEW).setDataAndType(uri, "image/*")
+                    .addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION or android.content.Intent.FLAG_ACTIVITY_NEW_TASK),
+            )
+        }.onFailure { _state.update { it.copy(messages = it.messages + "No app to open the photo with.") } }
+    }
 
     /** Opens the album [name] (from the projects list) straight into its album view. */
     private var albumAfterOpen = false
@@ -1095,7 +1128,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
         val srcH = clip.meta.height.takeIf { it > 0 }?.toFloat() ?: 1080f
         val (ow, oh) = s.framing(clip).outputSize(srcW, srcH)
         val centred = item.copy(x = 0.5f, y = 0.5f, align = app.headsup.core.edit.TextAlign.CENTER, angle = 0f)
-        val box = app.headsup.render.TextRenderer.box(centred, ow, oh)
+        val box = app.headsup.render.TextRenderer.box(centred, ow, oh, textValues(s, clip, 0L))
         if (box.width() <= 0f || box.height() <= 0f) return
         val k = minOf(0.92f * ow / box.width(), 0.92f * oh / box.height())
         updateText(id) { centred.copy(size = (item.size * k).coerceIn(0.01f, 2f)) }
@@ -1143,7 +1176,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
         val r = s.framing(clip)
         val (ow, oh) = r.outputSize(srcW, srcH)
         val shown = raw.placed(clip.id, t0, frameMapping(s, clip))
-        val box = app.headsup.render.TextRenderer.box(shown, ow, oh)
+        val box = app.headsup.render.TextRenderer.box(shown, ow, oh, textValues(s, clip, 0L))
         val corners = listOf(box.left to box.top, box.right to box.top, box.left to box.bottom, box.right to box.bottom)
             .map { (x, y) -> r.sourceOf(x, y, ow, oh, srcW, srcH) }
         val (cx, cy) = r.sourceOf(box.centerX(), box.centerY(), ow, oh, srcW, srcH)
@@ -1226,7 +1259,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
      * it: found where it first shows, then followed (MobileSAM, told where it was), looked for
      * again whenever it is gone. In the background; the maps are kept with the clip.
      */
-    fun findSubject(index: Int) {
+    fun findSubject(index: Int, then: (() -> Unit)? = null) {
         val s = _state.value
         val clip = s.clips.getOrNull(index)?.takeIf { !it.meta.isPhoto } ?: return
         if (s.work.any { it.clipId == clip.id && it.label.startsWith("Finding the subject") }) return
@@ -1284,6 +1317,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                     messages = st.messages + (if (stopped()) "Subject found up to where it was stopped." else "Subject found on the clip: texts set Behind stand behind it."),
                 )
             }
+            then?.invoke()
         }
     }
 
@@ -1554,7 +1588,6 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                 selectedMask = 0,
                 compareGrade = null,
                 cine = null,
-                fast = null,
                 matchSession = null,
                 scope = null,
                 texts = emptyList(),
@@ -1658,6 +1691,11 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                 gradeKeys = it.gradeKeys,
                 stabilize = it.stabilize,
                 subject = it.subject,
+                cut = it.cut, cutMs = it.cutMs, frameKeys = it.frameKeys,
+                cineLook = it.cineLook,
+                harmony = it.harmony,
+                preset = it.preset,
+                lookStats = it.lookStats,
             )
         },
         groups = groups.map { SavedGroup(it.id, it.name, it.grade, it.lutName) },
@@ -1807,6 +1845,11 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
             gradeKeys = c.gradeKeys,
             stabilize = c.stabilize,
             subject = c.subject,
+            cut = c.cut, cutMs = c.cutMs, frameKeys = c.frameKeys,
+            cineLook = c.cineLook,
+            harmony = c.harmony,
+            preset = c.preset,
+            lookStats = c.lookStats,
             groupId = c.groupId,
         )
     }
@@ -2222,7 +2265,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
      * background: a few seconds per minute of video), then the shake taken out as it plays and
      * when it is exported. The cut is measured as it is; trimmed wider later, it is measured again.
      */
-    fun stabilizeClip(index: Int) {
+    fun stabilizeClip(index: Int, locked: Boolean = false) {
         val clip = _state.value.clips.getOrNull(index)?.takeIf { !it.meta.isPhoto } ?: return
         val context: Application = getApplication()
         runInBackground("Steadying ${clip.meta.name}", clip.id, null) { report, stopped ->
@@ -2231,7 +2274,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                 if (!stopped()) _state.update { it.copy(messages = it.messages + "Could not read the clip's frames to steady it.") }
                 return@runInBackground
             }
-            _state.update { st -> st.copy(clips = st.clips.map { c -> if (c.id == clip.id) c.copy(stabilize = path.copy(strength = c.stabilize?.strength ?: path.strength)) else c }) }
+            _state.update { st -> st.copy(clips = st.clips.map { c -> if (c.id == clip.id) c.copy(stabilize = path.copy(strength = c.stabilize?.strength ?: path.strength, locked = c.stabilize?.locked ?: locked, maxZoom = c.stabilize?.maxZoom ?: if (locked) 1.35f else path.maxZoom)) else c }) }
             if (_state.value.selected?.id == clip.id) refreshPreview()
         }
     }
@@ -2241,17 +2284,27 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
 
     fun removeStabilize(index: Int) = updateClip(index) { it.copy(stabilize = null) }
 
+    /** Steadied (the shake out, the camera's move kept) or locked (only an even drift kept, the roll held level). */
+    fun setStabilizeLocked(index: Int, locked: Boolean) = updateClip(index) { c ->
+        c.stabilize?.let { c.copy(stabilize = it.copy(locked = locked, maxZoom = if (locked) maxOf(it.maxZoom, 1.35f) else it.maxZoom)) } ?: c
+    }
+
+    /** The most the steadied picture may be zoomed in (1.1 … 1.5). */
+    fun setStabilizeCrop(index: Int, maxZoom: Float) = updateClip(index) { c -> c.stabilize?.let { c.copy(stabilize = it.copy(maxZoom = maxZoom.coerceIn(1.05f, 1.6f))) } ?: c }
+
     /** The camera path over [clip]'s cut, frame by frame, from small grey copies of its frames. */
     private fun measureShake(context: android.content.Context, clip: ClipState, report: (Float) -> Unit, stopped: () -> Boolean): app.headsup.core.frame.Stabilizer.Path? {
         val r = android.media.MediaMetadataRetriever()
         try {
             r.setDataSource(context, clip.meta.uri)
-            val fps = (clip.meta.frameRate ?: 30f).coerceIn(1f, 240f)
+            // Frames by number, times from the frames the file really holds a second (a 120 fps
+            // phone clip holds a few less): the nominal rate would put the steadying out of step.
+            val fps = (clip.meta.measuredFrameRate ?: clip.meta.frameRate ?: 30f).coerceIn(1f, 240f)
             val total = r.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_VIDEO_FRAME_COUNT)?.toIntOrNull() ?: return null
             val first = (clip.trimStartMs * fps / 1000f).toInt().coerceIn(0, total - 1)
             val last = (clip.trimEndMs * fps / 1000f).toInt().coerceIn(first, total - 1)
             val params = android.media.MediaMetadataRetriever.BitmapParams().apply { preferredConfig = Bitmap.Config.RGB_565 }
-            val width = 192
+            val width = 256
             var prev: FloatArray? = null
             var h = 0
             val steps = ArrayList<app.headsup.core.frame.Stabilizer.Step>()
@@ -2354,7 +2407,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
     fun selectClip(index: Int) {
         scopeFrame = null
         // What was being done on the photo before is let go: a colour being picked for it or for a mask.
-        _state.update { it.copy(selectedClip = index, scope = null, selectedMask = 0, compareGrade = null, cine = null, fast = null, pickingPoint = false, pointSelected = 0, pickingColour = false) }
+        _state.update { it.copy(selectedClip = index, scope = null, selectedMask = 0, compareGrade = null, cine = null, pickingPoint = false, pointSelected = 0, pickingColour = false) }
         refreshPreview()
     }
 
@@ -2603,16 +2656,37 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
         val index = _state.value.selectedClip ?: return
         val e = preset.effects
         updateClip(index) { c ->
-            c.copy(
-                grade = preset.grade,
-                lutName = preset.lutName,
-                effects = c.effects.copy(
-                    grain = e.grain, grainSize = e.grainSize, grainColour = e.grainColour,
-                    glow = e.glow, glowThreshold = e.glowThreshold, glowSpread = e.glowSpread, glowWarmth = e.glowWarmth,
-                    halation = e.halation, lensAberration = e.lensAberration, lensSoftness = e.lensSoftness,
-                    barsRatio = e.barsRatio, barsMotion = e.barsMotion,
-                ),
+            // On what the clip has without the preset it had (another preset replaces it).
+            val before = c.preset
+            val baseGrade = before?.gradeWithout(c.grade) ?: c.grade
+            val baseEffects = before?.effectsWithout(c.effects) ?: c.effects
+            val baseLut = before?.lutWithout(c.lutName) ?: c.lutName
+            val effects = baseEffects.copy(
+                grain = e.grain, grainSize = e.grainSize, grainColour = e.grainColour,
+                glow = e.glow, glowThreshold = e.glowThreshold, glowSpread = e.glowSpread, glowWarmth = e.glowWarmth,
+                halation = e.halation, lensAberration = e.lensAberration, lensSoftness = e.lensSoftness,
+                barsRatio = e.barsRatio, barsMotion = e.barsMotion,
+                mist = e.mist, streaks = e.streaks, streakLength = e.streakLength, star = e.star, starLength = e.starLength,
+                prism = e.prism, prismSpread = e.prismSpread, prismAngle = e.prismAngle,
             )
+            c.copy(
+                grade = preset.grade, lutName = preset.lutName, effects = effects,
+                preset = app.headsup.color.AppliedPreset(
+                    preset.name, baseGrade, baseEffects, baseLut, preset.grade, effects, preset.lutName,
+                    baseLook = before?.baseLook ?: c.cineLook, baseHarmony = before?.baseHarmony ?: c.harmony,
+                ),
+                // The preset replaces the corrections: a look or harmony in them is gone with it.
+                cineLook = null, harmony = null,
+            )
+        }
+    }
+
+    /** Takes the selected clip's preset off: as before it, with what was changed since kept. */
+    fun removePreset() {
+        val index = _state.value.selectedClip ?: return
+        updateClip(index) { c ->
+            val p = c.preset ?: return@updateClip c
+            c.copy(grade = p.gradeWithout(c.grade), effects = p.effectsWithout(c.effects), lutName = p.lutWithout(c.lutName), preset = null, cineLook = p.baseLook, harmony = p.baseHarmony)
         }
     }
 
@@ -3105,15 +3179,23 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                         IntArray(small.width * small.height).also { small.getPixels(it, 0, small.width, 0, 0, small.width, small.height) }.asList()
                     }.toIntArray()
                     graded(pixels, cube)
-                    CineAssistant.analyse(pixels)
+                    // People, found by the scene model in the middle frame (skin-like colour alone
+                    // also matches lamps, wood and brick).
+                    val people = runCatching {
+                        val f = frames[frames.size / 2]
+                        val w = 96
+                        val h = (w * f.height / f.width.coerceAtLeast(1)).coerceAtLeast(1)
+                        app.headsup.color.Segmenter.scene(context, f, w, h)[app.headsup.color.Scene.PEOPLE.ordinal].average().toFloat()
+                    }.getOrNull()
+                    CineAssistant.analyse(pixels).copy(people = people)
                 }
                 if (stats == null) {
                     _state.update { it.copy(messages = it.messages + "Could not read frames of this clip.") }
                     return@launch
                 }
-                _state.update { it.copy(lookStats = clip.id to stats) }
+                _state.update { st -> st.copy(clips = st.clips.map { c -> if (c.id == clip.id) c.copy(lookStats = stats) else c }) }
                 // A look being tried is fitted to what was just measured.
-                _state.value.fast?.takeIf { it.clipId == clip.id }?.let { applyFastLook(it.look, it.strength) }
+                _state.value.selected?.takeIf { it.id == clip.id }?.cineLook?.let { a -> a.look?.let { applyFastLook(it, a.strength) } }
             } finally {
                 _state.update { it.copy(busy = false, loadingMessage = null) }
             }
@@ -3221,10 +3303,9 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    /** Keeps the suggestion as ordinary corrections ([undo] = false) or restores the clip as it was. */
     /**
-     * Fast edit: [look] on the selected clip at [strength], on top of what it had when the first
-     * look was tried (trying another look replaces it, not adds to it).
+     * [look] on the selected clip at [strength], on top of what the clip has without its look
+     * (another look is replaced, not added to); kept with the clip ([ClipState.cineLook]).
      */
     fun applyFastLook(look: app.headsup.color.FastLook, strength: Float = 1f) {
         // An adaptive style being tried gives way to it.
@@ -3232,35 +3313,70 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
         val s = _state.value
         val index = s.selectedClip ?: return
         val clip = s.selected ?: return
-        val session = s.fast?.takeIf { it.clipId == clip.id } ?: FastSession(clip.id, clip.grade, clip.effects, look)
+        // On what the clip has without its look (another look is replaced, not added to).
+        val before = clip.cineLook
+        val baseGrade = before?.gradeWithout(clip.grade) ?: clip.grade
+        val baseEffects = before?.effectsWithout(clip.effects) ?: clip.effects
         val k = strength.coerceIn(0f, 1f)
         // Measured: the look's character, plus what this clip needs to suit it.
-        val stats = s.lookStats?.takeIf { it.first == clip.id }?.second
-        val fit = stats?.let { CineAssistant.fit(it, keepDark = look == app.headsup.color.FastLook.NIGHT) }
+        val stats = clip.lookStats
+        val fit = stats?.let { CineAssistant.fit(it, keepDark = look.keepDark) }
         val grade = if (fit != null) look.grade + fit else look.grade
         // Contrast from the cinematic curve, fitted to the clip's tones once measured (a dark clip
         // keeps its shadow detail), and taken down with the strength.
         val curve = app.headsup.core.color.ToneCurve.cinematic(look.contrast, low = stats?.low ?: 0.18f, median = stats?.median ?: 0.5f)
         val scaled = (grade * k).copy(curves = listOf(app.headsup.core.color.ToneCurve.scaled(curve, k), emptyList(), emptyList(), emptyList()))
-        _state.update { it.copy(fast = session.copy(look = look, strength = k)) }
-        updateClip(index) { it.copy(grade = session.baseGrade + scaled, effects = look.effectsOn(session.baseEffects, k)) }
+        val newGrade = baseGrade + scaled
+        val newEffects = look.effectsOn(baseEffects, k)
+        val applied = app.headsup.color.AppliedLook(look.name, k, baseGrade, baseEffects, newGrade, newEffects)
+        updateClip(index) { it.copy(grade = newGrade, effects = newEffects, cineLook = applied) }
     }
 
-    /** Hold to see the clip as it was before the Fast edit look. */
-    fun compareFast(held: Boolean) {
-        val session = _state.value.fast?.takeIf { held }
-        _state.update { it.copy(compareGrade = session?.baseGrade, compareEffects = session?.baseEffects) }
+    /** Takes the selected clip's look off: its corrections as before it, changes made since kept. */
+    fun removeFastLook() {
+        val s = _state.value
+        val index = s.selectedClip ?: return
+        val clip = s.selected ?: return
+        val applied = clip.cineLook ?: return
+        updateClip(index) { it.copy(grade = applied.gradeWithout(it.grade), effects = applied.effectsWithout(it.effects), cineLook = null) }
+    }
+
+    /** Colour harmony on the selected clip: [scheme] around [hue] at [amount], replacing the one it had. */
+    fun applyHarmony(scheme: app.headsup.core.color.ColourHarmony.Scheme, hue: Float, amount: Float) {
+        val s = _state.value
+        val index = s.selectedClip ?: return
+        val clip = s.selected ?: return
+        val base = clip.harmony?.gradeWithout(clip.grade) ?: clip.grade
+        val graded = base + app.headsup.core.color.ColourHarmony.grade(scheme, hue, amount)
+        val applied = app.headsup.color.AppliedHarmony(scheme, hue, amount.coerceIn(0f, 1f), base, graded)
+        updateClip(index) { it.copy(grade = graded, harmony = applied) }
+    }
+
+    /** Takes the selected clip's colour harmony off, keeping the changes made since. */
+    fun removeHarmony() {
+        val index = _state.value.selectedClip ?: return
+        updateClip(index) { c -> c.harmony?.let { h -> c.copy(grade = h.gradeWithout(c.grade), harmony = null) } ?: c }
+    }
+
+    /** Hold to see the clip without its colour harmony. */
+    fun compareHarmony(held: Boolean) {
+        val clip = _state.value.selected
+        _state.update { it.copy(compareGrade = clip?.harmony?.takeIf { held }?.gradeWithout(clip.grade)) }
         refreshPreview()
     }
 
-    /** Keeps the look as ordinary corrections and effects, or with [undo] puts the clip back. */
-    fun closeFast(undo: Boolean) {
-        val session = _state.value.fast ?: return
-        if (undo) {
-            val index = _state.value.clips.indexOfFirst { it.id == session.clipId }
-            if (index >= 0) updateClip(index) { it.copy(grade = session.baseGrade, effects = session.baseEffects) }
-        }
-        _state.update { it.copy(fast = null) }
+    /** While a ruler is held: the picture with these effects ([effects]; null: as they are). */
+    fun compareEffects(effects: EffectSettings?) {
+        _state.update { it.copy(compareEffects = effects) }
+        refreshPreview()
+    }
+
+    /** Hold to see the clip as it is without its look. */
+    fun compareFast(held: Boolean) {
+        val clip = _state.value.selected
+        val applied = clip?.cineLook?.takeIf { held }
+        _state.update { it.copy(compareGrade = applied?.gradeWithout(clip.grade), compareEffects = applied?.effectsWithout(clip.effects)) }
+        refreshPreview()
     }
 
     fun closeCine(undo: Boolean) {
@@ -3289,15 +3405,79 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
         val h = c.meta.height.toFloat().coerceAtLeast(1f)
         val framed = copy(aspect = aspect)
         val (ow, oh) = framed.outputSize(w, h)
-        return framed.copy(zoom = zoom.coerceIn(1f, 4f)).clamped(ow, oh, w, h)
+        return framed.copy(zoom = zoom.coerceIn(framed.minZoom, 4f)).clamped(ow, oh, w, h).snappedInFrame(ow, oh, w, h)
     }
 
     /** Changes the selected clip's framing; kept inside the picture. */
+    /** A photo cut down to part of its frame ([left]..[right], [top]..[bottom], fractions): its edges dragged in. */
+    fun cropTo(left: Float, top: Float, right: Float, bottom: Float) {
+        val clip = _state.value.selected?.takeIf { it.meta.isPhoto } ?: return
+        val w = clip.meta.width.toFloat().coerceAtLeast(1f)
+        val h = clip.meta.height.toFloat().coerceAtLeast(1f)
+        updateReframe { it.cropped(left, top, right, bottom, w, h) }
+    }
+
     fun updateReframe(transform: (Reframe) -> Reframe) {
         val index = _state.value.selectedClip ?: return
         val s = _state.value
         // An album's photo keeps its own crop shape (null: the photo's); a film's clips take the timeline's.
-        updateClip(index) { c -> transform(c.reframe).let { r -> c.copy(reframe = r.clampedFor(c, if (s.photoProject) r.aspect else s.timelineAspect)) } }
+        updateClip(index) { c ->
+            if (c.frameKeys.isEmpty()) {
+                transform(c.reframe).let { r -> c.copy(reframe = r.clampedFor(c, if (s.photoProject) r.aspect else s.timelineAspect)) }
+            } else {
+                // A moving frame: what is set is the key nearest the playhead (its zoom and centre);
+                // the rest of the framing (shape, turn, fit) is the clip's own as before.
+                val at = playheadFileMs.coerceIn(c.trimStartMs, c.trimEndMs)
+                val shown = app.headsup.core.frame.FrameKeys.at(c.reframe, c.frameKeys, at)
+                val r = transform(shown).clampedFor(c, if (s.photoProject) shown.aspect else s.timelineAspect)
+                c.copy(
+                    reframe = c.reframe.copy(angleDegrees = r.angleDegrees, aspect = r.aspect, fit = r.fit, blur = r.blur, vertical = r.vertical, horizontal = r.horizontal,
+                        distortion = r.distortion, lensVignette = r.lensVignette, mirrored = r.mirrored, panels = r.panels, backdropColour = r.backdropColour, backdropImage = r.backdropImage),
+                    frameKeys = app.headsup.core.frame.FrameKeys.setNearest(c.frameKeys, at, r),
+                )
+            }
+        }
+    }
+
+    /** The effect bars cut from a picture of one's own (kept by the app). */
+    fun setBarsImage(uri: Uri) {
+        val context = getApplication<Application>()
+        viewModelScope.launch {
+            val path = withContext(Dispatchers.IO) {
+                runCatching {
+                    val dir = java.io.File(context.filesDir, "logos").apply { mkdirs() }
+                    val file = java.io.File(dir, java.util.UUID.randomUUID().toString())
+                    context.contentResolver.openInputStream(uri)?.use { input -> file.outputStream().use { input.copyTo(it) } } ?: return@runCatching null
+                    file.absolutePath
+                }.getOrNull()
+            }
+            if (path == null) _state.update { it.copy(messages = it.messages + "Could not read that picture.") }
+            else updateEffects { it.copy(barsImage = path, barsBlur = false) }
+        }
+    }
+
+    /** A picture of one's own (kept by the app) filling the bars round the selected fitted photo. */
+    /** The border round fitted clips (blurred picture, a colour, or a picture of one's own): for the whole film. */
+    fun setBorder(blur: Boolean, colour: Int, image: String?) {
+        _state.update { s -> s.copy(clips = s.clips.map { c -> c.copy(reframe = c.reframe.copy(blur = blur, backdropColour = colour, backdropImage = image)) }) }
+        refreshPreview()
+    }
+
+    fun setBackdropImage(uri: Uri, allClips: Boolean = false) {
+        val context = getApplication<Application>()
+        viewModelScope.launch {
+            val path = withContext(Dispatchers.IO) {
+                runCatching {
+                    val dir = java.io.File(context.filesDir, "logos").apply { mkdirs() }
+                    val file = java.io.File(dir, java.util.UUID.randomUUID().toString())
+                    context.contentResolver.openInputStream(uri)?.use { input -> file.outputStream().use { input.copyTo(it) } } ?: return@runCatching null
+                    file.absolutePath
+                }.getOrNull()
+            }
+            if (path == null) _state.update { it.copy(messages = it.messages + "Could not read that picture.") }
+            else if (allClips) setBorder(blur = false, colour = 0xFF000000.toInt(), image = path)
+            else updateReframe { it.copy(blur = false, backdropImage = path) }
+        }
     }
 
     /** Fill or fit for every clip, e.g. after changing the frame's shape. */
@@ -4539,6 +4719,77 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
     /** Blend from the previous clip's look over [lengthMs] at the start of the clip at [index]; 0 for a cut. */
     fun setTransition(index: Int, lengthMs: Long) = updateClip(index) { it.copy(transitionMs = lengthMs.coerceAtLeast(0L)) }
 
+    /** How clip [index] comes in from the clip before: [kind] over [lengthMs] (half at the end of the one before). */
+    fun setCut(index: Int, kind: app.headsup.core.edit.CutKind, lengthMs: Long) = updateClip(index) { it.copy(cut = kind, cutMs = lengthMs.coerceIn(100L, 4000L)) }
+
+    /**
+     * A Ken Burns move on clip [index]: the frame as it is now at its start, and a little closer at
+     * its end (to be set where wanted: go to the end and frame it). Off: the frame as at the playhead stays.
+     */
+    fun setKenBurns(index: Int, on: Boolean) = updateClip(index) { c ->
+        if (!on) {
+            val at = playheadFileMs.coerceIn(c.trimStartMs, c.trimEndMs)
+            val shown = app.headsup.core.frame.FrameKeys.at(c.reframe, c.frameKeys, at)
+            c.copy(reframe = c.reframe.copy(zoom = shown.zoom, centerX = shown.centerX, centerY = shown.centerY), frameKeys = emptyList())
+        } else {
+            val r = c.reframe
+            c.copy(frameKeys = listOf(
+                app.headsup.core.frame.FrameKey(c.trimStartMs, r.zoom, r.centerX, r.centerY),
+                app.headsup.core.frame.FrameKey(c.trimEndMs, (r.zoom * 1.25f).coerceAtMost(4f), r.centerX, r.centerY),
+            ))
+        }
+    }
+
+    /**
+     * The frame following the clip's subject (people, animals, vehicles): its middle kept on them,
+     * evened out so it glides, at the zoom set now (zoom in first to give it room to move). The
+     * subject is found first when it is not yet (in the background).
+     */
+    fun followSubjectWithFrame(index: Int) {
+        val clip = _state.value.clips.getOrNull(index)?.takeIf { !it.meta.isPhoto } ?: return
+        val id = clip.subject
+        if (id == null) {
+            findSubject(index) { followSubjectWithFrame(index) }
+            return
+        }
+        val context: Application = getApplication()
+        viewModelScope.launch {
+            val keys = withContext(Dispatchers.Default) {
+                val seq = app.headsup.color.MaskSequences.get(context, id) ?: return@withContext null
+                val times = ArrayList<Long>()
+                val xs = ArrayList<Float>()
+                val ys = ArrayList<Float>()
+                for (k in seq.timesMs.indices) {
+                    val map = seq.frames[k]
+                    var sx = 0.0
+                    var sy = 0.0
+                    var n = 0.0
+                    for (i in map.indices) {
+                        val v = (map[i].toInt() and 0xFF) / 255.0
+                        if (v < 0.5) continue
+                        sx += (i % seq.width + 0.5) / seq.width
+                        sy += (i / seq.width + 0.5) / seq.height
+                        n += 1.0
+                    }
+                    if (n < seq.width * seq.height * 0.002) continue
+                    times += seq.timesMs[k]; xs += (sx / n).toFloat(); ys += (sy / n).toFloat()
+                }
+                if (times.isEmpty()) null
+                else app.headsup.core.frame.FrameKeys.following(times.toLongArray(), xs.toFloatArray(), ys.toFloatArray(), maxOf(clip.reframe.zoom, 1.3f))
+            }
+            if (keys == null) {
+                _state.update { it.copy(messages = it.messages + "No subject found to follow in this clip.") }
+                return@launch
+            }
+            _state.update { st -> st.copy(clips = st.clips.map { c -> if (c.id == clip.id) c.copy(frameKeys = keys) else c }, messages = st.messages + "The frame follows the subject (${keys.size} keys).") }
+            refreshPreview()
+        }
+    }
+
+    /** The same way in for every clip after the first. */
+    fun setCutForAll(kind: app.headsup.core.edit.CutKind, lengthMs: Long) =
+        _state.update { s -> s.copy(clips = s.clips.mapIndexed { i, c -> if (i == 0) c else c.copy(cut = kind, cutMs = lengthMs.coerceIn(100L, 4000L)) }) }
+
     /**
      * Changes the selected clip's corrections (they also become the default for clips added
      * later), or the global node's.
@@ -4753,7 +5004,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
             return
         }
         loadJob = viewModelScope.launch {
-            val saved = mutableListOf<String>()
+            val saved = mutableListOf<Uri>()
             val failed = mutableListOf<String>()
             try {
                 for ((n, entry) in photos.withIndex()) {
@@ -4800,15 +5051,16 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                             }
                         }
                     }
-                        .onSuccess { saved += clip.meta.name }
+                        .onSuccess { saved += it }
                         .onFailure { failed += "${clip.meta.name}: ${it.message ?: it.javaClass.simpleName}" }
                 }
             } finally {
                 val message = buildString {
-                    if (saved.isNotEmpty()) append("Saved ${saved.size} photo(s) to ${app.headsup.export.MediaStoreOutput.VIDEO_FOLDER}.")
+                    if (saved.isNotEmpty()) append(if (saved.size == 1) "Saved 1 photo to ${app.headsup.export.MediaStoreOutput.VIDEO_FOLDER}." else "Saved ${saved.size} photos to ${app.headsup.export.MediaStoreOutput.VIDEO_FOLDER}.")
                     if (failed.isNotEmpty()) append(" Failed: " + failed.joinToString("; "))
                 }
-                _state.update { it.copy(busy = false, loadingMessage = null, loadingProgress = null, messages = it.messages + message.trim()) }
+                // The first one saved can be opened in the gallery from the message.
+                _state.update { it.copy(busy = false, loadingMessage = null, loadingProgress = null, messages = it.messages + message.trim(), lastSaved = saved.firstOrNull() ?: it.lastSaved) }
             }
         }
     }
@@ -4993,12 +5245,18 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                     reframe = s.framing(clip),
                     stabilize = clip.stabilize?.takeIf { it.strength > 0f },
                     clipId = clip.id,
+                    frameKeys = clip.frameKeys,
                     subject = clip.subject,
                     textMasks = clip.masks,
                     speed = clip.speed,
                     isPhoto = clip.meta.isPhoto,
                     muteChangedSpeed = clip.muteChangedSpeed,
                     fadeInMs = clip.fadeInMs,
+                    // Transitions only in a film (its clips joined), at the cuts to the clips beside.
+                    cutIn = if (kind == ExportKind.VIDEO && i > 0) clip.cut else app.headsup.core.edit.CutKind.NONE,
+                    cutInMs = clip.cutMs,
+                    cutOut = if (kind == ExportKind.VIDEO) s.clips.getOrNull(i + 1)?.cut ?: app.headsup.core.edit.CutKind.NONE else app.headsup.core.edit.CutKind.NONE,
+                    cutOutMs = s.clips.getOrNull(i + 1)?.cutMs ?: 0L,
                     fadeOutMs = clip.fadeOutMs,
                     soundLevel = clip.soundLevel,
                     timelineStartMs = s.clips.take(i).sumOf { it.timelineDurationMs },

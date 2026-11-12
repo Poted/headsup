@@ -80,8 +80,55 @@ object PhotoExporter {
     /** How many stops an Ultra HDR photo's brightest parts are lifted on an HDR screen. */
     private const val HDR_STOPS = 2f
 
+    /**
+     * What lies round a fitted photo in its frame: its colour, a picture of one's own covering the
+     * frame, or the photo itself blurred into a cloud of its colours (as the preview shows it).
+     * [photo] is stored turned by [degrees].
+     */
+    /** The photo's colours as a smooth cloud covering the frame (tiny, drawn large with filtering), a touch darker. */
+    private fun drawCloud(c: android.graphics.Canvas, fw: Float, fh: Float, photo: Bitmap, degrees: Int) {
+        runCatching {
+            val tiny = app.headsup.color.Segmenter.scaled(photo, 24)
+            val upright = if (degrees == 0) tiny else Bitmap.createBitmap(tiny, 0, 0, tiny.width, tiny.height, Matrix().apply { postRotate(degrees.toFloat()) }, true)
+            val k = maxOf(fw / upright.width, fh / upright.height)
+            val w = upright.width * k
+            val h = upright.height * k
+            val paint = android.graphics.Paint(android.graphics.Paint.FILTER_BITMAP_FLAG).apply {
+                colorFilter = android.graphics.ColorMatrixColorFilter(android.graphics.ColorMatrix().apply { setSaturation(1.3f) })
+            }
+            c.drawBitmap(upright, null, android.graphics.RectF((fw - w) / 2f, (fh - h) / 2f, (fw + w) / 2f, (fh + h) / 2f), paint)
+            c.drawColor(android.graphics.Color.argb(31, 0, 0, 0))
+        }
+    }
+
+    // Drawn into a recording: the pictures it draws must stay alive until the frame is rendered.
+    private fun drawBackdrop(context: Context, c: android.graphics.Canvas, fw: Float, fh: Float, r: Reframe, photo: Bitmap, degrees: Int) {
+        c.drawColor(if (r.fit && !r.blur) r.backdropColour else android.graphics.Color.BLACK)
+        if (!r.fit) return
+        fun cover(b: Bitmap, paint: android.graphics.Paint) {
+            val k = maxOf(fw / b.width, fh / b.height)
+            val w = b.width * k
+            val h = b.height * k
+            c.drawBitmap(b, null, android.graphics.RectF((fw - w) / 2f, (fh - h) / 2f, (fw + w) / 2f, (fh + h) / 2f), paint)
+        }
+        val smooth = android.graphics.Paint(android.graphics.Paint.FILTER_BITMAP_FLAG)
+        if (r.blur) {
+            drawCloud(c, fw, fh, photo, degrees)
+            return
+        }
+        r.backdropImage?.let { path ->
+            runCatching {
+                val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                BitmapFactory.decodeFile(path, bounds)
+                var sample = 1
+                while (maxOf(bounds.outWidth, bounds.outHeight) / (sample * 2) >= maxOf(fw, fh)) sample *= 2
+                BitmapFactory.decodeFile(path, BitmapFactory.Options().apply { inSampleSize = sample })?.let { cover(it, smooth) }
+            }
+        }
+    }
+
     /** [onProgress] gets 0..1 as reading, developing, drawing and saving go. */
-    fun export(context: Context, request: PhotoRequest, onProgress: (Float) -> Unit = {}): Uri {
+    fun export(context: Context, request: PhotoRequest, onProgress: (Float) -> Unit = {}): List<Uri> {
         // Raw photos are developed by the app at full size in half floats; others decoded by Android.
         val full = if (request.raw) RawPhotos.developFull(context, request.uri, request.rawDevelop, onProgress) else null
         onProgress(0.8f)
@@ -143,11 +190,49 @@ object PhotoExporter {
                 app.headsup.color.SubjectMaps.find(context, key, upright)
             }
         }.getOrNull()
+        // Glow and halation: the light of the corrected picture's bright parts, worked out on a small
+        // render of the picture alone (no texts), blurred, and laid over it before the texts.
+        // The corrected picture alone (no texts), small: [f] of the frame's size, as ARGB.
+        fun smallPicture(f: Float): Triple<IntArray, Int, Int> {
+            val sw = (fw * f).toInt().coerceAtLeast(2)
+            val sh = (fh * f).toInt().coerceAtLeast(2)
+            val node = RenderNode("small").apply {
+                setPosition(0, 0, sw, sh)
+                val c = beginRecording()
+                c.scale(sw / fw.toFloat(), sh / fh.toFloat())
+                c.drawColor(android.graphics.Color.BLACK)
+                c.translate(fw / 2f + t.translation.x, fh / 2f + t.translation.y)
+                c.rotate(request.reframe.angleDegrees)
+                c.scale(t.zoom * if (request.reframe.mirrored) -1f else 1f, t.zoom)
+                c.translate(-picW / 2f, -picH / 2f)
+                c.drawRect(0f, 0f, picW, picH, graded)
+                endRecording()
+            }
+            val small = render(node, sw, sh)
+            val px = IntArray(sw * sh)
+            small.getPixels(px, 0, sw, 0, 0, sw, sh)
+            small.recycle()
+            return Triple(px, sw, sh)
+        }
+        val glowLayer: Bitmap? = if (request.effects.glow > 0f || request.effects.halation > 0f) runCatching {
+            val sigma = app.headsup.core.photo.Glow.sigma(minOf(fw, fh).toFloat(), request.effects.glowSpread)
+            val f = (3f / sigma.coerceAtLeast(0.5f)).coerceIn(0.03f, 1f)
+            val (px, sw, sh) = smallPicture(f)
+            val e = request.effects
+            val light = app.headsup.core.photo.Glow.light(px, e.glowThreshold, e.glow, e.halation, app.headsup.render.EffectLook.glowTint(e.glowWarmth))
+            Bitmap.createBitmap(app.headsup.core.photo.Glow.blur(light, sw, sh, sigma * f), sw, sh, Bitmap.Config.ARGB_8888)
+        }.onFailure { it.printStackTrace() }.getOrNull() else null
+        // Mist, Anamorphic streaks, Star and Prism: worked out the same way, on a copy about 1000 px across.
+        val fxLayer: Bitmap? = if (request.effects.lightFx.any) runCatching {
+            val f = (1024f / maxOf(fw, fh)).coerceAtMost(1f)
+            val (px, sw, sh) = smallPicture(f)
+            Bitmap.createBitmap(app.headsup.core.photo.LightFx.light(px, sw, sh, request.effects.lightFx), sw, sh, Bitmap.Config.ARGB_8888)
+        }.onFailure { it.printStackTrace() }.getOrNull() else null
         val renderer = DashboardRenderer(context.assets)
         val root = RenderNode("frame").apply {
             setPosition(0, 0, fw, fh)
             val c = beginRecording()
-            c.drawColor(android.graphics.Color.BLACK)
+            drawBackdrop(context, c, fw.toFloat(), fh.toFloat(), request.reframe, photo, degrees)
             c.save()
             c.translate(fw / 2f + t.translation.x, fh / 2f + t.translation.y)
             c.rotate(request.reframe.angleDegrees)
@@ -155,8 +240,21 @@ object PhotoExporter {
             c.translate(-picW / 2f, -picH / 2f)
             c.drawRect(0f, 0f, picW, picH, graded)
             c.restore()
+            for (layer in listOfNotNull(glowLayer, fxLayer)) {
+                c.drawBitmap(layer, null, android.graphics.RectF(0f, 0f, fw.toFloat(), fh.toFloat()), android.graphics.Paint(android.graphics.Paint.FILTER_BITMAP_FLAG).apply { blendMode = android.graphics.BlendMode.SCREEN })
+            }
             renderer.drawVignette(c, fw.toFloat(), fh.toFloat(), request.vignette)
             val data = request.dashboard
+            // Blurred bars: the photo's colours, blurred, in the bars (under the dashboard and texts).
+            if (request.effects.barsBlur) {
+                val bars = renderer.barRects(fw.toFloat(), fh.toFloat(), request.effects)
+                for (b in bars) {
+                    c.save()
+                    c.clipRect(b)
+                    drawCloud(c, fw.toFloat(), fh.toFloat(), photo, degrees)
+                    c.restore()
+                }
+            }
             if (data != null) renderer.draw(c, fw.toFloat(), fh.toFloat(), request.style, data, request.effects) else renderer.drawBars(c, fw.toFloat(), fh.toFloat(), request.effects)
             app.headsup.render.RouteMapRenderer.draw(c, fw.toFloat(), fh.toFloat(), request.routeMap, request.mapTrack, request.mapMarker?.first, request.mapMarker?.second)
             TextRenderer.draw(c, fw.toFloat(), fh.toFloat(), request.texts, request.textMs, subject = { item, canvas, paint ->
@@ -183,7 +281,7 @@ object PhotoExporter {
                 Bitmap.createScaledBitmap(deep, (fw * k).toInt().coerceAtLeast(2), (fh * k).toInt().coerceAtLeast(2), true).also { deep.recycle() }
             }
             val name = request.name.substringBeforeLast('.') + "_edit.tif"
-            return MediaStoreOutput.savePhoto(context, name, "image/tiff") { out -> writeTiff(sized, out.buffered(1 shl 20)) }.also { sized.recycle() }
+            return listOf(MediaStoreOutput.savePhoto(context, name, "image/tiff") { out -> writeTiff(sized, out.buffered(1 shl 20)) }.also { sized.recycle() })
         }
         val rendered = render(root, fw, fh)
         // A raw's real lights above white, framed as the photo, for an Ultra HDR gain map.
@@ -199,9 +297,24 @@ object PhotoExporter {
             Bitmap.createScaledBitmap(rendered, (fw * k).toInt().coerceAtLeast(2), (fh * k).toInt().coerceAtLeast(2), true).also { rendered.recycle() }
         }
         val name = request.name.substringBeforeLast('.') + "_edit.jpg"
+        // A carousel: the frame cut into its parts (_1of3, _2of3…), saved last part first, so the
+        // first part is the newest in the gallery (shown first, on the left); returned in order.
+        val panels = request.reframe.panels.coerceIn(1, 3)
+        if (panels > 1) {
+            val pw2 = bitmap.width / panels
+            val uris = arrayOfNulls<Uri>(panels)
+            for (k in panels - 1 downTo 0) {
+                val part = Bitmap.createBitmap(bitmap, k * pw2, 0, pw2, bitmap.height)
+                val partName = request.name.substringBeforeLast('.') + "_edit_${k + 1}of$panels.jpg"
+                uris[k] = MediaStoreOutput.savePhoto(context, partName) { out -> part.compress(Bitmap.CompressFormat.JPEG, request.quality.coerceIn(1, 100), out) }
+                if (part !== bitmap) part.recycle()
+            }
+            bitmap.recycle()
+            return uris.filterNotNull()
+        }
         val saved = if (request.format == PhotoFormat.ULTRA_HDR && android.os.Build.VERSION.SDK_INT >= 34) withGainmap(bitmap, headroom) else bitmap
-        return MediaStoreOutput.savePhoto(context, name) { out -> saved.compress(Bitmap.CompressFormat.JPEG, request.quality.coerceIn(1, 100), out) }
-            .also { saved.recycle(); if (saved !== bitmap) bitmap.recycle() }
+        return listOf(MediaStoreOutput.savePhoto(context, name) { out -> saved.compress(Bitmap.CompressFormat.JPEG, request.quality.coerceIn(1, 100), out) }
+            .also { saved.recycle(); if (saved !== bitmap) bitmap.recycle() })
     }
 
     /** [photo] ([w] × [h] pixels) sampled through the DNG's WarpRectilinear: each colour from where its lens put it. */

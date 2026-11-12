@@ -60,6 +60,9 @@ object AppSettings {
 
     /** Every animation of the app shortened to nothing (and the start-up one to its last frame). */
     var reduceMotion by mutableStateOf(false)
+
+    /** Blurred bars glow round the whole preview too (as a TV's ambient light), not only inside the frame. */
+    var ambientPreview by mutableStateOf(false)
         private set
 
     /** A light click from the phone on each step of a ruler. */
@@ -72,6 +75,12 @@ object AppSettings {
 
     /** The light sensor says the phone is in bright sun now (only watched with [fieldInSun]). */
     var inSun by mutableStateOf(false)
+
+    /** The light sensor's last reading (lux), shown in Settings so the switch can be checked; null before the first. */
+    var lux by mutableStateOf<Float?>(null)
+
+    /** Whether the phone has a light sensor at all. */
+    var lightSensor by mutableStateOf(true)
         internal set
 
     /** Held sideways, the picture on the right and the tools on the left (for the left hand). */
@@ -82,6 +91,7 @@ object AppSettings {
         val p = context.getSharedPreferences(FILE, Context.MODE_PRIVATE)
         theme = Theme.entries.firstOrNull { it.name == p.getString("theme", null) }
         reduceMotion = p.getBoolean("reduceMotion", false)
+        ambientPreview = p.getBoolean("ambientPreview", false)
         haptics = p.getBoolean("haptics", true)
         pictureRight = p.getBoolean("pictureRight", false)
         fieldInSun = p.getBoolean("fieldInSun", false)
@@ -94,6 +104,11 @@ object AppSettings {
     fun setTheme(context: Context, value: Theme?) {
         theme = value
         save(context) { putString("theme", value?.name) }
+    }
+
+    fun setAmbientPreview(context: Context, value: Boolean) {
+        ambientPreview = value
+        save(context) { putBoolean("ambientPreview", value) }
     }
 
     fun setReduceMotion(context: Context, value: Boolean) {
@@ -128,37 +143,55 @@ object AppSettings {
 
 /**
  * The phone's light sensor read while the app is on screen, for [AppSettings.fieldInSun]: in
- * bright sun (above [SUN_LUX] for 2 s) Field comes on, back in shade (below [SHADE_LUX] for 8 s)
+ * bright sun (at [SUN_LUX] or more for 2 s) Field comes on, back in shade (below [SHADE_LUX] for 8 s)
  * the chosen theme returns; the gap and the waits keep it from flickering at a passing cloud.
  */
 class SunWatch(context: Context) : android.hardware.SensorEventListener {
     private val sensors = context.getSystemService(Context.SENSOR_SERVICE) as android.hardware.SensorManager
     private val light = sensors.getDefaultSensor(android.hardware.Sensor.TYPE_LIGHT)
+    private val handler = Handler(Looper.getMainLooper())
     private var since = 0L
     private var bright = false
+    private var listening = false
+
+    /** Decides again a little later: the sensor only speaks when the light changes, and steady sun would never be confirmed. */
+    private val decide = Runnable { settle() }
 
     fun start() {
-        if (light == null || !AppSettings.fieldInSun) return
-        sensors.registerListener(this, light, android.hardware.SensorManager.SENSOR_DELAY_NORMAL)
+        AppSettings.lightSensor = light != null
+        if (light == null || !AppSettings.fieldInSun || listening) return
+        listening = sensors.registerListener(this, light, android.hardware.SensorManager.SENSOR_DELAY_NORMAL)
     }
 
-    fun stop() = sensors.unregisterListener(this)
+    fun stop() {
+        handler.removeCallbacks(decide)
+        if (listening) sensors.unregisterListener(this)
+        listening = false
+    }
 
     override fun onSensorChanged(event: android.hardware.SensorEvent) {
         if (!AppSettings.fieldInSun) { AppSettings.inSun = false; return }
         val lux = event.values.firstOrNull() ?: return
-        val now = android.os.SystemClock.uptimeMillis()
+        AppSettings.lux = lux
         val wantsBright = if (AppSettings.inSun) lux > SHADE_LUX else lux >= SUN_LUX
-        if (wantsBright != bright) { bright = wantsBright; since = now }
+        if (wantsBright != bright) { bright = wantsBright; since = android.os.SystemClock.uptimeMillis() }
+        settle()
+    }
+
+    private fun settle() {
+        handler.removeCallbacks(decide)
+        if (bright == AppSettings.inSun) return
         val wait = if (AppSettings.inSun) 8_000L else 2_000L
-        if (bright != AppSettings.inSun && now - since >= wait) AppSettings.inSun = bright
+        val left = wait - (android.os.SystemClock.uptimeMillis() - since)
+        if (left <= 0) AppSettings.inSun = bright else handler.postDelayed(decide, left)
     }
 
     override fun onAccuracyChanged(sensor: android.hardware.Sensor?, accuracy: Int) = Unit
 
     companion object {
-        const val SUN_LUX = 15_000f
-        const val SHADE_LUX = 4_000f
+        // The sensor looks at the user, not at the sun: in full sun it often reads only a few thousand lux.
+        const val SUN_LUX = 4_000f
+        const val SHADE_LUX = 1_200f
     }
 }
 
@@ -233,6 +266,7 @@ fun SettingsSheet(vm: HeadsupViewModel, onDismiss: () -> Unit) {
             ) {
                 SettingSwitch("Reduce animations", "Everything appears at once.", AppSettings.reduceMotion) { AppSettings.setReduceMotion(context, it) }
                 SettingSwitch("Ruler clicks", "A light tap on every step.", AppSettings.haptics) { AppSettings.setHaptics(context, it) }
+                SettingSwitch("Ambient light", "Blurred bars glow round the whole preview too, not only in the frame.", AppSettings.ambientPreview) { AppSettings.setAmbientPreview(context, it) }
             }
             ToolSection(
                 "Layout",
@@ -332,6 +366,17 @@ private fun ThemeSection(context: Context) {
             color = HeadsupColors.TextMuted,
         )
         SettingSwitch("Field in bright sun", "Switches by itself, back in the shade.", AppSettings.fieldInSun) { AppSettings.setFieldInSun(context, it) }
+        if (AppSettings.fieldInSun) {
+            Text(
+                when {
+                    !AppSettings.lightSensor -> "This phone has no light sensor: Field cannot come on by itself."
+                    AppSettings.lux == null -> "Waiting for the light sensor…"
+                    else -> "Light now: ${AppSettings.lux?.toInt()} lx (Field from ${SunWatch.SUN_LUX.toInt()} lx for 2 s, back below ${SunWatch.SHADE_LUX.toInt()} lx for 8 s)." +
+                        if (AppSettings.inSun) " In the sun: Field is on." else ""
+                },
+                style = MaterialTheme.typography.labelSmall, color = HeadsupColors.TextMuted,
+            )
+        }
     }
 }
 

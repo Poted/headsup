@@ -61,6 +61,13 @@ data class SavedClip(
     /** The shot steadied (its measured path and strength), or null. */
     val stabilize: app.headsup.core.frame.Stabilizer.Path? = null,
     val subject: String? = null,
+    val cineLook: app.headsup.color.AppliedLook? = null,
+    val harmony: app.headsup.color.AppliedHarmony? = null,
+    val preset: app.headsup.color.AppliedPreset? = null,
+    val lookStats: app.headsup.core.color.FrameStats? = null,
+    val cut: app.headsup.core.edit.CutKind = app.headsup.core.edit.CutKind.NONE,
+    val cutMs: Long = 500L,
+    val frameKeys: List<app.headsup.core.frame.FrameKey> = emptyList(),
 )
 
 /** A reversed clip's source: [originalUri] from [startMs] to [endMs], played backwards. */
@@ -355,6 +362,28 @@ internal object Json {
         )
     }
 
+    private fun lookJson(a: app.headsup.color.AppliedLook) = JSONObject().put("name", a.name).put("strength", a.strength.toDouble())
+        .put("baseGrade", grade(a.baseGrade)).put("baseEffects", effects(a.baseEffects))
+        .put("grade", grade(a.grade)).put("effects", effects(a.effects))
+
+    private fun lookFrom(a: JSONObject) = app.headsup.color.AppliedLook(
+        a.optString("name"), a.optDouble("strength", 1.0).toFloat(),
+        grade(a.optJSONObject("baseGrade")), effects(a.optJSONObject("baseEffects")),
+        grade(a.optJSONObject("grade")), effects(a.optJSONObject("effects")),
+    )
+
+    private fun harmonyJson(h: app.headsup.color.AppliedHarmony) = JSONObject()
+        .put("scheme", h.scheme.name).put("hue", h.hue.toDouble()).put("amount", h.amount.toDouble())
+        .put("baseGrade", grade(h.baseGrade)).put("grade", grade(h.grade))
+
+    private fun harmonyFrom(h: JSONObject): app.headsup.color.AppliedHarmony? =
+        app.headsup.core.color.ColourHarmony.Scheme.entries.firstOrNull { it.name == h.optString("scheme") }?.let {
+            app.headsup.color.AppliedHarmony(
+                it, h.optDouble("hue", 30.0).toFloat(), h.optDouble("amount", 0.5).toFloat(),
+                grade(h.optJSONObject("baseGrade")), grade(h.optJSONObject("grade")),
+            )
+        }
+
     private fun clip(c: SavedClip) = JSONObject()
         .put("uri", c.uri.toString())
         .put("trimStartMs", c.trimStartMs)
@@ -396,17 +425,41 @@ internal object Json {
             c.stabilize?.let { p ->
                 val flat = JSONArray()
                 for (st in p.steps) { flat.put(st.dx.toDouble()); flat.put(st.dy.toDouble()); flat.put(st.degrees.toDouble()) }
-                put("stabilize", JSONObject().put("start", p.startMs).put("frame", p.frameMs.toDouble()).put("strength", p.strength.toDouble()).put("steps", flat))
+                put("stabilize", JSONObject().put("start", p.startMs).put("frame", p.frameMs.toDouble()).put("strength", p.strength.toDouble())
+                    .put("locked", p.locked).put("maxZoom", p.maxZoom.toDouble()).put("steps", flat))
             }
         }
         .putOpt("subject", c.subject)
+        .putOpt("cineLook", c.cineLook?.let(::lookJson))
+        .putOpt("lookStats", c.lookStats?.let { f ->
+            JSONObject().put("low", f.low.toDouble()).put("median", f.median.toDouble()).put("high", f.high.toDouble())
+                .put("clipped", f.clipped.toDouble()).put("crushed", f.crushed.toDouble()).put("colourfulness", f.colourfulness.toDouble())
+                .put("skin", f.skin.toDouble()).put("foliage", f.foliage.toDouble()).put("warmth", f.warmth.toDouble())
+                .put("lights", f.lights.toDouble()).put("green", f.green.toDouble()).put("blue", f.blue.toDouble())
+                .put("orange", f.orange.toDouble()).put("highWarmth", f.highWarmth.toDouble()).putOpt("people", f.people?.toDouble())
+        })
+        .putOpt("preset", c.preset?.let { p ->
+            JSONObject().put("name", p.name).put("baseGrade", grade(p.baseGrade)).put("baseEffects", effects(p.baseEffects)).putOpt("baseLut", p.baseLut)
+                .put("grade", grade(p.grade)).put("effects", effects(p.effects)).putOpt("lut", p.lut)
+                .putOpt("look", p.baseLook?.let(::lookJson)).putOpt("harmony", p.baseHarmony?.let(::harmonyJson))
+        })
+        .putOpt("harmony", c.harmony?.let(::harmonyJson))
+        .put("cut", c.cut.name).put("cutMs", c.cutMs)
+        .apply {
+            if (c.frameKeys.isNotEmpty()) put("frameKeys", JSONArray(c.frameKeys.map { k ->
+                JSONObject().put("t", k.timeMs).put("z", k.zoom.toDouble()).put("x", k.centerX.toDouble()).put("y", k.centerY.toDouble())
+            }))
+        }
         .apply { if (c.gradeKeys.isNotEmpty()) put("gradeKeys", JSONArray(c.gradeKeys.map { k -> JSONObject().put("t", k.timeMs).put("grade", grade(k.grade)) })) }
         .put("raw", JSONObject().put("exposure", c.rawDevelop.exposure.toDouble()).put("highlights", c.rawDevelop.highlights.toDouble())
             .put("shadows", c.rawDevelop.shadows.toDouble()).put("temperature", c.rawDevelop.temperature.toDouble()).put("tint", c.rawDevelop.tint.toDouble())
             .put("sharpen", c.rawDevelop.sharpen.toDouble()).put("colourNoise", c.rawDevelop.colourNoise.toDouble()))
         .put("reframe", JSONObject().put("zoom", c.reframe.zoom).put("centerX", c.reframe.centerX).put("centerY", c.reframe.centerY).put("angleDegrees", c.reframe.angleDegrees).put("fit", c.reframe.fit).put("blur", c.reframe.blur)
             .put("vertical", c.reframe.vertical).put("horizontal", c.reframe.horizontal)
-            .put("distortion", c.reframe.distortion.toDouble()).put("lensVignette", c.reframe.lensVignette.toDouble()).put("mirrored", c.reframe.mirrored))
+            .put("distortion", c.reframe.distortion.toDouble()).put("lensVignette", c.reframe.lensVignette.toDouble()).put("mirrored", c.reframe.mirrored)
+            // A photo's own crop shape (a film's clips take the timeline's frame instead).
+            .putOpt("aspect", c.reframe.aspect?.toDouble())
+            .put("panels", c.reframe.panels).put("backdropColour", c.reframe.backdropColour).putOpt("backdropImage", c.reframe.backdropImage))
 
     private fun clip(o: JSONObject) = SavedClip(
         uri = Uri.parse(o.getString("uri")),
@@ -443,12 +496,37 @@ internal object Json {
         cullGroup = if (o.has("cullGroup")) o.optInt("cullGroup") else null,
         cullBest = o.optBoolean("cullBest", false),
         subject = o.optStringOrNull("subject"),
+        cineLook = o.optJSONObject("cineLook")?.let(::lookFrom),
+        lookStats = o.optJSONObject("lookStats")?.let { f ->
+            fun v(k: String) = f.optDouble(k, 0.0).toFloat()
+            app.headsup.core.color.FrameStats(
+                v("low"), v("median"), v("high"), v("clipped"), v("crushed"), v("colourfulness"), v("skin"), v("foliage"), v("warmth"),
+                v("lights"), v("green"), v("blue"), v("orange"), v("highWarmth"), if (f.has("people")) v("people") else null,
+            )
+        },
+        preset = o.optJSONObject("preset")?.let { p ->
+            app.headsup.color.AppliedPreset(
+                p.optString("name"), grade(p.optJSONObject("baseGrade")), effects(p.optJSONObject("baseEffects")), p.optStringOrNull("baseLut"),
+                grade(p.optJSONObject("grade")), effects(p.optJSONObject("effects")), p.optStringOrNull("lut"),
+                p.optJSONObject("look")?.let(::lookFrom), p.optJSONObject("harmony")?.let(::harmonyFrom),
+            )
+        },
+        harmony = o.optJSONObject("harmony")?.let(::harmonyFrom),
+        cut = app.headsup.core.edit.CutKind.entries.firstOrNull { it.name == o.optString("cut") } ?: app.headsup.core.edit.CutKind.NONE,
+        cutMs = o.optLong("cutMs", 500L),
+        frameKeys = o.optJSONArray("frameKeys")?.let { a ->
+            List(a.length()) { k -> a.getJSONObject(k) }.map { j ->
+                app.headsup.core.frame.FrameKey(j.optLong("t"), j.optDouble("z", 1.0).toFloat(), j.optDouble("x", 0.5).toFloat(), j.optDouble("y", 0.5).toFloat())
+            }.sortedBy { it.timeMs }
+        }.orEmpty(),
         stabilize = o.optJSONObject("stabilize")?.let { j ->
             val flat = j.optJSONArray("steps") ?: return@let null
             app.headsup.core.frame.Stabilizer.Path(
                 j.optLong("start"), j.optDouble("frame", 33.3).toFloat(),
                 List(flat.length() / 3) { k -> app.headsup.core.frame.Stabilizer.Step(flat.optDouble(k * 3).toFloat(), flat.optDouble(k * 3 + 1).toFloat(), flat.optDouble(k * 3 + 2).toFloat()) },
                 j.optDouble("strength", 0.7).toFloat(),
+                j.optBoolean("locked", false),
+                j.optDouble("maxZoom", app.headsup.core.frame.Stabilizer.MAX_ZOOM.toDouble()).toFloat(),
             )
         },
         gradeKeys = o.optJSONArray("gradeKeys").objects().map { k -> app.headsup.core.color.GradeKey(k.optLong("t"), grade(k.optJSONObject("grade"))) }.sortedBy { it.timeMs },
@@ -466,6 +544,10 @@ internal object Json {
                 centerX = r.optDouble("centerX", 0.5).toFloat(),
                 centerY = r.optDouble("centerY", 0.5).toFloat(),
                 angleDegrees = r.optDouble("angleDegrees", 0.0).toFloat(),
+                aspect = if (r.has("aspect")) r.optDouble("aspect").toFloat().takeIf { it > 0f && !it.isNaN() } else null,
+                panels = r.optInt("panels", 1).coerceIn(1, 3),
+                backdropColour = r.optInt("backdropColour", 0xFF000000.toInt()),
+                backdropImage = r.optStringOrNull("backdropImage"),
                 fit = r.optBoolean("fit", false),
                 blur = r.optBoolean("blur", false),
                 vertical = r.optDouble("vertical", 0.0).toFloat(),
@@ -518,6 +600,7 @@ internal object Json {
         .put("texture", g.texture)
         .put("defringe", g.defringe.toDouble())
         .put("colourPop", g.colourPop.toDouble())
+        .put("printer", JSONArray(g.printer.map { it.toDouble() }))
         .put("points", JSONArray(g.points.map { p ->
             JSONObject().put("r", p.r.toDouble()).put("g", p.g.toDouble()).put("b", p.b.toDouble()).put("range", p.range.toDouble())
                 .put("hue", p.hue.toDouble()).put("sat", p.saturation.toDouble()).put("lum", p.luminance.toDouble())
@@ -568,6 +651,7 @@ internal object Json {
             texture = f("texture"),
             defringe = f("defringe"),
             colourPop = f("colourPop"),
+            printer = o.optJSONArray("printer")?.let { a -> List(3) { i -> a.optDouble(i, 0.0).toFloat() } } ?: app.headsup.core.color.PrinterLights.NEUTRAL,
             points = o.optJSONArray("points")?.let { a ->
                 List(a.length()) { k -> a.getJSONObject(k) }.map { p ->
                     app.headsup.core.color.PointColour(
@@ -604,6 +688,10 @@ internal object Json {
         .put("bokeh", e.bokeh.toDouble()).put("bokehHighlights", e.bokehHighlights.toDouble()).putOpt("bokehMask", e.bokehMask).put("bokehInvert", e.bokehInvert)
         .putOpt("barsRatio", e.barsRatio)
         .put("barsMotion", e.barsMotion.name)
+        .put("barsVertical", e.barsVertical).put("barsColour", e.barsColour).putOpt("barsImage", e.barsImage).put("barsBlur", e.barsBlur)
+        .put("weave", e.weave.toDouble()).put("flicker", e.flicker.toDouble())
+        .put("mist", e.mist.toDouble()).put("streaks", e.streaks.toDouble()).put("streakLength", e.streakLength.toDouble())
+        .put("star", e.star.toDouble()).put("starLength", e.starLength.toDouble()).put("prism", e.prism.toDouble()).put("prismSpread", e.prismSpread.toDouble()).put("prismAngle", e.prismAngle.toDouble()).put("bokehOval", e.bokehOval)
         .putOpt("graph", e.graph?.name)
         .put("dashboard", e.dashboard)
 
@@ -627,6 +715,21 @@ internal object Json {
             bokehInvert = o.optBoolean("bokehInvert", false),
             barsRatio = if (o.has("barsRatio")) o.getDouble("barsRatio").toFloat() else null,
             barsMotion = app.headsup.render.BarsMotion.entries.firstOrNull { it.name == o.optString("barsMotion") } ?: app.headsup.render.BarsMotion.STILL,
+            barsVertical = o.optBoolean("barsVertical", false),
+            barsColour = o.optInt("barsColour", 0xFF000000.toInt()),
+            barsImage = o.optStringOrNull("barsImage"),
+            barsBlur = o.optBoolean("barsBlur", false),
+            mist = o.optDouble("mist", 0.0).toFloat(),
+            weave = o.optDouble("weave", 0.0).toFloat(),
+            flicker = o.optDouble("flicker", 0.0).toFloat(),
+            streaks = o.optDouble("streaks", 0.0).toFloat(),
+            streakLength = o.optDouble("streakLength", 1.0).toFloat(),
+            star = o.optDouble("star", 0.0).toFloat(),
+            starLength = o.optDouble("starLength", 1.0).toFloat(),
+            prism = o.optDouble("prism", 0.0).toFloat(),
+            prismSpread = o.optDouble("prismSpread", 1.0).toFloat(),
+            prismAngle = o.optDouble("prismAngle", app.headsup.core.photo.LightFx.PRISM_ANGLE.toDouble()).toFloat(),
+            bokehOval = o.optBoolean("bokehOval", false),
             graph = GraphMetric.entries.firstOrNull { it.name == o.optStringOrNull("graph") },
             dashboard = o.optBoolean("dashboard", true),
         )

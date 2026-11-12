@@ -34,7 +34,9 @@ object LensBlur {
      * (1 − [keep]), to be laid over the sharp photo. [radius] in pixels; [highlights] 0..1 how
      * much the brightest parts open into bright discs (as clipped highlights do through a lens).
      */
-    fun background(argb: IntArray, w: Int, h: Int, keep: FloatArray, radius: Float, highlights: Float): IntArray {
+    fun background(argb: IntArray, w: Int, h: Int, keep: FloatArray, radius: Float, highlights: Float, oval: Boolean = false): IntArray {
+        // An anamorphic lens's aperture: a tall oval (as wide as it is round, a half again as tall).
+        val tall = if (oval) 1.5f else 1f
         val n = w * h
         // Linear light, the brightest lifted (they were clipped by the camera: their real light is more).
         val lr = FloatArray(n)
@@ -66,7 +68,7 @@ object LensBlur {
             var sw = 0f
             for (t in 0 until TAPS) {
                 val sx = (x + disc[t * 2] * rad + 0.5f).toInt().coerceIn(0, w - 1)
-                val sy = (y + disc[t * 2 + 1] * rad + 0.5f).toInt().coerceIn(0, h - 1)
+                val sy = (y + disc[t * 2 + 1] * rad * tall + 0.5f).toInt().coerceIn(0, h - 1)
                 val j = sy * w + sx
                 val wt = bg[j]
                 sr += lr[j] * wt

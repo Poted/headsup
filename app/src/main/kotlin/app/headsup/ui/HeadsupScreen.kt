@@ -433,6 +433,7 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
                         fromMaskCubes = state.previewFromMaskCubes,
                         fromMaskMs = state.previewFromMaskMs,
                         transitionMs = selected.transitionMs,
+                        cutOut = state.selectedClip?.let { state.clips.getOrNull(it + 1) }?.let { it.cut to it.cutMs } ?: (app.headsup.core.edit.CutKind.NONE to 0L),
                         guideMask = selected.masks.getOrNull(state.selectedMask).takeIf { editingMasks && !fullscreen },
                         onMoveMask = if (shaping && !fullscreen && !editingBrush && !editingRange && !pickingColour) { x, y -> vm.updateMask { it.copy(centerX = x, centerY = y) } } else null,
                         // A painted mask moves with two fingers only in Move; otherwise they zoom the view.
@@ -527,9 +528,13 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
                         cutScrub = cutScrub,
                         onFrameSource = { frameSource.value = it },
                         onPictureSource = { pictureSource.value = it },
-                        reframe = state.framing(selected),
+                        reframeBase = state.framing(selected),
+                        // While the frame is set at a key, it shows that key; otherwise it moves.
+                        frameKeys = selected.frameKeys,
                         // Full screen is for looking: no framing (pinch zooms the view instead), no grid.
                         onReframe = if (framing && !fullscreen) { r -> vm.updateReframe { r } } else null,
+                        // An album's photo, filled and level: its frame's edges drag in to cut it down.
+                        onCrop = if (framing && !fullscreen && state.photoProject && selected.meta.isPhoto && selected.reframe.let { !it.fit && it.straighten == 0f && it.panels == 1 }) vm::cropTo else null,
                         showGrid = framing && !fullscreen,
                         autoPlay = continuePlaying,
                         seekRequest = seekRequest,
@@ -561,17 +566,18 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
                     if (!fullscreen) UndoRedo(state.canUndo, state.canRedo, vm::undo, vm::redo, vm::undoAll, vm::resetAllEdits, Modifier.align(Alignment.TopEnd).padding(top = 8.dp, end = 24.dp), canResetAll = state.clips.isNotEmpty(), album = state.photoProject,
                         milestones = state.milestones, onAddMilestone = vm::addMilestone, onBackToMilestone = vm::backToMilestone, onRemoveMilestone = vm::removeMilestone,
                     )
-                    // Full screen: the picture alone, to see it as it will look.
-                    Box(
+                    // Full screen: the picture alone, to see it as it will look. (Its way out is in the
+                    // screen's corner, off the picture: full screen is for looking.)
+                    if (!fullscreen) Box(
                         Modifier
-                            .align(if (fullscreen) Alignment.TopEnd else Alignment.TopStart)
+                            .align(Alignment.TopStart)
                             .padding(top = 8.dp, start = 24.dp, end = 24.dp)
                             .size(36.dp)
                             .clip(CircleShape)
                             .background(Color.Black.copy(alpha = 0.45f))
-                            .clickable { fullscreen = !fullscreen },
+                            .clickable { fullscreen = true },
                         contentAlignment = Alignment.Center,
-                    ) { Text(if (fullscreen) "✕" else "⤢", color = Color.White, style = MaterialTheme.typography.titleMedium) }
+                    ) { Text("⤢", color = Color.White, style = MaterialTheme.typography.titleMedium) }
                 }
             }
             if (!fullscreen && !wide && state.clips.isNotEmpty()) {
@@ -714,7 +720,7 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
                     .padding(16.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
-                if (state.messages.isNotEmpty()) Messages(state.messages, vm::dismissMessages)
+                if (state.messages.isNotEmpty()) Messages(state.messages, vm::dismissMessages, onOpen = state.lastSaved?.takeIf { state.messages.any { m -> m.startsWith("Saved") } }?.let { { vm.openLastSaved(context) } })
                 when (tool) {
                     Tool.FILES -> FilesPanel(
                         state, vm, onAddVideos = addVideos, onAddFit = addFit, onAddSound = { soundPicker.launch(arrayOf("audio/*")) },
@@ -736,11 +742,17 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
                         at = { scrubT.value ?: timelineOf(playhead.longValue) }, videoEnd = clipStarts.last(),
                         onAddSound = { addingSound = true },
                     )
-                    Tool.COLOUR -> ColourPage(
-                        state, vm, adjustment, { adjustment = it }, onAddLut = { lutPicker.launch(arrayOf("*/*")) }, frameSource.value,
-                        playhead, onSeek = { ms -> state.selectedClip?.let { showInClip(it, ms) } ?: run { seekRequest = ms } }, pictureSource = pictureSource.value,
-                        maskTools = maskTools, onMaskTools = { maskTools = it },
-                    )
+                    // Every ruler and round option of Adjust compares when held still: its own correction
+                    // taken out where that can be told, else the original (a mask: the picture without it).
+                    Tool.COLOUR -> androidx.compose.runtime.CompositionLocalProvider(
+                        LocalHoldOriginal provides { held: Boolean -> if (editingMasks) hideMask = held else showOriginal = held },
+                    ) {
+                        ColourPage(
+                            state, vm, adjustment, { adjustment = it }, onAddLut = { lutPicker.launch(arrayOf("*/*")) }, frameSource.value,
+                            playhead, onSeek = { ms -> state.selectedClip?.let { showInClip(it, ms) } ?: run { seekRequest = ms } }, pictureSource = pictureSource.value,
+                            maskTools = maskTools, onMaskTools = { maskTools = it },
+                        )
+                    }
                     Tool.OVERLAYS -> {
                         // Saved from before the looks moved to Adjust: back to an overlay.
                         val kind = effectKind.takeIf { it in OVERLAY_KINDS } ?: EffectKind.DASHBOARD
@@ -811,6 +823,23 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
             // The picture alone on black, centred, whichever way the phone is held; a swipe down leaves.
             // On black the controls are those of the dark theme, in light mode too.
             HeadsupTheme(AppSettings.current(androidx.compose.foundation.isSystemInDarkTheme()).onPicture) {
+              // The way out (✕) in the screen's top corner: shown on entering and after a touch
+              // anywhere, gone again a moment later, so nothing lies over the picture being looked at.
+              var exitShownAt by remember { mutableStateOf(android.os.SystemClock.uptimeMillis()) }
+              var exitShown by remember { mutableStateOf(true) }
+              LaunchedEffect(exitShownAt) {
+                  exitShown = true
+                  kotlinx.coroutines.delay(2_500)
+                  exitShown = false
+              }
+              Box(
+                  Modifier.fillMaxSize().pointerInput(Unit) {
+                      awaitEachGesture {
+                          awaitFirstDown(requireUnconsumed = false, pass = androidx.compose.ui.input.pointer.PointerEventPass.Initial)
+                          exitShownAt = android.os.SystemClock.uptimeMillis()
+                      }
+                  },
+              ) {
                 Column(
                     Modifier
                         .fillMaxSize()
@@ -818,11 +847,21 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
                         .graphicsLayer { scaleX = settle.value; scaleY = settle.value; alpha = 0.4f + 0.6f * ((settle.value - 0.96f) / 0.04f) }
                         .then(
                             if (state.photoProject) Modifier.observedSwipe(pictureFree && !photoZoomed) { if (it == Swipe.DOWN || (wide && mirrored(it) == Swipe.LEFT)) fullscreen = false }
-                            else Modifier.freeSwipe(pictureFree) { if (it == Swipe.DOWN || (wide && mirrored(it) == Swipe.LEFT)) fullscreen = false },
+                            else Modifier.freeSwipe(pictureFree && !photoZoomed) { if (it == Swipe.DOWN || (wide && mirrored(it) == Swipe.LEFT)) fullscreen = false },
                         ),
                     verticalArrangement = Arrangement.Center,
                     content = pictureAndTimeline,
                 )
+                androidx.compose.animation.AnimatedVisibility(
+                    visible = exitShown, modifier = Modifier.align(Alignment.TopEnd).padding(top = 12.dp, end = 12.dp),
+                    enter = androidx.compose.animation.fadeIn(), exit = androidx.compose.animation.fadeOut(),
+                ) {
+                    Box(
+                        Modifier.size(40.dp).clip(CircleShape).background(Color.Black.copy(alpha = 0.55f)).clickable { fullscreen = false },
+                        contentAlignment = Alignment.Center,
+                    ) { Text("✕", color = Color.White, style = MaterialTheme.typography.titleMedium) }
+                }
+              }
             }
         } else if (wide) {
             androidx.compose.foundation.layout.BoxWithConstraints(Modifier.fillMaxSize().systemBarsPadding().padding(top = 8.dp)) {
@@ -1212,6 +1251,12 @@ private fun Modifier.observedSwipe(enabled: Boolean, onSwipe: (Swipe) -> Unit): 
                 val change = event.changes.firstOrNull { it.id == down.id } ?: break
                 if (!change.pressed) break
                 val d = change.position - down.position
+                // Held still first (the hold that shows the original, then its before / after line
+                // dragged sideways): not a swipe, however far the finger goes after.
+                if (d.getDistance() < viewConfiguration.touchSlop) {
+                    if (change.uptimeMillis - down.uptimeMillis > 300L) break
+                    continue
+                }
                 if (d.getDistance() < distance) continue
                 val swipe = when {
                     abs(d.x) > 2 * abs(d.y) -> if (abs(d.x) < sideways) continue else if (d.x > 0) Swipe.RIGHT else Swipe.LEFT
@@ -1318,6 +1363,8 @@ private fun UndoNotice(text: String?, at: Long, modifier: Modifier) {
     var shown by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(at) {
         if (text == null || at == 0L) return@LaunchedEffect
+        // Only a notice just made: coming back on screen (out of full screen) does not say an old one again.
+        if (android.os.SystemClock.uptimeMillis() - at > 1_500L) return@LaunchedEffect
         shown = text
         kotlinx.coroutines.delay(1_800)
         shown = null
@@ -1346,13 +1393,15 @@ private fun Label(text: String) {
 }
 
 @Composable
-private fun Messages(messages: List<String>, onDismiss: () -> Unit) {
+private fun Messages(messages: List<String>, onDismiss: () -> Unit, onOpen: (() -> Unit)? = null) {
     val clipboard = LocalClipboardManager.current
     val text = messages.joinToString("\n\n")
     Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer)) {
         Column(Modifier.padding(12.dp)) {
             SelectionContainer { Text(text, color = MaterialTheme.colorScheme.onErrorContainer, style = MaterialTheme.typography.bodySmall) }
             Row {
+                // A photo just saved: straight to it in the gallery.
+                if (onOpen != null) TextButton(onClick = onOpen) { Text("Open") }
                 TextButton(onClick = { clipboard.setText(AnnotatedString(text)) }) { Text("Copy") }
                 TextButton(onClick = onDismiss) { Text("Dismiss") }
             }
@@ -1552,22 +1601,43 @@ private fun TimelineRate(state: UiState, vm: HeadsupViewModel) {
     }
 }
 
-/** How each clip's frames fit [fps]: by its frame rate after its speed change. */
+/**
+ * How each clip's frames fit [fps], in plain words: what it was shot at (and what the file really
+ * holds when the camera dropped frames), how many of its frames the timeline uses, and the speed
+ * that uses every frame for slow motion. The clip is named only when there are several.
+ */
 @Composable
 private fun RateNotes(state: UiState, fps: Float) {
-    // One line per clip, by its place on the timeline and file name.
-    val notes = state.clips.withIndex().filter { !it.value.meta.isPhoto && it.value.meta.frameRate != null }.map { (i, c) ->
+    val videos = state.clips.withIndex().filter { !it.value.meta.isPhoto && it.value.meta.frameRate != null }
+    val notes = videos.map { (i, c) ->
         val rate = c.meta.frameRate ?: fps
         val speed = c.averageSpeed
-        val name = "${i + 1}. ${c.meta.name} · ${OutputSpec.formatFps(rate)} fps" + if (speed != 1f) " at ${String.format(Locale.US, "%.3g", speed)}×" + (if (c.speedCurve.isNotEmpty()) " on average" else "") else ""
+        val title = (if (videos.size > 1) "Clip ${i + 1}: " else "This clip: ") + "shot at ${OutputSpec.formatFps(rate)} fps" +
+            (c.meta.measuredFrameRate?.takeIf { it < rate * 0.99f }?.let { " (${OutputSpec.formatFps(it)} measured: the camera dropped a few)" } ?: "") +
+            if (speed != 1f) ", played at ${speedText(speed)}" + (if (c.speedCurve.isNotEmpty()) " on average" else "") else ""
         val r = rate * speed / fps
-        when {
-            kotlin.math.abs(r - 1f) < 0.02f -> "$name: every frame used"
-            r > 1f -> "$name: every ${String.format(Locale.US, "%.3g", r)}th frame kept (\"All frames\" speed: ${String.format(Locale.US, "%.3g", speed / r)}× slow motion)"
-            else -> "$name: ${OutputSpec.formatFps(rate * speed)} frames a second, each held longer"
+        val how = when {
+            kotlin.math.abs(r - 1f) < 0.02f -> "Every frame is used."
+            r > 1f -> {
+                val whole = kotlin.math.round(r)
+                val share = if (kotlin.math.abs(r - whole) < 0.03f) "Every ${ordinal(whole.toInt())} frame is used"
+                else String.format(Locale.US, "About 1 frame in %.1f is used", r)
+                "$share. For slow motion with all of them: ${speedText(speed / r)} in Speed."
+            }
+            else -> "It has fewer frames than the timeline (${OutputSpec.formatFps(rate * speed)} a second), so each shows a little longer."
         }
+        "$title.\n$how"
     }
-    if (notes.isNotEmpty()) Hint(notes.joinToString("\n"))
+    if (notes.isNotEmpty()) Hint(notes.joinToString("\n\n"))
+}
+
+/** 2nd, 3rd, 4th… */
+private fun ordinal(n: Int): String = n.toString() + when {
+    n % 100 in 11..13 -> "th"
+    n % 10 == 1 -> "st"
+    n % 10 == 2 -> "nd"
+    n % 10 == 3 -> "rd"
+    else -> "th"
 }
 
 /** The selected clip's cut (or a photo's time on screen), with split and delete. */
@@ -1608,24 +1678,35 @@ private fun CutTool(state: UiState, vm: HeadsupViewModel, playhead: LongState, o
                 if ((i == 1) != (clip.reversed != null)) vm.reverseClip(index)
             }, enabled = { !state.busy })
         }
-        // Steadied: the shake taken out, the camera's own move kept.
+        // Steadied: the shake taken out, the camera's own move kept. Locked: only an even drift
+        // kept and the roll held level, as if on a slider.
         val steady = clip.stabilize
         val measuring = state.work.any { it.clipId == clip.id && it.maskIndex == null && it.label.startsWith("Steadying") }
         ToolSection(
             "Steady",
-            info = "Takes out handheld shake (pans and walks stay). The picture is zoomed in a little, at most 20 %. Measured once, in the background; trimmed wider later, measure again. Double-tap the ruler for the usual strength.",
+            info = "Steadied takes out handheld shake; pans and walks stay. Locked takes out all the wobble and the tilting left and right, keeping only one even, straight move through the shot (as a slow Ken Burns): for a shaky shot meant to glide. " +
+                "Both zoom in to hide the moved edges, at most as much as Crop allows: more crop, steadier. Measured once, in the background; trimmed wider later, measure again.",
         ) {
-            ChoiceGrid(listOf("As shot", "Steadied"), if (steady != null) 1 else 0, { i ->
-                if (i == 1 && steady == null) vm.stabilizeClip(index) else if (i == 0 && steady != null) vm.removeStabilize(index)
+            val mode = when { steady == null -> 0; steady.locked -> 2; else -> 1 }
+            ChoiceGrid(listOf("As shot", "Steadied", "Locked"), mode, { i ->
+                when {
+                    i == 0 -> if (steady != null) vm.removeStabilize(index)
+                    steady == null -> vm.stabilizeClip(index, locked = i == 2)
+                    else -> vm.setStabilizeLocked(index, i == 2)
+                }
             }, enabled = { !measuring })
             if (measuring) Hint("Measuring the shake…")
             if (steady != null) {
-                ValueHeader("Strength", String.format(Locale.US, "%.0f %%", steady.strength * 100))
-                RulerSlider(steady.strength, 0f..1f, 0.05f, { v -> vm.setStabilizeStrength(index, v) }, onReset = { vm.setStabilizeStrength(index, 0.7f) })
+                if (!steady.locked) {
+                    ValueHeader("Strength", String.format(Locale.US, "%.0f %%", steady.strength * 100))
+                    RulerSlider(steady.strength, 0f..1f, 0.05f, { v -> vm.setStabilizeStrength(index, v) }, onReset = { vm.setStabilizeStrength(index, 0.7f) })
+                }
+                val crops = listOf(1.1f, 1.2f, 1.35f, 1.5f)
+                LabeledChoice("Crop", crops.map { "${kotlin.math.round((it - 1f) * 100).toInt()} %" }, { kotlin.math.abs(crops[it] - steady.maxZoom) < 0.01f }, { vm.setStabilizeCrop(index, crops[it]) })
                 if (steady.startMs > clip.trimStartMs + 100 || steady.startMs + (steady.steps.size * steady.frameMs).toLong() < clip.trimEndMs - 100) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Hint("The cut is wider than what was measured.", Modifier.weight(1f))
-                        SmallAction("Measure again", { vm.stabilizeClip(index) }, enabled = !measuring)
+                        SmallAction("Measure again", { vm.stabilizeClip(index, steady.locked) }, enabled = !measuring)
                     }
                 }
             }
@@ -1720,6 +1801,23 @@ private fun FadeTool(clip: ClipState, index: Int, vm: HeadsupViewModel) {
         RulerSlider(clip.fadeInMs / 1000f, 0f..maxS, 0.1f, { v -> vm.setFades(index, (v * 1000).toLong(), clip.fadeOutMs) }, onReset = { vm.setFades(index, 0L, clip.fadeOutMs) })
         ValueHeader("Fade out to black", fadeLabel(clip.fadeOutMs))
         RulerSlider(clip.fadeOutMs / 1000f, 0f..maxS, 0.1f, { v -> vm.setFades(index, clip.fadeInMs, (v * 1000).toLong()) }, onReset = { vm.setFades(index, clip.fadeInMs, 0L) })
+    }
+    // How this clip comes in from the one before: half of it at that one's end, half at this one's start.
+    if (index > 0) ToolSection(
+        "Transition in",
+        info = "How this clip comes in from the one before it: Black or White dips through that colour, Zoom pushes into the cut and settles out of it, " +
+            "Whip flings the picture sideways in a blur and brings the next in from the other side. Half of it is the end of the clip before, half the start of this one.",
+    ) {
+        val kinds = app.headsup.core.edit.CutKind.entries
+        ChoiceGrid(kinds.map { it.label }, kinds.indexOf(clip.cut), { i -> vm.setCut(index, kinds[i], clip.cutMs) })
+        if (clip.cut != app.headsup.core.edit.CutKind.NONE) {
+            val lengths = app.headsup.core.edit.CutTransition.LENGTHS
+            LabeledChoice("Length", lengths.map { String.format(Locale.US, "%.1f s", it / 1000f) }, { lengths[it] == clip.cutMs }, { i -> vm.setCut(index, clip.cut, lengths[i]) })
+            Row {
+                Spacer(Modifier.weight(1f))
+                SmallAction("Use between all clips", { vm.setCutForAll(clip.cut, clip.cutMs) })
+            }
+        }
     }
 }
 
@@ -2116,29 +2214,44 @@ private fun ProjectHeader(state: UiState, vm: HeadsupViewModel, onProjects: () -
     if (settings) SettingsSheet(vm, onDismiss = { settings = false })
     LaunchedEffect(Unit) { vm.refreshProjects() }
     // The page starts with the project: its name and facts, its few actions as icons beside them.
-    Row(verticalAlignment = Alignment.Top) {
-        Column(Modifier.weight(1f).padding(top = 4.dp)) {
-            val album = state.photoProject
-            Text(state.projectName, style = MaterialTheme.typography.titleMedium, maxLines = 2)
-            Text(
-                (if (album) "Photo album" else "Film") + " · saved automatically" + when {
-                    state.clips.isEmpty() -> ""
-                    album -> " · ${state.clips.size} photos"
-                    else -> {
-                        // On the timeline: after speed changes, at the timeline's frame rate.
-                        val total = state.clips.sumOf { it.timelineDurationMs }
-                        " · ${state.clips.size} clips, ${Formats.duration(total)}, ${frameCount(total, state.effectiveTimelineFps) ?: 0L} frames"
-                    }
-                },
-                style = MaterialTheme.typography.labelSmall,
-                color = HeadsupColors.TextMuted,
-            )
-        }
+    val facts: @Composable () -> Unit = {
+        val album = state.photoProject
+        Text(state.projectName, style = MaterialTheme.typography.titleMedium, maxLines = 2, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
+        Text(
+            (if (album) "Photo album" else "Film") + " · saved automatically" + when {
+                state.clips.isEmpty() -> ""
+                album -> " · ${state.clips.size} photos"
+                else -> {
+                    // On the timeline: after speed changes, at the timeline's frame rate.
+                    val total = state.clips.sumOf { it.timelineDurationMs }
+                    " · ${state.clips.size} clips, ${Formats.duration(total)}, ${frameCount(total, state.effectiveTimelineFps) ?: 0L} frames"
+                }
+            },
+            style = MaterialTheme.typography.labelSmall,
+            color = HeadsupColors.TextMuted,
+        )
+    }
+    val actions: @Composable () -> Unit = {
         IconAction(HeadsupIcons.Switch, "Switch project", onProjects)
         // An open album's album view (stars, Auto pick): from the album itself, not the list.
         if (state.photoProject && state.clips.isNotEmpty()) IconAction(HeadsupIcons.Grid, "Album view", { vm.openAlbumOf(state.projectName) })
         IconAction(HeadsupIcons.Pencil, "Rename", { renaming = true })
         IconAction(HeadsupIcons.Settings, "Settings", { settings = true })
+    }
+    // In a narrow column (held sideways with the tools drawn in) the name goes above its icons,
+    // so it keeps the column's whole width instead of a sliver beside them.
+    androidx.compose.foundation.layout.BoxWithConstraints {
+        if (maxWidth < 340.dp) {
+            Column {
+                Column(Modifier.fillMaxWidth().padding(top = 4.dp)) { facts() }
+                Row(verticalAlignment = Alignment.CenterVertically) { actions() }
+            }
+        } else {
+            Row(verticalAlignment = Alignment.Top) {
+                Column(Modifier.weight(1f).padding(top = 4.dp)) { facts() }
+                actions()
+            }
+        }
     }
     if (renaming) {
         RenameDialog(state.projectName, onDismiss = { renaming = false }, title = "Project name") { vm.renameProject(it); renaming = false }
@@ -2310,7 +2423,9 @@ private val SPEEDS = listOf(0.25f, 0.5f, 0.75f, 1f, 1.5f, 2f, 3f, 4f)
 private fun SpeedControls(clip: ClipState, timelineFps: Float, onSpeed: (Float) -> Unit) {
     val steady = clip.speedCurve.isEmpty()
     // Every frame of high-frame-rate footage at the timeline's rate (e.g. 120 fps on a 24 fps timeline: 0.2×).
-    val conform = clip.meta.frameRate?.takeIf { !clip.meta.isPhoto && it > timelineFps + 0.5f }?.let { timelineFps / it }
+    // The rate shot at (0.25× for 120 fps on 30), or what the file holds when the camera dropped many.
+    val held = clip.meta.frameRate?.let { shot -> clip.meta.measuredFrameRate?.takeIf { it < shot * 0.97f } ?: shot }
+    val conform = held?.takeIf { !clip.meta.isPhoto && it > timelineFps + 0.5f }?.let { timelineFps / it }
     if (conform != null) {
         ChoiceGrid(
             listOf("All frames · ${String.format(Locale.US, "%.3g", conform)}×"),
@@ -2331,7 +2446,16 @@ private fun SpeedControls(clip: ClipState, timelineFps: Float, onSpeed: (Float) 
         Hint(
             if (effective + 0.5f >= timelineFps) {
                 String.format(Locale.US, "Smooth: %s fps footage at %s× still gives %s fps (timeline %s).",
-                    OutputSpec.formatFps(sourceFps), clip.speed, OutputSpec.formatFps(effective), OutputSpec.formatFps(timelineFps))
+                    OutputSpec.formatFps(sourceFps), clip.speed, OutputSpec.formatFps(effective), OutputSpec.formatFps(timelineFps)) +
+                    // Shot at the rate, but some frames dropped: said once, with what it means.
+                    (clip.meta.measuredFrameRate?.takeIf { it < sourceFps * 0.99f }?.let { held ->
+                        val repeat = timelineFps / (timelineFps - held * clip.speed).coerceAtLeast(0.01f)
+                        if (held * clip.speed >= timelineFps - 0.05f) ""
+                        else if (repeat >= 20f) String.format(Locale.US, " The camera dropped a few frames (%s a second on average), so about one frame in %.0f shows twice; too rarely to see.",
+                            OutputSpec.formatFps(held), repeat)
+                        else String.format(Locale.US, " The camera dropped frames (%s a second on average): one frame in %.0f shows twice, which can look uneven. %s× (All frames) uses each frame once.",
+                            OutputSpec.formatFps(held), repeat, speedText(timelineFps / held))
+                    } ?: "")
             } else {
                 String.format(Locale.US, "Will stutter: only %s fps at %s× for a %s fps timeline. Shoot at %s fps for this speed.",
                     OutputSpec.formatFps(effective), clip.speed, OutputSpec.formatFps(timelineFps), OutputSpec.formatFps(timelineFps / clip.speed))
@@ -3096,7 +3220,7 @@ private val Adjustment.section: ColourSection
         Adjustment.EXPOSURE, Adjustment.BRIGHTNESS, Adjustment.CONTRAST, Adjustment.HIGHLIGHTS, Adjustment.SHADOWS,
         Adjustment.WHITES, Adjustment.BLACKS, Adjustment.ROLLOFF, Adjustment.CURVE -> ColourSection.LIGHT
         Adjustment.TEMPERATURE, Adjustment.TINT, Adjustment.SATURATION, Adjustment.VIBRANCE, Adjustment.DENSITY, Adjustment.SKIN -> ColourSection.COLOUR
-        Adjustment.SPLIT, Adjustment.SHADOW_HUE, Adjustment.HIGHLIGHT_HUE, Adjustment.TAME, Adjustment.VIGNETTE, Adjustment.WHEELS -> ColourSection.FILM
+        Adjustment.SPLIT, Adjustment.SHADOW_HUE, Adjustment.HIGHLIGHT_HUE, Adjustment.TAME, Adjustment.VIGNETTE, Adjustment.WHEELS, Adjustment.PRINTER -> ColourSection.FILM
         Adjustment.TEXTURE, Adjustment.CLARITY, Adjustment.DEHAZE, Adjustment.DEFRINGE -> ColourSection.PRESENCE
         Adjustment.CINE, Adjustment.LUT, Adjustment.MATCH, Adjustment.BLEND -> ColourSection.TOOLS
         Adjustment.MIXER, Adjustment.POINT, Adjustment.HUE_CURVES, Adjustment.CHANNELS, Adjustment.BW, Adjustment.CALIBRATION -> ColourSection.MIXER
@@ -3179,6 +3303,9 @@ internal enum class Adjustment(
 
     /** Not a single ruler: colour wheels for shadows, midtones and highlights. */
     WHEELS("◎", "Grading", 0f..1f, 1f, "", { 0f }, { g, _ -> g }),
+
+    /** Not a single ruler: printer lights, red, green and blue in printer points, as a film lab. */
+    PRINTER("RGB", "Printer lights", 0f..1f, 1f, "", { 0f }, { g, _ -> g }),
 
     /** Not a single ruler: point tone curves (RGB and per channel). */
     CURVE("∿", "Curve", 0f..1f, 1f, "", { 0f }, { g, _ -> g }),
@@ -3400,7 +3527,8 @@ private fun ColourPage(
         // Set on all clips exactly when Adjust works on all of them.
         LaunchedEffect(target) { vm.setEffectsOnAll(target == GradeTarget.GLOBAL) }
         // Bokeh is worked out on a photo (a whole video would take too long).
-        val looks = if (state.selected?.meta?.isPhoto == true) LOOK_KINDS else LOOK_KINDS - EffectKind.BOKEH
+        // Bokeh is for photos; gate weave is film moving, for video.
+        val looks = if (state.selected?.meta?.isPhoto == true) LOOK_KINDS - EffectKind.WEAVE else LOOK_KINDS - EffectKind.BOKEH
         EffectsPanel(state, vm, lookKind.takeIf { it in looks } ?: looks.first(), playhead, looks) { lookKind = it }
         return
     }
@@ -3420,10 +3548,30 @@ private fun ColourPage(
                 Adjustment.CURVE -> state.grade.curves.any { it.isNotEmpty() }
                 Adjustment.HUE_CURVES -> state.grade.hueCurves.any { it.isNotEmpty() }
                 Adjustment.WHEELS -> state.grade.wheels.any { it != 0f }
+                Adjustment.PRINTER -> state.grade.printer.any { it != 0f }
                 Adjustment.LOOK -> state.grade.look != null
                 else -> a.get(state.grade) != a.neutral
             }
-            CircleOption(a.symbol, a.label, selected = a == adjustment, modified = modified) { onAdjustment(a) }
+            // Held: the picture without this one correction (the tools that set a whole look: the original).
+            val g = state.grade
+            val without: ColorGrade? = when (a) {
+                Adjustment.LUT, Adjustment.BLEND, Adjustment.CINE, Adjustment.MATCH -> null
+                Adjustment.MIXER -> g.copy(mixer = app.headsup.core.color.ColourMixer.NEUTRAL)
+                Adjustment.POINT -> g.copy(points = emptyList(), colourPop = 0f)
+                Adjustment.CHANNELS -> g.copy(channelMix = app.headsup.core.color.ChannelMixer.NEUTRAL)
+                Adjustment.BW -> g.copy(bw = app.headsup.core.color.BlackAndWhite.NEUTRAL)
+                Adjustment.CALIBRATION -> g.copy(calibration = app.headsup.core.color.Calibration.NEUTRAL)
+                Adjustment.CURVE -> g.copy(curves = app.headsup.core.color.ToneCurve.NEUTRAL)
+                Adjustment.HUE_CURVES -> g.copy(hueCurves = app.headsup.core.color.HueCurves.NEUTRAL)
+                Adjustment.WHEELS -> g.copy(wheels = app.headsup.core.color.ColourWheels.NEUTRAL)
+                Adjustment.PRINTER -> g.copy(printer = app.headsup.core.color.PrinterLights.NEUTRAL)
+                Adjustment.LOOK -> g.copy(look = null)
+                else -> a.set(g, a.neutral)
+            }
+            CircleOption(
+                a.symbol, a.label, selected = a == adjustment, modified = modified,
+                onHold = without?.let { w -> { held: Boolean -> vm.setCompareGrade(if (held) w else null) } },
+            ) { onAdjustment(a) }
         }
     }
     if (adjustment == Adjustment.CINE) {
@@ -3494,6 +3642,10 @@ private fun ColourPage(
         WheelControls(state, vm)
         return
     }
+    if (adjustment == Adjustment.PRINTER) {
+        PrinterControls(state, vm)
+        return
+    }
     if (adjustment == Adjustment.LOOK) {
         LooksPanel(state, vm, frameSource)
         return
@@ -3548,6 +3700,41 @@ private val Adjustment.info: String
         Adjustment.HALATION -> "A warm red halo round bright edges inside the mask, as on film."
         else -> label + "."
     }
+
+/** Printer lights: red, green and blue keys in points (and the master), as a film lab's timer. */
+@Composable
+private fun PrinterControls(state: UiState, vm: HeadsupViewModel) {
+    val P = app.headsup.core.color.PrinterLights
+    val points = state.grade.printer
+    var step by rememberSaveable { mutableStateOf(0.5f) }
+    fun press(channel: Int, sign: Int) = vm.updateGrade { it.copy(printer = P.pressed(it.printer, channel, step * sign)) }
+    ToolSection(
+        "Printer lights",
+        info = "How a film lab timed a print: the red, green and blue light that exposed it, in points (12 points is one stop of that colour). It moves the colour of the whole picture evenly, shadows to highlights, without bending the ends. + adds that colour; − adds its opposite (cyan, magenta, yellow). Darker/Brighter move all three. Hold the Printer lights circle above to see the picture without them.",
+        onReset = if (points.any { it != 0f }) ({ vm.updateGrade { it.copy(printer = P.NEUTRAL) } }) else null,
+    ) {
+        // The three numbers as a timer reads them.
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
+            for ((i, name) in listOf("R", "G", "B").withIndex()) {
+                val v = points.getOrElse(i) { 0f }
+                Text(
+                    name + " " + (if (v == 0f) "0" else String.format(Locale.US, "%+.2f", v).trimEnd('0').trimEnd('.')),
+                    style = MaterialTheme.typography.titleLarge.copy(fontFamily = GeistMonoFamily),
+                    color = if (v == 0f) HeadsupColors.TextMuted else HeadsupColors.Highlight,
+                )
+            }
+        }
+        // A key pair per light: its opposite colour on the left, the colour on the right.
+        for ((i, pair) in listOf("Cyan" to "Red", "Magenta" to "Green", "Yellow" to "Blue", "Darker" to "Brighter").withIndex()) {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                PanelAction("− ${pair.first}", { press(i, -1) }, Modifier.weight(1f))
+                PanelAction("+ ${pair.second}", { press(i, 1) }, Modifier.weight(1f))
+            }
+        }
+        val steps = listOf(0.25f, 0.5f, 1f, 3f)
+        ChoiceGrid(listOf("¼ point", "½ point", "1 point", "3 points"), steps.indexOf(step), { step = steps[it] }, minCell = 64.dp)
+    }
+}
 
 /** Colour grading: a wheel per range (drag to the hue, outwards for more), its brightness, and the balance. */
 @Composable
@@ -3652,7 +3839,7 @@ private fun CurveControls(state: UiState, vm: HeadsupViewModel) {
             Spacer(Modifier.width(8.dp))
             for ((label, amount) in listOf("Subtle" to 0.5f, "Film" to 1f, "Strong" to 1.4f)) {
                 // Fitted to the clip's tones when it has been analysed (Looks > Analyse clip).
-                val measured = state.lookStats?.takeIf { it.first == state.selected?.id }?.second
+                val measured = state.selected?.lookStats
                 val curve = app.headsup.core.color.ToneCurve.cinematic(amount, low = measured?.low ?: 0.18f, median = measured?.median ?: 0.5f)
                 FilterChip(
                     selected = flat == curve,
@@ -4040,54 +4227,76 @@ private fun MixerControls(state: UiState, vm: HeadsupViewModel) {
 }
 
 /** Looks (profiles): a starting rendering under the corrections, and how strongly. */
+/** Looks that suit what was measured in the clip, the best first ([app.headsup.color.FastLook.suggested]). */
+private fun suggestedLooks(s: app.headsup.core.color.FrameStats): List<app.headsup.color.FastLook> =
+    app.headsup.color.FastLook.suggested(s)
+
+/** What the clip was found to be, in words (night, lights in the dark, people…). */
+private fun sceneWords(s: app.headsup.core.color.FrameStats): List<String> =
+    s.traits.mapNotNull {
+        when (it) {
+            app.headsup.core.color.SceneTrait.NIGHT -> "night"
+            app.headsup.core.color.SceneTrait.CITY_LIGHTS -> "lights in the dark"
+            app.headsup.core.color.SceneTrait.GOLDEN -> "low sun"
+            app.headsup.core.color.SceneTrait.FLAT -> "flat, grey light"
+            app.headsup.core.color.SceneTrait.FOLIAGE -> "greenery"
+            app.headsup.core.color.SceneTrait.SKY -> "sky or water"
+            app.headsup.core.color.SceneTrait.PEOPLE -> "people"
+            app.headsup.core.color.SceneTrait.COLOURFUL -> "loud colour"
+            else -> null
+        }
+    }
+
+
 /**
- * Looks that suit what was measured in the clip: night, skin-like tones, loud greens and blues, a
- * warm (sunset) cast; the best first.
+ * The user's saved looks: one tap puts it on the clip, None takes it off again (what was changed
+ * since stays). Deleting is apart, under Manage, and asks first.
  */
-private fun suggestedLooks(s: app.headsup.core.color.FrameStats): List<app.headsup.color.FastLook> {
-    val out = mutableListOf<app.headsup.color.FastLook>()
-    if (s.median < 0.22f) out += app.headsup.color.FastLook.NIGHT
-    if (s.skin > SKIN_SHARE) { out += app.headsup.color.FastLook.CLEAN; out += app.headsup.color.FastLook.WARM_FILM }
-    if (s.foliage > 0.15f) { out += app.headsup.color.FastLook.TEAL_ORANGE; out += app.headsup.color.FastLook.MUTED }
-    if (s.warmth > 0.03f) { out += app.headsup.color.FastLook.FILM_35; out += app.headsup.color.FastLook.VINTAGE }
-    if (s.colourfulness > 0.12f) out += app.headsup.color.FastLook.MUTED
-    out += listOf(app.headsup.color.FastLook.CLEAN, app.headsup.color.FastLook.FILM_35, app.headsup.color.FastLook.TEAL_ORANGE)
-    return out.distinct().take(3)
-}
-
-/** Skin-like tones count when they are more than this share of the picture. */
-private const val SKIN_SHARE = 0.08f
-
-/** The user's saved looks: one tap puts it on the clip; the clip's own look can be saved by name. */
 @Composable
 private fun PresetControls(state: UiState, vm: HeadsupViewModel) {
     LaunchedEffect(Unit) { vm.loadPresets() }
     var naming by remember { mutableStateOf(false) }
+    var managing by remember { mutableStateOf(false) }
+    var deleting by remember { mutableStateOf<String?>(null) }
     val what = if (state.photoProject) "photo" else "clip"
+    val clip = state.selected
     ToolSection(
         "My presets",
-        info = "Save the look of a $what you like (its corrections, LUT, grain, glow…) and put it on others in any project with one tap. Masks and framing stay each $what's own. Tap a preset to put its look on this $what; ✕ deletes it.",
+        info = "Save the look of a $what you like (its corrections, LUT, grain, glow…) and put it on others in any project with one tap. None takes it off the $what again. Masks and framing stay each $what's own. Manage deletes presets.",
     ) {
     if (state.presets.isEmpty()) {
         Text("No presets yet.", style = MaterialTheme.typography.bodySmall, color = HeadsupColors.TextMuted)
-    } else {
+    } else if (managing) {
+        // Deleting: each with its ✕, asked first.
         FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            for (p in state.presets) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    PillAction("◆", p.name, { vm.applyPreset(p) })
-                    Text(
-                        "✕",
-                        Modifier.clip(CircleShape).clickable { vm.deletePreset(p.name) }.padding(horizontal = 8.dp, vertical = 4.dp),
-                        style = MaterialTheme.typography.labelMedium, color = HeadsupColors.TextMuted,
-                    )
-                }
-            }
+            for (p in state.presets) PillAction("✕", p.name, { deleting = p.name })
+        }
+        PanelAction("Done", { managing = false }, Modifier.fillMaxWidth())
+    } else {
+        val names = state.presets.map { it.name }
+        val on = clip?.preset?.name
+        ChoiceGrid(listOf("None") + names, if (on == null) 0 else names.indexOf(on).let { if (it < 0) -1 else it + 1 }, { i ->
+            if (i == 0) vm.removePreset() else vm.applyPreset(state.presets[i - 1])
+        })
+    }
+    if (!managing) {
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            PanelAction("Save this look", { naming = true }, Modifier.weight(1f))
+            if (state.presets.isNotEmpty()) PanelAction("Manage", { managing = true }, Modifier.weight(1f))
         }
     }
-    PanelAction("Save this look", { naming = true }, Modifier.fillMaxWidth())
     }
     if (naming) {
         RenameDialog("Preset ${state.presets.size + 1}", onDismiss = { naming = false }, title = "Preset name") { vm.savePreset(it); naming = false }
+    }
+    deleting?.let { name ->
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { deleting = null },
+            title = { Text("Delete \"$name\"?") },
+            text = { Text("The preset is removed for good. ${what.replaceFirstChar { it.uppercase() }}s that use it keep their look.") },
+            confirmButton = { androidx.compose.material3.TextButton(onClick = { vm.deletePreset(name); deleting = null }) { Text("Delete") } },
+            dismissButton = { androidx.compose.material3.TextButton(onClick = { deleting = null }) { Text("Cancel") } },
+        )
     }
 }
 
@@ -4115,24 +4324,21 @@ private fun LooksPanel(state: UiState, vm: HeadsupViewModel, frameSource: (() ->
         PresetControls(state, vm)
         return
     }
-    val stats = state.lookStats?.takeIf { it.first == clip.id }?.second
-    val fast = state.fast?.takeIf { it.clipId == clip.id }
-    fun choose(look: app.headsup.color.FastLook) = vm.applyFastLook(look, fast?.strength ?: 1f)
+    val stats = clip.lookStats
+    val applied = clip.cineLook
+    val current = applied?.look
+    fun choose(look: app.headsup.color.FastLook) = vm.applyFastLook(look, applied?.strength ?: 1f)
     val what = if (clip.meta.isPhoto) "photo" else "clip"
     // The clip measured: what was found, and the looks that suit it.
     ToolSection(
         "Cinematic",
-        info = "A complete look: colour taken away rather than added, soft highlights, grain and light. Analyse the $what and looks that suit it are suggested, and every look is fitted to it. Hold the ruler to see the $what without it; Done keeps it as normal corrections and effects, adjustable afterwards.",
+        info = "A complete look: colour taken away rather than added, soft highlights, grain and light. Analyse the $what and looks that suit it are suggested, and every look is fitted to it. Hold the ruler to see the $what without it. The look stays with the $what: change its strength or take it off with None at any time; what you change by hand meanwhile is kept.",
     ) {
     Row(verticalAlignment = Alignment.CenterVertically) {
         Hint(
             if (stats == null) "Not analysed yet."
-            else String.format(
-                Locale.US, "Mid-tones %.0f %% · %.1f %% clipped · %s%s",
-                stats.median * 100, stats.clipped * 100,
-                if (stats.foliage > 0.15f) "lots of green/blue" else "colours calm",
-                if (stats.skin > SKIN_SHARE) " · skin-like tones" else "",
-            ),
+            else (listOf(String.format(Locale.US, "Mid-tones %.0f %% · %.1f %% clipped", stats.median * 100, stats.clipped * 100)) + sceneWords(stats))
+                .joinToString(" · "),
             Modifier.weight(1f),
         )
         Spacer(Modifier.width(8.dp))
@@ -4140,23 +4346,59 @@ private fun LooksPanel(state: UiState, vm: HeadsupViewModel, frameSource: (() ->
     }
     // What suits the clip is outlined in the one grid (no second row of the same looks).
     val suggested = stats?.let { suggestedLooks(it) }.orEmpty()
-    val cinematic = app.headsup.color.FastLook.entries
-    ChoiceGrid(cinematic.map { it.label }, cinematic.indexOf(fast?.look), { choose(cinematic[it]) }, outlined = { cinematic[it] in suggested })
-    if (suggested.isNotEmpty()) Hint("Outlined: the looks that suit this $what.")
-    // The look being tried: its strength, then keep it or put the clip back.
-    if (fast != null) {
-        ValueHeader("Strength", String.format(Locale.US, "%.0f %%", fast.strength * 100))
+    // None (the clip without a look), then the suggested looks, then the rest.
+    val cinematic = suggested + app.headsup.color.FastLook.entries.filter { it !in suggested }
+    ChoiceGrid(
+        listOf("None") + cinematic.map { it.label }, if (current == null) 0 else cinematic.indexOf(current) + 1,
+        { i -> if (i == 0) vm.removeFastLook() else choose(cinematic[i - 1]) },
+        outlined = { i -> i > 0 && cinematic[i - 1] in suggested },
+    )
+    if (suggested.isNotEmpty()) Hint("Outlined, first: the looks that suit this $what.")
+    // The look on the clip: its strength, any time later too.
+    if (applied != null && current != null) {
+        ValueHeader("Strength", String.format(Locale.US, "%.0f %%", applied.strength * 100))
         RulerSlider(
-            fast.strength, 0f..1f, 0.02f, { v -> vm.applyFastLook(fast.look, v) },
-            onReset = { vm.applyFastLook(fast.look, 1f) }, onHold = vm::compareFast,
+            applied.strength, 0f..1f, 0.02f, { v -> vm.applyFastLook(current, v) },
+            onReset = { vm.applyFastLook(current, 1f) }, onHold = vm::compareFast,
         )
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            SmallAction("Undo", { vm.closeFast(undo = true) })
-            Spacer(Modifier.weight(1f))
-            SmallAction("Done", { vm.closeFast(undo = false) })
-        }
-        Hint(if (stats != null) "Fitted to this $what." else "Not fitted yet: Analyse $what fits it.")
+        Hint(current.description + if (stats != null) " Fitted to this $what." else " Analyse the $what to fit it.")
     }
+    }
+    HarmonyControls(clip, vm, what)
+}
+
+/** A colour-wheel hue in a word. */
+private fun hueName(h: Float): String = listOf(
+    "red", "orange", "yellow", "lime", "green", "teal", "cyan", "azure", "blue", "violet", "magenta", "pink",
+)[(((h + 15f) % 360f) / 30f).toInt().coerceIn(0, 11)]
+
+/**
+ * Colour harmony: the clip's colours pulled towards a scheme on the colour wheel around a key
+ * colour (complementary, split, analogous, triadic), the key in the highlights and its partner in
+ * the shadows. None takes it off; it stays changeable.
+ */
+@Composable
+private fun HarmonyControls(clip: ClipState, vm: HeadsupViewModel, what: String) {
+    val h = clip.harmony
+    val schemes = app.headsup.core.color.ColourHarmony.Scheme.entries
+    ToolSection(
+        "Colour harmony",
+        info = "Pulls the $what's colours towards a palette, as colourists do: Complementary (a colour and its opposite, like orange and teal or yellow and violet), Split (a colour and the two beside its opposite), Analogous (neighbours: calm, one mood) or Triadic (three evenly apart: lively). The key colour goes into the highlights, its partner into the shadows; colours far from the palette are calmed, skin is changed least. Hold a ruler to see the $what without it.",
+    ) {
+        ChoiceGrid(listOf("None") + schemes.map { it.label }, if (h == null) 0 else schemes.indexOf(h.scheme) + 1, { i ->
+            if (i == 0) vm.removeHarmony() else vm.applyHarmony(schemes[i - 1], h?.hue ?: 30f, h?.amount ?: 0.5f)
+        }, minCell = 64.dp)
+        if (h == null) return@ToolSection
+        // The palette: the scheme's colours around the key.
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+            for (hue in app.headsup.core.color.ColourHarmony.hues(h.scheme, h.hue)) {
+                Box(Modifier.size(22.dp).clip(CircleShape).background(androidx.compose.ui.graphics.Color.hsv(hue, 0.75f, 0.9f)))
+            }
+        }
+        ValueHeader("Key colour", String.format(Locale.US, "%.0f° · %s", h.hue, hueName(h.hue)))
+        RulerSlider(h.hue, 0f..359f, 1f, { v -> vm.applyHarmony(h.scheme, v, h.amount) }, onReset = { vm.applyHarmony(h.scheme, 30f, h.amount) }, onHold = vm::compareHarmony)
+        ValueHeader("Amount", String.format(Locale.US, "%.0f %%", h.amount * 100))
+        RulerSlider(h.amount, 0f..1f, 0.02f, { v -> vm.applyHarmony(h.scheme, h.hue, v) }, onReset = { vm.applyHarmony(h.scheme, h.hue, 0.5f) }, onHold = vm::compareHarmony)
     }
 }
 
@@ -4234,22 +4476,18 @@ private fun CinePanel(state: UiState, vm: HeadsupViewModel, frameSource: (() -> 
 @Composable
 private fun FastEdit(state: UiState, vm: HeadsupViewModel) {
     val clip = state.selected ?: return
-    val fast = state.fast?.takeIf { it.clipId == clip.id }
+    val applied = clip.cineLook
+    val current = applied?.look
     val what = if (state.photoProject) "photo" else "clip"
-    ToolSection(
-        "Fast edit",
-        info = "A whole look at once: colour taken away rather than added, soft highlights, grain and light. Hold the ruler to see the $what without it. Done keeps it as normal corrections (Density, Roll-off, Tame…) and effects (Grain, Glow, Lens…), adjustable afterwards.",
-    ) {
+    ToolSection("Fast edit", info = "A whole look at once. None takes it off.") {
     val fastLooks = app.headsup.color.FastLook.entries
-    ChoiceGrid(fastLooks.map { it.label }, fastLooks.indexOf(fast?.look), { vm.applyFastLook(fastLooks[it], fast?.strength ?: 1f) })
-    if (fast == null) return@ToolSection
-    ValueHeader("Strength", String.format(Locale.US, "%.0f %%", fast.strength * 100))
-    RulerSlider(fast.strength, 0f..1f, 0.02f, { v -> vm.applyFastLook(fast.look, v) }, onReset = { vm.applyFastLook(fast.look, 1f) }, onHold = vm::compareFast)
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        SmallAction("Undo", { vm.closeFast(undo = true) })
-        Spacer(Modifier.weight(1f))
-        SmallAction("Done", { vm.closeFast(undo = false) })
-    }
+    ChoiceGrid(listOf("None") + fastLooks.map { it.label }, if (current == null) 0 else fastLooks.indexOf(current) + 1, { i ->
+        if (i == 0) vm.removeFastLook() else vm.applyFastLook(fastLooks[i - 1], applied?.strength ?: 1f)
+    })
+    if (applied == null || current == null) return@ToolSection
+    ValueHeader("Strength", String.format(Locale.US, "%.0f %%", applied.strength * 100))
+    RulerSlider(applied.strength, 0f..1f, 0.02f, { v -> vm.applyFastLook(current, v) }, onReset = { vm.applyFastLook(current, 1f) }, onHold = vm::compareFast)
+    Hint("Hold the ruler to see the $what without it.")
     }
 }
 
@@ -4881,10 +5119,10 @@ private fun SkinToneTool(scope: ScopeResult?, onMatch: () -> Unit) {
         "Skin line",
         info = "On a vectorscope, skin of every complexion falls close to one line. Tap a face on the picture to measure it; Match line turns the skin tones onto that line, leaving greys and other colours alone.",
     ) {
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        VectorscopeView(scope, Modifier.size(140.dp))
-        Spacer(Modifier.width(14.dp))
-        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+    // In a narrow column (held sideways with the tools drawn in) the reading goes under the scope.
+    androidx.compose.foundation.layout.BoxWithConstraints {
+        val narrow = maxWidth < 300.dp
+        val reading: @Composable () -> Unit = {
             val measured = scope?.measured
             if (measured == null) {
                 Hint(if (scope == null) "Tap a face on the picture to measure skin tone." else "That point is too grey to measure; tap skin.")
@@ -4895,7 +5133,21 @@ private fun SkinToneTool(scope: ScopeResult?, onMatch: () -> Unit) {
                     String.format(Locale.US, "%+.0f° from the skin line (%s)", off, if (off > 0) "towards yellow/green" else "towards red/magenta"),
                 )
             }
-            Button(onClick = onMatch, enabled = measured != null) { Text("Match line") }
+            Button(onClick = onMatch, enabled = measured != null, modifier = if (narrow) Modifier.fillMaxWidth() else Modifier) {
+                Text("Match line", maxLines = 1, softWrap = false)
+            }
+        }
+        if (narrow) {
+            Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                VectorscopeView(scope, Modifier.size(140.dp))
+                reading()
+            }
+        } else {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                VectorscopeView(scope, Modifier.size(140.dp))
+                Spacer(Modifier.width(14.dp))
+                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) { reading() }
+            }
         }
     }
     }
@@ -4945,28 +5197,80 @@ private fun FramePanel(state: UiState, vm: HeadsupViewModel) {
         info = "One shape for the whole film. First clip takes the shape of the first clip on the timeline." +
             (vm.outputPreview(state)?.let { " Exported at ${it.width}×${it.height}." } ?: ""),
     ) {
+        // The usual shapes, and one of one's own (Custom: width and height typed in).
+        var custom by remember { mutableStateOf(false) }
+        val preset = presets.indexOfFirst { it.first == state.frameAspect }
+        val own = state.frameAspect != null && preset < 0
         ChoiceGrid(
-            presets.map { (aspect, label) -> if (aspect == null) "First clip" else label },
-            presets.indexOfFirst { it.first == state.frameAspect },
-            { vm.setFrameAspect(presets[it].first) },
-            glyph = { i, on -> AspectGlyph(presets[i].first ?: first?.let { m -> m.width.toFloat() / m.height.coerceAtLeast(1) }, on) },
+            presets.map { (aspect, label) -> if (aspect == null) "First clip" else label } + (if (own) "Custom " + aspectLabel(state.frameAspect!!) else "Custom"),
+            if (own) presets.size else preset,
+            { i -> if (i == presets.size) custom = true else vm.setFrameAspect(presets[i].first) },
+            glyph = { i, on ->
+                val a = if (i == presets.size) (state.frameAspect.takeIf { own } ?: 1.5f) else presets[i].first
+                AspectGlyph(a ?: first?.let { m -> m.width.toFloat() / m.height.coerceAtLeast(1) }, on)
+            },
         )
+        if (custom) CustomAspectDialog(state.frameAspect.takeIf { own }, onDismiss = { custom = false }) { a ->
+            custom = false
+            vm.setFrameAspect(a)
+        }
         vm.outputPreview(state)?.let { Text("${it.width} × ${it.height}", style = MaterialTheme.typography.labelSmall, color = HeadsupColors.TextMuted) }
     }
 
     val r = state.framing(clip)
     ToolSection(
         "This clip in the frame",
-        info = if (r.fit && r.blur) "The whole picture inside the frame, the bars filled with it blurred (every fitted clip of the film); zoom in to fill more."
-        else if (r.fit) "The whole picture inside the frame, black bars where the shapes differ; zoom in to fill more."
+        info = if (r.fit) "The whole picture inside the frame, a border where the shapes differ: black, white, the picture blurred or a picture of yours (for the whole film). " +
+            "Zoom below 1× (Geometry) makes it smaller; drag it to place it, it snaps to the frame's middle, thirds and edges."
         else "The picture fills the frame; drag it to choose what stays, pinch to zoom. The grid shows the thirds.",
         onReset = if (clip.reframe != Reframe(aspect = clip.reframe.aspect, fit = r.fit)) ({ vm.updateReframe { Reframe(fit = it.fit) } }) else null,
     ) {
         ChoiceGrid(listOf("Fill", "Fit"), if (r.fit) 1 else 0, { i -> vm.updateReframe { it.copy(fit = i == 1) } })
         if (r.fit) {
-            // What fills the bars: black, or the picture itself blurred behind it (as social apps do); for the whole film.
-            Text("Bars", style = MaterialTheme.typography.labelMedium, color = HeadsupColors.TextMuted)
-            ChoiceGrid(listOf("Black", "Blur"), if (r.blur) 1 else 0, { vm.setBlurBars(it == 1) })
+            // What fills the border: black, white, the picture itself blurred (as social apps do), or a
+            // picture of one's own; for the whole film. Zoom below 1× (Geometry) and drag to place it.
+            val imagePicker = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri -> if (uri != null) vm.setBackdropImage(uri, allClips = true) }
+            val choice = when {
+                r.blur -> 2
+                r.backdropImage != null -> 3
+                r.backdropColour == 0xFFFFFFFF.toInt() -> 1
+                else -> 0
+            }
+            LabeledChoice("Border", listOf("Black", "White", "Blur", "Picture"), { it == choice }, { i ->
+                when (i) {
+                    0 -> vm.setBorder(blur = false, colour = 0xFF000000.toInt(), image = null)
+                    1 -> vm.setBorder(blur = false, colour = 0xFFFFFFFF.toInt(), image = null)
+                    2 -> vm.setBorder(blur = true, colour = 0xFF000000.toInt(), image = null)
+                    else -> imagePicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+                }
+            })
+        }
+    }
+    // The frame moving through the clip: a slow push in or across (Ken Burns), or following the subject.
+    val index = state.selectedClip
+    if (index != null) ToolSection(
+        "Move",
+        info = "Ken Burns: the frame glides from how it is at the clip's start to how it is at its end; go to either end (⇤ ⇥) and frame it there (drag, pinch). " +
+            "Follow: the frame keeps the subject (people, animals, vehicles) in it as they move, gliding rather than jerking, at the zoom set now (zoom in first to give it room); " +
+            "the subject is found first when it is not yet. Off keeps the frame as it is at the playhead.",
+    ) {
+        val following = clip.frameKeys.size > 2
+        val mode = when { clip.frameKeys.isEmpty() -> 0; following -> 2; else -> 1 }
+        val finding = state.work.any { it.clipId == clip.id && it.label.startsWith("Finding the subject") }
+        ChoiceGrid(listOf("Off", "Ken Burns", "Follow"), mode, { i ->
+            when (i) {
+                0 -> vm.setKenBurns(index, false)
+                1 -> vm.setKenBurns(index, true)
+                else -> vm.followSubjectWithFrame(index)
+            }
+        })
+        when {
+            finding -> Hint("Finding the subject in this clip…")
+            mode == 1 -> Hint("Set at the start, then at the end: the frame nearest the playhead is the one dragged.")
+            mode == 2 -> Row {
+                Spacer(Modifier.weight(1f))
+                SmallAction("Follow again", { vm.followSubjectWithFrame(index) })
+            }
         }
     }
     GeometrySections(r, vm)
@@ -4998,6 +5302,11 @@ private fun EffectKinds(state: UiState, kind: EffectKind, kinds: List<EffectKind
                 EffectKind.HALATION -> effects.halation > 0f
                 EffectKind.LENS -> effects.lens
                 EffectKind.BOKEH -> effects.bokeh > 0f
+                EffectKind.MIST -> effects.mist > 0f
+                EffectKind.STREAKS -> effects.streaks > 0f
+                EffectKind.STAR -> effects.star > 0f
+                EffectKind.PRISM -> effects.prism > 0f
+                EffectKind.WEAVE -> effects.weave > 0f || effects.flicker > 0f
                 EffectKind.BARS -> effects.barsRatio != null
             }
             CircleOption(e.symbol, e.label, selected = e == kind, modified = active) { onKind(e) }
@@ -5017,13 +5326,21 @@ private enum class EffectKind(val symbol: String, val label: String) {
     BARS("Cin", "Bars"),
     LENS("Lens", "Lens"),
     BOKEH("Bk", "Bokeh"),
+    MIST("Mi", "Mist"),
+    STREAKS("An", "Anamorphic"),
+    STAR("✶", "Star"),
+    PRISM("Pr", "Prism"),
+    WEAVE("Gw", "Gate weave"),
 }
 
 /** Drawn over the picture: the Overlays tool. */
 private val OVERLAY_KINDS = listOf(EffectKind.TEXT, EffectKind.STICKER, EffectKind.MAP, EffectKind.DASHBOARD, EffectKind.GRAPH)
 
 /** Part of the picture's look: the base layer's Effects in Adjust. */
-private val LOOK_KINDS = listOf(EffectKind.BOKEH, EffectKind.GRAIN, EffectKind.GLOW, EffectKind.HALATION, EffectKind.LENS, EffectKind.BARS)
+private val LOOK_KINDS = listOf(
+    EffectKind.BOKEH, EffectKind.GRAIN, EffectKind.GLOW, EffectKind.HALATION, EffectKind.MIST, EffectKind.STREAKS,
+    EffectKind.STAR, EffectKind.PRISM, EffectKind.LENS, EffectKind.WEAVE, EffectKind.BARS,
+)
 
 /** Effects over the picture, picked from round options like the colour corrections. */
 @Composable
@@ -5033,6 +5350,8 @@ private fun EffectsPanel(state: UiState, vm: HeadsupViewModel, kind: EffectKind,
     val activities = state.activities
     val updateStyle = vm::updateStyle
     val updateEffects = vm::updateEffects
+    // Holding a ruler shows the picture without this one effect (not without everything).
+    val holdWithout: (Boolean) -> Unit = { held -> vm.compareEffects(if (held) effects.without(kind) else null) }
     EffectKinds(state, kind, kinds, onKind)
     // The dashboard and the graph are set per clip, or on all clips at once (only what is changed).
     if ((kind == EffectKind.DASHBOARD && activities.isNotEmpty()) || kind == EffectKind.GRAPH) {
@@ -5088,7 +5407,7 @@ private fun EffectsPanel(state: UiState, vm: HeadsupViewModel, kind: EffectKind,
                 val (_, size, colour) = stocks[i]
                 updateEffects { it.copy(grainSize = size, grainColour = colour, grain = if (it.grain == 0f) 0.35f else it.grain) }
             })
-            EffectRuler(
+            EffectRuler(compare = holdWithout, params =
                 listOf(
                     EffectParam("Amount", effects.grain, 0f..1f, 0.02f, 0f, percent = true) { v -> updateEffects { it.copy(grain = v) } },
                     EffectParam("Size", effects.grainSize, 0.5f..3f, 0.1f, 1f, format = "%.1f") { v -> updateEffects { it.copy(grainSize = v) } },
@@ -5098,7 +5417,7 @@ private fun EffectsPanel(state: UiState, vm: HeadsupViewModel, kind: EffectKind,
             }
         }
         EffectKind.GLOW -> ToolSection("Glow", info = "Light around what is brighter than the threshold. A small spread keeps it subtle; Colour: cool (−) to warm (+).") {
-            EffectRuler(
+            EffectRuler(compare = holdWithout, params =
                 listOf(
                     EffectParam("Glow", effects.glow, 0f..1f, 0.02f, 0f, percent = true) { v -> updateEffects { it.copy(glow = v) } },
                     EffectParam("Threshold", effects.glowThreshold, 0.4f..0.98f, 0.02f, 0.75f, percent = true) { v -> updateEffects { it.copy(glowThreshold = v) } },
@@ -5109,7 +5428,7 @@ private fun EffectsPanel(state: UiState, vm: HeadsupViewModel, kind: EffectKind,
 
         }
         EffectKind.HALATION -> ToolSection("Halation", info = "Red-orange bleed around bright highlights, as on motion picture film. Threshold and spread are the glow's.") {
-            EffectRuler(
+            EffectRuler(compare = holdWithout, params =
                 listOf(
                     EffectParam("Halation", effects.halation, 0f..1f, 0.02f, 0f, percent = true) { v -> updateEffects { it.copy(halation = v) } },
                     EffectParam("Threshold", effects.glowThreshold, 0.4f..0.98f, 0.02f, 0.75f, percent = true) { v -> updateEffects { it.copy(glowThreshold = v) } },
@@ -5124,7 +5443,7 @@ private fun EffectsPanel(state: UiState, vm: HeadsupViewModel, kind: EffectKind,
                 "or a mask of yours (Adjust › Masks: Select, the brush…). Highlights: how much bright points open into bright discs. Worked out on the photo, a moment after the ruler stops. " +
                 "Bokeh is this photo's own: it is not set on other photos by All, Copy or Paste.",
         ) {
-            EffectRuler(
+            EffectRuler(compare = holdWithout, params =
                 listOf(
                     EffectParam("Blur", effects.bokeh, 0f..1f, 0.02f, 0f, percent = true) { v -> updateEffects { it.copy(bokeh = v) } },
                     EffectParam("Highlights", effects.bokehHighlights, 0f..1f, 0.02f, 0.5f, percent = true) { v -> updateEffects { it.copy(bokehHighlights = v) } },
@@ -5139,8 +5458,69 @@ private fun EffectsPanel(state: UiState, vm: HeadsupViewModel, kind: EffectKind,
             LabeledChoice("Blurred", listOf("The rest", "What it covers"), { (it == 1) == effects.bokehInvert }, { i -> updateEffects { it.copy(bokehInvert = i == 1) } })
             if (effects.bokehMask == null) SmallAction("Find the subject again", { vm.findPhotoSubjectAgain() })
         }
+        EffectKind.WEAVE -> ToolSection(
+            "Gate weave",
+            info = "Film running through a projector: the frame never sits exactly where the last one did (weave, a small restless drift, more up and down) and the lamp's light is never quite even (flicker). " +
+                "Subtle is right: a little of each reads as film; much of it looks like a fault. The picture is enlarged a touch so the moving edges stay out of sight.",
+        ) {
+            EffectRuler(compare = holdWithout, params =
+                listOf(
+                    EffectParam("Weave", effects.weave, 0f..1f, 0.02f, 0f, percent = true) { v -> updateEffects { it.copy(weave = v) } },
+                    EffectParam("Flicker", effects.flicker, 0f..1f, 0.02f, 0f, percent = true) { v -> updateEffects { it.copy(flicker = v) } },
+                ),
+            )
+        }
+        EffectKind.MIST -> ToolSection(
+            "Mist",
+            info = "A diffusion filter (as a Pro-Mist or Black Mist): the lights and bright parts spread into a soft haze round them, " +
+                "the picture gentler, as a film camera's. Laid over the picture as light adds; the before / after line shows it on its right.",
+        ) {
+            EffectRuler(compare = holdWithout, params = listOf(EffectParam("Mist", effects.mist, 0f..1f, 0.02f, 0f, percent = true) { v -> updateEffects { it.copy(mist = v) } }))
+        }
+        EffectKind.STREAKS -> ToolSection(
+            "Anamorphic",
+            info = "An anamorphic lens's long, thin, blue streaks across the lights (street lamps, the sun, headlights). " +
+                "Anamorphic look adds the rest of it: the cinema shape (2.39:1 bars), softer corners" +
+                (if (state.selected?.meta?.isPhoto == true) " and oval bokeh (with Bokeh on)." else "."),
+        ) {
+            EffectRuler(compare = holdWithout, params =
+                listOf(
+                    EffectParam("Streaks", effects.streaks, 0f..1f, 0.02f, 0f, percent = true) { v -> updateEffects { it.copy(streaks = v) } },
+                    EffectParam("Length", effects.streakLength, 0.3f..3f, 0.05f, 1f, format = "× %.2f") { v -> updateEffects { it.copy(streakLength = v) } },
+                ),
+            )
+            Row {
+                Spacer(Modifier.weight(1f))
+                SmallAction("Anamorphic look", {
+                    updateEffects { it.copy(streaks = maxOf(it.streaks, 0.5f), barsRatio = 2.39f, barsVertical = false, barsBlur = false, barsImage = null, barsColour = 0xFF000000.toInt(), lensSoftness = maxOf(it.lensSoftness, 0.25f), bokehOval = true) }
+                })
+            }
+        }
+        EffectKind.STAR -> ToolSection(
+            "Star",
+            info = "A star filter: rays up, down and to the sides from each point of light (lamps, reflections, the sun). Length sets how far they reach.",
+        ) {
+            EffectRuler(compare = holdWithout, params =
+                listOf(
+                    EffectParam("Star", effects.star, 0f..1f, 0.02f, 0f, percent = true) { v -> updateEffects { it.copy(star = v) } },
+                    EffectParam("Length", effects.starLength, 0.3f..3f, 0.05f, 1f, format = "× %.2f") { v -> updateEffects { it.copy(starLength = v) } },
+                ),
+            )
+        }
+        EffectKind.PRISM -> ToolSection(
+            "Prism",
+            info = "A prism held before the lens: the lights repeated beside themselves, split into a rainbow's colours. Spread sets how far the copies go, Direction which way (0° right, 90° down, 180° left, 270° up).",
+        ) {
+            EffectRuler(compare = holdWithout, params =
+                listOf(
+                    EffectParam("Prism", effects.prism, 0f..1f, 0.02f, 0f, percent = true) { v -> updateEffects { it.copy(prism = v) } },
+                    EffectParam("Spread", effects.prismSpread, 0.3f..3f, 0.05f, 1f, format = "× %.2f") { v -> updateEffects { it.copy(prismSpread = v) } },
+                    EffectParam("Direction", effects.prismAngle, 0f..355f, 5f, app.headsup.core.photo.LightFx.PRISM_ANGLE, format = "%.0f°") { v -> updateEffects { it.copy(prismAngle = v) } },
+                ),
+            )
+        }
         EffectKind.LENS -> ToolSection("Lens", info = "An older lens: colour fringes and softness that grow towards the corners; the middle stays sharp. A little goes a long way.") {
-            EffectRuler(
+            EffectRuler(compare = holdWithout, params =
                 listOf(
                     EffectParam("Fringes", effects.lensAberration, 0f..1f, 0.02f, 0f, percent = true) { v -> updateEffects { it.copy(lensAberration = v) } },
                     EffectParam("Soft corners", effects.lensSoftness, 0f..1f, 0.02f, 0f, percent = true) { v -> updateEffects { it.copy(lensSoftness = v) } },
@@ -5150,11 +5530,16 @@ private fun EffectsPanel(state: UiState, vm: HeadsupViewModel, kind: EffectKind,
         }
         EffectKind.BARS -> ToolSection(
             "Bars",
-            info = "Black bars top and bottom for a cinema shape." +
+            info = "Black bars top and bottom for a cinema shape. For a border round the picture (it made smaller in its frame, on any side, " +
+                "black, white, blurred or a picture), see " + (if (state.photoProject) "Crop › In the frame." else "Edit › Frame › This clip in the frame.") +
                 if (state.timelineAspect < 16f / 9f - 0.01f) " On this frame they take as much of the height as they would on 16:9, for the same look." else "",
         ) {
+            // Cinema bars only: black, top and bottom. Bars round a picture made smaller in its frame
+            // (any side, black, white, blurred or a picture) are the frame's: Crop / Frame › In the frame.
             val ratios = listOf<Float?>(null, 2.39f, 2.0f, 1.85f)
-            ChoiceGrid(ratios.map { r -> when (r) { null -> "Off"; 2.39f -> "2.39:1"; 2.0f -> "2:1"; else -> "1.85:1" } }, ratios.indexOf(effects.barsRatio), { i -> updateEffects { it.copy(barsRatio = ratios[i]) } }, minCell = 60.dp)
+            ChoiceGrid(listOf("Off", "2.39:1", "2:1", "1.85:1"), if (effects.barsVertical) 0 else ratios.indexOf(effects.barsRatio), { i ->
+                updateEffects { it.copy(barsRatio = ratios[i], barsVertical = false, barsBlur = false, barsImage = null, barsColour = 0xFF000000.toInt()) }
+            }, minCell = 60.dp)
             // Sliding in and out is in time: a photo has none.
             if (effects.barsRatio != null && !state.photoProject && state.selected?.meta?.isPhoto != true) {
                 val motions = app.headsup.render.BarsMotion.entries
@@ -5178,12 +5563,28 @@ private class EffectParam(
 
 /** An effect's values: which one the ruler edits (when there are several), its value, the ruler. */
 @Composable
-private fun EffectRuler(params: List<EffectParam>) {
+private fun EffectRuler(params: List<EffectParam>, compare: ((Boolean) -> Unit)? = null) {
     var index by rememberSaveable(params.map { it.label }.joinToString()) { mutableStateOf(0) }
     val p = params[index.coerceIn(0, params.size - 1)]
     if (params.size > 1) Segmented(params.map { it.label }, index, { index = it })
     ValueHeader(p.label, if (p.percent) String.format(Locale.US, "%.0f %%", p.value * 100) else String.format(Locale.US, p.format, p.value))
-    RulerSlider(p.value, p.range, p.step, { v -> p.set(v) }, onReset = { p.set(p.neutral) })
+    RulerSlider(p.value, p.range, p.step, { v -> p.set(v) }, onReset = { p.set(p.neutral) }, onHold = compare)
+}
+
+/** [this] with the effect [kind] off: what holding its ruler shows (only that effect taken away). */
+private fun app.headsup.render.EffectSettings.without(kind: EffectKind): app.headsup.render.EffectSettings = when (kind) {
+    EffectKind.GRAIN -> copy(grain = 0f)
+    EffectKind.GLOW -> copy(glow = 0f)
+    EffectKind.HALATION -> copy(halation = 0f)
+    EffectKind.BOKEH -> copy(bokeh = 0f)
+    EffectKind.WEAVE -> copy(weave = 0f, flicker = 0f)
+    EffectKind.MIST -> copy(mist = 0f)
+    EffectKind.STREAKS -> copy(streaks = 0f)
+    EffectKind.STAR -> copy(star = 0f)
+    EffectKind.PRISM -> copy(prism = 0f)
+    EffectKind.LENS -> copy(lensAberration = 0f, lensSoftness = 0f)
+    EffectKind.BARS -> copy(barsRatio = null)
+    else -> this
 }
 
 @Composable
@@ -6018,16 +6419,116 @@ private fun PhotoCrop(state: UiState, clip: ClipState, vm: HeadsupViewModel) {
     val presets = Reframe.PRESETS
     ToolSection(
         "Aspect",
-        info = "The shape the photo is cut to; Original keeps the photo's own. Drag the picture to choose what stays, pinch to zoom.",
+        info = "The shape the photo is cut to; Original keeps the photo's own. Drag an edge or corner of the frame in to cut it freely (the shape then shows as Custom). Drag the picture to choose what stays, pinch to zoom.",
     ) {
+        // The usual shapes, and one of one's own (Custom: width and height typed in).
+        var custom by remember { mutableStateOf(false) }
+        val preset = presets.indexOfFirst { it.first == r.aspect }
+        val own = r.panels == 1 && r.aspect != null && preset < 0
         ChoiceGrid(
-            presets.map { it.second },
-            presets.indexOfFirst { it.first == r.aspect },
-            { i -> vm.updateReframe { it.copy(aspect = presets[i].first) } },
-            glyph = { i, on -> AspectGlyph(presets[i].first ?: clip.meta.let { m -> if (r.quarterTurns % 2 != 0) m.height.toFloat() / m.width.coerceAtLeast(1) else m.width.toFloat() / m.height.coerceAtLeast(1) }, on) },
+            presets.map { it.second } + (if (own) "Custom " + aspectLabel(r.aspect!!) else "Custom"),
+            if (r.panels > 1) -1 else if (own) presets.size else preset,
+            { i -> if (i == presets.size) custom = true else vm.updateReframe { it.copy(aspect = presets[i].first, panels = 1) } },
+            glyph = { i, on ->
+                val a = if (i == presets.size) (r.aspect.takeIf { own } ?: 1.5f) else presets[i].first
+                AspectGlyph(a ?: clip.meta.let { m -> if (r.quarterTurns % 2 != 0) m.height.toFloat() / m.width.coerceAtLeast(1) else m.width.toFloat() / m.height.coerceAtLeast(1) }, on)
+            },
         )
+        if (custom) CustomAspectDialog(r.aspect.takeIf { own }, onDismiss = { custom = false }) { a ->
+            custom = false
+            vm.updateReframe { it.copy(aspect = a, panels = 1) }
+        }
+    }
+    // A panorama cut into a carousel: 2 or 3 panels side by side, each Instagram's 4:5 or 1:1.
+    ToolSection(
+        "Carousel",
+        info = "A wide photo cut into 2 or 3 posts that join up when swiped (an Instagram carousel). The frame takes their shape side by side; " +
+            "the dashed lines show the cuts. Drag the picture to place it, pinch to zoom. Export saves each part as its own photo (_1of3, _2of3…).",
+    ) {
+        ChoiceGrid(listOf("Off", "2 parts", "3 parts"), (r.panels - 1).coerceIn(0, 2), { i ->
+            val n = i + 1
+            vm.updateReframe {
+                if (n == 1) it.copy(panels = 1)
+                else {
+                    val shape = if (it.panels > 1) (it.aspect ?: 0.8f * it.panels) / it.panels else 0.8f
+                    it.copy(panels = n, aspect = shape * n, fit = false)
+                }
+            }
+        })
+        if (r.panels > 1) {
+            val shape = (r.aspect ?: 0.8f * r.panels) / r.panels
+            val shapes = Reframe.PANEL_SHAPES
+            LabeledChoice("Each part", shapes.map { it.second }, { kotlin.math.abs(shapes[it].first - shape) < 0.01f }, { i ->
+                vm.updateReframe { it.copy(aspect = shapes[i].first * it.panels) }
+            })
+        }
+    }
+    // The whole photo inside its frame, made smaller and moved there: room round it for the bars.
+    ToolSection(
+        "In the frame",
+        info = "Fill: the photo covers the frame (what is outside is cut). Fit: all of it inside the frame, with bars where the shapes differ; " +
+            "zoom below 1× makes it smaller, and dragging it moves it in the frame (e.g. to the top, the bars below). The bars: a colour, the photo blurred, or a picture of your own.",
+    ) {
+        ChoiceGrid(listOf("Fill", "Fit"), if (r.fit) 1 else 0, { i -> vm.updateReframe { it.copy(fit = i == 1, panels = if (i == 1) 1 else it.panels) } })
+        if (r.fit) {
+            val imagePicker = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri -> if (uri != null) vm.setBackdropImage(uri) }
+            val choice = when {
+                r.blur -> 2
+                r.backdropImage != null -> 3
+                r.backdropColour == 0xFFFFFFFF.toInt() -> 1
+                else -> 0
+            }
+            LabeledChoice("Bars", listOf("Black", "White", "Blur", "Picture"), { it == choice }, { i ->
+                when (i) {
+                    0 -> vm.updateReframe { it.copy(blur = false, backdropImage = null, backdropColour = 0xFF000000.toInt()) }
+                    1 -> vm.updateReframe { it.copy(blur = false, backdropImage = null, backdropColour = 0xFFFFFFFF.toInt()) }
+                    2 -> vm.updateReframe { it.copy(blur = true, backdropImage = null) }
+                    else -> imagePicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+                }
+            })
+        }
     }
     GeometrySections(r, vm)
+}
+
+/** A shape as width:height in small whole numbers where it is one (3:2, 21:9), else to two decimals. */
+private fun aspectLabel(a: Float): String {
+    for (h in 1..20) {
+        val w = a * h
+        if (kotlin.math.abs(w - kotlin.math.round(w)) < 0.01f) return "${kotlin.math.round(w).toInt()}:$h"
+    }
+    return String.format(Locale.US, "%.2f:1", a)
+}
+
+/** A crop shape of one's own: width and height, in any units (3 and 2, or 1080 and 1350). */
+@Composable
+private fun CustomAspectDialog(current: Float?, onDismiss: () -> Unit, onSet: (Float) -> Unit) {
+    val start = current?.let { aspectLabel(it).split(':') }
+    var w by remember { mutableStateOf(start?.getOrNull(0)?.takeIf { !it.contains('.') } ?: "3") }
+    var h by remember { mutableStateOf(start?.getOrNull(1)?.takeIf { !it.contains('.') } ?: "2") }
+    val wv = w.replace(',', '.').toFloatOrNull()
+    val hv = h.replace(',', '.').toFloatOrNull()
+    val aspect = if (wv != null && hv != null && wv > 0f && hv > 0f) wv / hv else null
+    // Very long or very tall shapes are not crops a photo can be cut to sensibly.
+    val ok = aspect != null && aspect in 0.2f..5f
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Custom shape") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(w, { w = it.take(6) }, Modifier.weight(1f), label = { Text("Width") }, singleLine = true,
+                        keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(keyboardType = androidx.compose.ui.text.input.KeyboardType.Decimal))
+                    Text(":", style = MaterialTheme.typography.titleLarge)
+                    OutlinedTextField(h, { h = it.take(6) }, Modifier.weight(1f), label = { Text("Height") }, singleLine = true,
+                        keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(keyboardType = androidx.compose.ui.text.input.KeyboardType.Decimal))
+                }
+                Hint(if (ok) "A frame ${aspectLabel(aspect!!)} (${String.format(Locale.US, "%.2f", aspect)} wide to 1 high)." else "Width and height, e.g. 3 and 2, or 1080 and 1350.")
+            }
+        },
+        confirmButton = { TextButton(onClick = { aspect?.let(onSet) }, enabled = ok) { Text("Set") } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+    )
 }
 
 /**
@@ -6066,7 +6567,7 @@ private fun GeometrySections(r: Reframe, vm: HeadsupViewModel) {
         info = "Zoom into the picture, and turn it level (double-tap a ruler to reset it, hold it to compare).",
     ) {
         ValueHeader("Zoom", String.format(Locale.US, "%.2f×", r.zoom))
-        RulerSlider(r.zoom, 1f..4f, 0.02f, { v -> vm.updateReframe { it.copy(zoom = v) } }, onReset = { vm.updateReframe { it.copy(zoom = 1f) } })
+        RulerSlider(r.zoom, r.minZoom..4f, 0.02f, { v -> vm.updateReframe { it.copy(zoom = v) } }, onReset = { vm.updateReframe { it.copy(zoom = 1f) } })
         // Straightening: the angle besides the quarter turns.
         val turns = r.quarterTurns
         ValueHeader("Straighten", String.format(Locale.US, "%+.1f°", r.straighten))

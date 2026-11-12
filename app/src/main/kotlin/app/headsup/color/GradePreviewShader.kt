@@ -33,6 +33,15 @@ class GradeTables(
 @RequiresApi(33)
 class GradePreviewShader {
     private val shader = RuntimeShader(SOURCE)
+
+    /** The light the bright parts give, from the corrected picture: blurred and laid over it (glow, halation). */
+    private val glowSource = RuntimeShader(GLOW_SOURCE)
+
+    /** Each light effect's own source (each keeps its own settings). */
+    private val mistSource = RuntimeShader(LIGHT_SOURCE)
+    private val streakSource = RuntimeShader(LIGHT_SOURCE)
+    private val starSource = RuntimeShader(LIGHT_SOURCE)
+    private val prismSource = RuntimeShader(LIGHT_SOURCE)
     private var tableSize = LutBaker.DEFAULT_SIZE
 
     init {
@@ -122,7 +131,66 @@ class GradePreviewShader {
         fromMasks: List<ColourMask> = emptyList(),
     ): RenderEffect {
         setUniforms(effects, zebra, frame, width, height, masks, fromWeight, detail, presence, warp, fromMasks)
-        return RenderEffect.createRuntimeShaderEffect(shader, "image")
+        val fx = effects.lightFx
+        val glowing = effects.glow > 0f || effects.halation > 0f
+        if (!glowing && !fx.any) return RenderEffect.createRuntimeShaderEffect(shader, "image")
+        // Glow, halation and the light effects as light really spreads: the bright parts' light taken
+        // from the corrected picture, blurred by the system's Gaussian (shifted, tinted), and added
+        // back over it (screen). Gathered in one pass instead, a wide glow showed its taps.
+        shader.setFloatUniform("glow", 0f)
+        shader.setFloatUniform("halation", 0f)
+        val base = RenderEffect.createRuntimeShaderEffect(shader, "image")
+        val splitX = if (split >= 0f) split * width else -1f
+        val short = minOf(width, height)
+        val lights = ArrayList<RenderEffect>()
+        if (glowing) {
+            glowSource.setFloatUniform("threshold", effects.glowThreshold)
+            glowSource.setFloatUniform("glow", effects.glow)
+            glowSource.setFloatUniform("halation", effects.halation)
+            glowSource.setFloatUniform("glowTint", EffectLook.glowTint(effects.glowWarmth))
+            glowSource.setFloatUniform("splitX", splitX)
+            val light = RenderEffect.createChainEffect(RenderEffect.createRuntimeShaderEffect(glowSource, "image"), base)
+            val sigma = app.headsup.core.photo.Glow.sigma(short, effects.glowSpread).coerceAtLeast(0.5f)
+            lights += RenderEffect.createBlurEffect(sigma, sigma, light, Shader.TileMode.CLAMP)
+        }
+        // The light a source shader takes from the corrected picture: over [threshold], × [gain], in [tint].
+        fun source(s: RuntimeShader, threshold: Float, gain: Float, tint: FloatArray): RenderEffect {
+            s.setFloatUniform("threshold", threshold)
+            s.setFloatUniform("gain", gain)
+            s.setFloatUniform("tint", tint)
+            s.setFloatUniform("splitX", splitX)
+            return RenderEffect.createChainEffect(RenderEffect.createRuntimeShaderEffect(s, "image"), base)
+        }
+        fun blur(e: RenderEffect, sx: Float, sy: Float) = RenderEffect.createBlurEffect(sx.coerceAtLeast(0.5f), sy.coerceAtLeast(0.5f), e, Shader.TileMode.DECAL)
+        val L = app.headsup.core.photo.LightFx
+        val white = floatArrayOf(1f, 1f, 1f)
+        if (fx.mist > 0f) lights += blur(source(mistSource, L.MIST_THRESHOLD, fx.mist * 0.6f, white), L.MIST_SIGMA * short, L.MIST_SIGMA * short)
+        if (fx.streaks > 0f) lights += blur(source(streakSource, L.STREAK_THRESHOLD, fx.streaks * 2f, L.STREAK_TINT), L.STREAK_SIGMA * short * fx.streakLength, L.STREAK_THIN * short)
+        if (fx.star > 0f) {
+            val src = source(starSource, L.STAR_THRESHOLD, fx.star * 2f, white)
+            lights += blur(src, L.STAR_SIGMA * short * fx.starLength, L.STAR_THIN * short)
+            lights += blur(src, L.STAR_THIN * short, L.STAR_SIGMA * short * fx.starLength)
+        }
+        if (fx.prism > 0f) {
+            val soft = blur(source(prismSource, L.PRISM_THRESHOLD, fx.prism, white), L.PRISM_SOFT * short, L.PRISM_SOFT * short)
+            val a = Math.toRadians(fx.prismAngle.toDouble())
+            for (k in 0..2) {
+                val d = L.PRISM_STEP * short * fx.prismSpread * (k + 1)
+                val t = L.PRISM_TINTS[k]
+                val wgt = L.PRISM_WEIGHTS[k]
+                val tint = android.graphics.ColorMatrixColorFilter(android.graphics.ColorMatrix(floatArrayOf(
+                    t[0] * wgt, 0f, 0f, 0f, 0f,
+                    0f, t[1] * wgt, 0f, 0f, 0f,
+                    0f, 0f, t[2] * wgt, 0f, 0f,
+                    0f, 0f, 0f, 1f, 0f,
+                )))
+                lights += RenderEffect.createColorFilterEffect(tint, RenderEffect.createOffsetEffect((d * kotlin.math.cos(a)).toFloat(), (d * kotlin.math.sin(a)).toFloat(), soft))
+            }
+        }
+        // All the light added together, then over the picture.
+        var light = lights.first()
+        for (k in 1 until lights.size) light = RenderEffect.createBlendModeEffect(light, lights[k], android.graphics.BlendMode.PLUS)
+        return RenderEffect.createBlendModeEffect(base, light, android.graphics.BlendMode.SCREEN)
     }
 
     /**
@@ -140,6 +208,9 @@ class GradePreviewShader {
         warp: DoubleArray? = null,
     ): Shader {
         setUniforms(effects, false, 0f, width, height, masks, 0f, detail, presence, warp)
+        // The photo export adds glow and halation after (blurred light, as the preview does).
+        shader.setFloatUniform("glow", 0f)
+        shader.setFloatUniform("halation", 0f)
         shader.setInputShader("image", image)
         return shader
     }
@@ -333,6 +404,39 @@ class GradePreviewShader {
         // The tables are laid out like Media3's SingleColorLut: N wide, N² high, x = b, y = g + N·r.
         // They are sampled without filtering and interpolated here (trilinear); glow taps use the
         // nearest entry of the base table, which is plenty for a blurred highlight.
+        /** The light of what is bright in the corrected picture, coloured as glow and halation; none left of the before / after line. */
+        /** The light of what is brighter than [threshold], × gain, in a tint; none left of the before / after line. */
+        const val LIGHT_SOURCE = """
+            uniform shader image;
+            uniform float threshold;
+            uniform float gain;
+            uniform float3 tint;
+            uniform float splitX;
+            half4 main(float2 coord) {
+                if (splitX >= 0.0 && coord.x < splitX) return half4(0.0, 0.0, 0.0, 1.0);
+                float3 c = float3(image.eval(coord).rgb);
+                float k = max(dot(c, float3(0.2126, 0.7152, 0.0722)) - threshold, 0.0) / max(1.0 - threshold, 0.01);
+                return half4(half3(clamp(c * k * gain * tint, 0.0, 1.0)), 1.0);
+            }
+        """
+
+        const val GLOW_SOURCE = """
+            uniform shader image;
+            uniform float threshold;
+            uniform float glow;
+            uniform float halation;
+            uniform float3 glowTint;
+            uniform float splitX;
+            half4 main(float2 coord) {
+                if (splitX >= 0.0 && coord.x < splitX) return half4(0.0, 0.0, 0.0, 1.0);
+                float3 c = float3(image.eval(coord).rgb);
+                float k = max(dot(c, float3(0.2126, 0.7152, 0.0722)) - threshold, 0.0) / max(1.0 - threshold, 0.01);
+                float3 b = c * k;
+                float3 l = b * glow * 1.5 * glowTint + dot(b, float3(0.33)) * halation * 2.0 * float3(1.0, 0.3, 0.1);
+                return half4(half3(clamp(l, 0.0, 1.0)), 1.0);
+            }
+        """
+
         val SOURCE = """
             uniform shader image;
             uniform shader brush;
@@ -531,6 +635,32 @@ class GradePreviewShader {
             }
 
             // Turns the glow's taps a little per pixel when it reaches far, so its rings do not show.
+            // The glow's grid of taps moved by under a cell at each pixel (interleaved gradient noise),
+            // so its regular spacing never shows as copies of a small bright thing.
+            float2 glowJitter(float2 p) {
+                return float2(
+                    fract(52.9829189 * fract(dot(p, float2(0.06711056, 0.00583715)))),
+                    fract(52.9829189 * fract(dot(p.yx + 17.0, float2(0.06711056, 0.00583715))))
+                ) - 0.5;
+            }
+
+            // The light round p: what is bright gathered over a Gaussian (σ 1.1 r) on a 7×7 grid of
+            // taps, so a small light spreads into an even glow, not into dots or rings of copies.
+            float3 glowGather(float2 p, float r) {
+                float2 jit = glowJitter(p);
+                float3 acc = float3(0.0);
+                float wsum = 0.0;
+                for (int y = -3; y <= 3; y++) {
+                    for (int x = -3; x <= 3; x++) {
+                        float2 o = (float2(float(x), float(y)) + jit) * r * 0.8;
+                        float w = exp(-dot(o, o) / (2.42 * r * r));
+                        acc += bright(p + o) * w;
+                        wsum += w;
+                    }
+                }
+                return acc / wsum;
+            }
+
             float glowTurn(float2 p) {
                 return fract(52.9829189 * fract(dot(p, float2(0.06711056, 0.00583715)))) * 6.2832 * smooth01(1.1, 2.0, glowSpread);
             }
@@ -697,17 +827,11 @@ class GradePreviewShader {
                 }
                 if (glow > 0.0 || halation > 0.0) {
                     float r = shortSide * 0.012 * glowSpread;
-                    float turn = glowTurn(coord);
-                    float3 acc = float3(0.0);
-                    for (int i = 0; i < 12; i++) {
-                        float a = float(i) * 0.5236 + turn;
-                        acc += bright(coord + float2(cos(a), sin(a)) * r);
-                    }
-                    for (int i = 0; i < 6; i++) {
-                        float a = float(i) * 1.0472 + 0.26 + turn;
-                        acc += bright(coord + float2(cos(a), sin(a)) * 2.2 * r);
-                    }
-                    float3 g = clamp(acc / 18.0 * glow * 1.5 * glowTint + dot(acc / 18.0, float3(0.33)) * halation * 2.0 * float3(1.0, 0.3, 0.1), 0.0, 1.0);
+                    // The light gathered over the whole disc (a golden-angle spiral), turned differently
+                    // at each pixel: two fixed rings repeated a small bright thing (a lit sign) as
+                    // copies of itself a ring away; spread like this it is an even glow round it.
+                    float3 acc = glowGather(coord, r);
+                    float3 g = clamp(acc * glow * 1.5 * glowTint + dot(acc, float3(0.33)) * halation * 2.0 * float3(1.0, 0.3, 0.1), 0.0, 1.0);
                     c = 1.0 - (1.0 - c) * (1.0 - g);
                 }
                 // A mask's glow: only what is bright inside the mask gives light, which spreads past
@@ -716,17 +840,25 @@ class GradePreviewShader {
                     float r = shortSide * 0.012 * glowSpread;
                     float3 accG = float3(0.0);
                     float3 accH = float3(0.0);
-                    for (int i = 0; i < 18; i++) {
-                        float a = i < 12 ? float(i) * 0.5236 : float(i - 12) * 1.0472 + 0.26;
-                        float2 q = coord + float2(cos(a), sin(a)) * (i < 12 ? r : 2.2 * r);
-                        float2 k = maskGlowAt(q);
-                        if (k.x <= 0.0 && k.y <= 0.0) continue;
-                        float3 s = float3(gradeNearest(img(q).rgb));
-                        float3 b = s * (max(luma(s) - 0.6, 0.0) / 0.4);
-                        accG += b * k.x;
-                        accH += b * k.y;
+                    float2 jit = glowJitter(coord);
+                    float wsum = 0.0;
+                    for (int y = -2; y <= 2; y++) {
+                        for (int x = -2; x <= 2; x++) {
+                            float2 o = (float2(float(x), float(y)) + jit) * r * 0.9;
+                            float w = exp(-dot(o, o) / (2.42 * r * r));
+                            wsum += w;
+                            float2 q = coord + o;
+                            float2 k = maskGlowAt(q);
+                            if (k.x <= 0.0 && k.y <= 0.0) continue;
+                            float3 s = float3(gradeNearest(img(q).rgb));
+                            float3 b = s * (max(luma(s) - 0.6, 0.0) / 0.4) * w;
+                            accG += b * k.x;
+                            accH += b * k.y;
+                        }
                     }
-                    float3 g = clamp(accG / 18.0 * 1.5 * glowTint + dot(accH / 18.0, float3(0.33)) * 2.0 * float3(1.0, 0.3, 0.1), 0.0, 1.0);
+                    accG /= wsum;
+                    accH /= wsum;
+                    float3 g = clamp(accG * 1.5 * glowTint + dot(accH, float3(0.33)) * 2.0 * float3(1.0, 0.3, 0.1), 0.0, 1.0);
                     c = 1.0 - (1.0 - c) * (1.0 - g);
                 }
                 if (grain > 0.0) c = filmGrain(coord, c);

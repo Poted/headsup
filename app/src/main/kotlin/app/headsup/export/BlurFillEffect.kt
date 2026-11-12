@@ -25,10 +25,13 @@ import kotlin.math.roundToInt
  */
 @OptIn(UnstableApi::class)
 class BlurFillEffect(
-    private val toFrame: android.graphics.Matrix,
+    /** Source → frame at a moment of the clip (its own time, ms): one matrix, or one per frame for a moving frame. */
+    private val toFrameAt: (positionMs: Long) -> android.graphics.Matrix,
     private val outWidth: Int,
     private val outHeight: Int,
 ) : GlEffect {
+    constructor(toFrame: android.graphics.Matrix, outWidth: Int, outHeight: Int) : this({ _ -> toFrame }, outWidth, outHeight)
+
     override fun toGlShaderProgram(context: Context, useHdr: Boolean): GlShaderProgram = Program(useHdr)
 
     private inner class Program(private val useHdr: Boolean) : BaseGlShaderProgram(useHdr, 1) {
@@ -43,11 +46,14 @@ class BlurFillEffect(
         private var textures = IntArray(0)
         private var fbos = IntArray(0)
 
-        init {
+        private var firstUs = -1L
+
+        /** The frame → source matrix for this moment, column by column as GLSL reads a mat3. */
+        private fun sourceAt(presentationTimeUs: Long) {
+            if (firstUs < 0) firstUs = presentationTimeUs
             val inverse = android.graphics.Matrix()
-            toFrame.invert(inverse)
+            toFrameAt((presentationTimeUs - firstUs) / 1000L).invert(inverse)
             val m = FloatArray(9).also { inverse.getValues(it) }
-            // Column by column, as GLSL reads a mat3.
             floatArrayOf(m[0], m[3], m[6], m[1], m[4], m[7], m[2], m[5], m[8]).copyInto(toSource)
         }
 
@@ -84,6 +90,7 @@ class BlurFillEffect(
 
         override fun drawFrame(inputTexId: Int, presentationTimeUs: Long) {
             try {
+                sourceAt(presentationTimeUs)
                 // Where Media3 wants the frame drawn: put back after the small passes.
                 val bound = IntArray(1).also { GLES20.glGetIntegerv(GLES20.GL_FRAMEBUFFER_BINDING, it, 0) }[0]
                 val viewport = IntArray(4).also { GLES20.glGetIntegerv(GLES20.GL_VIEWPORT, it, 0) }

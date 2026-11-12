@@ -47,7 +47,7 @@ object Bokeh {
         if (effects.bokehInvert) for (i in keep.indices) keep[i] = 1f - keep[i]
         val px = IntArray(w * h)
         small.getPixels(px, 0, w, 0, 0, w, h)
-        val out = LensBlur.background(px, w, h, keep, LensBlur.radiusFor(effects.bokeh, maxOf(w, h)), effects.bokehHighlights)
+        val out = LensBlur.background(px, w, h, keep, LensBlur.radiusFor(effects.bokeh, maxOf(w, h)), effects.bokehHighlights, oval = effects.bokehOval)
         return Bitmap.createBitmap(out, w, h, Bitmap.Config.ARGB_8888) to outline(keep, w, h)
     }
 

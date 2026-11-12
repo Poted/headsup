@@ -39,6 +39,15 @@ data class Reframe(
     val lensVignette: Float = 0f,
     /** Mirrored left to right (before it is turned); a flip upside down is this and half a turn. */
     val mirrored: Boolean = false,
+    /**
+     * A photo for a carousel (Instagram): the frame cut into this many panels side by side, each
+     * [aspect] / [panels] wide, saved one after another (1: not cut).
+     */
+    val panels: Int = 1,
+    /** With [fit]: the bars' colour (ARGB) when not blurred; black by default. */
+    val backdropColour: Int = 0xFF000000.toInt(),
+    /** With [fit]: a picture (kept by the app) filling the bars, in place of the colour. */
+    val backdropImage: String? = null,
 ) {
     val isIdentity: Boolean get() = zoom == 1f && centerX == 0.5f && centerY == 0.5f && angleDegrees == 0f && aspect == null && vertical == 0f && horizontal == 0f &&
         distortion == 0f && lensVignette == 0f && !mirrored
@@ -114,18 +123,88 @@ data class Reframe(
         return max(zoom * upright, cover)
     }
 
-    /** [centerX]/[centerY] limited so the output stays inside the picture. */
+    /**
+     * [centerX]/[centerY] limited so the output stays inside the picture; fitted (the picture
+     * smaller than the frame that way), so the picture stays inside the frame: it can then be moved
+     * within it, e.g. up to leave the bars below.
+     */
     fun clamped(outW: Float, outH: Float, srcW: Float, srcH: Float): Reframe {
         val scale = baseScale(outW, outH, srcW, srcH) * effectiveZoom(outW, outH, srcW, srcH)
         val (c, s) = cosSin()
         // Half-extent of the (rotated) output frame in source fractions.
         val hx = (outW * c + outH * s) / (2f * scale) / srcW
         val hy = (outW * s + outH * c) / (2f * scale) / srcH
-        return copy(
-            centerX = if (hx >= 0.5f) 0.5f else centerX.coerceIn(hx, 1f - hx),
-            centerY = if (hy >= 0.5f) 0.5f else centerY.coerceIn(hy, 1f - hy),
-        )
+        fun limit(v: Float, h: Float) = when {
+            h < 0.5f -> v.coerceIn(h, 1f - h)
+            fit -> v.coerceIn(1f - h, h)
+            else -> 0.5f
+        }
+        return copy(centerX = limit(centerX, hx), centerY = limit(centerY, hy))
     }
+
+    /**
+     * Fitted and smaller than its frame: the picture's middle drawn to the frame's lines of
+     * symmetry (its middle and its thirds) and its edges to the frame's, when within [tolerance]
+     * of the frame's size; as it is otherwise (and when turned, where lines would not hold).
+     */
+    fun snappedInFrame(outW: Float, outH: Float, srcW: Float, srcH: Float, tolerance: Float = 0.02f): Reframe {
+        if (!fit || straighten != 0f) return this
+        val r = clamped(outW, outH, srcW, srcH)
+        val scale = baseScale(outW, outH, srcW, srcH) * r.effectiveZoom(outW, outH, srcW, srcH)
+        val odd = quarterTurns % 2 != 0
+        // The picture's size along the frame's x and y (turned a quarter, its sides swap).
+        val alongX = (if (odd) srcH else srcW) * scale
+        val alongY = (if (odd) srcW else srcH) * scale
+        // Where the picture's middle is in the frame (fractions) for a centre value, and back: a
+        // centre further right in the picture puts the picture's middle further left in the frame.
+        fun snap(centre: Float, out: Float, along: Float, srcSide: Float, sign: Float): Float {
+            if (along >= out) return centre
+            val k = sign * srcSide * scale / out
+            val middle = 0.5f + (0.5f - centre) * k
+            val half = along / out / 2f
+            // The frame's middle and thirds for the picture's middle; its edges for the picture's.
+            val targets = listOf(0.5f, 1f / 3f, 2f / 3f, half, 1f - half)
+            val near = targets.minByOrNull { kotlin.math.abs(it - middle) } ?: return centre
+            return if (kotlin.math.abs(near - middle) <= tolerance) 0.5f - (near - 0.5f) / k else centre
+        }
+        // Mapped like sourceOf: the picture's x is its own x (or y when turned), mirrored when it is.
+        val (sx, sy) = when (((quarterTurns % 4) + 4) % 4) {
+            0 -> (if (mirrored) -1f else 1f) to 1f
+            2 -> (if (mirrored) 1f else -1f) to -1f
+            else -> return r
+        }
+        return r.copy(centerX = snap(r.centerX, outW, alongX, srcW, sx), centerY = snap(r.centerY, outH, alongY, srcH, sy))
+    }
+
+    /**
+     * The framing cut down to part of the frame shown now: [left]..[right], [top]..[bottom] as
+     * fractions of the frame (its edges dragged in). The new frame has that part's shape and shows
+     * exactly what was inside it. For a [srcW]×[srcH] picture (as it comes, before turning);
+     * filled and not straightened only, else as it is.
+     */
+    fun cropped(left: Float, top: Float, right: Float, bottom: Float, srcW: Float, srcH: Float): Reframe {
+        if (fit || straighten != 0f || panels > 1) return this
+        val l = left.coerceIn(0f, 1f)
+        val r = right.coerceIn(0f, 1f)
+        val t = top.coerceIn(0f, 1f)
+        val b = bottom.coerceIn(0f, 1f)
+        if (r - l < 0.02f || b - t < 0.02f) return this
+        val (outW, outH) = outputSize(srcW, srcH)
+        val now = clamped(outW, outH, srcW, srcH)
+        val scale = baseScale(outW, outH, srcW, srcH) * now.effectiveZoom(outW, outH, srcW, srcH)
+        // The part's middle in the picture, and how much of the picture it spans.
+        val (cx, cy) = now.sourceOf((l + r) / 2f * outW, (t + b) / 2f * outH, outW, outH, srcW, srcH)
+        val spanW = (r - l) * outW / scale
+        val next = now.copy(aspect = (r - l) * outW / ((b - t) * outH), centerX = cx / srcW, centerY = cy / srcH, zoom = 1f)
+        val (w2, h2) = next.outputSize(srcW, srcH)
+        // The zoom at which the new frame's width spans the same part of the picture.
+        val wanted = w2 / spanW
+        val atOne = baseScale(w2, h2, srcW, srcH) * next.effectiveZoom(w2, h2, srcW, srcH)
+        return next.copy(zoom = (wanted / atOne).coerceIn(1f, 8f)).clamped(w2, h2, srcW, srcH)
+    }
+
+    /** The smallest zoom allowed: fitted, the picture may be made smaller inside the frame. */
+    val minZoom: Float get() = if (fit) MIN_FIT_ZOOM else 1f
 
     /** Source pixel shown at output pixel ([x], [y]). */
     fun sourceOf(x: Float, y: Float, outW: Float, outH: Float, srcW: Float, srcH: Float): Pair<Float, Float> {
@@ -167,6 +246,12 @@ data class Reframe(
     }
 
     companion object {
+        /** Fitted, how small the picture may be made inside its frame. */
+        const val MIN_FIT_ZOOM = 0.3f
+
+        /** Instagram's carousel panels: 4:5 (portrait, the tallest it shows) or 1:1. */
+        val PANEL_SHAPES: List<Pair<Float, String>> = listOf(0.8f to "4:5", 1f to "1:1")
+
         /** Scale at which the picture just covers the output frame. */
         fun baseScale(outW: Float, outH: Float, srcW: Float, srcH: Float) = max(outW / srcW, outH / srcH)
 

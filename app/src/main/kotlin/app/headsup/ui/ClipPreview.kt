@@ -22,6 +22,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.graphics.drawscope.clipRect
+import androidx.compose.ui.graphics.drawscope.clipPath
 import androidx.compose.ui.graphics.Color
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -47,6 +48,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameMillis
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
 import androidx.compose.ui.graphics.nativeCanvas
@@ -150,6 +152,8 @@ fun ClipPreview(
     fromMaskCubes: List<Array<Array<IntArray>>> = emptyList(),
     fromMaskMs: Long = 0L,
     transitionMs: Long = 0L,
+    /** How the clip goes into the next (the next clip's way in), for the end of this one. */
+    cutOut: Pair<app.headsup.core.edit.CutKind, Long> = app.headsup.core.edit.CutKind.NONE to 0L,
     /** Mask being edited: its outline is drawn, and dragging on the picture moves it. */
     guideMask: ColourMask? = null,
     onMoveMask: ((Float, Float) -> Unit)? = null,
@@ -221,8 +225,12 @@ fun ClipPreview(
     /** Receives a function that grabs the current picture (before colour) [width] pixels wide, e.g. for finding objects. */
     onPictureSource: (((width: Int) -> Bitmap?) -> Unit)? = null,
     /** Zoom, position and straightening; [onReframe] set means a finger on the picture pans and pinches it. */
-    reframe: Reframe = Reframe(),
+    reframeBase: Reframe = Reframe(),
+    /** The framing moving through the clip (Ken Burns, following the subject); empty: it stays [reframeBase]. */
+    frameKeys: List<app.headsup.core.frame.FrameKey> = emptyList(),
     onReframe: ((Reframe) -> Unit)? = null,
+    /** Set: the frame's edges and corners can be dragged in to cut the photo down (fractions of the frame). */
+    onCrop: ((left: Float, top: Float, right: Float, bottom: Float) -> Unit)? = null,
     /** Rule-of-thirds grid over the picture. */
     showGrid: Boolean = false,
     /** Start playing as soon as the clip is loaded (continuing from the previous clip). */
@@ -299,6 +307,17 @@ fun ClipPreview(
     // Two players: one shows the clip, the other holds the next one ready (a different shape or
     // file needs a new decoder, which in a single player shows as a pause at the cut).
     val players = remember { List(2) { ExoPlayer.Builder(context).build() } }
+    // The frames each player is about to show (when, and which moment of the media), so steadying
+    // corrects the very frame on screen, not the player's clock (which runs a little apart).
+    val shownFrames = remember { List(2) { ShownFrames() } }
+    DisposableEffect(players) {
+        val listeners = players.mapIndexed { i, p ->
+            androidx.media3.exoplayer.video.VideoFrameMetadataListener { presentationTimeUs, releaseTimeNs, _, _ ->
+                shownFrames[i].add(releaseTimeNs, presentationTimeUs)
+            }.also { p.setVideoFrameMetadataListener(it) }
+        }
+        onDispose { players.forEachIndexed { i, p -> p.clearVideoFrameMetadataListener(listeners[i]) } }
+    }
     DisposableEffect(players) { onDispose { players.forEach { it.release() } } }
     var active by remember { mutableIntStateOf(0) }
     // The player shown, as of this composition; effects that may run after a switch in the same
@@ -588,6 +607,9 @@ fun ClipPreview(
     var histogram by remember { mutableStateOf<FloatArray?>(null) }
     // Which scope shows (a tap on it steps through them): histogram, waveform, RGB parade.
     var scopeKind by androidx.compose.runtime.saveable.rememberSaveable { mutableIntStateOf(0) }
+    // Which corner of the picture the scope sits in (bit 0: right, bit 1: bottom), and how far a finger has dragged it.
+    var scopeCorner by androidx.compose.runtime.saveable.rememberSaveable { mutableIntStateOf(2) }
+    var scopeDrag by remember { mutableStateOf(Offset.Zero) }
     var scopeImage by remember { mutableStateOf<androidx.compose.ui.graphics.ImageBitmap?>(null) }
     val previewShader = remember { if (Build.VERSION.SDK_INT >= 33) GradePreviewShader() else null }
     var tableVersion by remember { mutableIntStateOf(0) }
@@ -657,6 +679,13 @@ fun ClipPreview(
     // Read by a gesture that lives as long as the preview: always the current setting.
     val panNow by rememberUpdatedState(panView)
     val reframer by rememberUpdatedState(onReframe)
+    val cropper by rememberUpdatedState(onCrop)
+    // The part kept while an edge of the frame is dragged (pixels of the frame), until it lifts.
+    var cropRect by remember { mutableStateOf<androidx.compose.ui.geometry.Rect?>(null) }
+    // The framing at this moment: moved by its keys (the moment is the one last drawn, so a key move
+    // follows the picture a frame behind, unseen).
+    val keyedAt = remember(clip.id) { mutableLongStateOf(clip.trimStartMs) }
+    val reframe = if (frameKeys.isEmpty()) reframeBase else app.headsup.core.frame.FrameKeys.at(reframeBase, frameKeys, keyedAt.longValue)
     val currentReframe by rememberUpdatedState(reframe)
     // Sizes of the frame and the picture under it, for gestures (read when they happen).
     LaunchedEffect(clip.meta.uri, wantsSubject, photoBitmap, photoFrom, subjectVersion) {
@@ -680,11 +709,13 @@ fun ClipPreview(
     val bokehSettings = clip.effects
     var bokehWorking by remember { mutableStateOf(false) }
     var bokehOutline by remember { mutableStateOf<Bitmap?>(null) }
+    // What was last outlined (the photo, its mask and side): not outlined again for the same.
+    var outlinedFor by remember { mutableStateOf<List<Any?>?>(null) }
     val outlineAlpha = remember { androidx.compose.animation.core.Animatable(0f) }
     // The photo the layer was made for: the layer is the whole photo with its background blurred,
     // so another photo's must never stay over this one while this one's is worked out.
     var bokehFor by remember { mutableStateOf<String?>(null) }
-    val bokehPhoto by produceState<ImageBitmap?>(null, photoBitmap, photoFrom, clip.meta.uri, bokehSettings.bokeh, bokehSettings.bokehHighlights, bokehSettings.bokehMask, bokehSettings.bokehInvert, clip.masks, subjectVersion) {
+    val bokehPhoto by produceState<ImageBitmap?>(null, photoBitmap, photoFrom, clip.meta.uri, bokehSettings.bokeh, bokehSettings.bokehHighlights, bokehSettings.bokehMask, bokehSettings.bokehInvert, bokehSettings.bokehOval, clip.masks, subjectVersion) {
         val uri = clip.meta.uri.toString()
         if (bokehFor != uri) { value = null; bokehOutline = null; bokehFor = uri }
         // Only from this photo's own picture (the previous one still shows while it is developed).
@@ -704,8 +735,11 @@ fun ClipPreview(
         } finally {
             bokehWorking = false
         }
-        // The outline shows a moment, then fades.
-        if (bokehOutline != null) {
+        // The outline shows a moment, then fades: only when what stays sharp changed (another photo,
+        // mask, side, or found again), not as the blur or highlights are set.
+        val keptKey = listOf(clip.meta.uri, bokehSettings.bokehMask, bokehSettings.bokehInvert, bokehSettings.bokehMask?.let { clip.masks.getOrNull(it) }, subjectVersion)
+        if (bokehOutline != null && keptKey != outlinedFor) {
+            outlinedFor = keptKey
             outlineAlpha.snapTo(1f)
             delay(1200)
             outlineAlpha.animateTo(0f, androidx.compose.animation.core.tween(800))
@@ -742,6 +776,8 @@ fun ClipPreview(
 
     // Player position; in file time while a cut handle is dragged, otherwise within the cut.
     var playerMs by remember { mutableLongStateOf(0L) }
+    // While playing: the player-time of the frame actually on screen (-1: not known, use playerMs).
+    var shownMs by remember { mutableLongStateOf(-1L) }
     val reportPosition by rememberUpdatedState(onPosition)
     val fileTime by rememberUpdatedState(scrubbing)
     var playing by remember { mutableStateOf(false) }
@@ -794,6 +830,8 @@ fun ClipPreview(
                 playerMs = exoPlayer.currentPosition
                 if (!fileTime) reportPosition(playerMs)
             }
+            // The frame on screen now, in the player's time (for steadying it exactly).
+            shownMs = if (exoPlayer.isPlaying) shownFrames[active].shownAt(System.nanoTime(), exoPlayer.currentPosition, clipNow.trimStartMs) else -1L
             // The speed of the clip actually on this player (just after a cut the selection may not
             // have followed yet): its ramp, or its steady speed, so no clip keeps another's speed.
             // Changed at most every 120 ms and by 3 % or more: each change costs the player a jolt.
@@ -878,11 +916,16 @@ fun ClipPreview(
     val positionMs = if (scrubbing) playerMs - clip.trimStartMs else playerMs
     // Masks that move are placed for this moment of the file.
     val fileMs = clip.trimStartMs + positionMs
+    if (frameKeys.isNotEmpty()) SideEffect { keyedAt.longValue = fileMs }
     // The oval being shaped as it shows now, for grabbing its ends.
     val guideNow by rememberUpdatedState(guideMask?.at(fileMs))
     // Position on the timeline within this clip, for fades and music.
     val clipTimelineMs = if (photo) positionMs else clip.timelineOfSource(positionMs)
     val fadeGain = Fade.gain(clipTimelineMs, clip.timelineDurationMs, clip.fadeInMs, clip.fadeOutMs)
+    // A transition at the cut in or out of this clip: its zoom, move, blur and dip now.
+    val cutLook = if (photo) app.headsup.core.edit.CutLook() else app.headsup.core.edit.CutTransition.at(clipTimelineMs, clip.timelineDurationMs, clip.cut, clip.cutMs, cutOut.first, cutOut.second)
+    // Film in a projector (gate weave, flicker) at this moment of the clip, as in the export.
+    val weaveNow = if (photo) app.headsup.core.edit.GateWeave.Shift(0f, 0f, 1f) else app.headsup.core.edit.GateWeave.at(clipTimelineMs, effects.weave, effects.flicker)
     // Bars sliding in (and out) with the clip's time, as in the export.
     // A photo has no time: its bars are simply there.
     val barsNow = if (effects.barsRatio == null) effects else if (photo) effects.copy(barsAmount = 1f) else effects.copy(barsAmount = effects.barsMotion.amount(clipTimelineMs, clip.timelineDurationMs))
@@ -993,15 +1036,29 @@ fun ClipPreview(
     }
 
     // Looking closely at a photo: the view's zoom and pan (not the photo's framing).
-    val inspect = photoMode && onReframe == null && onMoveMask == null && onTransformMask == null && onBrush == null && onMoveText == null && onSample == null
+    val inspect = onReframe == null && onMoveMask == null && onTransformMask == null && onBrush == null && onMoveText == null && onSample == null
     // The view's zoom applies while looking at a photo closely or painting a mask.
-    val zoomForSampling = photoMode && onSample != null && liveSample
+    // Wherever one finger has a tool's job on a photo (measuring or picking a colour, placing a
+    // text): two fingers still zoom and move the view. Not where two fingers have a job of their
+    // own: framing, a mask moved and turned, a selected text sized and turned.
+    val zoomForSampling = !inspect && !zoomForPainting && onReframe == null && onTransformMask == null &&
+        !(onMoveText != null && selectedTextId != null)
     val viewZoomed = inspect || zoomForPainting || zoomForSampling
-    var viewZoom by remember(clip.id) { mutableStateOf(1f) }
+    // Kept for the preview's life (its gestures hold these very states), put back for each clip.
+    var viewZoom by remember { mutableStateOf(1f) }
     val zoomedNow = viewZoom > 1.01f
     val tellZoomed by rememberUpdatedState(onViewZoomed)
-    LaunchedEffect(zoomedNow) { tellZoomed(zoomedNow) }
-    var viewPan by remember(clip.id) { mutableStateOf(Offset.Zero) }
+    // Also while the scope is dragged to another corner: the finger is busy, no screen swipe.
+    val scopeMoving = scopeDrag != Offset.Zero
+    LaunchedEffect(zoomedNow, scopeMoving) { tellZoomed(zoomedNow || scopeMoving) }
+    var viewPan by remember { mutableStateOf(Offset.Zero) }
+    LaunchedEffect(clip.id) { viewZoom = 1f; viewPan = Offset.Zero }
+    // Where the frame (what zooms) sits in the preview's area: zooming keeps the point under the
+    // fingers there, and the view is kept to the frame's own size, not the area's.
+    val previewArea = remember { arrayOfNulls<androidx.compose.ui.layout.LayoutCoordinates>(1) }
+    val frameBounds = remember { arrayOf(androidx.compose.ui.geometry.Rect.Zero) }
+    fun frameIn(w: Float, h: Float): androidx.compose.ui.geometry.Rect =
+        frameBounds[0].takeIf { it.width > 1f && it.height > 1f } ?: androidx.compose.ui.geometry.Rect(0f, 0f, w, h)
     /**
      * The view zoomed by [factor] around [at] (where the fingers are, in a [w]×[h] area) and moved
      * by [pan]: the picture under the fingers stays under them. It never leaves the frame.
@@ -1010,17 +1067,22 @@ fun ClipPreview(
         val z0 = viewZoom
         val z1 = (z0 * factor).coerceIn(1f, 8f)
         val k = z1 / z0
-        // The view is scaled about its middle: keep the point under [at] where it is.
-        val fromMiddle = at - Offset(w / 2f, h / 2f)
+        // The frame is scaled about its own middle: keep the point under [at] where it is.
+        val frame = frameIn(w, h)
+        val fromMiddle = at - frame.center
         val moved = fromMiddle * (1f - k) + viewPan * k + pan
         viewZoom = z1
-        val maxX = w * (z1 - 1f) / 2f
-        val maxY = h * (z1 - 1f) / 2f
+        val maxX = frame.width * (z1 - 1f) / 2f
+        val maxY = frame.height * (z1 - 1f) / 2f
         viewPan = if (z1 <= 1.001f) Offset.Zero else Offset(moved.x.coerceIn(-maxX, maxX), moved.y.coerceIn(-maxY, maxY))
     }
+    // A finger held for the before/after (or its split line): the zoomed view does not move under it.
+    var comparing by remember { mutableStateOf(false) }
+    // Fitted with blurred bars: the picture itself, small, blurred behind it (read below).
+    var backdrop by remember { mutableStateOf<ImageBitmap?>(null) }
     Column(Modifier.padding(horizontal = if (edgeToEdge) 0.dp else 16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Box(
-            Modifier.fillMaxWidth().clip(RoundedCornerShape(if (edgeToEdge) 0.dp else 20.dp)).background(HeadsupColors.Picture).then(
+            Modifier.fillMaxWidth().onGloballyPositioned { previewArea[0] = it }.clip(RoundedCornerShape(if (edgeToEdge) 0.dp else 20.dp)).background(HeadsupColors.Picture).then(
                 // Holding a finger still shows the original until it lifts; moving or a second
                 // finger (zoom) is left to the other gestures.
                 if (onHoldOriginal != null) {
@@ -1039,6 +1101,7 @@ fun ClipPreview(
                             }
                             if (released == null) {
                                 val hold = holdNow ?: return@awaitEachGesture
+                                comparing = true
                                 hold(true)
                                 // Held, then moved sideways: a line follows the finger, the picture as
                                 // shot on its left and as edited on its right; lifted, all as edited.
@@ -1061,6 +1124,7 @@ fun ClipPreview(
                                         }
                                     }
                                 } while (e.changes.any { it.pressed })
+                                comparing = false
                                 if (splitting) split = null else hold(false)
                             }
                         }
@@ -1078,11 +1142,15 @@ fun ClipPreview(
                             // At 1× a single finger is left alone, so the screen's swipes (full
                             // screen, folding the album) still work over the photo.
                             awaitEachGesture {
-                                awaitFirstDown(requireUnconsumed = false)
+                                val first = awaitFirstDown(requireUnconsumed = false)
+                                // One finger moves the zoomed view only once it really moves: a
+                                // finger held still (before/after) leaves it where it is.
+                                var moving = false
                                 do {
                                     val event = awaitPointerEvent()
                                     val fingers = event.changes.count { it.pressed }
-                                    if (fingers >= 2 || viewZoom > 1.01f) {
+                                    if (!moving && (fingers >= 2 || event.changes.any { (it.position - first.position).getDistance() > viewConfiguration.touchSlop })) moving = true
+                                    if (!comparing && moving && (fingers >= 2 || viewZoom > 1.01f)) {
                                         val zoom = event.calculateZoom()
                                         val pan = event.calculatePan()
                                         if (zoom != 1f || pan != Offset.Zero) {
@@ -1100,7 +1168,7 @@ fun ClipPreview(
                             })
                         }
                 } else if (zoomForSampling) {
-                    // Picking a colour: two fingers zoom and pan the view (one finger picks).
+                    // A tool has the single finger: two fingers zoom and pan the view.
                     Modifier.pointerInput(Unit) {
                         awaitEachGesture {
                             awaitFirstDown(requireUnconsumed = false, pass = androidx.compose.ui.input.pointer.PointerEventPass.Initial)
@@ -1147,8 +1215,9 @@ fun ClipPreview(
                                 if (event.changes.none { it.pressed }) break
                                 event.changes.firstOrNull()?.let { if ((it.position - first.position).getDistance() > 12.dp.toPx()) moved = true }
                                 if (panNow && event.changes.count { it.pressed } == 1) {
-                                    val maxX = size.width * (viewZoom - 1f) / 2f
-                                    val maxY = size.height * (viewZoom - 1f) / 2f
+                                    val frame = frameIn(size.width.toFloat(), size.height.toFloat())
+                                    val maxX = frame.width * (viewZoom - 1f) / 2f
+                                    val maxY = frame.height * (viewZoom - 1f) / 2f
                                     viewPan = if (viewZoom <= 1.001f) Offset.Zero
                                         else (viewPan + event.calculatePan()).let { Offset(it.x.coerceIn(-maxX, maxX), it.y.coerceIn(-maxY, maxY)) }
                                     event.changes.forEach { it.consume() }
@@ -1177,8 +1246,10 @@ fun ClipPreview(
             // ambient light lights round its player). Frames are read from
             // the file (not the TextureView, which gives nothing for HDR clips such as screen
             // recordings), small, every few tenths of a second while playing.
-            if (reframe.fit && reframe.blur) {
-                var backdrop by remember { mutableStateOf<ImageBitmap?>(null) }
+            // Only inside the frame unless Settings › Ambient light round the picture: the frame's edge shows.
+            val ambient = AppSettings.ambientPreview
+            // Also for blurred effect bars: the same small frames, blurred, show in the bars.
+            if ((reframe.fit && reframe.blur) || effects.barsBlur) {
                 val momentNow by rememberUpdatedState(fileMs)
                 val source = if (photo) null else sourceOf(clip)
                 val retriever = remember(source) {
@@ -1203,7 +1274,7 @@ fun ClipPreview(
                         delay(if (wantsPlay) 300L else 500L)
                     }
                 }
-                backdrop?.let {
+                backdrop?.takeIf { ambient && reframe.fit && reframe.blur }?.let {
                     // Richer colours, a touch darker; blurred by the system where it can (Android 12+),
                     // else smooth enough from being so small.
                     val richer = androidx.compose.ui.graphics.ColorMatrix().apply { setToSaturation(1.3f) }
@@ -1223,16 +1294,58 @@ fun ClipPreview(
             }
             BoxWithConstraints(
                 Modifier.heightIn(max = maxHeight).aspectRatio(frameAspect, matchHeightConstraintsFirst = true)
+                    .onGloballyPositioned { c ->
+                        val area = previewArea[0]
+                        if (area != null && area.isAttached && c.isAttached) {
+                            frameBounds[0] = androidx.compose.ui.geometry.Rect(area.localPositionOf(c, Offset.Zero), androidx.compose.ui.geometry.Size(c.size.width.toFloat(), c.size.height.toFloat()))
+                        }
+                    }
                     .graphicsLayer {
-                        val z = if (viewZoomed) viewZoom else 1f
+                        val z = (if (viewZoomed) viewZoom else 1f) * cutLook.zoom
                         scaleX = z
                         scaleY = z
-                        translationX = if (viewZoomed) viewPan.x else 0f
+                        translationX = (if (viewZoomed) viewPan.x else 0f) + cutLook.shift * size.width
                         translationY = if (viewZoomed) viewPan.y else 0f
+                        // A transition's blur of movement: sideways for a whip, all round for a zoom.
+                        if (cutLook.blur > 0f && Build.VERSION.SDK_INT >= 31) {
+                            val b = cutLook.blur * size.width / 3f
+                            renderEffect = androidx.compose.ui.graphics.BlurEffect(b, if (cutLook.radial) b else 0.5f, androidx.compose.ui.graphics.TileMode.Clamp)
+                        } else renderEffect = null
                     }
                     .clipToBounds(),
                 contentAlignment = Alignment.Center,
             ) {
+                // Fitted with blurred bars: the blur inside the frame (and round it too with the ambient light).
+                if (reframe.fit && reframe.blur) backdrop?.let {
+                    val richer = androidx.compose.ui.graphics.ColorMatrix().apply { setToSaturation(1.3f) }
+                    Image(
+                        it, contentDescription = null, contentScale = ContentScale.Crop,
+                        colorFilter = androidx.compose.ui.graphics.ColorFilter.colorMatrix(richer),
+                        modifier = Modifier.matchParentSize().graphicsLayer {
+                            if (Build.VERSION.SDK_INT >= 31) renderEffect = androidx.compose.ui.graphics.BlurEffect(40.dp.toPx(), 40.dp.toPx(), androidx.compose.ui.graphics.TileMode.Clamp)
+                        },
+                    )
+                    Box(Modifier.matchParentSize().background(Color.Black.copy(alpha = 0.12f)))
+                }
+                // Fitted, the bars in a colour of one's own or a picture.
+                if (reframe.fit && !reframe.blur) {
+                    Box(Modifier.matchParentSize().background(Color(reframe.backdropColour)))
+                    val imagePath = reframe.backdropImage
+                    val backdropPicture by produceState<ImageBitmap?>(null, imagePath) {
+                        value = imagePath?.let { path ->
+                            withContext(Dispatchers.IO) {
+                                runCatching {
+                                    val bounds = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                                    android.graphics.BitmapFactory.decodeFile(path, bounds)
+                                    var sample = 1
+                                    while (maxOf(bounds.outWidth, bounds.outHeight) / (sample * 2) >= 1600) sample *= 2
+                                    android.graphics.BitmapFactory.decodeFile(path, android.graphics.BitmapFactory.Options().apply { inSampleSize = sample })?.asImageBitmap()
+                                }.getOrNull()
+                            }
+                        }
+                    }
+                    backdropPicture?.let { Image(it, contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.matchParentSize()) }
+                }
                 val boxW = constraints.maxWidth.toFloat()
                 val boxH = constraints.maxHeight.toFloat()
                 val pictureW = if (sourceAspect > boxW / boxH) boxH * sourceAspect else boxW
@@ -1254,7 +1367,8 @@ fun ClipPreview(
                 val density = LocalDensity.current
                 // A TextureView (unlike PlayerView's default SurfaceView) is drawn by the UI, so the
                 // colour shader can be applied to it.
-                val pictureLayer = Modifier.requiredSize(with(density) { pictureW.toDp() }, with(density) { pictureH.toDp() }).graphicsLayer {
+                val pictureSize = Modifier.requiredSize(with(density) { pictureW.toDp() }, with(density) { pictureH.toDp() })
+                val pictureShade = Modifier.graphicsLayer {
                         // Reading these here re-applies the shader when they change, without recomposing.
                         tableVersion
                         val frame = if (effects.grain > 0f) (positionMs / 33).toFloat() else 0f
@@ -1266,13 +1380,16 @@ fun ClipPreview(
                         // Reframing moves the graded picture, as in the export (colour first, then framing).
                         val t = reframeTransform(reframe, geometry)
                         // Steadied: the frame's correction on the picture before it is framed.
-                        val c = if (steady != null && steadyCorrections != null && !photo) app.headsup.core.frame.Stabilizer.at(steady, steadyCorrections, fileMs) else null
-                        scaleX = t.zoom * (c?.zoom ?: 1f) * if (reframe.mirrored) -1f else 1f
-                        scaleY = t.zoom * (c?.zoom ?: 1f)
+                        val c = if (steady != null && steadyCorrections != null && !photo) app.headsup.core.frame.Stabilizer.at(steady, steadyCorrections, if (shownMs >= 0L && !scrubbing) clip.trimStartMs + shownMs else fileMs) else null
+                        // Film in a projector: the frame drifting (in the frame's own size), enlarged so its edges stay hidden.
+                        val cover = if (weaveNow.isNone) 1f else app.headsup.core.edit.GateWeave.cover(effects.weave)
+                        scaleX = t.zoom * (c?.zoom ?: 1f) * cover * if (reframe.mirrored) -1f else 1f
+                        scaleY = t.zoom * (c?.zoom ?: 1f) * cover
                         rotationZ = reframe.angleDegrees + (c?.degrees ?: 0f)
-                        translationX = t.translation.x + (c?.let { it.dx * size.width * t.zoom } ?: 0f)
-                        translationY = t.translation.y + (c?.let { it.dy * size.height * t.zoom } ?: 0f)
+                        translationX = t.translation.x + (c?.let { it.dx * size.width * t.zoom } ?: 0f) + weaveNow.dx * geometry.boxW
+                        translationY = t.translation.y + (c?.let { it.dy * size.height * t.zoom } ?: 0f) + weaveNow.dy * geometry.boxH
                     }
+                val pictureLayer = pictureSize.then(pictureShade)
                 val bitmap = photoBitmap
                 if (photo) {
                     if (bitmap != null) Image(bitmap, contentDescription = clip.meta.name, contentScale = ContentScale.FillBounds, modifier = pictureLayer)
@@ -1281,10 +1398,17 @@ fun ClipPreview(
                     bokehPhoto?.takeIf { !showingOriginal && bitmap != null }?.let { b ->
                         Image(
                             b, contentDescription = null, contentScale = ContentScale.FillBounds,
-                            modifier = pictureLayer.drawWithContent {
+                            // Cut at the line outside the colour layer: cut inside it, the colour shader turned
+                            // the cut-away part into opaque black over the photo's before side.
+                            modifier = pictureSize.drawWithContent {
                                 val at = split
-                                if (at == null) drawContent() else clipRect(left = at * size.width) { this@drawWithContent.drawContent() }
-                            },
+                                if (at == null) drawContent() else {
+                                    val t = reframeTransform(reframe, geometry)
+                                    val x = size.width / 2f + t.translation.x + (at * size.width - size.width / 2f) * t.zoom * (if (reframe.mirrored) -1f else 1f)
+                                    if (reframe.mirrored) clipRect(right = x) { this@drawWithContent.drawContent() }
+                                    else clipRect(left = x) { this@drawWithContent.drawContent() }
+                                }
+                            }.then(pictureShade),
                         )
                     }
                     if (photoFrom != clip.meta.uri) {
@@ -1345,7 +1469,7 @@ fun ClipPreview(
                                     }
                                     val t = reframeTransform(r, g)
                                     // Steadied (the selected clip's own player).
-                                    val c = if (fresh && (pictureClip[i] == null || pictureClip[i] == clip.id) && steady != null && steadyCorrections != null) app.headsup.core.frame.Stabilizer.at(steady, steadyCorrections, fileMs) else null
+                                    val c = if (fresh && (pictureClip[i] == null || pictureClip[i] == clip.id) && steady != null && steadyCorrections != null) app.headsup.core.frame.Stabilizer.at(steady, steadyCorrections, if (shownMs >= 0L && !scrubbing) clip.trimStartMs + shownMs else fileMs) else null
                                     scaleX = t.zoom * (c?.zoom ?: 1f) * if (r.mirrored) -1f else 1f
                                     scaleY = t.zoom * (c?.zoom ?: 1f)
                                     rotationZ = r.angleDegrees + (c?.degrees ?: 0f)
@@ -1356,16 +1480,85 @@ fun ClipPreview(
                         )
                     }
                 }
+                // Blurred effect bars: the picture's colours, blurred, cut to where the bars are
+                // (cut outside the blur's layer, so its edges stay inside them).
+                if (effects.barsBlur) backdrop?.let { cloud ->
+                    val richer = androidx.compose.ui.graphics.ColorMatrix().apply { setToSaturation(1.3f) }
+                    Image(
+                        cloud, contentDescription = null, contentScale = ContentScale.Crop,
+                        colorFilter = androidx.compose.ui.graphics.ColorFilter.colorMatrix(richer),
+                        modifier = Modifier.matchParentSize().drawWithContent {
+                            val bars = renderer.barRects(size.width, size.height, barsNow)
+                            if (bars.isEmpty()) return@drawWithContent
+                            val path = androidx.compose.ui.graphics.Path().apply {
+                                for (b in bars) addRect(androidx.compose.ui.geometry.Rect(b.left, b.top, b.right, b.bottom))
+                            }
+                            clipPath(path) { this@drawWithContent.drawContent() }
+                        }.graphicsLayer {
+                            if (Build.VERSION.SDK_INT >= 31) renderEffect = androidx.compose.ui.graphics.BlurEffect(30.dp.toPx(), 30.dp.toPx(), androidx.compose.ui.graphics.TileMode.Clamp)
+                        },
+                    )
+                }
                 Canvas(
                     Modifier
                         .matchParentSize()
+                        .then(
+                            if (onCrop == null) Modifier else Modifier.pointerInput(Unit) {
+                                // A finger on an edge or corner of the frame drags it in (before the
+                                // picture's own drag sees it); let go, the frame takes that shape.
+                                awaitEachGesture {
+                                    val down = awaitFirstDown(requireUnconsumed = false, pass = androidx.compose.ui.input.pointer.PointerEventPass.Initial)
+                                    val crop = cropper ?: return@awaitEachGesture
+                                    val w = size.width.toFloat()
+                                    val h = size.height.toFloat()
+                                    val reach = 28.dp.toPx()
+                                    val p0 = down.position
+                                    val left = p0.x < reach
+                                    val right = p0.x > w - reach
+                                    val top = p0.y < reach
+                                    val bottom = p0.y > h - reach
+                                    if (!(left || right || top || bottom)) return@awaitEachGesture
+                                    down.consume()
+                                    val least = 0.15f
+                                    var rect = androidx.compose.ui.geometry.Rect(0f, 0f, w, h)
+                                    cropRect = rect
+                                    while (true) {
+                                        val e = awaitPointerEvent(androidx.compose.ui.input.pointer.PointerEventPass.Initial)
+                                        val c = e.changes.firstOrNull { it.id == down.id } ?: break
+                                        if (!c.pressed) break
+                                        c.consume()
+                                        val p = c.position
+                                        rect = androidx.compose.ui.geometry.Rect(
+                                            if (left) p.x.coerceIn(0f, rect.right - w * least) else rect.left,
+                                            if (top) p.y.coerceIn(0f, rect.bottom - h * least) else rect.top,
+                                            if (right) p.x.coerceIn(rect.left + w * least, w) else rect.right,
+                                            if (bottom) p.y.coerceIn(rect.top + h * least, h) else rect.bottom,
+                                        )
+                                        cropRect = rect
+                                    }
+                                    cropRect = null
+                                    if (rect.width < w - 2f || rect.height < h - 2f) crop(rect.left / w, rect.top / h, rect.right / w, rect.bottom / h)
+                                }
+                            },
+                        )
                         .then(
                             if (onReframe == null) {
                                 Modifier
                             } else {
                                 Modifier.pointerInput(Unit) {
+                                    // Where the finger has really taken the picture: the frame it is shown
+                                    // in snaps to the frame's lines, but the next move goes on from here,
+                                    // so a slow drag does not stick on a line it is snapped to.
+                                    var free: Reframe? = null
+                                    var lastMoveMs = 0L
                                     detectTransformGestures { _, pan, zoomChange, _ ->
-                                        val r = currentReframe
+                                        val nowMs = android.os.SystemClock.uptimeMillis()
+                                        val held = free?.takeIf { nowMs - lastMoveMs < 250L }
+                                        lastMoveMs = nowMs
+                                        // Anything set meanwhile (a ruler, a reset) other than position wins.
+                                        val r = held?.takeIf { it.zoom == currentReframe.zoom || zoomChange != 1f }?.copy(
+                                            angleDegrees = currentReframe.angleDegrees, aspect = currentReframe.aspect, fit = currentReframe.fit, mirrored = currentReframe.mirrored,
+                                        ) ?: currentReframe
                                         val g = geometryRef.value
                                         val w = g.pictureW
                                         val h = g.pictureH
@@ -1374,9 +1567,10 @@ fun ClipPreview(
                                         val a = Math.toRadians(r.angleDegrees.toDouble())
                                         val dx = (pan.x * kotlin.math.cos(a) + pan.y * kotlin.math.sin(a)).toFloat() / z * if (r.mirrored) -1f else 1f
                                         val dy = (-pan.x * kotlin.math.sin(a) + pan.y * kotlin.math.cos(a)).toFloat() / z
-                                        reframer?.invoke(
-                                            r.copy(zoom = r.zoom * zoomChange, centerX = r.centerX - dx / w, centerY = r.centerY - dy / h),
-                                        )
+                                        val next = r.copy(zoom = r.zoom * zoomChange, centerX = r.centerX - dx / w, centerY = r.centerY - dy / h)
+                                        // Kept within what the frame allows (as the screen keeps it), not snapped.
+                                        free = next.copy(zoom = next.zoom.coerceIn(next.minZoom, 4f)).clamped(g.boxW, g.boxH, w, h)
+                                        reframer?.invoke(next)
                                     }
                                 }
                             },
@@ -1532,7 +1726,7 @@ fun ClipPreview(
                                     while (true) {
                                         val event = awaitPointerEvent()
                                         // A second finger: zooming, not picking.
-                                        if (live && event.changes.count { it.pressed } >= 2) { cancelled = true; break }
+                                        if (event.changes.count { it.pressed } >= 2) { cancelled = true; break }
                                         val change = event.changes.firstOrNull { it.id == down.id } ?: break
                                         if (!change.pressed) {
                                             change.consume()
@@ -1695,6 +1889,8 @@ fun ClipPreview(
                 }
                 val textsNow by rememberUpdatedState(shownTexts)
                 val rawTextsNow by rememberUpdatedState(texts)
+                // The frame round a text is that of the text as shown: its data fields filled in.
+                val boxValues by rememberUpdatedState(if (texts.any { app.headsup.core.edit.TextFields.hasFields(it.text) }) textValues(positionMs) else emptyMap())
                 val selectedTextNow by rememberUpdatedState(selectedTextId)
                 // While a text is dragged, guides show the middle and the margins it snaps to.
                 var placing by remember { mutableStateOf(false) }
@@ -1712,7 +1908,7 @@ fun ClipPreview(
                                     val h = size.height.toFloat()
                                     val items = textsNow
                                     val sel = items.firstOrNull { it.id == selectedTextNow }
-                                    fun boxOf(t: TextItem) = TextRenderer.box(t, w, h)
+                                    fun boxOf(t: TextItem) = TextRenderer.box(t, w, h, boxValues)
                                     // A point taken into an item's own (unturned) space.
                                     fun local(t: TextItem, p: Offset): Offset {
                                         val b = boxOf(t)
@@ -1801,7 +1997,7 @@ fun ClipPreview(
                         val photoMap = subjectMap?.takeIf { wantsSubject }
                         val behind: ((TextItem, android.graphics.Canvas, android.graphics.Paint) -> Unit)? = if (texts.none { it.behind }) null else {
                             val t = reframeTransform(reframe, geometry)
-                            val c = if (!photo && steady != null && steadyCorrections != null) app.headsup.core.frame.Stabilizer.at(steady, steadyCorrections, fileMs) else null
+                            val c = if (!photo && steady != null && steadyCorrections != null) app.headsup.core.frame.Stabilizer.at(steady, steadyCorrections, if (shownMs >= 0L && !scrubbing) clip.trimStartMs + shownMs else fileMs) else null
                             val warp = reframe.warp?.let { perspectiveMatrix(it, geometry.pictureW, geometry.pictureH) }
                             val f: (TextItem, android.graphics.Canvas, android.graphics.Paint) -> Unit = { item, cv, p ->
                                 val m = item.behindMask?.let { k -> clip.masks.getOrNull(k)?.let { app.headsup.color.TextMasks.alphaOf(context, it, sourceAspect, fileMs) } }
@@ -1818,7 +2014,7 @@ fun ClipPreview(
                     }
                     // The text or logo being edited: a dashed frame, ✕ to take it away, ↘ to size and turn it.
                     shownTexts.firstOrNull { it.id == selectedTextId }?.takeIf { onMoveText != null }?.let { t ->
-                        val b = TextRenderer.box(t, size.width, size.height)
+                        val b = TextRenderer.box(t, size.width, size.height, boxValues)
                         val pad = TEXT_FRAME_PAD.toPx()
                         rotate(t.angle, Offset(b.centerX(), b.centerY())) {
                             val tl = Offset(b.left - pad, b.top - pad)
@@ -1843,7 +2039,56 @@ fun ClipPreview(
                     }
                 }
                 if (fadeGain < 1f) Box(Modifier.matchParentSize().background(Color.Black.copy(alpha = 1f - fadeGain)))
+                // Its flicker: the light dipping a little, frame by frame.
+                if (weaveNow.gain < 1f) Box(Modifier.matchParentSize().background(Color.Black.copy(alpha = 1f - weaveNow.gain)))
+                if (cutLook.dip > 0f) Box(Modifier.matchParentSize().background((if (cutLook.dipWhite) Color.White else Color.Black).copy(alpha = cutLook.dip.coerceIn(0f, 1f))))
                 if (showGrid) Canvas(Modifier.matchParentSize()) { drawThirds() }
+                // Cutting the photo down: handles at the frame's corners and edges; while one is
+                // dragged, what goes is darkened and what stays is outlined.
+                if (onCrop != null) Canvas(Modifier.matchParentSize()) {
+                    val r = cropRect ?: androidx.compose.ui.geometry.Rect(0f, 0f, size.width, size.height)
+                    if (cropRect != null) {
+                        val shade = Color.Black.copy(alpha = 0.55f)
+                        drawRect(shade, Offset.Zero, androidx.compose.ui.geometry.Size(size.width, r.top))
+                        drawRect(shade, Offset(0f, r.bottom), androidx.compose.ui.geometry.Size(size.width, size.height - r.bottom))
+                        drawRect(shade, Offset(0f, r.top), androidx.compose.ui.geometry.Size(r.left, r.height))
+                        drawRect(shade, Offset(r.right, r.top), androidx.compose.ui.geometry.Size(size.width - r.right, r.height))
+                        drawRect(Color.White, r.topLeft, r.size, style = androidx.compose.ui.graphics.drawscope.Stroke(1.dp.toPx()))
+                        for (k in 1..2) {
+                            val x = r.left + r.width * k / 3f
+                            val y = r.top + r.height * k / 3f
+                            drawLine(Color.White.copy(alpha = 0.5f), Offset(x, r.top), Offset(x, r.bottom), 0.75.dp.toPx())
+                            drawLine(Color.White.copy(alpha = 0.5f), Offset(r.left, y), Offset(r.right, y), 0.75.dp.toPx())
+                        }
+                    }
+                    val len = 18.dp.toPx()
+                    val wide = 3.dp.toPx()
+                    val half = wide / 2f
+                    // Corners.
+                    for ((cx, cy, sx, sy) in listOf(
+                        listOf(r.left + half, r.top + half, 1f, 1f), listOf(r.right - half, r.top + half, -1f, 1f),
+                        listOf(r.left + half, r.bottom - half, 1f, -1f), listOf(r.right - half, r.bottom - half, -1f, -1f),
+                    )) {
+                        drawLine(Color.White, Offset(cx, cy), Offset(cx + sx * len, cy), wide)
+                        drawLine(Color.White, Offset(cx, cy), Offset(cx, cy + sy * len), wide)
+                    }
+                    // Middles of the edges.
+                    val mx = r.center.x
+                    val my = r.center.y
+                    drawLine(Color.White, Offset(mx - len / 2f, r.top + half), Offset(mx + len / 2f, r.top + half), wide)
+                    drawLine(Color.White, Offset(mx - len / 2f, r.bottom - half), Offset(mx + len / 2f, r.bottom - half), wide)
+                    drawLine(Color.White, Offset(r.left + half, my - len / 2f), Offset(r.left + half, my + len / 2f), wide)
+                    drawLine(Color.White, Offset(r.right - half, my - len / 2f), Offset(r.right - half, my + len / 2f), wide)
+                }
+                // A carousel: where the photo is cut into its panels.
+                if (reframe.panels > 1) Canvas(Modifier.matchParentSize()) {
+                    val dash = PathEffect.dashPathEffect(floatArrayOf(14f, 10f))
+                    for (k in 1 until reframe.panels) {
+                        val x = size.width * k / reframe.panels
+                        drawLine(Color.Black.copy(alpha = 0.5f), Offset(x, 0f), Offset(x, size.height), 3.dp.toPx())
+                        drawLine(Color.White, Offset(x, 0f), Offset(x, size.height), 1.5.dp.toPx(), pathEffect = dash)
+                    }
+                }
                 // What bokeh keeps sharp, outlined for a moment after it is found.
                 val outline = bokehOutline
                 if (outline != null && outlineAlpha.value > 0f && !showingOriginal) {
@@ -1905,7 +2150,40 @@ fun ClipPreview(
                     }
                 }
                 if (histogramOn) {
-                    val at = Modifier.align(Alignment.BottomStart).padding(start = 10.dp, end = 10.dp, top = 10.dp, bottom = if (compactTransport) 56.dp else 10.dp)
+                    // In a corner of the picture: dragged, it follows the finger and settles in the corner
+                    // that way (left / right, up / down), out of the way of what is looked at.
+                    val right = scopeCorner % 2 == 1
+                    val bottom = scopeCorner >= 2
+                    val at = Modifier
+                        .align(if (bottom) (if (right) Alignment.BottomEnd else Alignment.BottomStart) else (if (right) Alignment.TopEnd else Alignment.TopStart))
+                        // Clear of the buttons in the top corners and the folded transport at the bottom.
+                        .padding(start = 10.dp, end = 10.dp, top = if (bottom) 10.dp else 52.dp, bottom = if (compactTransport) 56.dp else 10.dp)
+                        .offset { androidx.compose.ui.unit.IntOffset(scopeDrag.x.toInt(), scopeDrag.y.toInt()) }
+                        .pointerInput(Unit) {
+                            val far = 28.dp.toPx()
+                            awaitEachGesture {
+                                val down = awaitFirstDown(requireUnconsumed = false)
+                                val slop = viewConfiguration.touchSlop
+                                var total = Offset.Zero
+                                var dragging = false
+                                // Moved past the slop: it follows the finger (a touch that stays put is the tap below).
+                                drag(down.id) { change ->
+                                    total += change.positionChange()
+                                    if (!dragging && total.getDistance() > slop) dragging = true
+                                    if (dragging) {
+                                        change.consume()
+                                        scopeDrag = total
+                                    }
+                                }
+                                if (dragging) {
+                                    var c = scopeCorner
+                                    if (total.x > far) c = c or 1 else if (total.x < -far) c = c and 2
+                                    if (total.y > far) c = c or 2 else if (total.y < -far) c = c and 1
+                                    scopeCorner = c
+                                }
+                                scopeDrag = Offset.Zero
+                            }
+                        }
                         .clickable { scopeKind = (scopeKind + 1) % 3 }
                     if (scopeKind == 0) {
                         histogram?.let { bins -> Histogram(bins, at.size(width = 128.dp, height = 56.dp)) }
@@ -2510,5 +2788,43 @@ private fun Spinner(modifier: Modifier) {
             size = androidx.compose.ui.geometry.Size(size.width - stroke, size.height - stroke),
             style = androidx.compose.ui.graphics.drawscope.Stroke(stroke, cap = androidx.compose.ui.graphics.StrokeCap.Round),
         )
+    }
+}
+
+/**
+ * The last few frames a player handed to the screen: when each is shown (System.nanoTime) and
+ * its moment in the media. Written on the player's thread, read on the main one.
+ */
+private class ShownFrames {
+    private val release = LongArray(8)
+    private val media = LongArray(8)
+    private var next = 0
+
+    @Synchronized
+    fun add(releaseNs: Long, presentationUs: Long) {
+        release[next] = releaseNs
+        media[next] = presentationUs
+        next = (next + 1) % release.size
+    }
+
+    /**
+     * The player-time (ms, as its position) of the frame on screen at [nowNs]: the latest one due
+     * by then. The media time is either the player's own or the file's (a clipped item's frames
+     * keep the file's times), told by which of them [positionMs] is near; -1 when neither.
+     */
+    @Synchronized
+    fun shownAt(nowNs: Long, positionMs: Long, clipStartMs: Long): Long {
+        var best = -1
+        for (i in release.indices) {
+            if (release[i] == 0L || release[i] > nowNs) continue
+            if (best < 0 || release[i] > release[best]) best = i
+        }
+        if (best < 0 || nowNs - release[best] > 200_000_000L) return -1L
+        val ms = media[best] / 1000
+        return when {
+            kotlin.math.abs(ms - positionMs) < 400L -> ms
+            kotlin.math.abs(ms - clipStartMs - positionMs) < 400L -> ms - clipStartMs
+            else -> -1L
+        }
     }
 }

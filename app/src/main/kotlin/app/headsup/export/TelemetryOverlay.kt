@@ -46,6 +46,10 @@ class TelemetryOverlay(
     /** Draws what a text goes behind (the clip's subject, or a mask) at a moment into a [w]×[h] frame; which maps those are. */
     private val subject: ((TextItem, Canvas, android.graphics.Paint, positionMs: Long, w: Float, h: Float) -> Unit)? = null,
     private val subjectKey: (positionMs: Long) -> String = { "" },
+    /** The border round a fitted clip (a colour or a picture, with the picture's place left open), drawn first. */
+    private val border: ((Canvas, Float, Float, Long) -> Unit)? = null,
+    /** Changes when the border moves (a moving frame). */
+    private val borderKey: (positionMs: Long) -> String = { "" },
 ) : BitmapOverlay() {
     private var width = fallbackWidth
     private var height = fallbackHeight
@@ -80,7 +84,7 @@ class TelemetryOverlay(
         val values = if (texts.isEmpty()) emptyMap() else textValues(data, positionMs)
         val shownTexts = if (texts.isEmpty()) texts else placeTexts(texts, positionMs)
         val textKey = if (texts.isEmpty()) "" else TextRenderer.key(shownTexts, timelineMs, values) + subjectKey(positionMs)
-        val key = "${width}x$height ${(effects.barsAmount * 200).toInt()} " + (data?.let { renderer.contentKey(style, it, w, h, effects) } ?: "-") + textKey + mapKey(data)
+        val key = "${width}x$height ${(effects.barsAmount * 200).toInt()} " + (data?.let { renderer.contentKey(style, it, w, h, effects) } ?: "-") + textKey + mapKey(data) + (if (border != null) borderKey(positionMs) else "")
         buffers[current]?.let { if (key == lastKey) return it }
 
         current = 1 - current
@@ -88,6 +92,7 @@ class TelemetryOverlay(
             ?: Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888).also { buffers[current] = it }
         bitmap.eraseColor(Color.TRANSPARENT)
         val canvas = Canvas(bitmap)
+        border?.invoke(canvas, w, h, positionMs)
         renderer.drawVignette(canvas, w, h, vignette)
         if (data != null) renderer.draw(canvas, w, h, style, data, effects) else renderer.drawBars(canvas, w, h, effects)
         drawMap?.invoke(canvas, w, h, data)

@@ -231,6 +231,28 @@ project's files), the preview resized left/right when held sideways, Edit called
       with AI masks tracked on video as they are now. The text's Subject › Behind becomes
       "Behind: [mask]". Done, with Fill the frame, fonts of one's own and image-filled letters.
 
+## To do (from the 1.0.0 review, 2026-11)
+
+- [ ] Freeze frame: a moment of a clip held as a still for a set time.
+- [ ] Sound level over time (keys on a clip's and a track's volume).
+- [ ] Voice-over recorded in the app, onto a sound track at the playhead.
+- [ ] Captions from speech, on the phone (subtitles as texts, timed to the words).
+- [ ] Green screen (chroma key) and picture in picture (a second clip over the first).
+- [ ] Photos: level the horizon by itself (the tilt is already measured for auto pick).
+- [ ] A true dissolve between clips (the clips overlapping: two sequences composed).
+- [ ] Gyro stabilisation as Gyroflow does it, for the DJI Osmo Action 6 and FPV footage:
+      - read the gyro: DJI's metadata in the Action 6's files; for FPV, the flight controller's
+        log (Betaflight blackbox) or the camera's own (DJI O3/O4, GoPro GPMF);
+      - sync it to the picture to the millisecond (the picture's own measured motion, as Steady
+        now measures it, to find the offset);
+      - lens profiles for the cameras used (calibrated with a chessboard), so the fisheye picture
+        is turned as the lens saw it;
+      - smoothing of the camera's orientation (the Stabilizer's smoothing, Locked, and a horizon
+        lock that keeps the horizon level through rolls);
+      - a GPU shader turning each frame row by row (rolling shutter), with a zoom that changes
+        smoothly as much as needed; in the preview and the export.
+      The phone writes no gyro into its videos: its clips keep the picture-based Steady.
+
 ## Pro features (proposed with the redesign, 2026-11)
 
 - [x] Before / after with a split line across the picture, dragged left and right.

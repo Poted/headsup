@@ -194,6 +194,52 @@ class ExportManager(private val context: Context) {
         }
     }
 
+    /**
+     * A fitted clip's border in a colour or a picture of one's own: drawn over the frame with the
+     * picture's place (its four corners where the framing puts them) left open. Black needs
+     * nothing (the frame is black there), and blurred borders are drawn by [BlurFillEffect].
+     */
+    private fun borderDrawer(request: ExportRequest): ((android.graphics.Canvas, Float, Float, Long) -> Unit)? {
+        val r = request.reframe
+        if (!r.fit || r.blur || (r.backdropImage == null && r.backdropColour == 0xFF000000.toInt())) return null
+        val srcW = request.width.toFloat().coerceAtLeast(1f)
+        val srcH = request.height.toFloat().coerceAtLeast(1f)
+        val (ow, oh) = r.outputSize(srcW, srcH)
+        // Where the picture's corners are at a moment (they move with a moving frame).
+        fun cornersAt(positionMs: Long): List<Pair<Float, Float>> {
+            val now = app.headsup.core.frame.FrameKeys.at(r, request.frameKeys, request.trimStartMs + positionMs)
+            return listOf(0f to 0f, srcW to 0f, srcW to srcH, 0f to srcH).map { (x, y) -> now.frameOf(x, y, ow, oh, srcW, srcH) }
+        }
+        val picture = r.backdropImage?.let { path ->
+            runCatching {
+                val bounds = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                android.graphics.BitmapFactory.decodeFile(path, bounds)
+                var sample = 1
+                while (maxOf(bounds.outWidth, bounds.outHeight) / (sample * 2) >= 2048) sample *= 2
+                android.graphics.BitmapFactory.decodeFile(path, android.graphics.BitmapFactory.Options().apply { inSampleSize = sample })
+            }.getOrNull()
+        }
+        val clear = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply { xfermode = android.graphics.PorterDuffXfermode(android.graphics.PorterDuff.Mode.CLEAR) }
+        return { canvas, w, h, positionMs ->
+            val corners = cornersAt(positionMs)
+            if (picture != null) {
+                val k = maxOf(w / picture.width, h / picture.height)
+                val pw = picture.width * k
+                val ph = picture.height * k
+                canvas.drawBitmap(picture, null, android.graphics.RectF((w - pw) / 2f, (h - ph) / 2f, (w + pw) / 2f, (h + ph) / 2f), android.graphics.Paint(android.graphics.Paint.FILTER_BITMAP_FLAG))
+            } else {
+                canvas.drawColor(r.backdropColour)
+            }
+            val sx = w / ow
+            val sy = h / oh
+            val hole = android.graphics.Path().apply {
+                corners.forEachIndexed { i, (x, y) -> if (i == 0) moveTo(x * sx, y * sy) else lineTo(x * sx, y * sy) }
+                close()
+            }
+            canvas.drawPath(hole, clear)
+        }
+    }
+
     /** Texts stuck to the picture of [request]'s clip, where the place they follow is at a moment (the clip's own time). */
     private fun textPlacer(request: ExportRequest): (List<TextItem>, Long) -> List<TextItem> {
         if (request.isPhoto || request.texts.none { it.follow?.clipId == request.clipId }) return { t, _ -> t }
@@ -335,6 +381,9 @@ class ExportManager(private val context: Context) {
             barsAt = { timelineMs -> request.effects.barsMotion.amount(timelineMs - request.clipStartMs, request.clipLengthMs) },
             placeTexts = textPlacer(request),
             subject = subjectDrawer(request),
+            border = borderDrawer(request),
+            // A moving frame with a border drawn over: the overlay is drawn again as the frame moves.
+            borderKey = if (request.frameKeys.isNotEmpty()) ({ positionMs -> "f${positionMs / 33}" }) else ({ _ -> "" }),
             subjectKey = { positionMs ->
                 val fileMs = request.trimStartMs + positionMs
                 (request.subject?.takeIf { !request.isPhoto && request.texts.any { it.behind && it.behindMask == null } }
@@ -371,16 +420,79 @@ class ExportManager(private val context: Context) {
         } else {
             grade?.cube?.let { effects += SingleColorLut.createFromCube(it) }
         }
-        if (request.effects.changesPixels) effects += FinishEffect(request.effects)
+        // Glow and halation are their own effect (light blurred in several passes); the rest of the finish here.
+        val finish = request.effects.copy(glow = 0f, halation = 0f)
+        if (finish.changesPixels) effects += FinishEffect(finish)
+        if (request.effects.glow > 0f || request.effects.halation > 0f) {
+            val e = request.effects
+            effects += GlowEffect(
+                e.glowThreshold, e.glow, e.halation, app.headsup.render.EffectLook.glowTint(e.glowWarmth),
+                app.headsup.core.photo.Glow.sigma(minOf(request.width, request.height).toFloat(), e.glowSpread),
+            )
+        }
+        // Mist, Anamorphic streaks, Star, Prism (on the 10-bit route too: the light is worked out on an
+        // 8-bit small copy, the frames there are already in display colours).
+        if (request.effects.lightFx.any) effects += LightFxEffect(request.effects.lightFx)
         // Steadied: each frame moved by its correction, before it is framed (as in the preview).
         request.stabilize?.let { path -> stabilizeEffect(path, request.width, request.height, request.trimStartMs)?.let { effects += it } }
         // Reframing comes after colour and texture (as in the preview) and before the dashboard.
-        reframeEffect(request.reframe, request.width, request.height, out.width, out.height)?.let { effects += it }
+        if (request.frameKeys.isNotEmpty() && !request.isPhoto && request.reframe.fit && request.reframe.blur) {
+            // A moving frame with a blurred border: the border's effect takes the framing of each moment.
+            val keys = request.frameKeys
+            val w = request.width
+            val h = request.height
+            effects += BlurFillEffect({ positionMs ->
+                reframeMatrix(app.headsup.core.frame.FrameKeys.at(request.reframe, keys, request.trimStartMs + positionMs), w, h) ?: Matrix()
+            }, out.width, out.height)
+        } else if (request.frameKeys.isNotEmpty() && !request.isPhoto) {
+            // A moving frame (Ken Burns, following the subject): the framing worked out for each frame's moment.
+            val keys = request.frameKeys
+            val w = request.width
+            val h = request.height
+            val (ow, oh) = out.width to out.height
+            effects += object : MatrixTransformation {
+                private var firstUs = -1L
+                override fun configure(inputWidth: Int, inputHeight: Int) = Size(ow, oh)
+                override fun getMatrix(presentationTimeUs: Long): Matrix {
+                    if (firstUs < 0) firstUs = presentationTimeUs
+                    val fileMs = request.trimStartMs + (presentationTimeUs - firstUs) / 1000
+                    val r = app.headsup.core.frame.FrameKeys.at(request.reframe, keys, fileMs)
+                    return reframeMatrix(r, w, h) ?: Matrix().apply {
+                        // Identity in normalised coordinates, scaled to the frame's shape (as no reframe would be).
+                    }
+                }
+            }
+        } else {
+            reframeEffect(request.reframe, request.width, request.height, out.width, out.height)?.let { effects += it }
+        }
         // The timeline's frame scaled to the output size (the same shape), so every clip of a joined
         // export has the same frame.
         effects += Presentation.createForWidthAndHeight(out.width, out.height, Presentation.LAYOUT_SCALE_TO_FIT_WITH_CROP)
+        // Blurred effect bars: the finished frame's own colours, blurred, where the bars are.
+        if (request.effects.barsBlur && request.effects.barsRatio != null) {
+            val bars = DashboardRenderer(context.assets)
+            val w = out.width.toFloat()
+            val h = out.height.toFloat()
+            effects += BarsBlurEffect { positionMs ->
+                val timelineMs = request.timelineStartMs + if (request.isPhoto) positionMs else (positionMs / request.speed).toLong()
+                val now = request.effects.copy(barsAmount = request.effects.barsMotion.amount(timelineMs - request.clipStartMs, request.clipLengthMs))
+                val out = FloatArray(8) { -1f }
+                bars.barRects(w, h, now).take(2).forEachIndexed { k, r ->
+                    out[k * 4] = r.left / w; out[k * 4 + 1] = r.top / h; out[k * 4 + 2] = r.right / w; out[k * 4 + 3] = r.bottom / h
+                }
+                out
+            }
+        }
         val speed = request.speed
         val timelineMs = if (request.isPhoto) request.durationMs else (request.durationMs / speed).toLong()
+        // Film in a projector: the frame's drift and flicker (video only), before the transitions.
+        if (!request.isPhoto && (request.effects.weave > 0f || request.effects.flicker > 0f)) {
+            effects += GateWeaveEffect(request.effects.weave, request.effects.flicker, request.speed)
+        }
+        // Transitions at the cuts: on the finished frame, before the dashboard and texts.
+        if (request.cutIn != app.headsup.core.edit.CutKind.NONE || request.cutOut != app.headsup.core.edit.CutKind.NONE) {
+            effects += CutEffect(timelineMs, request.cutIn, request.cutInMs, request.cutOut, request.cutOutMs, if (request.isPhoto) 1f else request.speed)
+        }
         val fade = if (request.fadeInMs > 0 || request.fadeOutMs > 0) {
             FadeEffect(timelineMs, request.fadeInMs, request.fadeOutMs, if (request.isPhoto) 1f else speed)
         } else null
