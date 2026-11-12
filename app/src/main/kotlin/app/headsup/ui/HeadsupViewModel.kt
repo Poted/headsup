@@ -2263,7 +2263,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
      * background: a few seconds per minute of video), then the shake taken out as it plays and
      * when it is exported. The cut is measured as it is; trimmed wider later, it is measured again.
      */
-    fun stabilizeClip(index: Int) {
+    fun stabilizeClip(index: Int, locked: Boolean = false) {
         val clip = _state.value.clips.getOrNull(index)?.takeIf { !it.meta.isPhoto } ?: return
         val context: Application = getApplication()
         runInBackground("Steadying ${clip.meta.name}", clip.id, null) { report, stopped ->
@@ -2272,7 +2272,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                 if (!stopped()) _state.update { it.copy(messages = it.messages + "Could not read the clip's frames to steady it.") }
                 return@runInBackground
             }
-            _state.update { st -> st.copy(clips = st.clips.map { c -> if (c.id == clip.id) c.copy(stabilize = path.copy(strength = c.stabilize?.strength ?: path.strength)) else c }) }
+            _state.update { st -> st.copy(clips = st.clips.map { c -> if (c.id == clip.id) c.copy(stabilize = path.copy(strength = c.stabilize?.strength ?: path.strength, locked = c.stabilize?.locked ?: locked, maxZoom = c.stabilize?.maxZoom ?: if (locked) 1.35f else path.maxZoom)) else c }) }
             if (_state.value.selected?.id == clip.id) refreshPreview()
         }
     }
@@ -2282,12 +2282,22 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
 
     fun removeStabilize(index: Int) = updateClip(index) { it.copy(stabilize = null) }
 
+    /** Steadied (the shake out, the camera's move kept) or locked (only an even drift kept, the roll held level). */
+    fun setStabilizeLocked(index: Int, locked: Boolean) = updateClip(index) { c ->
+        c.stabilize?.let { c.copy(stabilize = it.copy(locked = locked, maxZoom = if (locked) maxOf(it.maxZoom, 1.35f) else it.maxZoom)) } ?: c
+    }
+
+    /** The most the steadied picture may be zoomed in (1.1 … 1.5). */
+    fun setStabilizeCrop(index: Int, maxZoom: Float) = updateClip(index) { c -> c.stabilize?.let { c.copy(stabilize = it.copy(maxZoom = maxZoom.coerceIn(1.05f, 1.6f))) } ?: c }
+
     /** The camera path over [clip]'s cut, frame by frame, from small grey copies of its frames. */
     private fun measureShake(context: android.content.Context, clip: ClipState, report: (Float) -> Unit, stopped: () -> Boolean): app.headsup.core.frame.Stabilizer.Path? {
         val r = android.media.MediaMetadataRetriever()
         try {
             r.setDataSource(context, clip.meta.uri)
-            val fps = (clip.meta.frameRate ?: 30f).coerceIn(1f, 240f)
+            // Frames by number, times from the frames the file really holds a second (a 120 fps
+            // phone clip holds a few less): the nominal rate would put the steadying out of step.
+            val fps = (clip.meta.measuredFrameRate ?: clip.meta.frameRate ?: 30f).coerceIn(1f, 240f)
             val total = r.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_VIDEO_FRAME_COUNT)?.toIntOrNull() ?: return null
             val first = (clip.trimStartMs * fps / 1000f).toInt().coerceIn(0, total - 1)
             val last = (clip.trimEndMs * fps / 1000f).toInt().coerceIn(first, total - 1)
@@ -3350,6 +3360,12 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
     fun compareHarmony(held: Boolean) {
         val clip = _state.value.selected
         _state.update { it.copy(compareGrade = clip?.harmony?.takeIf { held }?.gradeWithout(clip.grade)) }
+        refreshPreview()
+    }
+
+    /** While a ruler is held: the picture with these effects ([effects]; null: as they are). */
+    fun compareEffects(effects: EffectSettings?) {
+        _state.update { it.copy(compareEffects = effects) }
         refreshPreview()
     }
 

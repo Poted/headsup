@@ -424,7 +424,8 @@ internal object Json {
             c.stabilize?.let { p ->
                 val flat = JSONArray()
                 for (st in p.steps) { flat.put(st.dx.toDouble()); flat.put(st.dy.toDouble()); flat.put(st.degrees.toDouble()) }
-                put("stabilize", JSONObject().put("start", p.startMs).put("frame", p.frameMs.toDouble()).put("strength", p.strength.toDouble()).put("steps", flat))
+                put("stabilize", JSONObject().put("start", p.startMs).put("frame", p.frameMs.toDouble()).put("strength", p.strength.toDouble())
+                    .put("locked", p.locked).put("maxZoom", p.maxZoom.toDouble()).put("steps", flat))
             }
         }
         .putOpt("subject", c.subject)
@@ -509,6 +510,8 @@ internal object Json {
                 j.optLong("start"), j.optDouble("frame", 33.3).toFloat(),
                 List(flat.length() / 3) { k -> app.headsup.core.frame.Stabilizer.Step(flat.optDouble(k * 3).toFloat(), flat.optDouble(k * 3 + 1).toFloat(), flat.optDouble(k * 3 + 2).toFloat()) },
                 j.optDouble("strength", 0.7).toFloat(),
+                j.optBoolean("locked", false),
+                j.optDouble("maxZoom", app.headsup.core.frame.Stabilizer.MAX_ZOOM.toDouble()).toFloat(),
             )
         },
         gradeKeys = o.optJSONArray("gradeKeys").objects().map { k -> app.headsup.core.color.GradeKey(k.optLong("t"), grade(k.optJSONObject("grade"))) }.sortedBy { it.timeMs },

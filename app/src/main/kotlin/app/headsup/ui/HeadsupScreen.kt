@@ -1678,24 +1678,35 @@ private fun CutTool(state: UiState, vm: HeadsupViewModel, playhead: LongState, o
                 if ((i == 1) != (clip.reversed != null)) vm.reverseClip(index)
             }, enabled = { !state.busy })
         }
-        // Steadied: the shake taken out, the camera's own move kept.
+        // Steadied: the shake taken out, the camera's own move kept. Locked: only an even drift
+        // kept and the roll held level, as if on a slider.
         val steady = clip.stabilize
         val measuring = state.work.any { it.clipId == clip.id && it.maskIndex == null && it.label.startsWith("Steadying") }
         ToolSection(
             "Steady",
-            info = "Takes out handheld shake (pans and walks stay). The picture is zoomed in a little, at most 20 %. Measured once, in the background; trimmed wider later, measure again. Double-tap the ruler for the usual strength.",
+            info = "Steadied takes out handheld shake; pans and walks stay. Locked takes out all the wobble and the tilting left and right, keeping only one even, straight move through the shot (as a slow Ken Burns): for a shaky shot meant to glide. " +
+                "Both zoom in to hide the moved edges, at most as much as Crop allows: more crop, steadier. Measured once, in the background; trimmed wider later, measure again.",
         ) {
-            ChoiceGrid(listOf("As shot", "Steadied"), if (steady != null) 1 else 0, { i ->
-                if (i == 1 && steady == null) vm.stabilizeClip(index) else if (i == 0 && steady != null) vm.removeStabilize(index)
+            val mode = when { steady == null -> 0; steady.locked -> 2; else -> 1 }
+            ChoiceGrid(listOf("As shot", "Steadied", "Locked"), mode, { i ->
+                when {
+                    i == 0 -> if (steady != null) vm.removeStabilize(index)
+                    steady == null -> vm.stabilizeClip(index, locked = i == 2)
+                    else -> vm.setStabilizeLocked(index, i == 2)
+                }
             }, enabled = { !measuring })
             if (measuring) Hint("Measuring the shake…")
             if (steady != null) {
-                ValueHeader("Strength", String.format(Locale.US, "%.0f %%", steady.strength * 100))
-                RulerSlider(steady.strength, 0f..1f, 0.05f, { v -> vm.setStabilizeStrength(index, v) }, onReset = { vm.setStabilizeStrength(index, 0.7f) })
+                if (!steady.locked) {
+                    ValueHeader("Strength", String.format(Locale.US, "%.0f %%", steady.strength * 100))
+                    RulerSlider(steady.strength, 0f..1f, 0.05f, { v -> vm.setStabilizeStrength(index, v) }, onReset = { vm.setStabilizeStrength(index, 0.7f) })
+                }
+                val crops = listOf(1.1f, 1.2f, 1.35f, 1.5f)
+                LabeledChoice("Crop", crops.map { "${kotlin.math.round((it - 1f) * 100).toInt()} %" }, { kotlin.math.abs(crops[it] - steady.maxZoom) < 0.01f }, { vm.setStabilizeCrop(index, crops[it]) })
                 if (steady.startMs > clip.trimStartMs + 100 || steady.startMs + (steady.steps.size * steady.frameMs).toLong() < clip.trimEndMs - 100) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Hint("The cut is wider than what was measured.", Modifier.weight(1f))
-                        SmallAction("Measure again", { vm.stabilizeClip(index) }, enabled = !measuring)
+                        SmallAction("Measure again", { vm.stabilizeClip(index, steady.locked) }, enabled = !measuring)
                     }
                 }
             }
@@ -3695,7 +3706,7 @@ private val Adjustment.info: String
 private fun PrinterControls(state: UiState, vm: HeadsupViewModel) {
     val P = app.headsup.core.color.PrinterLights
     val points = state.grade.printer
-    var step by rememberSaveable { mutableStateOf(1f) }
+    var step by rememberSaveable { mutableStateOf(0.5f) }
     fun press(channel: Int, sign: Int) = vm.updateGrade { it.copy(printer = P.pressed(it.printer, channel, step * sign)) }
     ToolSection(
         "Printer lights",
@@ -3707,7 +3718,7 @@ private fun PrinterControls(state: UiState, vm: HeadsupViewModel) {
             for ((i, name) in listOf("R", "G", "B").withIndex()) {
                 val v = points.getOrElse(i) { 0f }
                 Text(
-                    String.format(Locale.US, "%s %+.0f", name, v),
+                    name + " " + (if (v == 0f) "0" else String.format(Locale.US, "%+.2f", v).trimEnd('0').trimEnd('.')),
                     style = MaterialTheme.typography.titleLarge.copy(fontFamily = GeistMonoFamily),
                     color = if (v == 0f) HeadsupColors.TextMuted else HeadsupColors.Highlight,
                 )
@@ -3720,7 +3731,8 @@ private fun PrinterControls(state: UiState, vm: HeadsupViewModel) {
                 PanelAction("+ ${pair.second}", { press(i, 1) }, Modifier.weight(1f))
             }
         }
-        ChoiceGrid(listOf("1 point", "3 points", "6 points"), listOf(1f, 3f, 6f).indexOf(step), { step = listOf(1f, 3f, 6f)[it] })
+        val steps = listOf(0.25f, 0.5f, 1f, 3f)
+        ChoiceGrid(listOf("¼ point", "½ point", "1 point", "3 points"), steps.indexOf(step), { step = steps[it] }, minCell = 64.dp)
     }
 }
 
@@ -5338,6 +5350,8 @@ private fun EffectsPanel(state: UiState, vm: HeadsupViewModel, kind: EffectKind,
     val activities = state.activities
     val updateStyle = vm::updateStyle
     val updateEffects = vm::updateEffects
+    // Holding a ruler shows the picture without this one effect (not without everything).
+    val holdWithout: (Boolean) -> Unit = { held -> vm.compareEffects(if (held) effects.without(kind) else null) }
     EffectKinds(state, kind, kinds, onKind)
     // The dashboard and the graph are set per clip, or on all clips at once (only what is changed).
     if ((kind == EffectKind.DASHBOARD && activities.isNotEmpty()) || kind == EffectKind.GRAPH) {
@@ -5393,7 +5407,7 @@ private fun EffectsPanel(state: UiState, vm: HeadsupViewModel, kind: EffectKind,
                 val (_, size, colour) = stocks[i]
                 updateEffects { it.copy(grainSize = size, grainColour = colour, grain = if (it.grain == 0f) 0.35f else it.grain) }
             })
-            EffectRuler(
+            EffectRuler(compare = holdWithout, params =
                 listOf(
                     EffectParam("Amount", effects.grain, 0f..1f, 0.02f, 0f, percent = true) { v -> updateEffects { it.copy(grain = v) } },
                     EffectParam("Size", effects.grainSize, 0.5f..3f, 0.1f, 1f, format = "%.1f") { v -> updateEffects { it.copy(grainSize = v) } },
@@ -5403,7 +5417,7 @@ private fun EffectsPanel(state: UiState, vm: HeadsupViewModel, kind: EffectKind,
             }
         }
         EffectKind.GLOW -> ToolSection("Glow", info = "Light around what is brighter than the threshold. A small spread keeps it subtle; Colour: cool (−) to warm (+).") {
-            EffectRuler(
+            EffectRuler(compare = holdWithout, params =
                 listOf(
                     EffectParam("Glow", effects.glow, 0f..1f, 0.02f, 0f, percent = true) { v -> updateEffects { it.copy(glow = v) } },
                     EffectParam("Threshold", effects.glowThreshold, 0.4f..0.98f, 0.02f, 0.75f, percent = true) { v -> updateEffects { it.copy(glowThreshold = v) } },
@@ -5414,7 +5428,7 @@ private fun EffectsPanel(state: UiState, vm: HeadsupViewModel, kind: EffectKind,
 
         }
         EffectKind.HALATION -> ToolSection("Halation", info = "Red-orange bleed around bright highlights, as on motion picture film. Threshold and spread are the glow's.") {
-            EffectRuler(
+            EffectRuler(compare = holdWithout, params =
                 listOf(
                     EffectParam("Halation", effects.halation, 0f..1f, 0.02f, 0f, percent = true) { v -> updateEffects { it.copy(halation = v) } },
                     EffectParam("Threshold", effects.glowThreshold, 0.4f..0.98f, 0.02f, 0.75f, percent = true) { v -> updateEffects { it.copy(glowThreshold = v) } },
@@ -5429,7 +5443,7 @@ private fun EffectsPanel(state: UiState, vm: HeadsupViewModel, kind: EffectKind,
                 "or a mask of yours (Adjust › Masks: Select, the brush…). Highlights: how much bright points open into bright discs. Worked out on the photo, a moment after the ruler stops. " +
                 "Bokeh is this photo's own: it is not set on other photos by All, Copy or Paste.",
         ) {
-            EffectRuler(
+            EffectRuler(compare = holdWithout, params =
                 listOf(
                     EffectParam("Blur", effects.bokeh, 0f..1f, 0.02f, 0f, percent = true) { v -> updateEffects { it.copy(bokeh = v) } },
                     EffectParam("Highlights", effects.bokehHighlights, 0f..1f, 0.02f, 0.5f, percent = true) { v -> updateEffects { it.copy(bokehHighlights = v) } },
@@ -5449,7 +5463,7 @@ private fun EffectsPanel(state: UiState, vm: HeadsupViewModel, kind: EffectKind,
             info = "Film running through a projector: the frame never sits exactly where the last one did (weave, a small restless drift, more up and down) and the lamp's light is never quite even (flicker). " +
                 "Subtle is right: a little of each reads as film; much of it looks like a fault. The picture is enlarged a touch so the moving edges stay out of sight.",
         ) {
-            EffectRuler(
+            EffectRuler(compare = holdWithout, params =
                 listOf(
                     EffectParam("Weave", effects.weave, 0f..1f, 0.02f, 0f, percent = true) { v -> updateEffects { it.copy(weave = v) } },
                     EffectParam("Flicker", effects.flicker, 0f..1f, 0.02f, 0f, percent = true) { v -> updateEffects { it.copy(flicker = v) } },
@@ -5461,7 +5475,7 @@ private fun EffectsPanel(state: UiState, vm: HeadsupViewModel, kind: EffectKind,
             info = "A diffusion filter (as a Pro-Mist or Black Mist): the lights and bright parts spread into a soft haze round them, " +
                 "the picture gentler, as a film camera's. Laid over the picture as light adds; the before / after line shows it on its right.",
         ) {
-            EffectRuler(listOf(EffectParam("Mist", effects.mist, 0f..1f, 0.02f, 0f, percent = true) { v -> updateEffects { it.copy(mist = v) } }))
+            EffectRuler(compare = holdWithout, params = listOf(EffectParam("Mist", effects.mist, 0f..1f, 0.02f, 0f, percent = true) { v -> updateEffects { it.copy(mist = v) } }))
         }
         EffectKind.STREAKS -> ToolSection(
             "Anamorphic",
@@ -5469,7 +5483,7 @@ private fun EffectsPanel(state: UiState, vm: HeadsupViewModel, kind: EffectKind,
                 "Anamorphic look adds the rest of it: the cinema shape (2.39:1 bars), softer corners" +
                 (if (state.selected?.meta?.isPhoto == true) " and oval bokeh (with Bokeh on)." else "."),
         ) {
-            EffectRuler(
+            EffectRuler(compare = holdWithout, params =
                 listOf(
                     EffectParam("Streaks", effects.streaks, 0f..1f, 0.02f, 0f, percent = true) { v -> updateEffects { it.copy(streaks = v) } },
                     EffectParam("Length", effects.streakLength, 0.3f..3f, 0.05f, 1f, format = "× %.2f") { v -> updateEffects { it.copy(streakLength = v) } },
@@ -5486,7 +5500,7 @@ private fun EffectsPanel(state: UiState, vm: HeadsupViewModel, kind: EffectKind,
             "Star",
             info = "A star filter: rays up, down and to the sides from each point of light (lamps, reflections, the sun). Length sets how far they reach.",
         ) {
-            EffectRuler(
+            EffectRuler(compare = holdWithout, params =
                 listOf(
                     EffectParam("Star", effects.star, 0f..1f, 0.02f, 0f, percent = true) { v -> updateEffects { it.copy(star = v) } },
                     EffectParam("Length", effects.starLength, 0.3f..3f, 0.05f, 1f, format = "× %.2f") { v -> updateEffects { it.copy(starLength = v) } },
@@ -5497,7 +5511,7 @@ private fun EffectsPanel(state: UiState, vm: HeadsupViewModel, kind: EffectKind,
             "Prism",
             info = "A prism held before the lens: the lights repeated beside themselves, split into a rainbow's colours. Spread sets how far the copies go, Direction which way (0° right, 90° down, 180° left, 270° up).",
         ) {
-            EffectRuler(
+            EffectRuler(compare = holdWithout, params =
                 listOf(
                     EffectParam("Prism", effects.prism, 0f..1f, 0.02f, 0f, percent = true) { v -> updateEffects { it.copy(prism = v) } },
                     EffectParam("Spread", effects.prismSpread, 0.3f..3f, 0.05f, 1f, format = "× %.2f") { v -> updateEffects { it.copy(prismSpread = v) } },
@@ -5506,7 +5520,7 @@ private fun EffectsPanel(state: UiState, vm: HeadsupViewModel, kind: EffectKind,
             )
         }
         EffectKind.LENS -> ToolSection("Lens", info = "An older lens: colour fringes and softness that grow towards the corners; the middle stays sharp. A little goes a long way.") {
-            EffectRuler(
+            EffectRuler(compare = holdWithout, params =
                 listOf(
                     EffectParam("Fringes", effects.lensAberration, 0f..1f, 0.02f, 0f, percent = true) { v -> updateEffects { it.copy(lensAberration = v) } },
                     EffectParam("Soft corners", effects.lensSoftness, 0f..1f, 0.02f, 0f, percent = true) { v -> updateEffects { it.copy(lensSoftness = v) } },
@@ -5549,12 +5563,28 @@ private class EffectParam(
 
 /** An effect's values: which one the ruler edits (when there are several), its value, the ruler. */
 @Composable
-private fun EffectRuler(params: List<EffectParam>) {
+private fun EffectRuler(params: List<EffectParam>, compare: ((Boolean) -> Unit)? = null) {
     var index by rememberSaveable(params.map { it.label }.joinToString()) { mutableStateOf(0) }
     val p = params[index.coerceIn(0, params.size - 1)]
     if (params.size > 1) Segmented(params.map { it.label }, index, { index = it })
     ValueHeader(p.label, if (p.percent) String.format(Locale.US, "%.0f %%", p.value * 100) else String.format(Locale.US, p.format, p.value))
-    RulerSlider(p.value, p.range, p.step, { v -> p.set(v) }, onReset = { p.set(p.neutral) })
+    RulerSlider(p.value, p.range, p.step, { v -> p.set(v) }, onReset = { p.set(p.neutral) }, onHold = compare)
+}
+
+/** [this] with the effect [kind] off: what holding its ruler shows (only that effect taken away). */
+private fun app.headsup.render.EffectSettings.without(kind: EffectKind): app.headsup.render.EffectSettings = when (kind) {
+    EffectKind.GRAIN -> copy(grain = 0f)
+    EffectKind.GLOW -> copy(glow = 0f)
+    EffectKind.HALATION -> copy(halation = 0f)
+    EffectKind.BOKEH -> copy(bokeh = 0f)
+    EffectKind.WEAVE -> copy(weave = 0f, flicker = 0f)
+    EffectKind.MIST -> copy(mist = 0f)
+    EffectKind.STREAKS -> copy(streaks = 0f)
+    EffectKind.STAR -> copy(star = 0f)
+    EffectKind.PRISM -> copy(prism = 0f)
+    EffectKind.LENS -> copy(lensAberration = 0f, lensSoftness = 0f)
+    EffectKind.BARS -> copy(barsRatio = null)
+    else -> this
 }
 
 @Composable

@@ -23,7 +23,19 @@ object Stabilizer {
      * A shot's measured path: [steps] one per frame from [startMs] (file time), [frameMs] apart.
      * [strength] 0..1 how much of the shake goes (1: as steady as the crop allows).
      */
-    data class Path(val startMs: Long, val frameMs: Float, val steps: List<Step>, val strength: Float = 0.7f)
+    data class Path(
+        val startMs: Long,
+        val frameMs: Float,
+        val steps: List<Step>,
+        val strength: Float = 0.7f,
+        /**
+         * Locked: all the wobble and roll taken out, only the camera's steady drift kept (a straight,
+         * even move through the shot, as a slow Ken Burns), not just the shake.
+         */
+        val locked: Boolean = false,
+        /** The most the frame may be zoomed in to hide the moved picture's edges (1.2 is 20 %). */
+        val maxZoom: Float = MAX_ZOOM,
+    )
 
     /** A frame's correction: the picture moved by ([dx], [dy]) (fractions), turned by [degrees] and zoomed by [zoom]. */
     data class Correction(val dx: Float, val dy: Float, val degrees: Float, val zoom: Float) {
@@ -112,9 +124,11 @@ object Stabilizer {
             a[i] = a[i - 1] + path.steps[i].degrees
         }
         val sigma = max(1f, (250f + 1000f * path.strength) / path.frameMs)
-        val sx = gaussian(x, sigma)
-        val sy = gaussian(y, sigma)
-        val sa = gaussian(a, sigma)
+        // Locked: the path a straight line through the shot (its even drift); else smoothed.
+        val sx = if (path.locked) line(x) else gaussian(x, sigma)
+        val sy = if (path.locked) line(y) else gaussian(y, sigma)
+        // Locked, the turn is held still (a horizon does not drift): the shot's mean angle.
+        val sa = if (path.locked) FloatArray(n) { a.average().toFloat() } else gaussian(a, sigma)
         val raw = List(n) { i -> Triple(sx[i] - x[i], sy[i] - y[i], sa[i] - a[i]) }
         // The zoom that keeps the picture over the frame: a shift of d needs 1 + 2d; a turn
         // of θ about cos θ + sin θ · (long side / short side).
@@ -124,7 +138,7 @@ object Stabilizer {
             val turn = (cos(t) + sin(t) * long).toFloat()
             return turn + 2f * max(abs(c.first), abs(c.second))
         }
-        val zoom = min(MAX_ZOOM, raw.maxOf { need(it) }.coerceAtLeast(1f))
+        val zoom = min(path.maxZoom.coerceIn(1f, 2f), raw.maxOf { need(it) }.coerceAtLeast(1f))
         return raw.map { c ->
             // More than the zoom can hide: cut back, the turn kept.
             val over = need(c)
@@ -138,6 +152,22 @@ object Stabilizer {
         if (corrections.isEmpty()) return Correction(0f, 0f, 0f, 1f)
         val i = ((fileMs - path.startMs) / path.frameMs).toInt().coerceIn(0, corrections.lastIndex)
         return corrections[i]
+    }
+
+    /** The straight line that fits [v] best (least squares): its even drift. */
+    private fun line(v: FloatArray): FloatArray {
+        val n = v.size
+        if (n < 2) return v.copyOf()
+        val mt = (n - 1) / 2.0
+        val mv = v.average()
+        var num = 0.0
+        var den = 0.0
+        for (i in 0 until n) {
+            num += (i - mt) * (v[i] - mv)
+            den += (i - mt) * (i - mt)
+        }
+        val slope = if (den > 0) num / den else 0.0
+        return FloatArray(n) { i -> (mv + slope * (i - mt)).toFloat() }
     }
 
     private fun gaussian(v: FloatArray, sigma: Float): FloatArray {
