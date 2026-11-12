@@ -241,3 +241,39 @@ private fun mixer(green: FloatArray? = null, aqua: FloatArray? = null, blue: Flo
             for (p in 0..2) m[band.ordinal * 3 + p] = v[p]
         }
     }
+
+/**
+ * A cinematic look on a clip: which, how strongly, the clip's corrections and effects before it
+ * ([baseGrade], [baseEffects]) and as the look left them ([grade], [effects]). Kept with the clip,
+ * so None takes the look off at any time, keeping what was changed by hand since.
+ */
+data class AppliedLook(
+    val name: String,
+    val strength: Float,
+    val baseGrade: ColorGrade,
+    val baseEffects: EffectSettings,
+    val grade: ColorGrade,
+    val effects: EffectSettings,
+) {
+    val look: FastLook? get() = FastLook.entries.firstOrNull { it.name == name }
+
+    /** The clip's corrections without the look: as before it, with the changes made since on top. */
+    fun gradeWithout(current: ColorGrade): ColorGrade = baseGrade.synced(grade, current)
+
+    fun effectsWithout(current: EffectSettings): EffectSettings = baseEffects.synced(effects, current)
+}
+
+/**
+ * Colour harmony on a clip ([app.headsup.core.color.ColourHarmony]): the scheme, its key hue and
+ * amount, and the clip's corrections before it and as it left them, so it can be changed or taken
+ * off later, keeping what was changed by hand since.
+ */
+data class AppliedHarmony(
+    val scheme: app.headsup.core.color.ColourHarmony.Scheme,
+    val hue: Float,
+    val amount: Float,
+    val baseGrade: ColorGrade,
+    val grade: ColorGrade,
+) {
+    fun gradeWithout(current: ColorGrade): ColorGrade = baseGrade.synced(grade, current)
+}

@@ -1599,32 +1599,43 @@ private fun TimelineRate(state: UiState, vm: HeadsupViewModel) {
     }
 }
 
-/** How each clip's frames fit [fps]: by its frame rate after its speed change. */
+/**
+ * How each clip's frames fit [fps], in plain words: what it was shot at (and what the file really
+ * holds when the camera dropped frames), how many of its frames the timeline uses, and the speed
+ * that uses every frame for slow motion. The clip is named only when there are several.
+ */
 @Composable
 private fun RateNotes(state: UiState, fps: Float) {
-    // One line per clip, by its place on the timeline and file name.
-    val notes = state.clips.withIndex().filter { !it.value.meta.isPhoto && it.value.meta.frameRate != null }.map { (i, c) ->
+    val videos = state.clips.withIndex().filter { !it.value.meta.isPhoto && it.value.meta.frameRate != null }
+    val notes = videos.map { (i, c) ->
         val rate = c.meta.frameRate ?: fps
         val speed = c.averageSpeed
-        val name = "${i + 1}. ${c.meta.name} · ${OutputSpec.formatFps(rate)} fps" + droppedNote(c.meta) + if (speed != 1f) " at ${String.format(Locale.US, "%.3g", speed)}×" + (if (c.speedCurve.isNotEmpty()) " on average" else "") else ""
+        val title = (if (videos.size > 1) "Clip ${i + 1}: " else "This clip: ") + "shot at ${OutputSpec.formatFps(rate)} fps" +
+            (c.meta.measuredFrameRate?.takeIf { it < rate * 0.99f }?.let { " (${OutputSpec.formatFps(it)} measured: the camera dropped a few)" } ?: "") +
+            if (speed != 1f) ", played at ${speedText(speed)}" + (if (c.speedCurve.isNotEmpty()) " on average" else "") else ""
         val r = rate * speed / fps
-        when {
-            kotlin.math.abs(r - 1f) < 0.02f -> "$name: every frame used"
-            r > 1f -> "$name: every ${String.format(Locale.US, "%.3g", r)}th frame kept (\"All frames\" speed: ${String.format(Locale.US, "%.3g", speed / r)}× slow motion)"
-            else -> "$name: ${OutputSpec.formatFps(rate * speed)} frames a second, each held longer"
+        val how = when {
+            kotlin.math.abs(r - 1f) < 0.02f -> "Every frame is used."
+            r > 1f -> {
+                val whole = kotlin.math.round(r)
+                val share = if (kotlin.math.abs(r - whole) < 0.03f) "Every ${ordinal(whole.toInt())} frame is used"
+                else String.format(Locale.US, "About 1 frame in %.1f is used", r)
+                "$share. For slow motion with all of them: ${speedText(speed / r)} in Speed."
+            }
+            else -> "It has fewer frames than the timeline (${OutputSpec.formatFps(rate * speed)} a second), so each shows a little longer."
         }
+        "$title.\n$how"
     }
-    if (notes.isNotEmpty()) Hint(notes.joinToString("\n"))
+    if (notes.isNotEmpty()) Hint(notes.joinToString("\n\n"))
 }
 
-/**
- * " (116.97 on average)" when the file holds clearly fewer frames than it was shot at (the camera
- * dropped some, as phones do at high rates in low light), else nothing.
- */
-private fun droppedNote(meta: app.headsup.media.ClipMetadata): String {
-    val shot = meta.frameRate ?: return ""
-    val held = meta.measuredFrameRate ?: return ""
-    return if (held < shot * 0.99f) " (${OutputSpec.formatFps(held)} on average)" else ""
+/** 2nd, 3rd, 4th… */
+private fun ordinal(n: Int): String = n.toString() + when {
+    n % 100 in 11..13 -> "th"
+    n % 10 == 1 -> "st"
+    n % 10 == 2 -> "nd"
+    n % 10 == 3 -> "rd"
+    else -> "th"
 }
 
 /** The selected clip's cut (or a photo's time on screen), with split and delete. */
@@ -4237,13 +4248,14 @@ private fun LooksPanel(state: UiState, vm: HeadsupViewModel, frameSource: (() ->
         return
     }
     val stats = state.lookStats?.takeIf { it.first == clip.id }?.second
-    val fast = state.fast?.takeIf { it.clipId == clip.id }
-    fun choose(look: app.headsup.color.FastLook) = vm.applyFastLook(look, fast?.strength ?: 1f)
+    val applied = clip.cineLook
+    val current = applied?.look
+    fun choose(look: app.headsup.color.FastLook) = vm.applyFastLook(look, applied?.strength ?: 1f)
     val what = if (clip.meta.isPhoto) "photo" else "clip"
     // The clip measured: what was found, and the looks that suit it.
     ToolSection(
         "Cinematic",
-        info = "A complete look: colour taken away rather than added, soft highlights, grain and light. Analyse the $what and looks that suit it are suggested, and every look is fitted to it. Hold the ruler to see the $what without it. The look stays as normal corrections and effects, adjustable afterwards; Off (or Undo) takes it back.",
+        info = "A complete look: colour taken away rather than added, soft highlights, grain and light. Analyse the $what and looks that suit it are suggested, and every look is fitted to it. Hold the ruler to see the $what without it. The look stays with the $what: change its strength or take it off with None at any time; what you change by hand meanwhile is kept.",
     ) {
     Row(verticalAlignment = Alignment.CenterVertically) {
         Hint(
@@ -4257,29 +4269,60 @@ private fun LooksPanel(state: UiState, vm: HeadsupViewModel, frameSource: (() ->
     }
     // What suits the clip is outlined in the one grid (no second row of the same looks).
     val suggested = stats?.let { suggestedLooks(it) }.orEmpty()
-    // The suggested looks first, then the rest; while a look is on, Off puts the clip back as it was.
+    // None (the clip without a look), then the suggested looks, then the rest.
     val cinematic = suggested + app.headsup.color.FastLook.entries.filter { it !in suggested }
-    val labels = (if (fast != null) listOf("Off") else emptyList()) + cinematic.map { it.label }
-    val shift = if (fast != null) 1 else 0
     ChoiceGrid(
-        labels, fast?.let { cinematic.indexOf(it.look) + shift } ?: -1,
-        { i -> if (i < shift) vm.closeFast(undo = true) else choose(cinematic[i - shift]) },
-        outlined = { i -> i >= shift && cinematic[i - shift] in suggested },
+        listOf("None") + cinematic.map { it.label }, if (current == null) 0 else cinematic.indexOf(current) + 1,
+        { i -> if (i == 0) vm.removeFastLook() else choose(cinematic[i - 1]) },
+        outlined = { i -> i > 0 && cinematic[i - 1] in suggested },
     )
     if (suggested.isNotEmpty()) Hint("Outlined, first: the looks that suit this $what.")
-    // The look on the clip: its strength. It stays as it is set; leaving the panel keeps it as
-    // ordinary corrections and effects (Undo above takes it back like any change).
-    if (fast != null) {
-        ValueHeader("Strength", String.format(Locale.US, "%.0f %%", fast.strength * 100))
+    // The look on the clip: its strength, any time later too.
+    if (applied != null && current != null) {
+        ValueHeader("Strength", String.format(Locale.US, "%.0f %%", applied.strength * 100))
         RulerSlider(
-            fast.strength, 0f..1f, 0.02f, { v -> vm.applyFastLook(fast.look, v) },
-            onReset = { vm.applyFastLook(fast.look, 1f) }, onHold = vm::compareFast,
+            applied.strength, 0f..1f, 0.02f, { v -> vm.applyFastLook(current, v) },
+            onReset = { vm.applyFastLook(current, 1f) }, onHold = vm::compareFast,
         )
-        Hint(fast.look.description + if (stats != null) " Fitted to this $what." else " Analyse the $what to fit it.")
+        Hint(current.description + if (stats != null) " Fitted to this $what." else " Analyse the $what to fit it.")
     }
     }
-    // Leaving the panel (or the clip) keeps the look as the clip's own corrections and effects.
-    DisposableEffect(clip.id) { onDispose { vm.closeFast(undo = false) } }
+    HarmonyControls(clip, vm, what)
+}
+
+/** A colour-wheel hue in a word. */
+private fun hueName(h: Float): String = listOf(
+    "red", "orange", "yellow", "lime", "green", "teal", "cyan", "azure", "blue", "violet", "magenta", "pink",
+)[(((h + 15f) % 360f) / 30f).toInt().coerceIn(0, 11)]
+
+/**
+ * Colour harmony: the clip's colours pulled towards a scheme on the colour wheel around a key
+ * colour (complementary, split, analogous, triadic), the key in the highlights and its partner in
+ * the shadows. None takes it off; it stays changeable.
+ */
+@Composable
+private fun HarmonyControls(clip: ClipState, vm: HeadsupViewModel, what: String) {
+    val h = clip.harmony
+    val schemes = app.headsup.core.color.ColourHarmony.Scheme.entries
+    ToolSection(
+        "Colour harmony",
+        info = "Pulls the $what's colours towards a palette, as colourists do: Complementary (a colour and its opposite, like orange and teal or yellow and violet), Split (a colour and the two beside its opposite), Analogous (neighbours: calm, one mood) or Triadic (three evenly apart: lively). The key colour goes into the highlights, its partner into the shadows; colours far from the palette are calmed, skin is changed least. Hold a ruler to see the $what without it.",
+    ) {
+        ChoiceGrid(listOf("None") + schemes.map { it.label }, if (h == null) 0 else schemes.indexOf(h.scheme) + 1, { i ->
+            if (i == 0) vm.removeHarmony() else vm.applyHarmony(schemes[i - 1], h?.hue ?: 30f, h?.amount ?: 0.5f)
+        }, minCell = 64.dp)
+        if (h == null) return@ToolSection
+        // The palette: the scheme's colours around the key.
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+            for (hue in app.headsup.core.color.ColourHarmony.hues(h.scheme, h.hue)) {
+                Box(Modifier.size(22.dp).clip(CircleShape).background(androidx.compose.ui.graphics.Color.hsv(hue, 0.75f, 0.9f)))
+            }
+        }
+        ValueHeader("Key colour", String.format(Locale.US, "%.0f° · %s", h.hue, hueName(h.hue)))
+        RulerSlider(h.hue, 0f..359f, 1f, { v -> vm.applyHarmony(h.scheme, v, h.amount) }, onReset = { vm.applyHarmony(h.scheme, 30f, h.amount) }, onHold = vm::compareHarmony)
+        ValueHeader("Amount", String.format(Locale.US, "%.0f %%", h.amount * 100))
+        RulerSlider(h.amount, 0f..1f, 0.02f, { v -> vm.applyHarmony(h.scheme, h.hue, v) }, onReset = { vm.applyHarmony(h.scheme, h.hue, 0.5f) }, onHold = vm::compareHarmony)
+    }
 }
 
 @Composable
@@ -4356,22 +4399,18 @@ private fun CinePanel(state: UiState, vm: HeadsupViewModel, frameSource: (() -> 
 @Composable
 private fun FastEdit(state: UiState, vm: HeadsupViewModel) {
     val clip = state.selected ?: return
-    val fast = state.fast?.takeIf { it.clipId == clip.id }
+    val applied = clip.cineLook
+    val current = applied?.look
     val what = if (state.photoProject) "photo" else "clip"
-    ToolSection(
-        "Fast edit",
-        info = "A whole look at once: colour taken away rather than added, soft highlights, grain and light. Hold the ruler to see the $what without it. Done keeps it as normal corrections (Density, Roll-off, Tame…) and effects (Grain, Glow, Lens…), adjustable afterwards.",
-    ) {
+    ToolSection("Fast edit", info = "A whole look at once. None takes it off.") {
     val fastLooks = app.headsup.color.FastLook.entries
-    ChoiceGrid(fastLooks.map { it.label }, fastLooks.indexOf(fast?.look), { vm.applyFastLook(fastLooks[it], fast?.strength ?: 1f) })
-    if (fast == null) return@ToolSection
-    ValueHeader("Strength", String.format(Locale.US, "%.0f %%", fast.strength * 100))
-    RulerSlider(fast.strength, 0f..1f, 0.02f, { v -> vm.applyFastLook(fast.look, v) }, onReset = { vm.applyFastLook(fast.look, 1f) }, onHold = vm::compareFast)
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        SmallAction("Undo", { vm.closeFast(undo = true) })
-        Spacer(Modifier.weight(1f))
-        SmallAction("Done", { vm.closeFast(undo = false) })
-    }
+    ChoiceGrid(listOf("None") + fastLooks.map { it.label }, if (current == null) 0 else fastLooks.indexOf(current) + 1, { i ->
+        if (i == 0) vm.removeFastLook() else vm.applyFastLook(fastLooks[i - 1], applied?.strength ?: 1f)
+    })
+    if (applied == null || current == null) return@ToolSection
+    ValueHeader("Strength", String.format(Locale.US, "%.0f %%", applied.strength * 100))
+    RulerSlider(applied.strength, 0f..1f, 0.02f, { v -> vm.applyFastLook(current, v) }, onReset = { vm.applyFastLook(current, 1f) }, onHold = vm::compareFast)
+    Hint("Hold the ruler to see the $what without it.")
     }
 }
 

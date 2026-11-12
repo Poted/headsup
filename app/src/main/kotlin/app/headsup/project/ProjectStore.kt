@@ -61,6 +61,8 @@ data class SavedClip(
     /** The shot steadied (its measured path and strength), or null. */
     val stabilize: app.headsup.core.frame.Stabilizer.Path? = null,
     val subject: String? = null,
+    val cineLook: app.headsup.color.AppliedLook? = null,
+    val harmony: app.headsup.color.AppliedHarmony? = null,
     val cut: app.headsup.core.edit.CutKind = app.headsup.core.edit.CutKind.NONE,
     val cutMs: Long = 500L,
     val frameKeys: List<app.headsup.core.frame.FrameKey> = emptyList(),
@@ -403,6 +405,15 @@ internal object Json {
             }
         }
         .putOpt("subject", c.subject)
+        .putOpt("cineLook", c.cineLook?.let { a ->
+            JSONObject().put("name", a.name).put("strength", a.strength.toDouble())
+                .put("baseGrade", grade(a.baseGrade)).put("baseEffects", effects(a.baseEffects))
+                .put("grade", grade(a.grade)).put("effects", effects(a.effects))
+        })
+        .putOpt("harmony", c.harmony?.let { h ->
+            JSONObject().put("scheme", h.scheme.name).put("hue", h.hue.toDouble()).put("amount", h.amount.toDouble())
+                .put("baseGrade", grade(h.baseGrade)).put("grade", grade(h.grade))
+        })
         .put("cut", c.cut.name).put("cutMs", c.cutMs)
         .apply {
             if (c.frameKeys.isNotEmpty()) put("frameKeys", JSONArray(c.frameKeys.map { k ->
@@ -455,6 +466,22 @@ internal object Json {
         cullGroup = if (o.has("cullGroup")) o.optInt("cullGroup") else null,
         cullBest = o.optBoolean("cullBest", false),
         subject = o.optStringOrNull("subject"),
+        cineLook = o.optJSONObject("cineLook")?.let { a ->
+            app.headsup.color.AppliedLook(
+                a.optString("name"), a.optDouble("strength", 1.0).toFloat(),
+                grade(a.optJSONObject("baseGrade")), effects(a.optJSONObject("baseEffects")),
+                grade(a.optJSONObject("grade")), effects(a.optJSONObject("effects")),
+            )
+        },
+        harmony = o.optJSONObject("harmony")?.let { h ->
+            val scheme = app.headsup.core.color.ColourHarmony.Scheme.entries.firstOrNull { it.name == h.optString("scheme") }
+            scheme?.let {
+                app.headsup.color.AppliedHarmony(
+                    it, h.optDouble("hue", 30.0).toFloat(), h.optDouble("amount", 0.5).toFloat(),
+                    grade(h.optJSONObject("baseGrade")), grade(h.optJSONObject("grade")),
+                )
+            }
+        },
         cut = app.headsup.core.edit.CutKind.entries.firstOrNull { it.name == o.optString("cut") } ?: app.headsup.core.edit.CutKind.NONE,
         cutMs = o.optLong("cutMs", 500L),
         frameKeys = o.optJSONArray("frameKeys")?.let { a ->

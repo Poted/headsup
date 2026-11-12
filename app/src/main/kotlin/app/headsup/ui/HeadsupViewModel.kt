@@ -137,6 +137,10 @@ data class ClipState(
     val stabilize: app.headsup.core.frame.Stabilizer.Path? = null,
     /** The clip's subject found on its frames (a [app.headsup.color.MaskSequences] id), for texts behind it. */
     val subject: String? = null,
+    /** The cinematic look on it (Adjust › Looks), kept so it can be changed or taken off later. */
+    val cineLook: app.headsup.color.AppliedLook? = null,
+    /** Colour harmony on it (Adjust › Looks), kept so it can be changed or taken off later. */
+    val harmony: app.headsup.color.AppliedHarmony? = null,
     /** How the clip comes in from the one before (half of it at that one's end), and how long the whole of it is. */
     val cut: app.headsup.core.edit.CutKind = app.headsup.core.edit.CutKind.NONE,
     val cutMs: Long = 500L,
@@ -272,15 +276,6 @@ data class BackgroundWork(
     val maskIndex: Int? = null,
     val progress: Float? = null,
     val waiting: Boolean = true,
-)
-
-/** A Fast edit look being tried on clip [clipId]: what it had before, the look and its strength. */
-data class FastSession(
-    val clipId: Long,
-    val baseGrade: ColorGrade,
-    val baseEffects: EffectSettings,
-    val look: app.headsup.color.FastLook,
-    val strength: Float = 1f,
 )
 
 data class CineSession(
@@ -425,8 +420,6 @@ data class UiState(
     val brushSizedAt: Long = 0L,
     /** The clip measured for looks ([HeadsupViewModel.analyseClip]): its id and what was measured. */
     val lookStats: Pair<Long, app.headsup.core.color.FrameStats>? = null,
-    /** A Fast edit look being tried ([HeadsupViewModel.applyFastLook]). */
-    val fast: FastSession? = null,
     /** Long jobs running in the background (tracking with AI, reversing). */
     val work: List<BackgroundWork> = emptyList(),
     /** An outline being drawn around an object (x, y pairs, fractions of the picture), until the finger lifts. */
@@ -1593,7 +1586,6 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                 selectedMask = 0,
                 compareGrade = null,
                 cine = null,
-                fast = null,
                 matchSession = null,
                 scope = null,
                 texts = emptyList(),
@@ -1698,6 +1690,8 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                 stabilize = it.stabilize,
                 subject = it.subject,
                 cut = it.cut, cutMs = it.cutMs, frameKeys = it.frameKeys,
+                cineLook = it.cineLook,
+                harmony = it.harmony,
             )
         },
         groups = groups.map { SavedGroup(it.id, it.name, it.grade, it.lutName) },
@@ -1848,6 +1842,8 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
             stabilize = c.stabilize,
             subject = c.subject,
             cut = c.cut, cutMs = c.cutMs, frameKeys = c.frameKeys,
+            cineLook = c.cineLook,
+            harmony = c.harmony,
             groupId = c.groupId,
         )
     }
@@ -2395,7 +2391,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
     fun selectClip(index: Int) {
         scopeFrame = null
         // What was being done on the photo before is let go: a colour being picked for it or for a mask.
-        _state.update { it.copy(selectedClip = index, scope = null, selectedMask = 0, compareGrade = null, cine = null, fast = null, pickingPoint = false, pointSelected = 0, pickingColour = false) }
+        _state.update { it.copy(selectedClip = index, scope = null, selectedMask = 0, compareGrade = null, cine = null, pickingPoint = false, pointSelected = 0, pickingColour = false) }
         refreshPreview()
     }
 
@@ -3162,7 +3158,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                 }
                 _state.update { it.copy(lookStats = clip.id to stats) }
                 // A look being tried is fitted to what was just measured.
-                _state.value.fast?.takeIf { it.clipId == clip.id }?.let { applyFastLook(it.look, it.strength) }
+                _state.value.selected?.takeIf { it.id == clip.id }?.cineLook?.let { a -> a.look?.let { applyFastLook(it, a.strength) } }
             } finally {
                 _state.update { it.copy(busy = false, loadingMessage = null) }
             }
@@ -3270,10 +3266,9 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    /** Keeps the suggestion as ordinary corrections ([undo] = false) or restores the clip as it was. */
     /**
-     * Fast edit: [look] on the selected clip at [strength], on top of what it had when the first
-     * look was tried (trying another look replaces it, not adds to it).
+     * [look] on the selected clip at [strength], on top of what the clip has without its look
+     * (another look is replaced, not added to); kept with the clip ([ClipState.cineLook]).
      */
     fun applyFastLook(look: app.headsup.color.FastLook, strength: Float = 1f) {
         // An adaptive style being tried gives way to it.
@@ -3281,7 +3276,10 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
         val s = _state.value
         val index = s.selectedClip ?: return
         val clip = s.selected ?: return
-        val session = s.fast?.takeIf { it.clipId == clip.id } ?: FastSession(clip.id, clip.grade, clip.effects, look)
+        // On what the clip has without its look (another look is replaced, not added to).
+        val before = clip.cineLook
+        val baseGrade = before?.gradeWithout(clip.grade) ?: clip.grade
+        val baseEffects = before?.effectsWithout(clip.effects) ?: clip.effects
         val k = strength.coerceIn(0f, 1f)
         // Measured: the look's character, plus what this clip needs to suit it.
         val stats = s.lookStats?.takeIf { it.first == clip.id }?.second
@@ -3291,25 +3289,51 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
         // keeps its shadow detail), and taken down with the strength.
         val curve = app.headsup.core.color.ToneCurve.cinematic(look.contrast, low = stats?.low ?: 0.18f, median = stats?.median ?: 0.5f)
         val scaled = (grade * k).copy(curves = listOf(app.headsup.core.color.ToneCurve.scaled(curve, k), emptyList(), emptyList(), emptyList()))
-        _state.update { it.copy(fast = session.copy(look = look, strength = k)) }
-        updateClip(index) { it.copy(grade = session.baseGrade + scaled, effects = look.effectsOn(session.baseEffects, k)) }
+        val newGrade = baseGrade + scaled
+        val newEffects = look.effectsOn(baseEffects, k)
+        val applied = app.headsup.color.AppliedLook(look.name, k, baseGrade, baseEffects, newGrade, newEffects)
+        updateClip(index) { it.copy(grade = newGrade, effects = newEffects, cineLook = applied) }
     }
 
-    /** Hold to see the clip as it was before the Fast edit look. */
-    fun compareFast(held: Boolean) {
-        val session = _state.value.fast?.takeIf { held }
-        _state.update { it.copy(compareGrade = session?.baseGrade, compareEffects = session?.baseEffects) }
+    /** Takes the selected clip's look off: its corrections as before it, changes made since kept. */
+    fun removeFastLook() {
+        val s = _state.value
+        val index = s.selectedClip ?: return
+        val clip = s.selected ?: return
+        val applied = clip.cineLook ?: return
+        updateClip(index) { it.copy(grade = applied.gradeWithout(it.grade), effects = applied.effectsWithout(it.effects), cineLook = null) }
+    }
+
+    /** Colour harmony on the selected clip: [scheme] around [hue] at [amount], replacing the one it had. */
+    fun applyHarmony(scheme: app.headsup.core.color.ColourHarmony.Scheme, hue: Float, amount: Float) {
+        val s = _state.value
+        val index = s.selectedClip ?: return
+        val clip = s.selected ?: return
+        val base = clip.harmony?.gradeWithout(clip.grade) ?: clip.grade
+        val graded = base + app.headsup.core.color.ColourHarmony.grade(scheme, hue, amount)
+        val applied = app.headsup.color.AppliedHarmony(scheme, hue, amount.coerceIn(0f, 1f), base, graded)
+        updateClip(index) { it.copy(grade = graded, harmony = applied) }
+    }
+
+    /** Takes the selected clip's colour harmony off, keeping the changes made since. */
+    fun removeHarmony() {
+        val index = _state.value.selectedClip ?: return
+        updateClip(index) { c -> c.harmony?.let { h -> c.copy(grade = h.gradeWithout(c.grade), harmony = null) } ?: c }
+    }
+
+    /** Hold to see the clip without its colour harmony. */
+    fun compareHarmony(held: Boolean) {
+        val clip = _state.value.selected
+        _state.update { it.copy(compareGrade = clip?.harmony?.takeIf { held }?.gradeWithout(clip.grade)) }
         refreshPreview()
     }
 
-    /** Keeps the look as ordinary corrections and effects, or with [undo] puts the clip back. */
-    fun closeFast(undo: Boolean) {
-        val session = _state.value.fast ?: return
-        if (undo) {
-            val index = _state.value.clips.indexOfFirst { it.id == session.clipId }
-            if (index >= 0) updateClip(index) { it.copy(grade = session.baseGrade, effects = session.baseEffects) }
-        }
-        _state.update { it.copy(fast = null) }
+    /** Hold to see the clip as it is without its look. */
+    fun compareFast(held: Boolean) {
+        val clip = _state.value.selected
+        val applied = clip?.cineLook?.takeIf { held }
+        _state.update { it.copy(compareGrade = applied?.gradeWithout(clip.grade), compareEffects = applied?.effectsWithout(clip.effects)) }
+        refreshPreview()
     }
 
     fun closeCine(undo: Boolean) {
