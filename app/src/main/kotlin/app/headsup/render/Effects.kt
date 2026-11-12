@@ -46,6 +46,16 @@ data class EffectSettings(
     val barsImage: String? = null,
     /** The bars the picture itself, blurred (drawn with the picture, not over it). */
     val barsBlur: Boolean = false,
+    /** Light effects ([app.headsup.core.photo.LightFx]): Mist, Anamorphic streaks, Star, Prism; amounts 0..1, reaches 1 = usual. */
+    val mist: Float = 0f,
+    val streaks: Float = 0f,
+    val streakLength: Float = 1f,
+    val star: Float = 0f,
+    val starLength: Float = 1f,
+    val prism: Float = 0f,
+    val prismSpread: Float = 1f,
+    /** Photos: bokeh through an anamorphic lens's tall oval aperture instead of a round one. */
+    val bokehOval: Boolean = false,
     /** How far in the bars are at the moment drawn, 0..1 (set while drawing, not saved). */
     val barsAmount: Float = 1f,
     /** Activity profile drawn along the bottom edge, or null for none. */
@@ -62,6 +72,10 @@ data class EffectSettings(
     val bokehInvert: Boolean = false,
 ) {
     val changesPixels: Boolean get() = grain > 0f || glow > 0f || halation > 0f || lens
+
+    /** The light effects, as [app.headsup.core.photo.LightFx] takes them. */
+    val lightFx: app.headsup.core.photo.LightFx.Settings
+        get() = app.headsup.core.photo.LightFx.Settings(mist, streaks, streakLength, star, starLength, prism, prismSpread)
 
     /** The lens effect is on. */
     val lens: Boolean get() = lensAberration > 0f || lensSoftness > 0f
@@ -84,6 +98,14 @@ data class EffectSettings(
         barsColour = if (after.barsColour != before.barsColour) after.barsColour else barsColour,
         barsImage = if (after.barsImage != before.barsImage) after.barsImage else barsImage,
         barsBlur = if (after.barsBlur != before.barsBlur) after.barsBlur else barsBlur,
+        mist = if (after.mist != before.mist) after.mist else mist,
+        streaks = if (after.streaks != before.streaks) after.streaks else streaks,
+        streakLength = if (after.streakLength != before.streakLength) after.streakLength else streakLength,
+        star = if (after.star != before.star) after.star else star,
+        starLength = if (after.starLength != before.starLength) after.starLength else starLength,
+        prism = if (after.prism != before.prism) after.prism else prism,
+        prismSpread = if (after.prismSpread != before.prismSpread) after.prismSpread else prismSpread,
+        bokehOval = if (after.bokehOval != before.bokehOval) after.bokehOval else bokehOval,
         graph = if (after.graph != before.graph) after.graph else graph,
         dashboard = if (after.dashboard != before.dashboard) after.dashboard else dashboard,
         // Bokeh is made for one photo (its subject, its masks' numbers): never set on others.

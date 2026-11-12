@@ -5114,6 +5114,10 @@ private fun EffectKinds(state: UiState, kind: EffectKind, kinds: List<EffectKind
                 EffectKind.HALATION -> effects.halation > 0f
                 EffectKind.LENS -> effects.lens
                 EffectKind.BOKEH -> effects.bokeh > 0f
+                EffectKind.MIST -> effects.mist > 0f
+                EffectKind.STREAKS -> effects.streaks > 0f
+                EffectKind.STAR -> effects.star > 0f
+                EffectKind.PRISM -> effects.prism > 0f
                 EffectKind.BARS -> effects.barsRatio != null
             }
             CircleOption(e.symbol, e.label, selected = e == kind, modified = active) { onKind(e) }
@@ -5133,13 +5137,20 @@ private enum class EffectKind(val symbol: String, val label: String) {
     BARS("Cin", "Bars"),
     LENS("Lens", "Lens"),
     BOKEH("Bk", "Bokeh"),
+    MIST("Mi", "Mist"),
+    STREAKS("An", "Anamorphic"),
+    STAR("✶", "Star"),
+    PRISM("Pr", "Prism"),
 }
 
 /** Drawn over the picture: the Overlays tool. */
 private val OVERLAY_KINDS = listOf(EffectKind.TEXT, EffectKind.STICKER, EffectKind.MAP, EffectKind.DASHBOARD, EffectKind.GRAPH)
 
 /** Part of the picture's look: the base layer's Effects in Adjust. */
-private val LOOK_KINDS = listOf(EffectKind.BOKEH, EffectKind.GRAIN, EffectKind.GLOW, EffectKind.HALATION, EffectKind.LENS, EffectKind.BARS)
+private val LOOK_KINDS = listOf(
+    EffectKind.BOKEH, EffectKind.GRAIN, EffectKind.GLOW, EffectKind.HALATION, EffectKind.MIST, EffectKind.STREAKS,
+    EffectKind.STAR, EffectKind.PRISM, EffectKind.LENS, EffectKind.BARS,
+)
 
 /** Effects over the picture, picked from round options like the colour corrections. */
 @Composable
@@ -5254,6 +5265,54 @@ private fun EffectsPanel(state: UiState, vm: HeadsupViewModel, kind: EffectKind,
             // Which side is blurred, without turning the mask itself inside out.
             LabeledChoice("Blurred", listOf("The rest", "What it covers"), { (it == 1) == effects.bokehInvert }, { i -> updateEffects { it.copy(bokehInvert = i == 1) } })
             if (effects.bokehMask == null) SmallAction("Find the subject again", { vm.findPhotoSubjectAgain() })
+        }
+        EffectKind.MIST -> ToolSection(
+            "Mist",
+            info = "A diffusion filter (as a Pro-Mist or Black Mist): the lights and bright parts spread into a soft haze round them, " +
+                "the picture gentler, as a film camera's. Laid over the picture as light adds; the before / after line shows it on its right.",
+        ) {
+            EffectRuler(listOf(EffectParam("Mist", effects.mist, 0f..1f, 0.02f, 0f, percent = true) { v -> updateEffects { it.copy(mist = v) } }))
+        }
+        EffectKind.STREAKS -> ToolSection(
+            "Anamorphic",
+            info = "An anamorphic lens's long, thin, blue streaks across the lights (street lamps, the sun, headlights). " +
+                "Anamorphic look adds the rest of it: the cinema shape (2.39:1 bars), softer corners" +
+                (if (state.selected?.meta?.isPhoto == true) " and oval bokeh (with Bokeh on)." else "."),
+        ) {
+            EffectRuler(
+                listOf(
+                    EffectParam("Streaks", effects.streaks, 0f..1f, 0.02f, 0f, percent = true) { v -> updateEffects { it.copy(streaks = v) } },
+                    EffectParam("Length", effects.streakLength, 0.3f..3f, 0.05f, 1f, format = "× %.2f") { v -> updateEffects { it.copy(streakLength = v) } },
+                ),
+            )
+            Row {
+                Spacer(Modifier.weight(1f))
+                SmallAction("Anamorphic look", {
+                    updateEffects { it.copy(streaks = maxOf(it.streaks, 0.5f), barsRatio = 2.39f, barsVertical = false, barsBlur = false, barsImage = null, barsColour = 0xFF000000.toInt(), lensSoftness = maxOf(it.lensSoftness, 0.25f), bokehOval = true) }
+                })
+            }
+        }
+        EffectKind.STAR -> ToolSection(
+            "Star",
+            info = "A star filter: rays up, down and to the sides from each point of light (lamps, reflections, the sun). Length sets how far they reach.",
+        ) {
+            EffectRuler(
+                listOf(
+                    EffectParam("Star", effects.star, 0f..1f, 0.02f, 0f, percent = true) { v -> updateEffects { it.copy(star = v) } },
+                    EffectParam("Length", effects.starLength, 0.3f..3f, 0.05f, 1f, format = "× %.2f") { v -> updateEffects { it.copy(starLength = v) } },
+                ),
+            )
+        }
+        EffectKind.PRISM -> ToolSection(
+            "Prism",
+            info = "A prism held before the lens: the lights repeated beside themselves, split into a rainbow's colours, down and to the right. Spread sets how far the copies go.",
+        ) {
+            EffectRuler(
+                listOf(
+                    EffectParam("Prism", effects.prism, 0f..1f, 0.02f, 0f, percent = true) { v -> updateEffects { it.copy(prism = v) } },
+                    EffectParam("Spread", effects.prismSpread, 0.3f..3f, 0.05f, 1f, format = "× %.2f") { v -> updateEffects { it.copy(prismSpread = v) } },
+                ),
+            )
         }
         EffectKind.LENS -> ToolSection("Lens", info = "An older lens: colour fringes and softness that grow towards the corners; the middle stays sharp. A little goes a long way.") {
             EffectRuler(

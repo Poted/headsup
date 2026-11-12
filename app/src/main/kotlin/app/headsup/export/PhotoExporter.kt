@@ -192,12 +192,11 @@ object PhotoExporter {
         }.getOrNull()
         // Glow and halation: the light of the corrected picture's bright parts, worked out on a small
         // render of the picture alone (no texts), blurred, and laid over it before the texts.
-        val glowLayer: Bitmap? = if (request.effects.glow > 0f || request.effects.halation > 0f) runCatching {
-            val sigma = app.headsup.core.photo.Glow.sigma(minOf(fw, fh).toFloat(), request.effects.glowSpread)
-            val f = (3f / sigma.coerceAtLeast(0.5f)).coerceIn(0.03f, 1f)
+        // The corrected picture alone (no texts), small: [f] of the frame's size, as ARGB.
+        fun smallPicture(f: Float): Triple<IntArray, Int, Int> {
             val sw = (fw * f).toInt().coerceAtLeast(2)
             val sh = (fh * f).toInt().coerceAtLeast(2)
-            val node = RenderNode("glow").apply {
+            val node = RenderNode("small").apply {
                 setPosition(0, 0, sw, sh)
                 val c = beginRecording()
                 c.scale(sw / fw.toFloat(), sh / fh.toFloat())
@@ -213,9 +212,21 @@ object PhotoExporter {
             val px = IntArray(sw * sh)
             small.getPixels(px, 0, sw, 0, 0, sw, sh)
             small.recycle()
+            return Triple(px, sw, sh)
+        }
+        val glowLayer: Bitmap? = if (request.effects.glow > 0f || request.effects.halation > 0f) runCatching {
+            val sigma = app.headsup.core.photo.Glow.sigma(minOf(fw, fh).toFloat(), request.effects.glowSpread)
+            val f = (3f / sigma.coerceAtLeast(0.5f)).coerceIn(0.03f, 1f)
+            val (px, sw, sh) = smallPicture(f)
             val e = request.effects
             val light = app.headsup.core.photo.Glow.light(px, e.glowThreshold, e.glow, e.halation, app.headsup.render.EffectLook.glowTint(e.glowWarmth))
             Bitmap.createBitmap(app.headsup.core.photo.Glow.blur(light, sw, sh, sigma * f), sw, sh, Bitmap.Config.ARGB_8888)
+        }.onFailure { it.printStackTrace() }.getOrNull() else null
+        // Mist, Anamorphic streaks, Star and Prism: worked out the same way, on a copy about 1000 px across.
+        val fxLayer: Bitmap? = if (request.effects.lightFx.any) runCatching {
+            val f = (1024f / maxOf(fw, fh)).coerceAtMost(1f)
+            val (px, sw, sh) = smallPicture(f)
+            Bitmap.createBitmap(app.headsup.core.photo.LightFx.light(px, sw, sh, request.effects.lightFx), sw, sh, Bitmap.Config.ARGB_8888)
         }.onFailure { it.printStackTrace() }.getOrNull() else null
         val renderer = DashboardRenderer(context.assets)
         val root = RenderNode("frame").apply {
@@ -229,8 +240,8 @@ object PhotoExporter {
             c.translate(-picW / 2f, -picH / 2f)
             c.drawRect(0f, 0f, picW, picH, graded)
             c.restore()
-            glowLayer?.let { g ->
-                c.drawBitmap(g, null, android.graphics.RectF(0f, 0f, fw.toFloat(), fh.toFloat()), android.graphics.Paint(android.graphics.Paint.FILTER_BITMAP_FLAG).apply { blendMode = android.graphics.BlendMode.SCREEN })
+            for (layer in listOfNotNull(glowLayer, fxLayer)) {
+                c.drawBitmap(layer, null, android.graphics.RectF(0f, 0f, fw.toFloat(), fh.toFloat()), android.graphics.Paint(android.graphics.Paint.FILTER_BITMAP_FLAG).apply { blendMode = android.graphics.BlendMode.SCREEN })
             }
             renderer.drawVignette(c, fw.toFloat(), fh.toFloat(), request.vignette)
             val data = request.dashboard

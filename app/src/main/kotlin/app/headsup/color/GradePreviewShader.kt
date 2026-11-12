@@ -36,6 +36,12 @@ class GradePreviewShader {
 
     /** The light the bright parts give, from the corrected picture: blurred and laid over it (glow, halation). */
     private val glowSource = RuntimeShader(GLOW_SOURCE)
+
+    /** Each light effect's own source (each keeps its own settings). */
+    private val mistSource = RuntimeShader(LIGHT_SOURCE)
+    private val streakSource = RuntimeShader(LIGHT_SOURCE)
+    private val starSource = RuntimeShader(LIGHT_SOURCE)
+    private val prismSource = RuntimeShader(LIGHT_SOURCE)
     private var tableSize = LutBaker.DEFAULT_SIZE
 
     init {
@@ -125,22 +131,66 @@ class GradePreviewShader {
         fromMasks: List<ColourMask> = emptyList(),
     ): RenderEffect {
         setUniforms(effects, zebra, frame, width, height, masks, fromWeight, detail, presence, warp, fromMasks)
-        if (effects.glow <= 0f && effects.halation <= 0f) return RenderEffect.createRuntimeShaderEffect(shader, "image")
-        // Glow and halation as light really spreads: the bright parts' light taken from the corrected
-        // picture, blurred by the system's Gaussian, and added back over it (screen). Gathered in one
-        // pass instead, a wide glow showed its taps (copies of a light, dots, a diagonal weave).
+        val fx = effects.lightFx
+        val glowing = effects.glow > 0f || effects.halation > 0f
+        if (!glowing && !fx.any) return RenderEffect.createRuntimeShaderEffect(shader, "image")
+        // Glow, halation and the light effects as light really spreads: the bright parts' light taken
+        // from the corrected picture, blurred by the system's Gaussian (shifted, tinted), and added
+        // back over it (screen). Gathered in one pass instead, a wide glow showed its taps.
         shader.setFloatUniform("glow", 0f)
         shader.setFloatUniform("halation", 0f)
         val base = RenderEffect.createRuntimeShaderEffect(shader, "image")
-        glowSource.setFloatUniform("threshold", effects.glowThreshold)
-        glowSource.setFloatUniform("glow", effects.glow)
-        glowSource.setFloatUniform("halation", effects.halation)
-        glowSource.setFloatUniform("glowTint", EffectLook.glowTint(effects.glowWarmth))
-        glowSource.setFloatUniform("splitX", if (split >= 0f) split * width else -1f)
-        val light = RenderEffect.createChainEffect(RenderEffect.createRuntimeShaderEffect(glowSource, "image"), base)
-        val sigma = app.headsup.core.photo.Glow.sigma(minOf(width, height), effects.glowSpread).coerceAtLeast(0.5f)
-        val blurred = RenderEffect.createBlurEffect(sigma, sigma, light, Shader.TileMode.CLAMP)
-        return RenderEffect.createBlendModeEffect(base, blurred, android.graphics.BlendMode.SCREEN)
+        val splitX = if (split >= 0f) split * width else -1f
+        val short = minOf(width, height)
+        val lights = ArrayList<RenderEffect>()
+        if (glowing) {
+            glowSource.setFloatUniform("threshold", effects.glowThreshold)
+            glowSource.setFloatUniform("glow", effects.glow)
+            glowSource.setFloatUniform("halation", effects.halation)
+            glowSource.setFloatUniform("glowTint", EffectLook.glowTint(effects.glowWarmth))
+            glowSource.setFloatUniform("splitX", splitX)
+            val light = RenderEffect.createChainEffect(RenderEffect.createRuntimeShaderEffect(glowSource, "image"), base)
+            val sigma = app.headsup.core.photo.Glow.sigma(short, effects.glowSpread).coerceAtLeast(0.5f)
+            lights += RenderEffect.createBlurEffect(sigma, sigma, light, Shader.TileMode.CLAMP)
+        }
+        // The light a source shader takes from the corrected picture: over [threshold], × [gain], in [tint].
+        fun source(s: RuntimeShader, threshold: Float, gain: Float, tint: FloatArray): RenderEffect {
+            s.setFloatUniform("threshold", threshold)
+            s.setFloatUniform("gain", gain)
+            s.setFloatUniform("tint", tint)
+            s.setFloatUniform("splitX", splitX)
+            return RenderEffect.createChainEffect(RenderEffect.createRuntimeShaderEffect(s, "image"), base)
+        }
+        fun blur(e: RenderEffect, sx: Float, sy: Float) = RenderEffect.createBlurEffect(sx.coerceAtLeast(0.5f), sy.coerceAtLeast(0.5f), e, Shader.TileMode.DECAL)
+        val L = app.headsup.core.photo.LightFx
+        val white = floatArrayOf(1f, 1f, 1f)
+        if (fx.mist > 0f) lights += blur(source(mistSource, L.MIST_THRESHOLD, fx.mist * 0.6f, white), L.MIST_SIGMA * short, L.MIST_SIGMA * short)
+        if (fx.streaks > 0f) lights += blur(source(streakSource, L.STREAK_THRESHOLD, fx.streaks * 2f, L.STREAK_TINT), L.STREAK_SIGMA * short * fx.streakLength, L.STREAK_THIN * short)
+        if (fx.star > 0f) {
+            val src = source(starSource, L.STAR_THRESHOLD, fx.star * 2f, white)
+            lights += blur(src, L.STAR_SIGMA * short * fx.starLength, L.STAR_THIN * short)
+            lights += blur(src, L.STAR_THIN * short, L.STAR_SIGMA * short * fx.starLength)
+        }
+        if (fx.prism > 0f) {
+            val soft = blur(source(prismSource, L.PRISM_THRESHOLD, fx.prism, white), L.PRISM_SOFT * short, L.PRISM_SOFT * short)
+            val a = Math.toRadians(L.PRISM_ANGLE.toDouble())
+            for (k in 0..2) {
+                val d = L.PRISM_STEP * short * fx.prismSpread * (k + 1)
+                val t = L.PRISM_TINTS[k]
+                val wgt = L.PRISM_WEIGHTS[k]
+                val tint = android.graphics.ColorMatrixColorFilter(android.graphics.ColorMatrix(floatArrayOf(
+                    t[0] * wgt, 0f, 0f, 0f, 0f,
+                    0f, t[1] * wgt, 0f, 0f, 0f,
+                    0f, 0f, t[2] * wgt, 0f, 0f,
+                    0f, 0f, 0f, 1f, 0f,
+                )))
+                lights += RenderEffect.createColorFilterEffect(tint, RenderEffect.createOffsetEffect((d * kotlin.math.cos(a)).toFloat(), (d * kotlin.math.sin(a)).toFloat(), soft))
+            }
+        }
+        // All the light added together, then over the picture.
+        var light = lights.first()
+        for (k in 1 until lights.size) light = RenderEffect.createBlendModeEffect(light, lights[k], android.graphics.BlendMode.PLUS)
+        return RenderEffect.createBlendModeEffect(base, light, android.graphics.BlendMode.SCREEN)
     }
 
     /**
@@ -355,6 +405,21 @@ class GradePreviewShader {
         // They are sampled without filtering and interpolated here (trilinear); glow taps use the
         // nearest entry of the base table, which is plenty for a blurred highlight.
         /** The light of what is bright in the corrected picture, coloured as glow and halation; none left of the before / after line. */
+        /** The light of what is brighter than [threshold], × gain, in a tint; none left of the before / after line. */
+        const val LIGHT_SOURCE = """
+            uniform shader image;
+            uniform float threshold;
+            uniform float gain;
+            uniform float3 tint;
+            uniform float splitX;
+            half4 main(float2 coord) {
+                if (splitX >= 0.0 && coord.x < splitX) return half4(0.0, 0.0, 0.0, 1.0);
+                float3 c = float3(image.eval(coord).rgb);
+                float k = max(dot(c, float3(0.2126, 0.7152, 0.0722)) - threshold, 0.0) / max(1.0 - threshold, 0.01);
+                return half4(half3(clamp(c * k * gain * tint, 0.0, 1.0)), 1.0);
+            }
+        """
+
         const val GLOW_SOURCE = """
             uniform shader image;
             uniform float threshold;

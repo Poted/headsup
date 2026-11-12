@@ -423,6 +423,8 @@ class ExportManager(private val context: Context) {
                 app.headsup.core.photo.Glow.sigma(minOf(request.width, request.height).toFloat(), e.glowSpread),
             )
         }
+        // Mist, Anamorphic streaks, Star, Prism (not on the 10-bit route: its frames are not read back).
+        if (request.effects.lightFx.any && !hdr) effects += LightFxEffect(request.effects.lightFx)
         // Steadied: each frame moved by its correction, before it is framed (as in the preview).
         request.stabilize?.let { path -> stabilizeEffect(path, request.width, request.height, request.trimStartMs)?.let { effects += it } }
         // Reframing comes after colour and texture (as in the preview) and before the dashboard.

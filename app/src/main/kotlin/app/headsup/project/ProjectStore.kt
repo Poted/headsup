@@ -612,6 +612,8 @@ internal object Json {
         .putOpt("barsRatio", e.barsRatio)
         .put("barsMotion", e.barsMotion.name)
         .put("barsVertical", e.barsVertical).put("barsColour", e.barsColour).putOpt("barsImage", e.barsImage).put("barsBlur", e.barsBlur)
+        .put("mist", e.mist.toDouble()).put("streaks", e.streaks.toDouble()).put("streakLength", e.streakLength.toDouble())
+        .put("star", e.star.toDouble()).put("starLength", e.starLength.toDouble()).put("prism", e.prism.toDouble()).put("prismSpread", e.prismSpread.toDouble()).put("bokehOval", e.bokehOval)
         .putOpt("graph", e.graph?.name)
         .put("dashboard", e.dashboard)
 
@@ -639,6 +641,14 @@ internal object Json {
             barsColour = o.optInt("barsColour", 0xFF000000.toInt()),
             barsImage = o.optStringOrNull("barsImage"),
             barsBlur = o.optBoolean("barsBlur", false),
+            mist = o.optDouble("mist", 0.0).toFloat(),
+            streaks = o.optDouble("streaks", 0.0).toFloat(),
+            streakLength = o.optDouble("streakLength", 1.0).toFloat(),
+            star = o.optDouble("star", 0.0).toFloat(),
+            starLength = o.optDouble("starLength", 1.0).toFloat(),
+            prism = o.optDouble("prism", 0.0).toFloat(),
+            prismSpread = o.optDouble("prismSpread", 1.0).toFloat(),
+            bokehOval = o.optBoolean("bokehOval", false),
             graph = GraphMetric.entries.firstOrNull { it.name == o.optStringOrNull("graph") },
             dashboard = o.optBoolean("dashboard", true),
         )
