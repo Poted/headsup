@@ -3351,7 +3351,13 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /** A picture of one's own (kept by the app) filling the bars round the selected fitted photo. */
-    fun setBackdropImage(uri: Uri) {
+    /** The border round fitted clips (blurred picture, a colour, or a picture of one's own): for the whole film. */
+    fun setBorder(blur: Boolean, colour: Int, image: String?) {
+        _state.update { s -> s.copy(clips = s.clips.map { c -> c.copy(reframe = c.reframe.copy(blur = blur, backdropColour = colour, backdropImage = image)) }) }
+        refreshPreview()
+    }
+
+    fun setBackdropImage(uri: Uri, allClips: Boolean = false) {
         val context = getApplication<Application>()
         viewModelScope.launch {
             val path = withContext(Dispatchers.IO) {
@@ -3363,6 +3369,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                 }.getOrNull()
             }
             if (path == null) _state.update { it.copy(messages = it.messages + "Could not read that picture.") }
+            else if (allClips) setBorder(blur = false, colour = 0xFF000000.toInt(), image = path)
             else updateReframe { it.copy(blur = false, backdropImage = path) }
         }
     }

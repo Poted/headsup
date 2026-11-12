@@ -5036,28 +5036,53 @@ private fun FramePanel(state: UiState, vm: HeadsupViewModel) {
         info = "One shape for the whole film. First clip takes the shape of the first clip on the timeline." +
             (vm.outputPreview(state)?.let { " Exported at ${it.width}×${it.height}." } ?: ""),
     ) {
+        // The usual shapes, and one of one's own (Custom: width and height typed in).
+        var custom by remember { mutableStateOf(false) }
+        val preset = presets.indexOfFirst { it.first == state.frameAspect }
+        val own = state.frameAspect != null && preset < 0
         ChoiceGrid(
-            presets.map { (aspect, label) -> if (aspect == null) "First clip" else label },
-            presets.indexOfFirst { it.first == state.frameAspect },
-            { vm.setFrameAspect(presets[it].first) },
-            glyph = { i, on -> AspectGlyph(presets[i].first ?: first?.let { m -> m.width.toFloat() / m.height.coerceAtLeast(1) }, on) },
+            presets.map { (aspect, label) -> if (aspect == null) "First clip" else label } + (if (own) "Custom " + aspectLabel(state.frameAspect!!) else "Custom"),
+            if (own) presets.size else preset,
+            { i -> if (i == presets.size) custom = true else vm.setFrameAspect(presets[i].first) },
+            glyph = { i, on ->
+                val a = if (i == presets.size) (state.frameAspect.takeIf { own } ?: 1.5f) else presets[i].first
+                AspectGlyph(a ?: first?.let { m -> m.width.toFloat() / m.height.coerceAtLeast(1) }, on)
+            },
         )
+        if (custom) CustomAspectDialog(state.frameAspect.takeIf { own }, onDismiss = { custom = false }) { a ->
+            custom = false
+            vm.setFrameAspect(a)
+        }
         vm.outputPreview(state)?.let { Text("${it.width} × ${it.height}", style = MaterialTheme.typography.labelSmall, color = HeadsupColors.TextMuted) }
     }
 
     val r = state.framing(clip)
     ToolSection(
         "This clip in the frame",
-        info = if (r.fit && r.blur) "The whole picture inside the frame, the bars filled with it blurred (every fitted clip of the film); zoom in to fill more."
-        else if (r.fit) "The whole picture inside the frame, black bars where the shapes differ; zoom in to fill more."
+        info = if (r.fit) "The whole picture inside the frame, a border where the shapes differ: black, white, the picture blurred or a picture of yours (for the whole film). " +
+            "Zoom below 1× (Geometry) makes it smaller; drag it to place it, it snaps to the frame's middle, thirds and edges."
         else "The picture fills the frame; drag it to choose what stays, pinch to zoom. The grid shows the thirds.",
         onReset = if (clip.reframe != Reframe(aspect = clip.reframe.aspect, fit = r.fit)) ({ vm.updateReframe { Reframe(fit = it.fit) } }) else null,
     ) {
         ChoiceGrid(listOf("Fill", "Fit"), if (r.fit) 1 else 0, { i -> vm.updateReframe { it.copy(fit = i == 1) } })
         if (r.fit) {
-            // What fills the bars: black, or the picture itself blurred behind it (as social apps do); for the whole film.
-            Text("Bars", style = MaterialTheme.typography.labelMedium, color = HeadsupColors.TextMuted)
-            ChoiceGrid(listOf("Black", "Blur"), if (r.blur) 1 else 0, { vm.setBlurBars(it == 1) })
+            // What fills the border: black, white, the picture itself blurred (as social apps do), or a
+            // picture of one's own; for the whole film. Zoom below 1× (Geometry) and drag to place it.
+            val imagePicker = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri -> if (uri != null) vm.setBackdropImage(uri, allClips = true) }
+            val choice = when {
+                r.blur -> 2
+                r.backdropImage != null -> 3
+                r.backdropColour == 0xFFFFFFFF.toInt() -> 1
+                else -> 0
+            }
+            LabeledChoice("Border", listOf("Black", "White", "Blur", "Picture"), { it == choice }, { i ->
+                when (i) {
+                    0 -> vm.setBorder(blur = false, colour = 0xFF000000.toInt(), image = null)
+                    1 -> vm.setBorder(blur = false, colour = 0xFFFFFFFF.toInt(), image = null)
+                    2 -> vm.setBorder(blur = true, colour = 0xFF000000.toInt(), image = null)
+                    else -> imagePicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+                }
+            })
         }
     }
     GeometrySections(r, vm)
@@ -5241,34 +5266,16 @@ private fun EffectsPanel(state: UiState, vm: HeadsupViewModel, kind: EffectKind,
         }
         EffectKind.BARS -> ToolSection(
             "Bars",
-            info = "Bars over the picture: top and bottom for a cinema shape, or at the sides for a narrower one; black or white. " +
-                "For bars round the whole photo instead (it made smaller in its frame, the bars blurred or a picture), see Crop › In the frame." +
+            info = "Black bars top and bottom for a cinema shape. For a border round the picture (it made smaller in its frame, on any side, " +
+                "black, white, blurred or a picture), see " + (if (state.photoProject) "Crop › In the frame." else "Edit › Frame › This clip in the frame.") +
                 if (state.timelineAspect < 16f / 9f - 0.01f) " On this frame they take as much of the height as they would on 16:9, for the same look." else "",
         ) {
-            // Top and bottom (a cinema shape) or at the sides (a narrower picture, as a square or 4:5 post).
-            LabeledChoice("Bars", listOf("Top and bottom", "Sides"), { (it == 1) == effects.barsVertical }, { i ->
-                updateEffects { it.copy(barsVertical = i == 1, barsRatio = null) }
-            })
-            // At the sides: how much of the width they take (whatever the frame's shape, an upright photo too).
-            val ratios = if (effects.barsVertical) listOf<Float?>(null, 0.92f, 0.84f, 0.72f) else listOf<Float?>(null, 2.39f, 2.0f, 1.85f)
-            val labels = if (effects.barsVertical) listOf("Off", "Thin", "Medium", "Wide") else listOf("Off", "2.39:1", "2:1", "1.85:1")
-            ChoiceGrid(labels, ratios.indexOf(effects.barsRatio), { i -> updateEffects { it.copy(barsRatio = ratios[i]) } }, minCell = 60.dp)
-            if (effects.barsRatio != null) {
-                val barsPicker = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri -> if (uri != null) vm.setBarsImage(uri) }
-                val look = when {
-                    effects.barsBlur -> 2
-                    effects.barsImage != null -> 3
-                    effects.barsColour == 0xFFFFFFFF.toInt() -> 1
-                    else -> 0
-                }
-                LabeledChoice("Bars", listOf("Black", "White", "Blur", "Picture"), { it == look }, { i ->
-                    when (i) {
-                        2 -> updateEffects { it.copy(barsBlur = true, barsImage = null) }
-                        3 -> barsPicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
-                        else -> updateEffects { it.copy(barsBlur = false, barsImage = null, barsColour = if (i == 1) 0xFFFFFFFF.toInt() else 0xFF000000.toInt()) }
-                    }
-                })
-            }
+            // Cinema bars only: black, top and bottom. Bars round a picture made smaller in its frame
+            // (any side, black, white, blurred or a picture) are the frame's: Crop / Frame › In the frame.
+            val ratios = listOf<Float?>(null, 2.39f, 2.0f, 1.85f)
+            ChoiceGrid(listOf("Off", "2.39:1", "2:1", "1.85:1"), if (effects.barsVertical) 0 else ratios.indexOf(effects.barsRatio), { i ->
+                updateEffects { it.copy(barsRatio = ratios[i], barsVertical = false, barsBlur = false, barsImage = null, barsColour = 0xFF000000.toInt()) }
+            }, minCell = 60.dp)
             // Sliding in and out is in time: a photo has none.
             if (effects.barsRatio != null && !state.photoProject && state.selected?.meta?.isPhoto != true) {
                 val motions = app.headsup.render.BarsMotion.entries

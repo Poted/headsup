@@ -190,6 +190,33 @@ object PhotoExporter {
                 app.headsup.color.SubjectMaps.find(context, key, upright)
             }
         }.getOrNull()
+        // Glow and halation: the light of the corrected picture's bright parts, worked out on a small
+        // render of the picture alone (no texts), blurred, and laid over it before the texts.
+        val glowLayer: Bitmap? = if (request.effects.glow > 0f || request.effects.halation > 0f) runCatching {
+            val sigma = app.headsup.core.photo.Glow.sigma(minOf(fw, fh).toFloat(), request.effects.glowSpread)
+            val f = (3f / sigma.coerceAtLeast(0.5f)).coerceIn(0.03f, 1f)
+            val sw = (fw * f).toInt().coerceAtLeast(2)
+            val sh = (fh * f).toInt().coerceAtLeast(2)
+            val node = RenderNode("glow").apply {
+                setPosition(0, 0, sw, sh)
+                val c = beginRecording()
+                c.scale(sw / fw.toFloat(), sh / fh.toFloat())
+                c.drawColor(android.graphics.Color.BLACK)
+                c.translate(fw / 2f + t.translation.x, fh / 2f + t.translation.y)
+                c.rotate(request.reframe.angleDegrees)
+                c.scale(t.zoom * if (request.reframe.mirrored) -1f else 1f, t.zoom)
+                c.translate(-picW / 2f, -picH / 2f)
+                c.drawRect(0f, 0f, picW, picH, graded)
+                endRecording()
+            }
+            val small = render(node, sw, sh)
+            val px = IntArray(sw * sh)
+            small.getPixels(px, 0, sw, 0, 0, sw, sh)
+            small.recycle()
+            val e = request.effects
+            val light = app.headsup.core.photo.Glow.light(px, e.glowThreshold, e.glow, e.halation, app.headsup.render.EffectLook.glowTint(e.glowWarmth))
+            Bitmap.createBitmap(app.headsup.core.photo.Glow.blur(light, sw, sh, sigma * f), sw, sh, Bitmap.Config.ARGB_8888)
+        }.onFailure { it.printStackTrace() }.getOrNull() else null
         val renderer = DashboardRenderer(context.assets)
         val root = RenderNode("frame").apply {
             setPosition(0, 0, fw, fh)
@@ -202,6 +229,9 @@ object PhotoExporter {
             c.translate(-picW / 2f, -picH / 2f)
             c.drawRect(0f, 0f, picW, picH, graded)
             c.restore()
+            glowLayer?.let { g ->
+                c.drawBitmap(g, null, android.graphics.RectF(0f, 0f, fw.toFloat(), fh.toFloat()), android.graphics.Paint(android.graphics.Paint.FILTER_BITMAP_FLAG).apply { blendMode = android.graphics.BlendMode.SCREEN })
+            }
             renderer.drawVignette(c, fw.toFloat(), fh.toFloat(), request.vignette)
             val data = request.dashboard
             // Blurred bars: the photo's colours, blurred, in the bars (under the dashboard and texts).

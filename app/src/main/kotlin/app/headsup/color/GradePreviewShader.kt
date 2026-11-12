@@ -33,6 +33,9 @@ class GradeTables(
 @RequiresApi(33)
 class GradePreviewShader {
     private val shader = RuntimeShader(SOURCE)
+
+    /** The light the bright parts give, from the corrected picture: blurred and laid over it (glow, halation). */
+    private val glowSource = RuntimeShader(GLOW_SOURCE)
     private var tableSize = LutBaker.DEFAULT_SIZE
 
     init {
@@ -122,7 +125,22 @@ class GradePreviewShader {
         fromMasks: List<ColourMask> = emptyList(),
     ): RenderEffect {
         setUniforms(effects, zebra, frame, width, height, masks, fromWeight, detail, presence, warp, fromMasks)
-        return RenderEffect.createRuntimeShaderEffect(shader, "image")
+        if (effects.glow <= 0f && effects.halation <= 0f) return RenderEffect.createRuntimeShaderEffect(shader, "image")
+        // Glow and halation as light really spreads: the bright parts' light taken from the corrected
+        // picture, blurred by the system's Gaussian, and added back over it (screen). Gathered in one
+        // pass instead, a wide glow showed its taps (copies of a light, dots, a diagonal weave).
+        shader.setFloatUniform("glow", 0f)
+        shader.setFloatUniform("halation", 0f)
+        val base = RenderEffect.createRuntimeShaderEffect(shader, "image")
+        glowSource.setFloatUniform("threshold", effects.glowThreshold)
+        glowSource.setFloatUniform("glow", effects.glow)
+        glowSource.setFloatUniform("halation", effects.halation)
+        glowSource.setFloatUniform("glowTint", EffectLook.glowTint(effects.glowWarmth))
+        glowSource.setFloatUniform("splitX", if (split >= 0f) split * width else -1f)
+        val light = RenderEffect.createChainEffect(RenderEffect.createRuntimeShaderEffect(glowSource, "image"), base)
+        val sigma = app.headsup.core.photo.Glow.sigma(minOf(width, height), effects.glowSpread).coerceAtLeast(0.5f)
+        val blurred = RenderEffect.createBlurEffect(sigma, sigma, light, Shader.TileMode.CLAMP)
+        return RenderEffect.createBlendModeEffect(base, blurred, android.graphics.BlendMode.SCREEN)
     }
 
     /**
@@ -140,6 +158,9 @@ class GradePreviewShader {
         warp: DoubleArray? = null,
     ): Shader {
         setUniforms(effects, false, 0f, width, height, masks, 0f, detail, presence, warp)
+        // The photo export adds glow and halation after (blurred light, as the preview does).
+        shader.setFloatUniform("glow", 0f)
+        shader.setFloatUniform("halation", 0f)
         shader.setInputShader("image", image)
         return shader
     }
@@ -333,6 +354,24 @@ class GradePreviewShader {
         // The tables are laid out like Media3's SingleColorLut: N wide, N² high, x = b, y = g + N·r.
         // They are sampled without filtering and interpolated here (trilinear); glow taps use the
         // nearest entry of the base table, which is plenty for a blurred highlight.
+        /** The light of what is bright in the corrected picture, coloured as glow and halation; none left of the before / after line. */
+        const val GLOW_SOURCE = """
+            uniform shader image;
+            uniform float threshold;
+            uniform float glow;
+            uniform float halation;
+            uniform float3 glowTint;
+            uniform float splitX;
+            half4 main(float2 coord) {
+                if (splitX >= 0.0 && coord.x < splitX) return half4(0.0, 0.0, 0.0, 1.0);
+                float3 c = float3(image.eval(coord).rgb);
+                float k = max(dot(c, float3(0.2126, 0.7152, 0.0722)) - threshold, 0.0) / max(1.0 - threshold, 0.01);
+                float3 b = c * k;
+                float3 l = b * glow * 1.5 * glowTint + dot(b, float3(0.33)) * halation * 2.0 * float3(1.0, 0.3, 0.1);
+                return half4(half3(clamp(l, 0.0, 1.0)), 1.0);
+            }
+        """
+
         val SOURCE = """
             uniform shader image;
             uniform shader brush;
