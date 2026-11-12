@@ -3146,7 +3146,15 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                         IntArray(small.width * small.height).also { small.getPixels(it, 0, small.width, 0, 0, small.width, small.height) }.asList()
                     }.toIntArray()
                     graded(pixels, cube)
-                    CineAssistant.analyse(pixels)
+                    // People, found by the scene model in the middle frame (skin-like colour alone
+                    // also matches lamps, wood and brick).
+                    val people = runCatching {
+                        val f = frames[frames.size / 2]
+                        val w = 96
+                        val h = (w * f.height / f.width.coerceAtLeast(1)).coerceAtLeast(1)
+                        app.headsup.color.Segmenter.scene(context, f, w, h)[app.headsup.color.Scene.PEOPLE.ordinal].average().toFloat()
+                    }.getOrNull()
+                    CineAssistant.analyse(pixels).copy(people = people)
                 }
                 if (stats == null) {
                     _state.update { it.copy(messages = it.messages + "Could not read frames of this clip.") }
@@ -3277,7 +3285,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
         val k = strength.coerceIn(0f, 1f)
         // Measured: the look's character, plus what this clip needs to suit it.
         val stats = s.lookStats?.takeIf { it.first == clip.id }?.second
-        val fit = stats?.let { CineAssistant.fit(it, keepDark = look == app.headsup.color.FastLook.NIGHT) }
+        val fit = stats?.let { CineAssistant.fit(it, keepDark = look.keepDark) }
         val grade = if (fit != null) look.grade + fit else look.grade
         // Contrast from the cinematic curve, fitted to the clip's tones once measured (a dark clip
         // keeps its shadow detail), and taken down with the strength.

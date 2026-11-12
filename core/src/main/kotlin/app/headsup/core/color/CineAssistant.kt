@@ -20,7 +20,39 @@ data class FrameStats(
     val foliage: Float,
     /** Mean colour cast: positive = warm (red/yellow), negative = cool. */
     val warmth: Float,
-)
+    /** Share of small bright lights in the picture (lamps, signs): pixels near white. */
+    val lights: Float = 0f,
+    /** Share of clearly green pixels, of clearly blue ones (sky, water, blue light) and of orange/amber ones. */
+    val green: Float = 0f,
+    val blue: Float = 0f,
+    val orange: Float = 0f,
+    /** Colour cast of the bright parts only (the light's colour: low sun is orange). */
+    val highWarmth: Float = 0f,
+    /** Share of the picture that is people, found by the scene model; null when not looked for. */
+    val people: Float? = null,
+) {
+    /** The kinds of scene this is, for suggesting looks ([SceneTrait]). */
+    val traits: Set<SceneTrait> get() = buildSet {
+        val night = median < 0.2f
+        if (night) add(SceneTrait.NIGHT)
+        if (night && lights > 0.002f) add(SceneTrait.CITY_LIGHTS)
+        if (!night && median > 0.3f) add(SceneTrait.DAYLIGHT)
+        if (!night && highWarmth > 0.05f && orange > 0.08f) add(SceneTrait.GOLDEN)
+        if (!night && colourfulness < 0.06f && high - low < 0.75f) add(SceneTrait.FLAT)
+        if (green > 0.15f) add(SceneTrait.FOLIAGE)
+        if (blue > 0.12f && !night) add(SceneTrait.SKY)
+        // People: the scene model's when it looked; else skin-like tones in a lit picture (warm
+        // lamps, wood and brick look alike in colour, so not at night and not when they fill it).
+        val withPeople = people?.let { it > 0.02f } ?: (!night && skin > 0.04f && skin < 0.35f)
+        if (withPeople) add(SceneTrait.PEOPLE)
+        if (colourfulness > 0.13f) add(SceneTrait.COLOURFUL)
+        if (warmth < -0.015f) add(SceneTrait.COOL)
+        if (warmth > 0.035f) add(SceneTrait.WARM)
+    }
+}
+
+/** What a scene is, as measured: what the looks are suggested by. */
+enum class SceneTrait { NIGHT, CITY_LIGHTS, DAYLIGHT, GOLDEN, FLAT, FOLIAGE, SKY, PEOPLE, COLOURFUL, COOL, WARM }
 
 enum class CineStyle(val label: String) {
     WARM_FILM("Warm film"),
@@ -49,6 +81,12 @@ object CineAssistant {
         var skin = 0.0
         var foliage = 0
         var warmth = 0.0
+        var lights = 0
+        var green = 0
+        var blue = 0
+        var orange = 0
+        var highWarmth = 0.0
+        var highs = 0
         for (p in pixels) {
             val r = ((p shr 16) and 0xFF) / 255f
             val g = ((p shr 8) and 0xFF) / 255f
@@ -66,6 +104,16 @@ object CineAssistant {
                 val angle = FilmLook.angleOf(cb, cr)
                 if (angle in 190f..270f || angle >= 330f || angle < 10f) foliage++
             }
+            if (chroma > 0.06f) {
+                val angle = FilmLook.angleOf(cb, cr)
+                when {
+                    angle in 195f..265f -> green++
+                    angle >= 285f || angle < 15f -> blue++
+                    angle in 115f..170f -> orange++
+                }
+            }
+            if (y > 0.9f) lights++
+            if (y > 0.6f) { highWarmth += cr - cb; highs++ }
             warmth += cr - cb
         }
         fun percentile(q: Float): Float {
@@ -87,6 +135,11 @@ object CineAssistant {
             skin = (skin / n).toFloat(),
             foliage = foliage.toFloat() / n,
             warmth = (warmth / n).toFloat(),
+            lights = lights.toFloat() / n,
+            green = green.toFloat() / n,
+            blue = blue.toFloat() / n,
+            orange = orange.toFloat() / n,
+            highWarmth = if (highs > n / 200) (highWarmth / highs).toFloat() else 0f,
         )
     }
 

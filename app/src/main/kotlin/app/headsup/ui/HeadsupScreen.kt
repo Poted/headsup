@@ -1606,7 +1606,7 @@ private fun RateNotes(state: UiState, fps: Float) {
     val notes = state.clips.withIndex().filter { !it.value.meta.isPhoto && it.value.meta.frameRate != null }.map { (i, c) ->
         val rate = c.meta.frameRate ?: fps
         val speed = c.averageSpeed
-        val name = "${i + 1}. ${c.meta.name} · ${OutputSpec.formatFps(rate)} fps" + if (speed != 1f) " at ${String.format(Locale.US, "%.3g", speed)}×" + (if (c.speedCurve.isNotEmpty()) " on average" else "") else ""
+        val name = "${i + 1}. ${c.meta.name} · ${OutputSpec.formatFps(rate)} fps" + droppedNote(c.meta) + if (speed != 1f) " at ${String.format(Locale.US, "%.3g", speed)}×" + (if (c.speedCurve.isNotEmpty()) " on average" else "") else ""
         val r = rate * speed / fps
         when {
             kotlin.math.abs(r - 1f) < 0.02f -> "$name: every frame used"
@@ -1615,6 +1615,16 @@ private fun RateNotes(state: UiState, fps: Float) {
         }
     }
     if (notes.isNotEmpty()) Hint(notes.joinToString("\n"))
+}
+
+/**
+ * " (116.97 on average)" when the file holds clearly fewer frames than it was shot at (the camera
+ * dropped some, as phones do at high rates in low light), else nothing.
+ */
+private fun droppedNote(meta: app.headsup.media.ClipMetadata): String {
+    val shot = meta.frameRate ?: return ""
+    val held = meta.measuredFrameRate ?: return ""
+    return if (held < shot * 0.99f) " (${OutputSpec.formatFps(held)} on average)" else ""
 }
 
 /** The selected clip's cut (or a photo's time on screen), with split and delete. */
@@ -2389,7 +2399,9 @@ private val SPEEDS = listOf(0.25f, 0.5f, 0.75f, 1f, 1.5f, 2f, 3f, 4f)
 private fun SpeedControls(clip: ClipState, timelineFps: Float, onSpeed: (Float) -> Unit) {
     val steady = clip.speedCurve.isEmpty()
     // Every frame of high-frame-rate footage at the timeline's rate (e.g. 120 fps on a 24 fps timeline: 0.2×).
-    val conform = clip.meta.frameRate?.takeIf { !clip.meta.isPhoto && it > timelineFps + 0.5f }?.let { timelineFps / it }
+    // The rate shot at (0.25× for 120 fps on 30), or what the file holds when the camera dropped many.
+    val held = clip.meta.frameRate?.let { shot -> clip.meta.measuredFrameRate?.takeIf { it < shot * 0.97f } ?: shot }
+    val conform = held?.takeIf { !clip.meta.isPhoto && it > timelineFps + 0.5f }?.let { timelineFps / it }
     if (conform != null) {
         ChoiceGrid(
             listOf("All frames · ${String.format(Locale.US, "%.3g", conform)}×"),
@@ -2410,7 +2422,16 @@ private fun SpeedControls(clip: ClipState, timelineFps: Float, onSpeed: (Float) 
         Hint(
             if (effective + 0.5f >= timelineFps) {
                 String.format(Locale.US, "Smooth: %s fps footage at %s× still gives %s fps (timeline %s).",
-                    OutputSpec.formatFps(sourceFps), clip.speed, OutputSpec.formatFps(effective), OutputSpec.formatFps(timelineFps))
+                    OutputSpec.formatFps(sourceFps), clip.speed, OutputSpec.formatFps(effective), OutputSpec.formatFps(timelineFps)) +
+                    // Shot at the rate, but some frames dropped: said once, with what it means.
+                    (clip.meta.measuredFrameRate?.takeIf { it < sourceFps * 0.99f }?.let { held ->
+                        val repeat = timelineFps / (timelineFps - held * clip.speed).coerceAtLeast(0.01f)
+                        if (held * clip.speed >= timelineFps - 0.05f) ""
+                        else if (repeat >= 20f) String.format(Locale.US, " The camera dropped a few frames (%s a second on average), so about one frame in %.0f shows twice; too rarely to see.",
+                            OutputSpec.formatFps(held), repeat)
+                        else String.format(Locale.US, " The camera dropped frames (%s a second on average): one frame in %.0f shows twice, which can look uneven. %s× (All frames) uses each frame once.",
+                            OutputSpec.formatFps(held), repeat, speedText(timelineFps / held))
+                    } ?: "")
             } else {
                 String.format(Locale.US, "Will stutter: only %s fps at %s× for a %s fps timeline. Shoot at %s fps for this speed.",
                     OutputSpec.formatFps(effective), clip.speed, OutputSpec.formatFps(timelineFps), OutputSpec.formatFps(timelineFps / clip.speed))
@@ -4137,23 +4158,26 @@ private fun MixerControls(state: UiState, vm: HeadsupViewModel) {
 }
 
 /** Looks (profiles): a starting rendering under the corrections, and how strongly. */
-/**
- * Looks that suit what was measured in the clip: night, skin-like tones, loud greens and blues, a
- * warm (sunset) cast; the best first.
- */
-private fun suggestedLooks(s: app.headsup.core.color.FrameStats): List<app.headsup.color.FastLook> {
-    val out = mutableListOf<app.headsup.color.FastLook>()
-    if (s.median < 0.22f) out += app.headsup.color.FastLook.NIGHT
-    if (s.skin > SKIN_SHARE) { out += app.headsup.color.FastLook.CLEAN; out += app.headsup.color.FastLook.WARM_FILM }
-    if (s.foliage > 0.15f) { out += app.headsup.color.FastLook.TEAL_ORANGE; out += app.headsup.color.FastLook.MUTED }
-    if (s.warmth > 0.03f) { out += app.headsup.color.FastLook.FILM_35; out += app.headsup.color.FastLook.VINTAGE }
-    if (s.colourfulness > 0.12f) out += app.headsup.color.FastLook.MUTED
-    out += listOf(app.headsup.color.FastLook.CLEAN, app.headsup.color.FastLook.FILM_35, app.headsup.color.FastLook.TEAL_ORANGE)
-    return out.distinct().take(3)
-}
+/** Looks that suit what was measured in the clip, the best first ([app.headsup.color.FastLook.suggested]). */
+private fun suggestedLooks(s: app.headsup.core.color.FrameStats): List<app.headsup.color.FastLook> =
+    app.headsup.color.FastLook.suggested(s)
 
-/** Skin-like tones count when they are more than this share of the picture. */
-private const val SKIN_SHARE = 0.08f
+/** What the clip was found to be, in words (night, lights in the dark, people…). */
+private fun sceneWords(s: app.headsup.core.color.FrameStats): List<String> =
+    s.traits.mapNotNull {
+        when (it) {
+            app.headsup.core.color.SceneTrait.NIGHT -> "night"
+            app.headsup.core.color.SceneTrait.CITY_LIGHTS -> "lights in the dark"
+            app.headsup.core.color.SceneTrait.GOLDEN -> "low sun"
+            app.headsup.core.color.SceneTrait.FLAT -> "flat, grey light"
+            app.headsup.core.color.SceneTrait.FOLIAGE -> "greenery"
+            app.headsup.core.color.SceneTrait.SKY -> "sky or water"
+            app.headsup.core.color.SceneTrait.PEOPLE -> "people"
+            app.headsup.core.color.SceneTrait.COLOURFUL -> "loud colour"
+            else -> null
+        }
+    }
+
 
 /** The user's saved looks: one tap puts it on the clip; the clip's own look can be saved by name. */
 @Composable
@@ -4219,17 +4243,13 @@ private fun LooksPanel(state: UiState, vm: HeadsupViewModel, frameSource: (() ->
     // The clip measured: what was found, and the looks that suit it.
     ToolSection(
         "Cinematic",
-        info = "A complete look: colour taken away rather than added, soft highlights, grain and light. Analyse the $what and looks that suit it are suggested, and every look is fitted to it. Hold the ruler to see the $what without it; Done keeps it as normal corrections and effects, adjustable afterwards.",
+        info = "A complete look: colour taken away rather than added, soft highlights, grain and light. Analyse the $what and looks that suit it are suggested, and every look is fitted to it. Hold the ruler to see the $what without it. The look stays as normal corrections and effects, adjustable afterwards; Off (or Undo) takes it back.",
     ) {
     Row(verticalAlignment = Alignment.CenterVertically) {
         Hint(
             if (stats == null) "Not analysed yet."
-            else String.format(
-                Locale.US, "Mid-tones %.0f %% · %.1f %% clipped · %s%s",
-                stats.median * 100, stats.clipped * 100,
-                if (stats.foliage > 0.15f) "lots of green/blue" else "colours calm",
-                if (stats.skin > SKIN_SHARE) " · skin-like tones" else "",
-            ),
+            else (listOf(String.format(Locale.US, "Mid-tones %.0f %% · %.1f %% clipped", stats.median * 100, stats.clipped * 100)) + sceneWords(stats))
+                .joinToString(" · "),
             Modifier.weight(1f),
         )
         Spacer(Modifier.width(8.dp))
@@ -4237,24 +4257,29 @@ private fun LooksPanel(state: UiState, vm: HeadsupViewModel, frameSource: (() ->
     }
     // What suits the clip is outlined in the one grid (no second row of the same looks).
     val suggested = stats?.let { suggestedLooks(it) }.orEmpty()
-    val cinematic = app.headsup.color.FastLook.entries
-    ChoiceGrid(cinematic.map { it.label }, cinematic.indexOf(fast?.look), { choose(cinematic[it]) }, outlined = { cinematic[it] in suggested })
-    if (suggested.isNotEmpty()) Hint("Outlined: the looks that suit this $what.")
-    // The look being tried: its strength, then keep it or put the clip back.
+    // The suggested looks first, then the rest; while a look is on, Off puts the clip back as it was.
+    val cinematic = suggested + app.headsup.color.FastLook.entries.filter { it !in suggested }
+    val labels = (if (fast != null) listOf("Off") else emptyList()) + cinematic.map { it.label }
+    val shift = if (fast != null) 1 else 0
+    ChoiceGrid(
+        labels, fast?.let { cinematic.indexOf(it.look) + shift } ?: -1,
+        { i -> if (i < shift) vm.closeFast(undo = true) else choose(cinematic[i - shift]) },
+        outlined = { i -> i >= shift && cinematic[i - shift] in suggested },
+    )
+    if (suggested.isNotEmpty()) Hint("Outlined, first: the looks that suit this $what.")
+    // The look on the clip: its strength. It stays as it is set; leaving the panel keeps it as
+    // ordinary corrections and effects (Undo above takes it back like any change).
     if (fast != null) {
         ValueHeader("Strength", String.format(Locale.US, "%.0f %%", fast.strength * 100))
         RulerSlider(
             fast.strength, 0f..1f, 0.02f, { v -> vm.applyFastLook(fast.look, v) },
             onReset = { vm.applyFastLook(fast.look, 1f) }, onHold = vm::compareFast,
         )
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            SmallAction("Undo", { vm.closeFast(undo = true) })
-            Spacer(Modifier.weight(1f))
-            SmallAction("Done", { vm.closeFast(undo = false) })
-        }
-        Hint(if (stats != null) "Fitted to this $what." else "Not fitted yet: Analyse $what fits it.")
+        Hint(fast.look.description + if (stats != null) " Fitted to this $what." else " Analyse the $what to fit it.")
     }
     }
+    // Leaving the panel (or the clip) keeps the look as the clip's own corrections and effects.
+    DisposableEffect(clip.id) { onDispose { vm.closeFast(undo = false) } }
 }
 
 @Composable

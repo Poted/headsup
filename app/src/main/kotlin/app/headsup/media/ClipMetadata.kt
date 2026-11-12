@@ -85,6 +85,10 @@ data class ClipMetadata(
     val height: Int,
     /** Container bit rate (video + audio), bits per second. */
     val bitrate: Int?,
+    /**
+     * The rate the clip was shot at (120 for a phone's 120 fps video), not the average of the
+     * frames that arrived: phones drop a few at high rates, in low light most.
+     */
     val frameRate: Float?,
     val format: VideoFormatInfo?,
     val info: ClipInfo,
@@ -94,6 +98,8 @@ data class ClipMetadata(
     val isRaw: Boolean = false,
     /** Size of the file in bytes, when known. */
     val bytes: Long? = null,
+    /** Frames a second the file really holds on average (below [frameRate] when frames were dropped). */
+    val measuredFrameRate: Float? = null,
 )
 
 object ClipMetadataReader {
@@ -121,7 +127,11 @@ object ClipMetadataReader {
             val rotation = key(MediaMetadataRetriever.METADATA_KEY_VIDEO_ROTATION)?.toIntOrNull() ?: 0
             val rotated = rotation == 90 || rotation == 270
             val frames = key(MediaMetadataRetriever.METADATA_KEY_VIDEO_FRAME_COUNT)?.toLongOrNull()
-            val frameRate = if (frames != null && duration > 0) snapFrameRate(frames * 1000f / duration) else null
+            val measured = if (frames != null && duration > 0) frames * 1000f / duration else null
+            // The rate the camera says it shot at (phones write it for high rates), else the standard
+            // rate the measured one falls just under.
+            val captured = key(MediaMetadataRetriever.METADATA_KEY_CAPTURE_FRAMERATE)?.toFloatOrNull()?.takeIf { it > 1f }
+            val frameRate = measured?.let { m -> captured?.takeIf { m in it * 0.85f..it * 1.02f } ?: nominalFrameRate(m) }
 
             val evidence = listOfNotNull(
                 FilenameTimeParser.parse(name),
@@ -137,6 +147,7 @@ object ClipMetadataReader {
                 height = if (rotated) w else h,
                 bitrate = key(MediaMetadataRetriever.METADATA_KEY_BITRATE)?.toIntOrNull(),
                 frameRate = frameRate,
+                measuredFrameRate = measured,
                 format = VideoFormatInfo.read(context, uri),
                 info = ClipInfo(duration, evidence),
             )
@@ -185,8 +196,20 @@ object ClipMetadataReader {
     }.getOrNull()?.takeIf { it > 0 }
 
     /** Frame counts over a rounded duration give e.g. 29.94; report the nominal rate. */
-    private fun snapFrameRate(measured: Float): Float =
-        STANDARD_RATES.minBy { abs(it - measured) }.takeIf { abs(it - measured) / it < 0.02f } ?: measured
+    /**
+     * The standard rate a measured one belongs to: a file holds at most its rate's frames, and up to
+     * a few percent fewer when the camera dropped some (116.97 measured on 120 fps phone video), so a
+     * rate a little above the measured one counts more than one below. A fractional (NTSC) rate only
+     * when it is that close; phones shoot whole ones.
+     */
+    internal fun nominalFrameRate(measured: Float): Float {
+        val fits = STANDARD_RATES.filter { measured >= it * 0.95f && measured <= it * 1.01f }
+        val nearest = fits.minByOrNull { abs(it - measured) } ?: return measured
+        if (nearest % 1f != 0f && abs(nearest - measured) / nearest > 0.004f) {
+            fits.firstOrNull { it % 1f == 0f && abs(it - nearest) < 0.2f }?.let { return it }
+        }
+        return nearest
+    }
 
     fun displayName(context: Context, uri: Uri): String? =
         context.contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { c ->
