@@ -224,7 +224,9 @@ fun ClipPreview(
     /** Receives a function that grabs the current picture (before colour) [width] pixels wide, e.g. for finding objects. */
     onPictureSource: (((width: Int) -> Bitmap?) -> Unit)? = null,
     /** Zoom, position and straightening; [onReframe] set means a finger on the picture pans and pinches it. */
-    reframe: Reframe = Reframe(),
+    reframeBase: Reframe = Reframe(),
+    /** The framing moving through the clip (Ken Burns, following the subject); empty: it stays [reframeBase]. */
+    frameKeys: List<app.headsup.core.frame.FrameKey> = emptyList(),
     onReframe: ((Reframe) -> Unit)? = null,
     /** Rule-of-thirds grid over the picture. */
     showGrid: Boolean = false,
@@ -663,6 +665,10 @@ fun ClipPreview(
     // Read by a gesture that lives as long as the preview: always the current setting.
     val panNow by rememberUpdatedState(panView)
     val reframer by rememberUpdatedState(onReframe)
+    // The framing at this moment: moved by its keys (the moment is the one last drawn, so a key move
+    // follows the picture a frame behind, unseen).
+    val keyedAt = remember(clip.id) { mutableLongStateOf(clip.trimStartMs) }
+    val reframe = if (frameKeys.isEmpty()) reframeBase else app.headsup.core.frame.FrameKeys.at(reframeBase, frameKeys, keyedAt.longValue)
     val currentReframe by rememberUpdatedState(reframe)
     // Sizes of the frame and the picture under it, for gestures (read when they happen).
     LaunchedEffect(clip.meta.uri, wantsSubject, photoBitmap, photoFrom, subjectVersion) {
@@ -889,6 +895,7 @@ fun ClipPreview(
     val positionMs = if (scrubbing) playerMs - clip.trimStartMs else playerMs
     // Masks that move are placed for this moment of the file.
     val fileMs = clip.trimStartMs + positionMs
+    if (frameKeys.isNotEmpty()) SideEffect { keyedAt.longValue = fileMs }
     // The oval being shaped as it shows now, for grabbing its ends.
     val guideNow by rememberUpdatedState(guideMask?.at(fileMs))
     // Position on the timeline within this clip, for fades and music.

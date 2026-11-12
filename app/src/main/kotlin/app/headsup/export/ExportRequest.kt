@@ -73,6 +73,8 @@ data class ExportRequest(
     val reframe: Reframe = Reframe(),
     /** The shot steadied ([app.headsup.core.frame.Stabilizer]), or null. */
     val stabilize: app.headsup.core.frame.Stabilizer.Path? = null,
+    /** The framing moving through the clip (file time); empty: [reframe] all through. */
+    val frameKeys: List<app.headsup.core.frame.FrameKey> = emptyList(),
     /** The clip's id (texts follow places in it) and its subject's maps (texts behind it). */
     val clipId: Long = -1L,
     val subject: String? = null,

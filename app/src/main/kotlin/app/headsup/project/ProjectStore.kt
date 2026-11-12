@@ -63,6 +63,7 @@ data class SavedClip(
     val subject: String? = null,
     val cut: app.headsup.core.edit.CutKind = app.headsup.core.edit.CutKind.NONE,
     val cutMs: Long = 500L,
+    val frameKeys: List<app.headsup.core.frame.FrameKey> = emptyList(),
 )
 
 /** A reversed clip's source: [originalUri] from [startMs] to [endMs], played backwards. */
@@ -403,6 +404,11 @@ internal object Json {
         }
         .putOpt("subject", c.subject)
         .put("cut", c.cut.name).put("cutMs", c.cutMs)
+        .apply {
+            if (c.frameKeys.isNotEmpty()) put("frameKeys", JSONArray(c.frameKeys.map { k ->
+                JSONObject().put("t", k.timeMs).put("z", k.zoom.toDouble()).put("x", k.centerX.toDouble()).put("y", k.centerY.toDouble())
+            }))
+        }
         .apply { if (c.gradeKeys.isNotEmpty()) put("gradeKeys", JSONArray(c.gradeKeys.map { k -> JSONObject().put("t", k.timeMs).put("grade", grade(k.grade)) })) }
         .put("raw", JSONObject().put("exposure", c.rawDevelop.exposure.toDouble()).put("highlights", c.rawDevelop.highlights.toDouble())
             .put("shadows", c.rawDevelop.shadows.toDouble()).put("temperature", c.rawDevelop.temperature.toDouble()).put("tint", c.rawDevelop.tint.toDouble())
@@ -451,6 +457,11 @@ internal object Json {
         subject = o.optStringOrNull("subject"),
         cut = app.headsup.core.edit.CutKind.entries.firstOrNull { it.name == o.optString("cut") } ?: app.headsup.core.edit.CutKind.NONE,
         cutMs = o.optLong("cutMs", 500L),
+        frameKeys = o.optJSONArray("frameKeys")?.let { a ->
+            List(a.length()) { k -> a.getJSONObject(k) }.map { j ->
+                app.headsup.core.frame.FrameKey(j.optLong("t"), j.optDouble("z", 1.0).toFloat(), j.optDouble("x", 0.5).toFloat(), j.optDouble("y", 0.5).toFloat())
+            }.sortedBy { it.timeMs }
+        }.orEmpty(),
         stabilize = o.optJSONObject("stabilize")?.let { j ->
             val flat = j.optJSONArray("steps") ?: return@let null
             app.headsup.core.frame.Stabilizer.Path(

@@ -428,7 +428,27 @@ class ExportManager(private val context: Context) {
         // Steadied: each frame moved by its correction, before it is framed (as in the preview).
         request.stabilize?.let { path -> stabilizeEffect(path, request.width, request.height, request.trimStartMs)?.let { effects += it } }
         // Reframing comes after colour and texture (as in the preview) and before the dashboard.
-        reframeEffect(request.reframe, request.width, request.height, out.width, out.height)?.let { effects += it }
+        if (request.frameKeys.isNotEmpty() && !request.isPhoto && !(request.reframe.fit && request.reframe.blur)) {
+            // A moving frame (Ken Burns, following the subject): the framing worked out for each frame's moment.
+            val keys = request.frameKeys
+            val w = request.width
+            val h = request.height
+            val (ow, oh) = out.width to out.height
+            effects += object : MatrixTransformation {
+                private var firstUs = -1L
+                override fun configure(inputWidth: Int, inputHeight: Int) = Size(ow, oh)
+                override fun getMatrix(presentationTimeUs: Long): Matrix {
+                    if (firstUs < 0) firstUs = presentationTimeUs
+                    val fileMs = request.trimStartMs + (presentationTimeUs - firstUs) / 1000
+                    val r = app.headsup.core.frame.FrameKeys.at(request.reframe, keys, fileMs)
+                    return reframeMatrix(r, w, h) ?: Matrix().apply {
+                        // Identity in normalised coordinates, scaled to the frame's shape (as no reframe would be).
+                    }
+                }
+            }
+        } else {
+            reframeEffect(request.reframe, request.width, request.height, out.width, out.height)?.let { effects += it }
+        }
         // The timeline's frame scaled to the output size (the same shape), so every clip of a joined
         // export has the same frame.
         effects += Presentation.createForWidthAndHeight(out.width, out.height, Presentation.LAYOUT_SCALE_TO_FIT_WITH_CROP)

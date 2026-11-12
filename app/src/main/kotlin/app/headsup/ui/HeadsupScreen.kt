@@ -528,7 +528,9 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
                         cutScrub = cutScrub,
                         onFrameSource = { frameSource.value = it },
                         onPictureSource = { pictureSource.value = it },
-                        reframe = state.framing(selected),
+                        reframeBase = state.framing(selected),
+                        // While the frame is set at a key, it shows that key; otherwise it moves.
+                        frameKeys = selected.frameKeys,
                         // Full screen is for looking: no framing (pinch zooms the view instead), no grid.
                         onReframe = if (framing && !fullscreen) { r -> vm.updateReframe { r } } else null,
                         showGrid = framing && !fullscreen,
@@ -5101,6 +5103,33 @@ private fun FramePanel(state: UiState, vm: HeadsupViewModel) {
                     else -> imagePicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
                 }
             })
+        }
+    }
+    // The frame moving through the clip: a slow push in or across (Ken Burns), or following the subject.
+    val index = state.selectedClip
+    if (index != null) ToolSection(
+        "Move",
+        info = "Ken Burns: the frame glides from how it is at the clip's start to how it is at its end; go to either end (⇤ ⇥) and frame it there (drag, pinch). " +
+            "Follow: the frame keeps the subject (people, animals, vehicles) in it as they move, gliding rather than jerking, at the zoom set now (zoom in first to give it room); " +
+            "the subject is found first when it is not yet. Off keeps the frame as it is at the playhead.",
+    ) {
+        val following = clip.frameKeys.size > 2
+        val mode = when { clip.frameKeys.isEmpty() -> 0; following -> 2; else -> 1 }
+        val finding = state.work.any { it.clipId == clip.id && it.label.startsWith("Finding the subject") }
+        ChoiceGrid(listOf("Off", "Ken Burns", "Follow"), mode, { i ->
+            when (i) {
+                0 -> vm.setKenBurns(index, false)
+                1 -> vm.setKenBurns(index, true)
+                else -> vm.followSubjectWithFrame(index)
+            }
+        })
+        when {
+            finding -> Hint("Finding the subject in this clip…")
+            mode == 1 -> Hint("Set at the start, then at the end: the frame nearest the playhead is the one dragged.")
+            mode == 2 -> Row {
+                Spacer(Modifier.weight(1f))
+                SmallAction("Follow again", { vm.followSubjectWithFrame(index) })
+            }
         }
     }
     GeometrySections(r, vm)

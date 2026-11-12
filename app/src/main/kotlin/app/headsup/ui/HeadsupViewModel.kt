@@ -140,6 +140,8 @@ data class ClipState(
     /** How the clip comes in from the one before (half of it at that one's end), and how long the whole of it is. */
     val cut: app.headsup.core.edit.CutKind = app.headsup.core.edit.CutKind.NONE,
     val cutMs: Long = 500L,
+    /** The framing moving through the clip (Ken Burns, following the subject); empty: it stays. */
+    val frameKeys: List<app.headsup.core.frame.FrameKey> = emptyList(),
     /** Picture effects of this clip. */
     val effects: EffectSettings = EffectSettings(),
     /** Windows with their own corrections (graduated lines, ovals), at most [ColourMask.MAX_PER_CLIP]. */
@@ -1262,7 +1264,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
      * it: found where it first shows, then followed (MobileSAM, told where it was), looked for
      * again whenever it is gone. In the background; the maps are kept with the clip.
      */
-    fun findSubject(index: Int) {
+    fun findSubject(index: Int, then: (() -> Unit)? = null) {
         val s = _state.value
         val clip = s.clips.getOrNull(index)?.takeIf { !it.meta.isPhoto } ?: return
         if (s.work.any { it.clipId == clip.id && it.label.startsWith("Finding the subject") }) return
@@ -1320,6 +1322,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                     messages = st.messages + (if (stopped()) "Subject found up to where it was stopped." else "Subject found on the clip: texts set Behind stand behind it."),
                 )
             }
+            then?.invoke()
         }
     }
 
@@ -1694,7 +1697,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                 gradeKeys = it.gradeKeys,
                 stabilize = it.stabilize,
                 subject = it.subject,
-                cut = it.cut, cutMs = it.cutMs,
+                cut = it.cut, cutMs = it.cutMs, frameKeys = it.frameKeys,
             )
         },
         groups = groups.map { SavedGroup(it.id, it.name, it.grade, it.lutName) },
@@ -1844,7 +1847,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
             gradeKeys = c.gradeKeys,
             stabilize = c.stabilize,
             subject = c.subject,
-            cut = c.cut, cutMs = c.cutMs,
+            cut = c.cut, cutMs = c.cutMs, frameKeys = c.frameKeys,
             groupId = c.groupId,
         )
     }
@@ -3335,7 +3338,22 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
         val index = _state.value.selectedClip ?: return
         val s = _state.value
         // An album's photo keeps its own crop shape (null: the photo's); a film's clips take the timeline's.
-        updateClip(index) { c -> transform(c.reframe).let { r -> c.copy(reframe = r.clampedFor(c, if (s.photoProject) r.aspect else s.timelineAspect)) } }
+        updateClip(index) { c ->
+            if (c.frameKeys.isEmpty()) {
+                transform(c.reframe).let { r -> c.copy(reframe = r.clampedFor(c, if (s.photoProject) r.aspect else s.timelineAspect)) }
+            } else {
+                // A moving frame: what is set is the key nearest the playhead (its zoom and centre);
+                // the rest of the framing (shape, turn, fit) is the clip's own as before.
+                val at = playheadFileMs.coerceIn(c.trimStartMs, c.trimEndMs)
+                val shown = app.headsup.core.frame.FrameKeys.at(c.reframe, c.frameKeys, at)
+                val r = transform(shown).clampedFor(c, if (s.photoProject) shown.aspect else s.timelineAspect)
+                c.copy(
+                    reframe = c.reframe.copy(angleDegrees = r.angleDegrees, aspect = r.aspect, fit = r.fit, blur = r.blur, vertical = r.vertical, horizontal = r.horizontal,
+                        distortion = r.distortion, lensVignette = r.lensVignette, mirrored = r.mirrored, panels = r.panels, backdropColour = r.backdropColour, backdropImage = r.backdropImage),
+                    frameKeys = app.headsup.core.frame.FrameKeys.setNearest(c.frameKeys, at, r),
+                )
+            }
+        }
     }
 
     /** The effect bars cut from a picture of one's own (kept by the app). */
@@ -4621,6 +4639,70 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
     /** How clip [index] comes in from the clip before: [kind] over [lengthMs] (half at the end of the one before). */
     fun setCut(index: Int, kind: app.headsup.core.edit.CutKind, lengthMs: Long) = updateClip(index) { it.copy(cut = kind, cutMs = lengthMs.coerceIn(100L, 4000L)) }
 
+    /**
+     * A Ken Burns move on clip [index]: the frame as it is now at its start, and a little closer at
+     * its end (to be set where wanted: go to the end and frame it). Off: the frame as at the playhead stays.
+     */
+    fun setKenBurns(index: Int, on: Boolean) = updateClip(index) { c ->
+        if (!on) {
+            val at = playheadFileMs.coerceIn(c.trimStartMs, c.trimEndMs)
+            val shown = app.headsup.core.frame.FrameKeys.at(c.reframe, c.frameKeys, at)
+            c.copy(reframe = c.reframe.copy(zoom = shown.zoom, centerX = shown.centerX, centerY = shown.centerY), frameKeys = emptyList())
+        } else {
+            val r = c.reframe
+            c.copy(frameKeys = listOf(
+                app.headsup.core.frame.FrameKey(c.trimStartMs, r.zoom, r.centerX, r.centerY),
+                app.headsup.core.frame.FrameKey(c.trimEndMs, (r.zoom * 1.25f).coerceAtMost(4f), r.centerX, r.centerY),
+            ))
+        }
+    }
+
+    /**
+     * The frame following the clip's subject (people, animals, vehicles): its middle kept on them,
+     * evened out so it glides, at the zoom set now (zoom in first to give it room to move). The
+     * subject is found first when it is not yet (in the background).
+     */
+    fun followSubjectWithFrame(index: Int) {
+        val clip = _state.value.clips.getOrNull(index)?.takeIf { !it.meta.isPhoto } ?: return
+        val id = clip.subject
+        if (id == null) {
+            findSubject(index) { followSubjectWithFrame(index) }
+            return
+        }
+        val context: Application = getApplication()
+        viewModelScope.launch {
+            val keys = withContext(Dispatchers.Default) {
+                val seq = app.headsup.color.MaskSequences.get(context, id) ?: return@withContext null
+                val times = ArrayList<Long>()
+                val xs = ArrayList<Float>()
+                val ys = ArrayList<Float>()
+                for (k in seq.timesMs.indices) {
+                    val map = seq.frames[k]
+                    var sx = 0.0
+                    var sy = 0.0
+                    var n = 0.0
+                    for (i in map.indices) {
+                        val v = (map[i].toInt() and 0xFF) / 255.0
+                        if (v < 0.5) continue
+                        sx += (i % seq.width + 0.5) / seq.width
+                        sy += (i / seq.width + 0.5) / seq.height
+                        n += 1.0
+                    }
+                    if (n < seq.width * seq.height * 0.002) continue
+                    times += seq.timesMs[k]; xs += (sx / n).toFloat(); ys += (sy / n).toFloat()
+                }
+                if (times.isEmpty()) null
+                else app.headsup.core.frame.FrameKeys.following(times.toLongArray(), xs.toFloatArray(), ys.toFloatArray(), maxOf(clip.reframe.zoom, 1.3f))
+            }
+            if (keys == null) {
+                _state.update { it.copy(messages = it.messages + "No subject found to follow in this clip.") }
+                return@launch
+            }
+            _state.update { st -> st.copy(clips = st.clips.map { c -> if (c.id == clip.id) c.copy(frameKeys = keys) else c }, messages = st.messages + "The frame follows the subject (${keys.size} keys).") }
+            refreshPreview()
+        }
+    }
+
     /** The same way in for every clip after the first. */
     fun setCutForAll(kind: app.headsup.core.edit.CutKind, lengthMs: Long) =
         _state.update { s -> s.copy(clips = s.clips.mapIndexed { i, c -> if (i == 0) c else c.copy(cut = kind, cutMs = lengthMs.coerceIn(100L, 4000L)) }) }
@@ -5080,6 +5162,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                     reframe = s.framing(clip),
                     stabilize = clip.stabilize?.takeIf { it.strength > 0f },
                     clipId = clip.id,
+                    frameKeys = clip.frameKeys,
                     subject = clip.subject,
                     textMasks = clip.masks,
                     speed = clip.speed,
