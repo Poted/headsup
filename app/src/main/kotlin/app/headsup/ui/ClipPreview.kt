@@ -228,6 +228,8 @@ fun ClipPreview(
     /** The framing moving through the clip (Ken Burns, following the subject); empty: it stays [reframeBase]. */
     frameKeys: List<app.headsup.core.frame.FrameKey> = emptyList(),
     onReframe: ((Reframe) -> Unit)? = null,
+    /** Set: the frame's edges and corners can be dragged in to cut the photo down (fractions of the frame). */
+    onCrop: ((left: Float, top: Float, right: Float, bottom: Float) -> Unit)? = null,
     /** Rule-of-thirds grid over the picture. */
     showGrid: Boolean = false,
     /** Start playing as soon as the clip is loaded (continuing from the previous clip). */
@@ -665,6 +667,9 @@ fun ClipPreview(
     // Read by a gesture that lives as long as the preview: always the current setting.
     val panNow by rememberUpdatedState(panView)
     val reframer by rememberUpdatedState(onReframe)
+    val cropper by rememberUpdatedState(onCrop)
+    // The part kept while an edge of the frame is dragged (pixels of the frame), until it lifts.
+    var cropRect by remember { mutableStateOf<androidx.compose.ui.geometry.Rect?>(null) }
     // The framing at this moment: moved by its keys (the moment is the one last drawn, so a key move
     // follows the picture a frame behind, unseen).
     val keyedAt = remember(clip.id) { mutableLongStateOf(clip.trimStartMs) }
@@ -1466,6 +1471,45 @@ fun ClipPreview(
                     Modifier
                         .matchParentSize()
                         .then(
+                            if (onCrop == null) Modifier else Modifier.pointerInput(Unit) {
+                                // A finger on an edge or corner of the frame drags it in (before the
+                                // picture's own drag sees it); let go, the frame takes that shape.
+                                awaitEachGesture {
+                                    val down = awaitFirstDown(requireUnconsumed = false, pass = androidx.compose.ui.input.pointer.PointerEventPass.Initial)
+                                    val crop = cropper ?: return@awaitEachGesture
+                                    val w = size.width.toFloat()
+                                    val h = size.height.toFloat()
+                                    val reach = 28.dp.toPx()
+                                    val p0 = down.position
+                                    val left = p0.x < reach
+                                    val right = p0.x > w - reach
+                                    val top = p0.y < reach
+                                    val bottom = p0.y > h - reach
+                                    if (!(left || right || top || bottom)) return@awaitEachGesture
+                                    down.consume()
+                                    val least = 0.15f
+                                    var rect = androidx.compose.ui.geometry.Rect(0f, 0f, w, h)
+                                    cropRect = rect
+                                    while (true) {
+                                        val e = awaitPointerEvent(androidx.compose.ui.input.pointer.PointerEventPass.Initial)
+                                        val c = e.changes.firstOrNull { it.id == down.id } ?: break
+                                        if (!c.pressed) break
+                                        c.consume()
+                                        val p = c.position
+                                        rect = androidx.compose.ui.geometry.Rect(
+                                            if (left) p.x.coerceIn(0f, rect.right - w * least) else rect.left,
+                                            if (top) p.y.coerceIn(0f, rect.bottom - h * least) else rect.top,
+                                            if (right) p.x.coerceIn(rect.left + w * least, w) else rect.right,
+                                            if (bottom) p.y.coerceIn(rect.top + h * least, h) else rect.bottom,
+                                        )
+                                        cropRect = rect
+                                    }
+                                    cropRect = null
+                                    if (rect.width < w - 2f || rect.height < h - 2f) crop(rect.left / w, rect.top / h, rect.right / w, rect.bottom / h)
+                                }
+                            },
+                        )
+                        .then(
                             if (onReframe == null) {
                                 Modifier
                             } else {
@@ -1967,6 +2011,43 @@ fun ClipPreview(
                 if (weaveNow.gain < 1f) Box(Modifier.matchParentSize().background(Color.Black.copy(alpha = 1f - weaveNow.gain)))
                 if (cutLook.dip > 0f) Box(Modifier.matchParentSize().background((if (cutLook.dipWhite) Color.White else Color.Black).copy(alpha = cutLook.dip.coerceIn(0f, 1f))))
                 if (showGrid) Canvas(Modifier.matchParentSize()) { drawThirds() }
+                // Cutting the photo down: handles at the frame's corners and edges; while one is
+                // dragged, what goes is darkened and what stays is outlined.
+                if (onCrop != null) Canvas(Modifier.matchParentSize()) {
+                    val r = cropRect ?: androidx.compose.ui.geometry.Rect(0f, 0f, size.width, size.height)
+                    if (cropRect != null) {
+                        val shade = Color.Black.copy(alpha = 0.55f)
+                        drawRect(shade, Offset.Zero, androidx.compose.ui.geometry.Size(size.width, r.top))
+                        drawRect(shade, Offset(0f, r.bottom), androidx.compose.ui.geometry.Size(size.width, size.height - r.bottom))
+                        drawRect(shade, Offset(0f, r.top), androidx.compose.ui.geometry.Size(r.left, r.height))
+                        drawRect(shade, Offset(r.right, r.top), androidx.compose.ui.geometry.Size(size.width - r.right, r.height))
+                        drawRect(Color.White, r.topLeft, r.size, style = androidx.compose.ui.graphics.drawscope.Stroke(1.dp.toPx()))
+                        for (k in 1..2) {
+                            val x = r.left + r.width * k / 3f
+                            val y = r.top + r.height * k / 3f
+                            drawLine(Color.White.copy(alpha = 0.5f), Offset(x, r.top), Offset(x, r.bottom), 0.75.dp.toPx())
+                            drawLine(Color.White.copy(alpha = 0.5f), Offset(r.left, y), Offset(r.right, y), 0.75.dp.toPx())
+                        }
+                    }
+                    val len = 18.dp.toPx()
+                    val wide = 3.dp.toPx()
+                    val half = wide / 2f
+                    // Corners.
+                    for ((cx, cy, sx, sy) in listOf(
+                        listOf(r.left + half, r.top + half, 1f, 1f), listOf(r.right - half, r.top + half, -1f, 1f),
+                        listOf(r.left + half, r.bottom - half, 1f, -1f), listOf(r.right - half, r.bottom - half, -1f, -1f),
+                    )) {
+                        drawLine(Color.White, Offset(cx, cy), Offset(cx + sx * len, cy), wide)
+                        drawLine(Color.White, Offset(cx, cy), Offset(cx, cy + sy * len), wide)
+                    }
+                    // Middles of the edges.
+                    val mx = r.center.x
+                    val my = r.center.y
+                    drawLine(Color.White, Offset(mx - len / 2f, r.top + half), Offset(mx + len / 2f, r.top + half), wide)
+                    drawLine(Color.White, Offset(mx - len / 2f, r.bottom - half), Offset(mx + len / 2f, r.bottom - half), wide)
+                    drawLine(Color.White, Offset(r.left + half, my - len / 2f), Offset(r.left + half, my + len / 2f), wide)
+                    drawLine(Color.White, Offset(r.right - half, my - len / 2f), Offset(r.right - half, my + len / 2f), wide)
+                }
                 // A carousel: where the photo is cut into its panels.
                 if (reframe.panels > 1) Canvas(Modifier.matchParentSize()) {
                     val dash = PathEffect.dashPathEffect(floatArrayOf(14f, 10f))

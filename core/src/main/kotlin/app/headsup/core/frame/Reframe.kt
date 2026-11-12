@@ -176,6 +176,33 @@ data class Reframe(
         return r.copy(centerX = snap(r.centerX, outW, alongX, srcW, sx), centerY = snap(r.centerY, outH, alongY, srcH, sy))
     }
 
+    /**
+     * The framing cut down to part of the frame shown now: [left]..[right], [top]..[bottom] as
+     * fractions of the frame (its edges dragged in). The new frame has that part's shape and shows
+     * exactly what was inside it. For a [srcW]×[srcH] picture (as it comes, before turning);
+     * filled and not straightened only, else as it is.
+     */
+    fun cropped(left: Float, top: Float, right: Float, bottom: Float, srcW: Float, srcH: Float): Reframe {
+        if (fit || straighten != 0f || panels > 1) return this
+        val l = left.coerceIn(0f, 1f)
+        val r = right.coerceIn(0f, 1f)
+        val t = top.coerceIn(0f, 1f)
+        val b = bottom.coerceIn(0f, 1f)
+        if (r - l < 0.02f || b - t < 0.02f) return this
+        val (outW, outH) = outputSize(srcW, srcH)
+        val now = clamped(outW, outH, srcW, srcH)
+        val scale = baseScale(outW, outH, srcW, srcH) * now.effectiveZoom(outW, outH, srcW, srcH)
+        // The part's middle in the picture, and how much of the picture it spans.
+        val (cx, cy) = now.sourceOf((l + r) / 2f * outW, (t + b) / 2f * outH, outW, outH, srcW, srcH)
+        val spanW = (r - l) * outW / scale
+        val next = now.copy(aspect = (r - l) * outW / ((b - t) * outH), centerX = cx / srcW, centerY = cy / srcH, zoom = 1f)
+        val (w2, h2) = next.outputSize(srcW, srcH)
+        // The zoom at which the new frame's width spans the same part of the picture.
+        val wanted = w2 / spanW
+        val atOne = baseScale(w2, h2, srcW, srcH) * next.effectiveZoom(w2, h2, srcW, srcH)
+        return next.copy(zoom = (wanted / atOne).coerceIn(1f, 8f)).clamped(w2, h2, srcW, srcH)
+    }
+
     /** The smallest zoom allowed: fitted, the picture may be made smaller inside the frame. */
     val minZoom: Float get() = if (fit) MIN_FIT_ZOOM else 1f
 

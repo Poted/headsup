@@ -3391,6 +3391,14 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /** Changes the selected clip's framing; kept inside the picture. */
+    /** A photo cut down to part of its frame ([left]..[right], [top]..[bottom], fractions): its edges dragged in. */
+    fun cropTo(left: Float, top: Float, right: Float, bottom: Float) {
+        val clip = _state.value.selected?.takeIf { it.meta.isPhoto } ?: return
+        val w = clip.meta.width.toFloat().coerceAtLeast(1f)
+        val h = clip.meta.height.toFloat().coerceAtLeast(1f)
+        updateReframe { it.cropped(left, top, right, bottom, w, h) }
+    }
+
     fun updateReframe(transform: (Reframe) -> Reframe) {
         val index = _state.value.selectedClip ?: return
         val s = _state.value

@@ -533,6 +533,8 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
                         frameKeys = selected.frameKeys,
                         // Full screen is for looking: no framing (pinch zooms the view instead), no grid.
                         onReframe = if (framing && !fullscreen) { r -> vm.updateReframe { r } } else null,
+                        // An album's photo, filled and level: its frame's edges drag in to cut it down.
+                        onCrop = if (framing && !fullscreen && state.photoProject && selected.meta.isPhoto && selected.reframe.let { !it.fit && it.straighten == 0f && it.panels == 1 }) vm::cropTo else null,
                         showGrid = framing && !fullscreen,
                         autoPlay = continuePlaying,
                         seekRequest = seekRequest,
@@ -6387,7 +6389,7 @@ private fun PhotoCrop(state: UiState, clip: ClipState, vm: HeadsupViewModel) {
     val presets = Reframe.PRESETS
     ToolSection(
         "Aspect",
-        info = "The shape the photo is cut to; Original keeps the photo's own. Drag the picture to choose what stays, pinch to zoom.",
+        info = "The shape the photo is cut to; Original keeps the photo's own. Drag an edge or corner of the frame in to cut it freely (the shape then shows as Custom). Drag the picture to choose what stays, pinch to zoom.",
     ) {
         // The usual shapes, and one of one's own (Custom: width and height typed in).
         var custom by remember { mutableStateOf(false) }
