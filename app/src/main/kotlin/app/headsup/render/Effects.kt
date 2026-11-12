@@ -54,6 +54,8 @@ data class EffectSettings(
     val starLength: Float = 1f,
     val prism: Float = 0f,
     val prismSpread: Float = 1f,
+    /** Which way the prism's copies go, degrees from the right, clockwise. */
+    val prismAngle: Float = app.headsup.core.photo.LightFx.PRISM_ANGLE,
     /** Photos: bokeh through an anamorphic lens's tall oval aperture instead of a round one. */
     val bokehOval: Boolean = false,
     /** How far in the bars are at the moment drawn, 0..1 (set while drawing, not saved). */
@@ -75,7 +77,7 @@ data class EffectSettings(
 
     /** The light effects, as [app.headsup.core.photo.LightFx] takes them. */
     val lightFx: app.headsup.core.photo.LightFx.Settings
-        get() = app.headsup.core.photo.LightFx.Settings(mist, streaks, streakLength, star, starLength, prism, prismSpread)
+        get() = app.headsup.core.photo.LightFx.Settings(mist, streaks, streakLength, star, starLength, prism, prismSpread, prismAngle)
 
     /** The lens effect is on. */
     val lens: Boolean get() = lensAberration > 0f || lensSoftness > 0f
@@ -105,6 +107,7 @@ data class EffectSettings(
         starLength = if (after.starLength != before.starLength) after.starLength else starLength,
         prism = if (after.prism != before.prism) after.prism else prism,
         prismSpread = if (after.prismSpread != before.prismSpread) after.prismSpread else prismSpread,
+        prismAngle = if (after.prismAngle != before.prismAngle) after.prismAngle else prismAngle,
         bokehOval = if (after.bokehOval != before.bokehOval) after.bokehOval else bokehOval,
         graph = if (after.graph != before.graph) after.graph else graph,
         dashboard = if (after.dashboard != before.dashboard) after.dashboard else dashboard,

@@ -199,13 +199,17 @@ class ExportManager(private val context: Context) {
      * picture's place (its four corners where the framing puts them) left open. Black needs
      * nothing (the frame is black there), and blurred borders are drawn by [BlurFillEffect].
      */
-    private fun borderDrawer(request: ExportRequest): ((android.graphics.Canvas, Float, Float) -> Unit)? {
+    private fun borderDrawer(request: ExportRequest): ((android.graphics.Canvas, Float, Float, Long) -> Unit)? {
         val r = request.reframe
         if (!r.fit || r.blur || (r.backdropImage == null && r.backdropColour == 0xFF000000.toInt())) return null
         val srcW = request.width.toFloat().coerceAtLeast(1f)
         val srcH = request.height.toFloat().coerceAtLeast(1f)
         val (ow, oh) = r.outputSize(srcW, srcH)
-        val corners = listOf(0f to 0f, srcW to 0f, srcW to srcH, 0f to srcH).map { (x, y) -> r.frameOf(x, y, ow, oh, srcW, srcH) }
+        // Where the picture's corners are at a moment (they move with a moving frame).
+        fun cornersAt(positionMs: Long): List<Pair<Float, Float>> {
+            val now = app.headsup.core.frame.FrameKeys.at(r, request.frameKeys, request.trimStartMs + positionMs)
+            return listOf(0f to 0f, srcW to 0f, srcW to srcH, 0f to srcH).map { (x, y) -> now.frameOf(x, y, ow, oh, srcW, srcH) }
+        }
         val picture = r.backdropImage?.let { path ->
             runCatching {
                 val bounds = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
@@ -216,7 +220,8 @@ class ExportManager(private val context: Context) {
             }.getOrNull()
         }
         val clear = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply { xfermode = android.graphics.PorterDuffXfermode(android.graphics.PorterDuff.Mode.CLEAR) }
-        return { canvas, w, h ->
+        return { canvas, w, h, positionMs ->
+            val corners = cornersAt(positionMs)
             if (picture != null) {
                 val k = maxOf(w / picture.width, h / picture.height)
                 val pw = picture.width * k
@@ -377,6 +382,8 @@ class ExportManager(private val context: Context) {
             placeTexts = textPlacer(request),
             subject = subjectDrawer(request),
             border = borderDrawer(request),
+            // A moving frame with a border drawn over: the overlay is drawn again as the frame moves.
+            borderKey = if (request.frameKeys.isNotEmpty()) ({ positionMs -> "f${positionMs / 33}" }) else ({ _ -> "" }),
             subjectKey = { positionMs ->
                 val fileMs = request.trimStartMs + positionMs
                 (request.subject?.takeIf { !request.isPhoto && request.texts.any { it.behind && it.behindMask == null } }
@@ -423,12 +430,21 @@ class ExportManager(private val context: Context) {
                 app.headsup.core.photo.Glow.sigma(minOf(request.width, request.height).toFloat(), e.glowSpread),
             )
         }
-        // Mist, Anamorphic streaks, Star, Prism (not on the 10-bit route: its frames are not read back).
-        if (request.effects.lightFx.any && !hdr) effects += LightFxEffect(request.effects.lightFx)
+        // Mist, Anamorphic streaks, Star, Prism (on the 10-bit route too: the light is worked out on an
+        // 8-bit small copy, the frames there are already in display colours).
+        if (request.effects.lightFx.any) effects += LightFxEffect(request.effects.lightFx)
         // Steadied: each frame moved by its correction, before it is framed (as in the preview).
         request.stabilize?.let { path -> stabilizeEffect(path, request.width, request.height, request.trimStartMs)?.let { effects += it } }
         // Reframing comes after colour and texture (as in the preview) and before the dashboard.
-        if (request.frameKeys.isNotEmpty() && !request.isPhoto && !(request.reframe.fit && request.reframe.blur)) {
+        if (request.frameKeys.isNotEmpty() && !request.isPhoto && request.reframe.fit && request.reframe.blur) {
+            // A moving frame with a blurred border: the border's effect takes the framing of each moment.
+            val keys = request.frameKeys
+            val w = request.width
+            val h = request.height
+            effects += BlurFillEffect({ positionMs ->
+                reframeMatrix(app.headsup.core.frame.FrameKeys.at(request.reframe, keys, request.trimStartMs + positionMs), w, h) ?: Matrix()
+            }, out.width, out.height)
+        } else if (request.frameKeys.isNotEmpty() && !request.isPhoto) {
             // A moving frame (Ken Burns, following the subject): the framing worked out for each frame's moment.
             val keys = request.frameKeys
             val w = request.width

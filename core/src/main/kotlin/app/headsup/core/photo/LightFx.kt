@@ -23,6 +23,8 @@ object LightFx {
         val starLength: Float = 1f,
         val prism: Float = 0f,
         val prismSpread: Float = 1f,
+        /** Which way the prism's copies go, degrees from the right, clockwise on screen. */
+        val prismAngle: Float = PRISM_ANGLE,
     ) {
         val any: Boolean get() = mist > 0f || streaks > 0f || star > 0f || prism > 0f
     }
@@ -96,7 +98,7 @@ object LightFx {
         }
         if (s.prism > 0f) {
             val soft = gaussian(source(PRISM_THRESHOLD, s.prism, white), w, h, PRISM_SOFT * short, PRISM_SOFT * short)
-            val a = Math.toRadians(PRISM_ANGLE.toDouble())
+            val a = Math.toRadians(s.prismAngle.toDouble())
             for (k in 0..2) {
                 val d = PRISM_STEP * short * s.prismSpread * (k + 1)
                 val dx = (d * cos(a)).roundToInt()

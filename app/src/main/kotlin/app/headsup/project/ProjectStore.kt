@@ -629,7 +629,7 @@ internal object Json {
         .put("barsMotion", e.barsMotion.name)
         .put("barsVertical", e.barsVertical).put("barsColour", e.barsColour).putOpt("barsImage", e.barsImage).put("barsBlur", e.barsBlur)
         .put("mist", e.mist.toDouble()).put("streaks", e.streaks.toDouble()).put("streakLength", e.streakLength.toDouble())
-        .put("star", e.star.toDouble()).put("starLength", e.starLength.toDouble()).put("prism", e.prism.toDouble()).put("prismSpread", e.prismSpread.toDouble()).put("bokehOval", e.bokehOval)
+        .put("star", e.star.toDouble()).put("starLength", e.starLength.toDouble()).put("prism", e.prism.toDouble()).put("prismSpread", e.prismSpread.toDouble()).put("prismAngle", e.prismAngle.toDouble()).put("bokehOval", e.bokehOval)
         .putOpt("graph", e.graph?.name)
         .put("dashboard", e.dashboard)
 
@@ -664,6 +664,7 @@ internal object Json {
             starLength = o.optDouble("starLength", 1.0).toFloat(),
             prism = o.optDouble("prism", 0.0).toFloat(),
             prismSpread = o.optDouble("prismSpread", 1.0).toFloat(),
+            prismAngle = o.optDouble("prismAngle", app.headsup.core.photo.LightFx.PRISM_ANGLE.toDouble()).toFloat(),
             bokehOval = o.optBoolean("bokehOval", false),
             graph = GraphMetric.entries.firstOrNull { it.name == o.optStringOrNull("graph") },
             dashboard = o.optBoolean("dashboard", true),

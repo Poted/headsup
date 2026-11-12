@@ -173,7 +173,7 @@ class GradePreviewShader {
         }
         if (fx.prism > 0f) {
             val soft = blur(source(prismSource, L.PRISM_THRESHOLD, fx.prism, white), L.PRISM_SOFT * short, L.PRISM_SOFT * short)
-            val a = Math.toRadians(L.PRISM_ANGLE.toDouble())
+            val a = Math.toRadians(fx.prismAngle.toDouble())
             for (k in 0..2) {
                 val d = L.PRISM_STEP * short * fx.prismSpread * (k + 1)
                 val t = L.PRISM_TINTS[k]

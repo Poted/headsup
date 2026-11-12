@@ -20,7 +20,7 @@ import kotlin.math.roundToInt
  * The light effects (Mist, Anamorphic streaks, Star, Prism) for exported video, as the photo export
  * makes them: each frame averaged down on the GPU to a small copy, its light worked out by
  * [LightFx] (the same code as for photos), and laid back over the frame as light adds (screen),
- * drawn up smoothly. Not on the 10-bit route (its frames are not 8-bit to read back).
+ * drawn up smoothly. On the 10-bit route too: the small copy is 8-bit whatever the frames are.
  */
 @OptIn(UnstableApi::class)
 class LightFxEffect(private val settings: LightFx.Settings) : GlEffect {

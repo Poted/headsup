@@ -5352,12 +5352,13 @@ private fun EffectsPanel(state: UiState, vm: HeadsupViewModel, kind: EffectKind,
         }
         EffectKind.PRISM -> ToolSection(
             "Prism",
-            info = "A prism held before the lens: the lights repeated beside themselves, split into a rainbow's colours, down and to the right. Spread sets how far the copies go.",
+            info = "A prism held before the lens: the lights repeated beside themselves, split into a rainbow's colours. Spread sets how far the copies go, Direction which way (0° right, 90° down, 180° left, 270° up).",
         ) {
             EffectRuler(
                 listOf(
                     EffectParam("Prism", effects.prism, 0f..1f, 0.02f, 0f, percent = true) { v -> updateEffects { it.copy(prism = v) } },
                     EffectParam("Spread", effects.prismSpread, 0.3f..3f, 0.05f, 1f, format = "× %.2f") { v -> updateEffects { it.copy(prismSpread = v) } },
+                    EffectParam("Direction", effects.prismAngle, 0f..355f, 5f, app.headsup.core.photo.LightFx.PRISM_ANGLE, format = "%.0f°") { v -> updateEffects { it.copy(prismAngle = v) } },
                 ),
             )
         }
