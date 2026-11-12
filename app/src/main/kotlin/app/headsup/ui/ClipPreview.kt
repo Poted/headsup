@@ -1442,8 +1442,19 @@ fun ClipPreview(
                                 Modifier
                             } else {
                                 Modifier.pointerInput(Unit) {
+                                    // Where the finger has really taken the picture: the frame it is shown
+                                    // in snaps to the frame's lines, but the next move goes on from here,
+                                    // so a slow drag does not stick on a line it is snapped to.
+                                    var free: Reframe? = null
+                                    var lastMoveMs = 0L
                                     detectTransformGestures { _, pan, zoomChange, _ ->
-                                        val r = currentReframe
+                                        val nowMs = android.os.SystemClock.uptimeMillis()
+                                        val held = free?.takeIf { nowMs - lastMoveMs < 250L }
+                                        lastMoveMs = nowMs
+                                        // Anything set meanwhile (a ruler, a reset) other than position wins.
+                                        val r = held?.takeIf { it.zoom == currentReframe.zoom || zoomChange != 1f }?.copy(
+                                            angleDegrees = currentReframe.angleDegrees, aspect = currentReframe.aspect, fit = currentReframe.fit, mirrored = currentReframe.mirrored,
+                                        ) ?: currentReframe
                                         val g = geometryRef.value
                                         val w = g.pictureW
                                         val h = g.pictureH
@@ -1452,9 +1463,10 @@ fun ClipPreview(
                                         val a = Math.toRadians(r.angleDegrees.toDouble())
                                         val dx = (pan.x * kotlin.math.cos(a) + pan.y * kotlin.math.sin(a)).toFloat() / z * if (r.mirrored) -1f else 1f
                                         val dy = (-pan.x * kotlin.math.sin(a) + pan.y * kotlin.math.cos(a)).toFloat() / z
-                                        reframer?.invoke(
-                                            r.copy(zoom = r.zoom * zoomChange, centerX = r.centerX - dx / w, centerY = r.centerY - dy / h),
-                                        )
+                                        val next = r.copy(zoom = r.zoom * zoomChange, centerX = r.centerX - dx / w, centerY = r.centerY - dy / h)
+                                        // Kept within what the frame allows (as the screen keeps it), not snapped.
+                                        free = next.copy(zoom = next.zoom.coerceIn(next.minZoom, 4f)).clamped(g.boxW, g.boxH, w, h)
+                                        reframer?.invoke(next)
                                     }
                                 }
                             },
