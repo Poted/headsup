@@ -1522,9 +1522,10 @@ private enum class EditTab(val symbol: String, val label: String) {
     SPEED("×", "Speed"),
     STEADY("≋", "Steady"),
     FADE("◐", "Fades"),
+    // The frame: the film's shape, and how this clip sits in it.
     FRAME("▭", "Frame"),
-    // The whole film: its shape and frame rate; and its best moments.
-    TIMELINE("▤", "Timeline"),
+    // The film's frame rate; and its best moments.
+    RATE("fps", "Frame rate"),
     MOMENTS("★", "Moments"),
 }
 
@@ -1554,7 +1555,8 @@ private fun EditPanel(
                 EditTab.SPEED -> clip != null && (clip.speedChanged || clip.reversed != null)
                 EditTab.STEADY -> clip?.stabilize != null
                 EditTab.FADE -> clip != null && (clip.fadeInMs > 0 || clip.fadeOutMs > 0)
-                EditTab.TIMELINE -> state.timelineFps != null || state.frameAspect != null
+                EditTab.FRAME -> state.frameAspect != null
+                EditTab.RATE -> state.timelineFps != null
                 else -> false
             }
             CircleOption(t.symbol, t.label, selected = t == tab, modified = modified) { onTab(t) }
@@ -1580,15 +1582,12 @@ private fun EditPanel(
         EditTab.STEADY -> if (clip != null && index != null && !clip.meta.isPhoto) SteadySection(state, clip, index, vm)
         EditTab.FADE -> if (clip != null && index != null) FadeTool(clip, index, vm)
         EditTab.FRAME -> FramePanel(state, vm)
-        EditTab.TIMELINE -> {
-            TimelineShape(state, vm)
-            TimelineRate(state, vm)
-        }
+        EditTab.RATE -> TimelineRate(state, vm)
         EditTab.MOMENTS -> HighlightControls(state, vm, onShowHighlight)
     }
 }
 
-/** The film's shape (Edit › Timeline): one for every clip, like a DaVinci timeline's resolution. */
+/** The film's shape (Edit › Frame, first): one for every clip, like a DaVinci timeline's resolution. */
 @Composable
 private fun TimelineShape(state: UiState, vm: HeadsupViewModel) {
     // The timeline's frame: one shape for the whole project, like a DaVinci timeline's resolution.
@@ -5275,6 +5274,8 @@ private fun FramePanel(state: UiState, vm: HeadsupViewModel) {
         PhotoCrop(state, clip, vm)
         return
     }
+    // The film's shape first (one for every clip), then this clip in it.
+    TimelineShape(state, vm)
     val r = state.framing(clip)
     ToolSection(
         "This clip in the frame",

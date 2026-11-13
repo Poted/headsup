@@ -19,7 +19,7 @@ Główna nawigacja (dolny pasek): **Project · Edit · Adjust · Overlays · Aud
 | Zakładka | Co zawiera |
 |---|---|
 | Project | pliki, kolejność klipów, grupy kamer, zapis i wersje projektu |
-| Edit | Cut (przycinanie, podział, flagi), Speed (z kierunkiem), Steady, Fades, Frame (kadr klipu, ruch kadru: Ken Burns/Follow), Timeline (kształt i frame rate filmu), Moments |
+| Edit | Cut (przycinanie, podział, flagi), Speed (z kierunkiem), Steady, Fades, Frame (kształt filmu, kadr klipu, ruch kadru: Ken Burns/Follow), Frame rate, Moments |
 | Adjust | Layers / Keys / Applies to, potem sekcje: Looks, Light, Colour, Presence, Mixer, Film, Effects, Tools |
 | Overlays | teksty, naklejki, mapa trasy, dashboard, wykres |
 | Audio | muzyka, głośność, ducking, LUFS |
@@ -156,8 +156,8 @@ Edit      Cut       zakres (Reset = cały klip) · At the playhead · Cut inside
           Speed     Constant/Variable · Sound · Direction (Forwards/Backwards)
           Steady    As shot / Steadied / Locked · Strength · Crop
           Fades     wejście / wyjście
-          Frame     ten klip w kadrze · Geometry · Perspective · Lens · ruch kadru
-          Timeline  kształt filmu · frame rate filmu        (ustawienia całego filmu)
+          Frame     kształt filmu · ten klip w kadrze · Geometry · Perspective · Lens · ruch kadru
+          Frame rate  frame rate filmu
           Moments   najlepsze chwile z danych zegarka
 Adjust    [Layers | Keys | Applies to]  →  Mask/Adjust (przy masce) + opcje maski
           Looks     Cinematic · Harmony · Profiles · Presets
@@ -180,7 +180,7 @@ Export    preset · linia „co wyjdzie” (ustawienia w arkuszu) · Export · D
 | Adjust › Tools › Looks › przełącznik Cinematic / Profiles / My presets, a w Cinematic jeszcze Colour harmony | Adjust › **Looks** (pierwsza sekcja) › Cinematic · Harmony · Profiles · Presets, każde jedno dotknięcie od sekcji | Look to najczęstszy start (S1). Był na czwartym poziomie, pod nazwą „Tools”, z kolejnym przełącznikiem w środku. Harmony było ukryte pod Cinematic, choć to osobne narzędzie. |
 | Steady i Direction w karcie Cut | **Steady** jako osobne narzędzie Edit, **Direction** w Speed | Cut odpowiada na pytanie „który fragment”. Stabilizacja to osobna operacja; kierunek odtwarzania to cecha prędkości. |
 | Karta „Clip” z „Full clip” i „Delete clip” obok siebie | „Full clip” = **Reset karty Cut**; **Delete clip** jako akcja na dole panelu | Cofnięcie przycięcia to reset przycięcia. Usunięcie klipu to akcja na klipie, a stawianie jej obok resetu zaprasza do pomyłki. |
-| Kształt osi w Edit › Frame (z kadrem klipu), frame rate jako osobne kółko | **Edit › Timeline**: kształt i frame rate filmu razem | Ustawienia całego filmu oddzielone od ustawień jednego klipu. Frame dotyczy już tylko klipu. |
+| Kształt filmu i kadr klipu w Frame, bez kolejności | **Edit › Frame**: najpierw kształt filmu (jeden dla wszystkich klipów), pod nim ten klip w kadrze | Wszystko, co dotyczy kadru, jest w Frame; karta całego filmu stoi pierwsza i mówi o tym w ⓘ. |
 | My presets: cztery jednakowe kafle (None, Preset 1, Save this look, Manage) | wybór „On this clip” (None + presety), a pod linią małe akcje „+ Save this look” i „Manage…” | Wybór i akcja nie mogą wyglądać tak samo. |
 | Split tone jako trzy kółka (Split, Shadow hue, Light hue) | jedno kółko **Split tone**, w karcie Amount + dwa odcienie | To jedno narzędzie; trzy kółka sugerowały trzy niezależne korekty. |
 
@@ -208,7 +208,7 @@ Liczone dotknięcia od otwartego projektu z klipem (bez przewijania i bez samych
 2. Cofnięcie: *Reset* w karcie Cut (1).
 
 **S5. Kształt filmu 4:5 dla Instagrama: 3 dotknięcia**
-1. Edit › Timeline (2) › *4:5* (1).
+1. Edit › Frame (2) › *4:5* w karcie Timeline frame (1).
 
 ## 10. Do sprawdzenia w następnym przeglądzie
 
