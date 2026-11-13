@@ -65,14 +65,21 @@ class MainActivity : ComponentActivity() {
             HeadsupTheme(palette) {
                 // The logo animation plays once per launch, not on rotation.
                 var splash by rememberSaveable { mutableStateOf(savedInstanceState == null) }
-                // The editor is built once the logo is complete, so building it does not eat the animation's frames.
-                var editor by rememberSaveable { mutableStateOf(savedInstanceState != null) }
-                // The light planner covers the editor, which stays as it was beneath it.
-                var planner by rememberSaveable { mutableStateOf(false) }
+                // Which half of the app is open: 0 asks, 1 the editor, 2 the light planner. They share nothing
+                // but the phone; going back from either returns to the choice.
+                var mode by rememberSaveable { mutableStateOf(0) }
+                // The editor is built the first time it is chosen (not before, so the logo's frames stay free)
+                // and then kept, so going to the planner and back finds it as it was.
+                var editorBuilt by rememberSaveable { mutableStateOf(false) }
+                androidx.activity.compose.BackHandler(enabled = mode != 0) { mode = 0 }
                 Box {
-                    if (editor) HeadsupScreen(onPlanner = { planner = true })
-                    if (planner) app.headsup.ui.PlannerScreen(onClose = { planner = false })
-                    if (splash) SplashOverlay(onRevealed = { editor = true }) { splash = false; editor = true }
+                    if (editorBuilt) HeadsupScreen()
+                    if (mode == 2) app.headsup.ui.PlannerScreen(onBack = { mode = 0 }, onEditor = { editorBuilt = true; mode = 1 })
+                    if (mode == 0) app.headsup.ui.ModeChooser(
+                        onEditor = { editorBuilt = true; mode = 1 },
+                        onPlanner = { mode = 2 },
+                    )
+                    if (splash) SplashOverlay(onRevealed = {}) { splash = false }
                 }
             }
         }

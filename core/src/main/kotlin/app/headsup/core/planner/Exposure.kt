@@ -90,7 +90,7 @@ object Exposure {
 
     /** The listed filters whose stops fall inside [window] (so the ISO stays in range). */
     fun filtersIn(window: ClosedFloatingPointRange<Double>): List<NdFilter> =
-        NdFilter.entries.filter { it.stops >= window.start - 0.05 && it.stops <= window.endInclusive + 0.05 }
+        NdFilter.entries.filter { it.stops >= window.start - 0.025 && it.stops <= window.endInclusive + 0.025 }
 
     /** Works the exposure out for a scene of [ev] (at ISO 100). */
     fun solve(ev: Double, s: ExposureSetup): ExposureResult {

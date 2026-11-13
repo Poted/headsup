@@ -206,7 +206,7 @@ private enum class Tool(val label: String, val icon: ImageVector) {
 }
 
 @Composable
-fun HeadsupScreen(vm: HeadsupViewModel = viewModel(), onPlanner: () -> Unit = {}) {
+fun HeadsupScreen(vm: HeadsupViewModel = viewModel()) {
     val state by vm.state.collectAsStateWithLifecycle()
     val jobs by vm.exportJobs.collectAsStateWithLifecycle()
     // FIT files usually land in Downloads; videos are picked from the gallery.
@@ -724,7 +724,7 @@ fun HeadsupScreen(vm: HeadsupViewModel = viewModel(), onPlanner: () -> Unit = {}
                 when (tool) {
                     Tool.FILES -> FilesPanel(
                         state, vm, onAddVideos = addVideos, onAddFit = addFit, onAddSound = { soundPicker.launch(arrayOf("audio/*")) },
-                        onAddPhotos = addPhotos, onPlanner = onPlanner,
+                        onAddPhotos = addPhotos,
                         onShowClip = { i -> jumpTo(clipStarts[i]) },
                     )
                     Tool.EDIT -> EditPanel(
@@ -1421,7 +1421,6 @@ private fun FilesPanel(
     onAddSound: () -> Unit,
     onShowClip: (Int) -> Unit,
     onAddPhotos: () -> Unit,
-    onPlanner: () -> Unit,
 ) {
     // The open project and its files on the page; the list of all projects and the project's own
     // lists (files, sounds, activities) in sheets from the bottom, summed up by a line each.
@@ -1429,8 +1428,6 @@ private fun FilesPanel(
     var section by rememberSaveable { mutableStateOf("Video") }
     if (projects) {
         OptionsSheet("Projects", onDismiss = { projects = false }) {
-            // The light planner: sun, moon and Milky Way for any place and day, with the exposure to set.
-            AddTile(HeadsupIcons.Dashboard, "Light planner (sun, moon, exposure)", { projects = false; onPlanner() }, Modifier.fillMaxWidth())
             ProjectRow(
                 state, vm,
                 onOpen = { projects = false },

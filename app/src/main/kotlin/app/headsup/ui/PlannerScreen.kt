@@ -12,6 +12,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -61,6 +62,8 @@ import app.headsup.core.planner.Place
 import app.headsup.core.planner.Planner
 import app.headsup.core.planner.Sky
 import app.headsup.core.planner.SkyConditions
+import app.headsup.core.planner.Timelapse
+import app.headsup.core.planner.TimelapseLimits
 import java.time.LocalDate
 import java.time.ZoneOffset
 import java.time.ZonedDateTime
@@ -74,6 +77,8 @@ private class PlannerPrefs(context: Context) {
     private val p = context.getSharedPreferences("planner", Context.MODE_PRIVATE)
     fun get(k: String, d: Float) = p.getFloat(k, d)
     fun put(k: String, v: Float) = p.edit().putFloat(k, v).apply()
+    fun getString(k: String, d: String) = p.getString(k, d) ?: d
+    fun putString(k: String, v: String) = p.edit().putString(k, v).apply()
 }
 
 /**
@@ -82,8 +87,8 @@ private class PlannerPrefs(context: Context) {
  * Drag the sky to look round; move the time bar to see the light change through the day.
  */
 @Composable
-fun PlannerScreen(onClose: () -> Unit) {
-    BackHandler(onBack = onClose)
+fun PlannerScreen(onBack: () -> Unit, onEditor: () -> Unit) {
+    BackHandler(onBack = onBack)
     val context = LocalContext.current
     val prefs = remember { PlannerPrefs(context) }
     val deviceOffsetHours = remember { java.util.TimeZone.getDefault().rawOffset / 3_600_000 }
@@ -105,13 +110,25 @@ fun PlannerScreen(onClose: () -> Unit) {
     var ndIndex by remember { mutableStateOf(prefs.get("nd", 3f).roundToInt()) } // -1: the planner picks
     var isoMax by remember { mutableStateOf(prefs.get("isomax", 25_600f).toDouble()) }
     var isoMin by remember { mutableStateOf(prefs.get("isomin", 100f).toDouble()) }
+    // Timelapse: the window of the day (minutes from midnight) and the shutter the camera may use in it.
+    var tlFrom by remember { mutableStateOf(prefs.get("tlfrom", 4f * 60f)) }
+    var tlTo by remember { mutableStateOf(prefs.get("tlto", 8f * 60f)) }
+    var shutterMin by remember { mutableStateOf(prefs.get("smin", 0.5f).toDouble()) }
+    var shutterMax by remember { mutableStateOf(prefs.get("smax", 4f).toDouble()) }
+    // Saved places; reload counts the times the place was set from outside, so the typed fields follow.
+    var places by remember { mutableStateOf(readPlaces(prefs)) }
+    var placeName by remember { mutableStateOf("") }
+    var selectedPlace by remember { mutableStateOf<Int?>(null) }
+    var confirmDelete by remember { mutableStateOf(false) }
+    var reload by remember { mutableStateOf(0) }
 
-    LaunchedEffect(lat, lon, elevation, offsetHours, minute, bortle, cloud, viewAz, auto, aperture, shutter, iso, ndIndex, isoMax, isoMin) {
+    LaunchedEffect(lat, lon, elevation, offsetHours, minute, bortle, cloud, viewAz, auto, aperture, shutter, iso, ndIndex, isoMax, isoMin, tlFrom, tlTo, shutterMin, shutterMax) {
         prefs.put("lat", lat.toFloat()); prefs.put("lon", lon.toFloat()); prefs.put("elev", elevation.toFloat())
         prefs.put("utc", offsetHours.toFloat()); prefs.put("min", minute); prefs.put("bortle", bortle.toFloat())
         prefs.put("cloud", cloud); prefs.put("az", viewAz); prefs.put("auto", auto.ordinal.toFloat())
         prefs.put("ap", aperture.toFloat()); prefs.put("sh", shutter.toFloat()); prefs.put("iso", iso.toFloat())
         prefs.put("nd", ndIndex.toFloat()); prefs.put("isomax", isoMax.toFloat()); prefs.put("isomin", isoMin.toFloat())
+        prefs.put("tlfrom", tlFrom); prefs.put("tlto", tlTo); prefs.put("smin", shutterMin.toFloat()); prefs.put("smax", shutterMax.toFloat())
     }
 
     val place = Place(lat.coerceIn(-90.0, 90.0), lon.coerceIn(-180.0, 180.0), elevation)
@@ -125,7 +142,7 @@ fun PlannerScreen(onClose: () -> Unit) {
     val times = remember(place, day, offsetHours) { Sky.sunTimes(place, zone, day) }
 
     val locationPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
-        if (granted) lastKnown(context)?.let { lat = it.first; lon = it.second; elevation = it.third }
+        if (granted) lastKnown(context)?.let { lat = it.first; lon = it.second; elevation = it.third; reload++ }
     }
 
     Column(
@@ -139,14 +156,14 @@ fun PlannerScreen(onClose: () -> Unit) {
     ) {
         Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
             Text("Light planner", style = MaterialTheme.typography.titleMedium, color = HeadsupColors.Ink, modifier = Modifier.weight(1f))
-            Chip("Close", onClose)
+            Chip("Editor", onEditor)
         }
         Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             // Place and date.
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                NumberField("Latitude", lat, Modifier.weight(1f)) { lat = it.coerceIn(-90.0, 90.0) }
-                NumberField("Longitude", lon, Modifier.weight(1f)) { lon = it.coerceIn(-180.0, 180.0) }
-                NumberField("Height (m)", elevation, Modifier.weight(1f)) { elevation = it.coerceIn(-400.0, 8900.0) }
+                NumberField("Latitude", lat, reload, Modifier.weight(1f)) { lat = it.coerceIn(-90.0, 90.0) }
+                NumberField("Longitude", lon, reload, Modifier.weight(1f)) { lon = it.coerceIn(-180.0, 180.0) }
+                NumberField("Height (m)", elevation, reload, Modifier.weight(1f)) { elevation = it.coerceIn(-400.0, 8900.0) }
             }
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Chip("◀", { day = day.minusDays(1) })
@@ -160,9 +177,47 @@ fun PlannerScreen(onClose: () -> Unit) {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Chip("Use my location", {
                     val ok = context.checkSelfPermission(Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
-                    if (ok) lastKnown(context)?.let { lat = it.first; lon = it.second; elevation = it.third }
+                    if (ok) lastKnown(context)?.let { lat = it.first; lon = it.second; elevation = it.third; reload++ }
                     else locationPermission.launch(Manifest.permission.ACCESS_COARSE_LOCATION)
                 })
+            }
+
+            // Saved places: tap one to work on it; a place is its coordinates, height and time zone.
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedTextField(
+                    value = placeName, onValueChange = { placeName = it }, singleLine = true,
+                    label = { Text("Name this place", maxLines = 1) }, modifier = Modifier.weight(1f),
+                )
+                Chip("Save place", {
+                    val name = placeName.trim()
+                    if (name.isNotEmpty()) {
+                        val one = SavedPlace(name, lat, lon, elevation, offsetHours)
+                        val at = places.indexOfFirst { it.name == name }
+                        places = if (at >= 0) places.toMutableList().also { it[at] = one } else places + one
+                        selectedPlace = places.indexOfFirst { it.name == name }
+                        writePlaces(prefs, places)
+                        placeName = ""
+                    }
+                })
+            }
+            if (places.isNotEmpty()) {
+                Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    places.forEachIndexed { i, sp ->
+                        Chip((if (selectedPlace == i) "● " else "") + sp.name, {
+                            lat = sp.lat; lon = sp.lon; elevation = sp.elev; offsetHours = sp.utc
+                            selectedPlace = i; confirmDelete = false; reload++
+                        })
+                    }
+                }
+                selectedPlace?.takeIf { it in places.indices }?.let { i ->
+                    Chip(if (confirmDelete) "Tap again to delete ${places[i].name}" else "Delete ${places[i].name}", {
+                        if (confirmDelete) {
+                            places = places.filterIndexed { j, _ -> j != i }
+                            writePlaces(prefs, places)
+                            selectedPlace = null; confirmDelete = false
+                        } else confirmDelete = true
+                    })
+                }
             }
 
             // The sky: drag sideways to turn.
@@ -233,6 +288,47 @@ fun PlannerScreen(onClose: () -> Unit) {
                 ExposureWarning.IsoTooLow -> Warning("Too bright: even the lowest ISO overexposes. " +
                     (r.suggestedNd?.let { if (r.suggestionEnough) "Use ${it.label}." else "Even ${it.label} is not enough: use a faster shutter or a smaller opening too." } ?: "Use a faster shutter or a smaller opening."))
                 null -> {}
+            }
+            // Timelapse: the filter cannot be changed during it, so one filter must serve the whole window.
+            Text("Timelapse", color = HeadsupColors.Ink, style = MaterialTheme.typography.titleSmall)
+            Text(
+                "From ${hhmm(tlFrom)} to ${hhmm(tlTo)} on ${day}. Aperture ${Exposure.formatAperture(aperture)}, shutter ${Exposure.formatShutter(shutterMin)}–${Exposure.formatShutter(shutterMax)}, ISO ${isoMin.roundToInt()}–${isoMax.roundToInt()} (set above).",
+                color = HeadsupColors.TextMuted, style = MaterialTheme.typography.labelMedium,
+            )
+            Slider(value = tlFrom, onValueChange = { tlFrom = it.coerceAtMost(tlTo - 10f) }, valueRange = 0f..1429f)
+            Slider(value = tlTo, onValueChange = { tlTo = it.coerceAtLeast(tlFrom + 10f) }, valueRange = 10f..1439f)
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("Shortest shutter ${Exposure.formatShutter(shutterMin)}", color = HeadsupColors.TextMuted, style = MaterialTheme.typography.labelMedium, modifier = Modifier.weight(1f))
+                Chip("−", { shutterMin = stepStops(shutterMin, -1.0, false).coerceAtMost(shutterMax) })
+                Chip("+", { shutterMin = stepStops(shutterMin, 1.0, false).coerceAtMost(shutterMax) })
+            }
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("Longest shutter ${Exposure.formatShutter(shutterMax)}", color = HeadsupColors.TextMuted, style = MaterialTheme.typography.labelMedium, modifier = Modifier.weight(1f))
+                Chip("−", { shutterMax = stepStops(shutterMax, -1.0, false).coerceAtLeast(shutterMin) })
+                Chip("+", { shutterMax = stepStops(shutterMax, 1.0, false) })
+            }
+            val tlLimits = TimelapseLimits(aperture, shutterMin, shutterMax, isoMin, isoMax)
+            val span = (tlTo - tlFrom).coerceAtLeast(10f)
+            val stepMinutes = (span / 12f).roundToInt().coerceAtLeast(5)
+            val tl = remember(place, day, offsetHours, tlFrom, tlTo, bortle, cloud, tlLimits) {
+                Timelapse.plan(Timelapse.sample(place, conditions, dayStart + tlFrom.toLong() * 60_000L, dayStart + tlTo.toLong() * 60_000L, stepMinutes), tlLimits)
+            }
+            Text("Light in this window: EV ${"%.1f".format(Locale.US, tl.evMin)} to ${"%.1f".format(Locale.US, tl.evMax)} (${"%.1f".format(Locale.US, tl.evMax - tl.evMin)} stops); the camera covers ${"%.1f".format(Locale.US, tlLimits.rangeStops)}.",
+                color = HeadsupColors.Ink, style = MaterialTheme.typography.bodyMedium)
+            if (tl.feasible && tl.filters.isNotEmpty()) {
+                Text("Take ${tl.filters.joinToString(" or ") { it.label }} (works from ${"%.1f".format(Locale.US, tl.ndLow.coerceAtLeast(0.0))} to ${"%.1f".format(Locale.US, tl.ndHigh)} stops of filter). The rows use ${tl.chosen.label}.",
+                    color = HeadsupColors.Good, style = MaterialTheme.typography.bodyMedium)
+            } else if (tl.feasible) {
+                Warning("The range fits (${"%.1f".format(Locale.US, tl.ndLow.coerceAtLeast(0.0))}–${"%.1f".format(Locale.US, tl.ndHigh)} stops), but none of the listed filters lies in it. The rows use ${tl.chosen.label}, the nearest.")
+            } else {
+                Warning("No single filter serves this window: the light changes ${"%.1f".format(Locale.US, tl.shortfallStops)} stops more than the shutter and ISO cover. Allow a longer longest shutter, a higher top ISO, or a shorter window. The rows use ${tl.chosen.label}; red rows are out of reach.")
+            }
+            for (st in tl.steps) {
+                val c = if (st.inReach) HeadsupColors.Ink else HeadsupColors.Bad
+                Text(
+                    "${clock(st.millis, zone)}  sun ${st.sunAltitude.roundToInt()}°  EV ${"%.1f".format(Locale.US, st.ev)}  ${Exposure.formatShutter(st.shutter)}  ISO ${Exposure.snapIso(st.iso)}" + (if (st.inReach) "" else "  out of reach"),
+                    color = c, style = MaterialTheme.typography.bodySmall,
+                )
             }
             Text(
                 "The light is estimated from the sun's and moon's height, the place's height, the night sky (Bortle) and cloud. It is a planning guide: measure on the spot when you can.",
@@ -361,8 +457,9 @@ private fun Warning(text: String) {
 
 /** A number typed in, kept as typed until it parses. */
 @Composable
-private fun NumberField(label: String, value: Double, modifier: Modifier, onValue: (Double) -> Unit) {
-    var text by remember { mutableStateOf(String.format(Locale.US, "%.4f", value).trimEnd('0').trimEnd('.')) }
+private fun NumberField(label: String, value: Double, reload: Int, modifier: Modifier, onValue: (Double) -> Unit) {
+    // Kept as typed ("50." stays), and set again only when the place is set from outside (reload changes).
+    var text by remember(reload) { mutableStateOf(String.format(Locale.US, "%.4f", value).trimEnd('0').trimEnd('.')) }
     OutlinedTextField(
         value = text,
         onValueChange = { t -> text = t; t.replace(',', '.').toDoubleOrNull()?.let(onValue) },
@@ -388,4 +485,21 @@ private fun lastKnown(context: Context): Triple<Double, Double, Double>? {
     val lm = context.getSystemService(Context.LOCATION_SERVICE) as? LocationManager ?: return null
     val best = lm.getProviders(true).mapNotNull { runCatching { lm.getLastKnownLocation(it) }.getOrNull() }.maxByOrNull { it.time } ?: return null
     return Triple(best.latitude, best.longitude, if (best.hasAltitude()) best.altitude else 0.0)
+}
+
+/** A place kept by name: where it is, how high, and its time zone as whole hours from UTC. */
+private data class SavedPlace(val name: String, val lat: Double, val lon: Double, val elev: Double, val utc: Int)
+
+private fun readPlaces(p: PlannerPrefs): List<SavedPlace> = runCatching {
+    val a = org.json.JSONArray(p.getString("places", "[]"))
+    (0 until a.length()).map {
+        val o = a.getJSONObject(it)
+        SavedPlace(o.getString("n"), o.getDouble("a"), o.getDouble("o"), o.getDouble("e"), o.getInt("u"))
+    }
+}.getOrDefault(emptyList())
+
+private fun writePlaces(p: PlannerPrefs, list: List<SavedPlace>) {
+    val a = org.json.JSONArray()
+    list.forEach { a.put(org.json.JSONObject().put("n", it.name).put("a", it.lat).put("o", it.lon).put("e", it.elev).put("u", it.utc)) }
+    p.putString("places", a.toString())
 }
