@@ -9,7 +9,14 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.remember
+import androidx.compose.foundation.background
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.draw.clip
+import app.headsup.core.planner.PlannerFrame
+import app.headsup.core.planner.TimelapsePlan
+import kotlinx.coroutines.launch
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
@@ -30,7 +37,7 @@ import kotlin.math.roundToInt
  */
 @Composable
 internal fun CalculatorView(st: PlannerState) {
-    val frame = Planner.frame(st.place, st.now, st.conditions, st.setup, st.measured)
+    val frame = Planner.frame(st.place, st.now, st.conditions, st.setup, st.measured, st.activeForecast)
     val r = frame.exposure
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
         // Where and when (set in the sun view), and the hour to try.
@@ -63,6 +70,8 @@ internal fun CalculatorView(st: PlannerState) {
             Text("Cloud ${(st.cloud * 100).roundToInt()}%", color = HeadsupColors.TextMuted, style = MaterialTheme.typography.labelMedium, modifier = Modifier.padding(end = 12.dp))
             Slider(value = st.cloud, onValueChange = { st.cloud = it }, valueRange = 0f..1f, modifier = Modifier.weight(1f))
         }
+
+        WeatherSection(st)
 
         // The exposure at this hour.
         Text("Scene EV ${one(frame.ev)}  (estimated, ±1.5)", color = HeadsupColors.Ink, style = MaterialTheme.typography.titleSmall)
@@ -108,6 +117,15 @@ internal fun CalculatorView(st: PlannerState) {
             null -> {}
         }
 
+        // Both skies side by side: the one set by hand and the one the forecast gives. A forecast of cloud is sometimes wrong.
+        st.forecastHere?.let { fc ->
+            Text("The same hour under both skies", color = HeadsupColors.Ink, style = MaterialTheme.typography.titleSmall)
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                SkyCard("Cloud set by hand · ${(st.cloud * 100).roundToInt()}%", Planner.frame(st.place, st.now, st.conditions, st.setup, st.measured), Modifier.weight(1f))
+                SkyCard("Forecast · cloud ${(fc.at(st.now) * 100).roundToInt()}%", Planner.frame(st.place, st.now, st.conditions, st.setup, st.measured, fc), Modifier.weight(1f))
+            }
+        }
+
         TimelapseSection(st)
         Text(
             "The light is estimated from the sun's and moon's height, the place's height, the night sky (Bortle) and cloud. It is a planning guide: measure on the spot when you can.",
@@ -141,8 +159,9 @@ private fun TimelapseSection(st: PlannerState) {
     val stepMinutes = (span / 12f).roundToInt().coerceAtLeast(5)
     val place = st.place
     val reading = st.measured
-    val tl = remember(place, st.day, st.offsetHours, st.tlFrom, st.tlTo, st.bortle, st.cloud, limits, reading) {
-        Timelapse.plan(Timelapse.sample(place, st.conditions, st.dayStart + st.tlFrom.toLong() * 60_000L, st.dayStart + st.tlTo.toLong() * 60_000L, stepMinutes, st.measured), limits)
+    val forecast = st.activeForecast
+    val tl = remember(place, st.day, st.offsetHours, st.tlFrom, st.tlTo, st.bortle, st.cloud, limits, reading, forecast) {
+        Timelapse.plan(Timelapse.sample(place, st.conditions, st.dayStart + st.tlFrom.toLong() * 60_000L, st.dayStart + st.tlTo.toLong() * 60_000L, stepMinutes, st.measured, forecast), limits)
     }
     Text("Light in this window: EV ${one(tl.evMin)} to ${one(tl.evMax)} (${one(tl.evMax - tl.evMin)} stops); the camera covers ${one(limits.rangeStops)}.",
         color = HeadsupColors.Ink, style = MaterialTheme.typography.bodyMedium)
@@ -154,11 +173,60 @@ private fun TimelapseSection(st: PlannerState) {
     } else {
         Warning("No single filter serves this window: the light changes ${one(tl.shortfallStops)} stops more than the shutter and ISO cover. Allow a longer longest shutter, a higher top ISO, or a shorter window. The rows use ${tl.chosen.label}; red rows are out of reach.")
     }
+    // With a forecast loaded: what the other sky would say about the filter.
+    st.forecastHere?.let { fc ->
+        val handPlan = Timelapse.plan(Timelapse.sample(place, st.conditions, st.dayStart + st.tlFrom.toLong() * 60_000L, st.dayStart + st.tlTo.toLong() * 60_000L, stepMinutes, st.measured), limits)
+        val fcPlan = Timelapse.plan(Timelapse.sample(place, st.conditions, st.dayStart + st.tlFrom.toLong() * 60_000L, st.dayStart + st.tlTo.toLong() * 60_000L, stepMinutes, st.measured, fc), limits)
+        Text("Cloud set by hand: ${planSummary(handPlan)}", color = HeadsupColors.Ink, style = MaterialTheme.typography.bodyMedium)
+        Text("Under the forecast: ${planSummary(fcPlan)}", color = HeadsupColors.Ink, style = MaterialTheme.typography.bodyMedium)
+        if (handPlan.chosen != fcPlan.chosen) Text("The two skies would have you take different filters: choose by how much you trust the forecast.", color = HeadsupColors.Warn, style = MaterialTheme.typography.labelMedium)
+    }
     for (step in tl.steps) {
         val c = if (step.inReach) HeadsupColors.Ink else HeadsupColors.Bad
         Text(
             "${clock(step.millis, st.zone)}  sun ${step.sunAltitude.roundToInt()}°  EV ${one(step.ev)}  ${Exposure.formatShutter(step.shutter)}  ISO ${Exposure.snapIso(step.iso)}" + (if (step.inReach) "" else "  out of reach"),
             color = c, style = MaterialTheme.typography.bodySmall,
         )
+    }
+}
+
+private fun planSummary(p: TimelapsePlan): String = when {
+    p.feasible && p.filters.isNotEmpty() -> "take ${p.filters.joinToString(" or ") { it.label }} (light ${one(p.evMin)} to ${one(p.evMax)} EV)"
+    p.feasible -> "the range fits but no listed filter is in it (nearest ${p.chosen.label})"
+    else -> "no single filter, short by ${one(p.shortfallStops)} stops"
+}
+
+/** The cloud: set by hand or from the forecast, with the forecast fetched on request and shown hour by hour. */
+@Composable
+private fun WeatherSection(st: PlannerState) {
+    val scope = rememberCoroutineScope()
+    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text("Sky", color = HeadsupColors.TextMuted, style = MaterialTheme.typography.labelMedium, modifier = Modifier.weight(1f))
+        Chip("By hand", { st.useForecast = false }, selected = !st.useForecast)
+        Chip("Forecast", { st.useForecast = true }, selected = st.useForecast)
+        Chip("Get forecast", { scope.launch { st.fetchForecast() } })
+    }
+    if (st.forecastStatus.isNotEmpty()) Text(st.forecastStatus, color = HeadsupColors.TextMuted, style = MaterialTheme.typography.labelSmall)
+    val fc = st.forecastHere
+    if (st.useForecast && fc == null) Warning("No forecast for this place and day yet, so the cloud set by hand is used. Tap Get forecast.")
+    if (fc != null) {
+        val hours = (0..21 step 3).joinToString(" · ") { h -> "${String.format("%02d", h)}h ${(fc.at(st.dayStart + h * 3_600_000L) * 100).roundToInt()}%" }
+        Text("Forecast cloud, local time: $hours", color = HeadsupColors.TextMuted, style = MaterialTheme.typography.labelSmall)
+        Text("A forecast of cloud is sometimes wrong (cloud shown, a clear sky found). Both skies are shown below; the cloud slider sets the one by hand.", color = HeadsupColors.TextMuted, style = MaterialTheme.typography.labelSmall)
+    }
+}
+
+/** One sky's answer for the hour: its EV and the settings. */
+@Composable
+private fun SkyCard(title: String, f: PlannerFrame, modifier: Modifier) {
+    val e = f.exposure
+    Column(modifier.clip(RoundedCornerShape(12.dp)).background(HeadsupColors.SurfaceHigh).padding(10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Text(title, color = HeadsupColors.TextMuted, style = MaterialTheme.typography.labelSmall)
+        Text("EV ${one(f.ev)}", color = HeadsupColors.Ink, style = MaterialTheme.typography.titleSmall)
+        Text(
+            "${Exposure.formatAperture(e.aperture)} · ${Exposure.formatShutter(e.shutter)} · ISO ${Exposure.snapIso(e.iso)} · ${e.nd.label}",
+            color = if (e.warning != null) HeadsupColors.Bad else HeadsupColors.Ink, style = MaterialTheme.typography.bodySmall,
+        )
+        if (e.warning != null) Text("out of the camera's reach", color = HeadsupColors.Bad, style = MaterialTheme.typography.labelSmall)
     }
 }

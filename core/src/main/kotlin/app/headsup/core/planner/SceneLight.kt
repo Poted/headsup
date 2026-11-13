@@ -63,9 +63,14 @@ object SceneLight {
         return log2(max(total, 1e-9))
     }
 
-    /** The light at [epochMillis] when the light at [baseMillis] was measured as [measuredEv]: the measure moved by the model's change. */
-    fun relative(place: Place, baseMillis: Long, measuredEv: Double, epochMillis: Long, conditions: SkyConditions = SkyConditions()): Double =
-        measuredEv + ev(place, epochMillis, conditions) - ev(place, baseMillis, conditions)
+    /**
+     * The light at [epochMillis] when the light at [baseMillis] was measured as [measuredEv]: the measure moved by the model's
+     * change. [baseConditions] are the sky at the time of the measure; [conditions] the sky expected at [epochMillis].
+     */
+    fun relative(
+        place: Place, baseMillis: Long, measuredEv: Double, epochMillis: Long,
+        conditions: SkyConditions = SkyConditions(), baseConditions: SkyConditions = conditions,
+    ): Double = measuredEv + ev(place, epochMillis, conditions) - ev(place, baseMillis, baseConditions)
 
     /** A plain name for the light: Day, Golden hour, Blue hour, Twilight, Night. */
     fun phase(sunAltitude: Double): String = when {

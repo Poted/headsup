@@ -16,7 +16,7 @@ auto, warnings with a suggested filter, the filter window for a held shutter), `
 of it for one moment, optionally from a measured EV), `Timelapse` (the filter cannot change during
 a timelapse: from the light's span over a window, the filter range that one filter must lie in,
 and the shutter and ISO at each moment; shutter first, at the lowest ISO), `WebMercator` (map
-pixels from latitude and longitude, for the map), `Ar` (the phone's attitude and a direction in the
+pixels from latitude and longitude, for the map), `Weather` (`CloudForecast`, hourly cloud moved smoothly between hours; `OpenMeteo` asks for and reads the cloud cover), `Ar` (the phone's attitude and a direction in the
 sky to a point on the screen, and the lens's focal length in pixels).
 
 `:app` `ui/`: `PlannerScreen` (the host: tabs Sun / Live / Calculator, button to the editor),
@@ -77,9 +77,20 @@ and ND ≤ EVmin + log2(ISOmax·shutterMax/(100·N²)). If the lower bound is ab
 filter serves the window and the plan says by how many stops. The shortest shutter sets how much
 the day is blurred, the longest is limited by the interval.
 
+## Cloud: by hand, forecast, or both
+
+The sky's cloud is set by hand (a slider) or taken from a forecast (Open-Meteo, no key, hourly
+total cloud cover, fetched on request for the place and day and kept on the phone). A forecast of
+cloud is sometimes wrong, so it is never silent: "By hand" / "Forecast" chooses which the plan
+uses, and once a forecast is loaded the calculator shows both skies side by side for the hour
+(EV and settings) and, for a timelapse, the filter each would have you take, with a note when they
+differ. A reading taken with the camera was made under the cloud set by hand, so the forecast moves
+it by the difference. A forecast is used only while it is for the place (to 0.1°) and day shown.
+Open-Meteo's free service is for non-commercial use and reaches about two weeks ahead.
+
 ## Network
 
-The planner is the only part with network use (permission INTERNET): the map's tiles from
+The planner is the only part with network use (permission INTERNET): the weather forecast, and the map's tiles from
 OpenStreetMap's own tile server, with its credit on the map and an identifying user agent, kept in
 the cache folder so a place seen once can be seen again with no signal. That server's policy is
 for light use; for a store release use a tile provider with a key. The editor uses no network.
@@ -93,6 +104,6 @@ for light use; for a store release use a tile provider with a key. The editor us
    Needs data fetched or bundled.
 4. [done] Map with the pin, the cone for the way the phone looks, and the sun's rise, set and
    current directions. The cone follows the dragged sky now; it will follow the compass in live view.
-5. Cloud forecast (Open-Meteo): optional, shown beside the clear-sky result, with a manual cloud
-   slider, since a forecast of cloud is sometimes wrong.
+5. [done] Cloud forecast (Open-Meteo): optional, shown beside the by-hand result, with the manual
+   cloud slider kept.
 6. Saved plans (a place with its timelapse settings); saved places exist already.

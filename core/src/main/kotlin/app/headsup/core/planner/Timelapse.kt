@@ -86,15 +86,17 @@ object Timelapse {
         return TimelapsePlan(evMin, evMax, w.start, w.endInclusive, feasible, listed, chosen, shortfall, steps)
     }
 
-    /** The light of a place every [stepMinutes] from [fromMillis] to [toMillis]; with [measured], worked from the camera's reading. */
+    /** The light of a place every [stepMinutes] from [fromMillis] to [toMillis]; with [measured], worked from the camera's reading; with a [forecast], under its clouds. */
     fun sample(
         place: Place, conditions: SkyConditions, fromMillis: Long, toMillis: Long, stepMinutes: Int, measured: Measured? = null,
+        forecast: CloudForecast? = null,
     ): List<Triple<Long, Double, Double>> {
         val out = ArrayList<Triple<Long, Double, Double>>()
         var t = fromMillis
         val step = stepMinutes.coerceAtLeast(1) * 60_000L
         while (t <= toMillis) {
-            val ev = if (measured == null) SceneLight.ev(place, t, conditions) else SceneLight.relative(place, measured.atMillis, measured.ev, t, conditions)
+            val sky = forecast?.let { conditions.copy(cloud = it.at(t)) } ?: conditions
+            val ev = if (measured == null) SceneLight.ev(place, t, sky) else SceneLight.relative(place, measured.atMillis, measured.ev, t, sky, conditions)
             out += Triple(t, ev, Sky.sun(place, t).altitude)
             t += step
         }

@@ -5,14 +5,21 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import app.headsup.core.planner.AutoSetting
+import app.headsup.core.planner.CloudForecast
 import app.headsup.core.planner.CameraLimits
 import app.headsup.core.planner.ExposureSetup
 import app.headsup.core.planner.NdFilter
+import app.headsup.core.planner.OpenMeteo
 import app.headsup.core.planner.Place
 import app.headsup.core.planner.SkyConditions
 import app.headsup.core.planner.Measured
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import java.net.HttpURLConnection
+import java.net.URL
 import java.time.LocalDate
 import java.time.ZoneOffset
+import java.util.Locale
 import kotlin.math.abs
 import kotlin.math.roundToInt
 import kotlin.reflect.KProperty
@@ -69,6 +76,52 @@ internal class PlannerState(context: Context) {
     var tlTo by Saved(prefs.get("tlto", 8f * 60f)) { prefs.put("tlto", it) }
     var shutterMin by Saved(prefs.get("smin", 0.5f).toDouble()) { prefs.put("smin", it.toFloat()) }
     var shutterMax by Saved(prefs.get("smax", 4f).toDouble()) { prefs.put("smax", it.toFloat()) }
+
+    /** True when the plan is worked under the forecast's clouds; false when under the cloud set by hand. */
+    var useForecast by Saved(prefs.get("useforecast", 0f) > 0.5f) { prefs.put("useforecast", if (it) 1f else 0f) }
+    /** The last forecast fetched, and the place and day it is for. It is kept, so a place seen once has its forecast with no signal. */
+    var forecast by mutableStateOf(OpenMeteo.parse(prefs.getString("fc_json", "")))
+    private var forecastKey by mutableStateOf(prefs.getString("fc_key", ""))
+    /** What the last fetch said, if it went wrong or is going on. */
+    var forecastStatus by mutableStateOf("")
+
+    private fun key() = String.format(Locale.US, "%.1f|%.1f|%s", lat, lon, day)
+
+    /** The forecast, while it is for this place and day. */
+    val forecastHere: CloudForecast? get() = forecast?.takeIf { forecastKey == key() }
+
+    /** The forecast the plan is worked under: only when chosen, and only when it is for this place and day. */
+    val activeForecast: CloudForecast? get() = if (useForecast) forecastHere else null
+
+    /** Asks the weather service for the cloud cover of this place and day. */
+    suspend fun fetchForecast() {
+        val k = key()
+        val url = OpenMeteo.url(lat, lon, day)
+        forecastStatus = "Loading the forecast…"
+        val body = withContext(Dispatchers.IO) {
+            runCatching {
+                val c = URL(url).openConnection() as HttpURLConnection
+                c.connectTimeout = 8000
+                c.readTimeout = 8000
+                c.setRequestProperty("User-Agent", "SweetSpotPlanner/1.0 (Android)")
+                try {
+                    if (c.responseCode == 200) c.inputStream.bufferedReader().use { it.readText() } else null
+                } finally {
+                    c.disconnect()
+                }
+            }.getOrNull()
+        }
+        val parsed = body?.let { OpenMeteo.parse(it) }
+        if (parsed != null && body != null) {
+            forecast = parsed
+            forecastKey = k
+            prefs.putString("fc_json", body)
+            prefs.putString("fc_key", k)
+            forecastStatus = ""
+        } else {
+            forecastStatus = "No forecast for this place and day: no signal, or too far ahead (about two weeks)."
+        }
+    }
 
     var places by mutableStateOf(readPlaces(prefs))
     var selectedPlace by mutableStateOf<Int?>(null)

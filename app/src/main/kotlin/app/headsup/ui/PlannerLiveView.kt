@@ -283,7 +283,7 @@ internal fun LiveView(st: PlannerState, onLocate: () -> Unit, modifier: Modifier
                 Modifier.align(Alignment.BottomCenter).fillMaxWidth().background(Color(0xB3000000)).padding(12.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                val frame = Planner.frame(place, st.now, st.conditions, st.setup, st.measured)
+                val frame = Planner.frame(place, st.now, st.conditions, st.setup, st.measured, st.activeForecast)
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Chip("◀", { st.day = st.day.minusDays(1) })
                     Text("${hhmm(st.minute)} · ${st.day}", color = Color.White, style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f))
