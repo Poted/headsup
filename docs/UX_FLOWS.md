@@ -19,8 +19,8 @@ Główna nawigacja (dolny pasek): **Project · Edit · Adjust · Overlays · Aud
 | Zakładka | Co zawiera |
 |---|---|
 | Project | pliki, kolejność klipów, grupy kamer, zapis i wersje projektu |
-| Edit | Cut (przycinanie, podział, Steady, Direction), Speed, Fades (i przejścia), Frame (kadr, kształt osi, ruch kadru: Ken Burns/Follow), Frame rate, Moments |
-| Adjust | korekty kolorów w sekcjach: Light, Presence, Colour, Mixer, Film, Effects, Looks, Tools; cele: Clip / Group / All / Mask |
+| Edit | Cut (przycinanie, podział, flagi), Speed (z kierunkiem), Steady, Fades, Frame (kształt filmu, kadr klipu, ruch kadru: Ken Burns/Follow), Frame rate, Moments |
+| Adjust | Layers / Keys / Applies to, potem sekcje: Looks, Light, Colour, Presence, Mixer, Film, Effects, Tools |
 | Overlays | teksty, naklejki, mapa trasy, dashboard, wykres |
 | Audio | muzyka, głośność, ducking, LUFS |
 | Export | presety (Vertical, YouTube), rozdzielczość, kodek, 10-bit/HLG |
@@ -46,8 +46,8 @@ góry podglądu.
 1. Nowy projekt Video → wybór 3–5 klipów.
 2. Edit › Cut: przycięcie; Speed: 0.25× dla ujęcia 120 fps.
 3. Export preset **Vertical** (9:16, 30 fps) — najlepiej już na starcie, bo zmienia kadr.
-4. Adjust › Looks › Cinematic: **Analyse clip** → aplikacja proponuje 3 looki → wybór →
-   suwak Strength.
+4. Adjust › Looks › Cinematic: **Analyse clip** → aplikacja proponuje 3 looki (obwódka) →
+   wybór → suwak Strength.
 5. Overlays: tekst. Audio: muzyka.
 6. Export.
 
@@ -141,3 +141,81 @@ Propozycje, nie decyzje:
 - Spójny model cofania i „None” dla wszystkiego, co nakłada cały wygląd.
 - Spójny język opisów (ⓘ) i komunikatów: co to robi i co z tego wynika dla użytkownika.
 - Lista miejsc, gdzie gesty się gryzą, i propozycja reguł.
+
+## 7. Mapa ekranów po przeglądzie IA (listopad 2026, po 1.0.0)
+
+Zasada: **zakładka → sekcja → narzędzie**, najwyżej trzy poziomy, a każdy poziom grupuje według
+tego, co użytkownik chce zrobić, a nie według tego, jak to działa w kodzie. W każdym panelu ta
+sama anatomia: zakres → wybór (kółka/zakładki) → karty (tytuł, ⓘ, Reset) → akcje panelu na dole.
+
+```
+Project   nazwa projektu + [przełącz projekt] [album] [nazwa] [ustawienia]
+          Photos/Video · Sound · Activity   (dodawanie + lista na stronie)
+Edit      Cut       zakres (Reset = cały klip) · At the playhead · Cut inside the shot · Flags
+                    [Delete clip na dole panelu]
+          Speed     Constant/Variable · Sound · Direction (Forwards/Backwards)
+          Steady    As shot / Steadied / Locked · Strength · Crop
+          Fades     wejście / wyjście
+          Frame     kształt filmu · ten klip w kadrze · Geometry · Perspective · Lens · ruch kadru
+          Frame rate  frame rate filmu
+          Moments   najlepsze chwile z danych zegarka
+Adjust    [Layers | Keys | Applies to]  →  Mask/Adjust (przy masce) + opcje maski
+          Looks     Cinematic · Harmony · Profiles · Presets
+          Light     Exposure … Roll-off · Curve
+          Colour    Temperature … Skin
+          Presence  Texture · Clarity · Dehaze · Defringe
+          Mixer     Colour mixer · Point colour · Hue curves · Channels · B&W · Calibration
+          Film      Split tone · Tame · Vignette · Grading · Printer lights
+          Effects   Bokeh · Grain · Glow · Halation · Mist · Anamorphic · Star · Prism · Lens · Gate weave · Bars
+          Tools     LUT · Shot match · Blend in
+Overlays  Text · Stickers · Route map · Dashboard · Graph   (listy dodanych w arkuszu)
+Audio     dźwięk klipów · wybrany dźwięk · Level / Fade in / Fade out
+Export    preset · linia „co wyjdzie” (ustawienia w arkuszu) · Export · Dashboard only
+```
+
+## 8. Co zmieniono w tym przeglądzie i dlaczego
+
+| Było | Jest | Dlaczego |
+|---|---|---|
+| Adjust › Tools › Looks › przełącznik Cinematic / Profiles / My presets, a w Cinematic jeszcze Colour harmony | Adjust › **Looks** (pierwsza sekcja) › Cinematic · Harmony · Profiles · Presets, każde jedno dotknięcie od sekcji | Look to najczęstszy start (S1). Był na czwartym poziomie, pod nazwą „Tools”, z kolejnym przełącznikiem w środku. Harmony było ukryte pod Cinematic, choć to osobne narzędzie. |
+| Steady i Direction w karcie Cut | **Steady** jako osobne narzędzie Edit, **Direction** w Speed | Cut odpowiada na pytanie „który fragment”. Stabilizacja to osobna operacja; kierunek odtwarzania to cecha prędkości. |
+| Karta „Clip” z „Full clip” i „Delete clip” obok siebie | „Full clip” = **Reset karty Cut**; **Delete clip** jako akcja na dole panelu | Cofnięcie przycięcia to reset przycięcia. Usunięcie klipu to akcja na klipie, a stawianie jej obok resetu zaprasza do pomyłki. |
+| Kształt filmu i kadr klipu w Frame, bez kolejności | **Edit › Frame**: najpierw kształt filmu (jeden dla wszystkich klipów), pod nim ten klip w kadrze | Wszystko, co dotyczy kadru, jest w Frame; karta całego filmu stoi pierwsza i mówi o tym w ⓘ. |
+| My presets: cztery jednakowe kafle (None, Preset 1, Save this look, Manage) | wybór „On this clip” (None + presety), a pod linią małe akcje „+ Save this look” i „Manage…” | Wybór i akcja nie mogą wyglądać tak samo. |
+| Split tone jako trzy kółka (Split, Shadow hue, Light hue) | jedno kółko **Split tone**, w karcie Amount + dwa odcienie | To jedno narzędzie; trzy kółka sugerowały trzy niezależne korekty. |
+
+## 9. Flow krok po kroku (stan po przeglądzie)
+
+Liczone dotknięcia od otwartego projektu z klipem (bez przewijania i bez samych zmian suwaków).
+
+**S1. Filmowy look do Reelsa: 7 dotknięć**
+1. Export › preset *Reels · TikTok · Shorts* (2) – ustawia 9:16 i 30 fps.
+2. Adjust › Looks › Cinematic (3) – sekcja Looks jest pierwsza.
+3. *Analyse clip* (1) → wybór looku z obwódką (1) → suwak Strength.
+
+**S2. Stabilizacja i zwolnienie ujęcia: 5 dotknięć**
+1. Edit › Steady › *Steadied* (3).
+2. Edit › Speed › *0.5×* (2) – kierunek (Backwards) w tej samej karcie.
+
+**S3. Album: jeden look na zaznaczone zdjęcia: 8 dotknięć**
+1. Adjust › Looks › Presets (3) › *+ Save this look* (1) → nazwa (1).
+2. Przełącz zdjęcie (1) → Presets › wybór presetu (1). Dla wielu zdjęć naraz: zaznacz je w
+   albumie, potem Tools › Shot match › *Match marked* (preset jest własnością jednego zdjęcia,
+   więc Applies to › All go nie rozsyła).
+
+**S4. Przycięcie klipu i powrót do całości: 4 dotknięcia**
+1. Edit › Cut (2) → *Start here* / *End here* (1).
+2. Cofnięcie: *Reset* w karcie Cut (1).
+
+**S5. Kształt filmu 4:5 dla Instagrama: 3 dotknięcia**
+1. Edit › Frame (2) › *4:5* w karcie Timeline frame (1).
+
+## 10. Do sprawdzenia w następnym przeglądzie
+
+- **Dashboard › Sync**: dopasowanie danych zegarka dotyczy też tekstów i mapy, a nie tylko
+  dashboardu. Rozważyć przeniesienie do Project › Activity.
+- **Vignette** jest w Film (bo to korekta obrazu), a Lightroom trzyma ją w Effects. Zostaje,
+  dopóki Effects to wyłącznie efekty nakładane na obraz.
+- **Undo w Shot match i dopasowaniu grupy**: relikt sesji; globalne ↶ robi to samo.
+- **Domyślna sekcja Adjust**: Looks jest pierwsza, ale Adjust otwiera się na ostatniej
+  używanej korekcie (dla nowego projektu: Exposure).
