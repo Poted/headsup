@@ -104,13 +104,14 @@ fun PlannerScreen(onClose: () -> Unit) {
     var iso by remember { mutableStateOf(prefs.get("iso", 100f).toDouble()) }
     var ndIndex by remember { mutableStateOf(prefs.get("nd", 3f).roundToInt()) } // -1: the planner picks
     var isoMax by remember { mutableStateOf(prefs.get("isomax", 25_600f).toDouble()) }
+    var isoMin by remember { mutableStateOf(prefs.get("isomin", 100f).toDouble()) }
 
-    LaunchedEffect(lat, lon, elevation, offsetHours, minute, bortle, cloud, viewAz, auto, aperture, shutter, iso, ndIndex, isoMax) {
+    LaunchedEffect(lat, lon, elevation, offsetHours, minute, bortle, cloud, viewAz, auto, aperture, shutter, iso, ndIndex, isoMax, isoMin) {
         prefs.put("lat", lat.toFloat()); prefs.put("lon", lon.toFloat()); prefs.put("elev", elevation.toFloat())
         prefs.put("utc", offsetHours.toFloat()); prefs.put("min", minute); prefs.put("bortle", bortle.toFloat())
         prefs.put("cloud", cloud); prefs.put("az", viewAz); prefs.put("auto", auto.ordinal.toFloat())
         prefs.put("ap", aperture.toFloat()); prefs.put("sh", shutter.toFloat()); prefs.put("iso", iso.toFloat())
-        prefs.put("nd", ndIndex.toFloat()); prefs.put("isomax", isoMax.toFloat())
+        prefs.put("nd", ndIndex.toFloat()); prefs.put("isomax", isoMax.toFloat()); prefs.put("isomin", isoMin.toFloat())
     }
 
     val place = Place(lat.coerceIn(-90.0, 90.0), lon.coerceIn(-180.0, 180.0), elevation)
@@ -119,7 +120,7 @@ fun PlannerScreen(onClose: () -> Unit) {
     val now = dayStart + minute.toLong() * 60_000L
     val conditions = SkyConditions(bortle, cloud.toDouble())
     val nd = if (ndIndex < 0) null else NdFilter.entries[ndIndex.coerceIn(0, NdFilter.entries.size - 1)]
-    val setup = ExposureSetup(auto, aperture, shutter, iso, nd, CameraLimits(100.0, isoMax))
+    val setup = ExposureSetup(auto, aperture, shutter, iso, nd, CameraLimits(isoMin, isoMax))
     val frame = Planner.frame(place, now, conditions, setup)
     val times = remember(place, day, offsetHours) { Sky.sunTimes(place, zone, day) }
 
@@ -207,9 +208,23 @@ fun PlannerScreen(onClose: () -> Unit) {
                 Chip("▶", { ndIndex = ((if (ndIndex < 0) r.nd.ordinal else ndIndex) + 1).coerceAtMost(NdFilter.entries.size - 1) })
             }
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("Highest ISO of the camera: ${isoMax.roundToInt()}", color = HeadsupColors.TextMuted, style = MaterialTheme.typography.labelMedium, modifier = Modifier.weight(1f))
-                Chip("−", { isoMax = (isoMax / 2).coerceAtLeast(800.0) })
-                Chip("+", { isoMax = (isoMax * 2).coerceAtMost(102_400.0) })
+                Text("ISO range: ${isoMin.roundToInt()}–${isoMax.roundToInt()}", color = HeadsupColors.TextMuted, style = MaterialTheme.typography.labelMedium, modifier = Modifier.weight(1f))
+                Chip("max −", { isoMax = (isoMax / 2).coerceAtLeast(maxOf(800.0, isoMin)) })
+                Chip("max +", { isoMax = (isoMax * 2).coerceAtMost(102_400.0) })
+                Chip("min −", { isoMin = (isoMin / 2).coerceAtLeast(50.0) })
+                Chip("min +", { isoMin = (isoMin * 2).coerceAtMost(isoMax) })
+            }
+            // With the shutter and aperture held: which filters keep the ISO inside its range.
+            if (auto == AutoSetting.Iso) {
+                val window = Exposure.ndWindow(frame.ev, aperture, shutter, CameraLimits(isoMin, isoMax))
+                val fits = Exposure.filtersIn(window)
+                Text(
+                    "At ${Exposure.formatAperture(aperture)} and ${Exposure.formatShutter(shutter)}, ISO ${isoMin.roundToInt()}–${isoMax.roundToInt()} needs " +
+                        (if (window.endInclusive < 0) "no filter (too dim even bare)"
+                        else "${"%.1f".format(Locale.US, window.start.coerceAtLeast(0.0))}–${"%.1f".format(Locale.US, window.endInclusive)} stops of filter" +
+                            (if (fits.isEmpty()) ": none of the listed filters" else ": " + fits.joinToString(" or ") { it.label })),
+                    color = HeadsupColors.Ink, style = MaterialTheme.typography.bodyMedium,
+                )
             }
             // Out of the camera's reach: red, and what to change.
             when (r.warning) {

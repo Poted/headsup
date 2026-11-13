@@ -78,6 +78,20 @@ object Exposure {
     fun apertureFor(ev: Double, shutter: Double, iso: Double, ndStops: Double): Double =
         sqrt(iso * shutter * 2.0.pow(ev) / (100.0 * 2.0.pow(ndStops)))
 
+    /**
+     * The neutral density, in stops, that keeps the ISO within the camera's range at this aperture and
+     * shutter: from the least (ISO at its highest) to the most (ISO at its lowest). Negative stops
+     * mean the light is too dim even without a filter. Answers "what filter for 1 s and ISO 100–3200?".
+     */
+    fun ndWindow(ev: Double, aperture: Double, shutter: Double, limits: CameraLimits): ClosedFloatingPointRange<Double> {
+        val bare = isoFor(ev, aperture, shutter, 0.0)
+        return log2(limits.isoMin / bare)..log2(limits.isoMax / bare)
+    }
+
+    /** The listed filters whose stops fall inside [window] (so the ISO stays in range). */
+    fun filtersIn(window: ClosedFloatingPointRange<Double>): List<NdFilter> =
+        NdFilter.entries.filter { it.stops >= window.start - 0.05 && it.stops <= window.endInclusive + 0.05 }
+
     /** Works the exposure out for a scene of [ev] (at ISO 100). */
     fun solve(ev: Double, s: ExposureSetup): ExposureResult {
         val fixedNd = s.nd

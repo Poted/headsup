@@ -77,4 +77,21 @@ class ExposureTest {
         assertEquals(3200, Exposure.snapIso(3345.0))
         assertEquals(400, Exposure.snapIso(380.0))
     }
+
+    @Test fun ndWindowForOneSecondAndIsoOneHundredToThirtyTwoHundred() {
+        // EV 10 at f/2.8: the bare ISO is 100·7.84/(1·1024) = 0.77, so ND must be log2(100/0.77) = 7.0 to 12.0 stops.
+        val w = Exposure.ndWindow(10.0, 2.8, 1.0, CameraLimits(100.0, 3200.0))
+        assertEquals(7.0, w.start, 0.05)
+        assertEquals(12.0, w.endInclusive, 0.05)
+        assertEquals(listOf(NdFilter.Nd1000), Exposure.filtersIn(w))
+        // At that filter the ISO sits inside the range.
+        val iso = Exposure.isoFor(10.0, 2.8, 1.0, NdFilter.Nd1000.stops)
+        assertTrue(iso in 100.0..3200.0, "iso $iso")
+    }
+
+    @Test fun ndWindowIsNegativeWhenTheLightIsTooDimEvenBare() {
+        val w = Exposure.ndWindow(-5.0, 2.8, 1.0, CameraLimits(100.0, 3200.0))
+        assertTrue(w.endInclusive < 0.0)
+        assertEquals(emptyList(), Exposure.filtersIn(w))
+    }
 }
