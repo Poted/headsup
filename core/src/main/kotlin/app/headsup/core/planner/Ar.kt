@@ -66,6 +66,17 @@ object Ar {
         return scale * 0.5 / tan(longSideFov * RAD / 2)
     }
 
+    /**
+     * The correction for a phone whose compass or tilt is off, found by aiming the middle of the
+     * picture at a body whose true place is known (the sun, the moon). [look] is where the phone
+     * thinks it looks (from magnetic north), [declination] the place's, [body] where the body truly is.
+     * Returns the compass correction (added to the true heading's reading, degrees) and the tilt correction.
+     */
+    fun alignment(look: SkyPoint, declination: Double, body: SkyPoint): Pair<Double, Double> {
+        val compass = ((body.azimuth - (look.azimuth + declination) + 540.0) % 360.0) - 180.0
+        return compass to (body.altitude - look.altitude)
+    }
+
     /** The field of view of a sensor side of [sensorSide] mm behind a lens of [focalLength] mm, in degrees. */
     fun fieldOfView(sensorSide: Double, focalLength: Double): Double = 2 * atan(sensorSide / (2 * focalLength)) / RAD
 }

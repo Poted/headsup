@@ -242,9 +242,57 @@ private fun TimesPanel(st: PlannerState) {
     line("Milky Way centre, dark", spans(milky.dark), MilkyBlue)
     line("… and no moon", spans(milky.moonless), MilkyBlue)
     Text(
-        "Milky Way: its centre at least 10° up while the sky is fully dark (sun 18° down), in the night after this day; \"no moon\" also needs the moon down or under a quarter lit.",
+        "Milky Way: its centre at least 5° up while the sky is fully dark (sun 18° down), in the night after this day; \"no moon\" also needs the moon down or under a quarter lit.",
         color = HeadsupColors.TextMuted, style = MaterialTheme.typography.labelSmall,
     )
+
+    // The moon's phases from this day.
+    Text("Moon phases", color = HeadsupColors.Ink, style = MaterialTheme.typography.titleSmall)
+    val phases = remember(st.day, st.offsetHours) { Sky.moonPhases(st.dayStart, 30) }
+    for (p in phases) {
+        val t = java.time.Instant.ofEpochMilli(p.millis).atZone(zone)
+        line(p.name, "${t.toLocalDate()} ${String.format(java.util.Locale.US, "%02d:%02d", t.hour, t.minute)}")
+    }
+
+    // The best nights for the Milky Way in the year from this day.
+    val scope = rememberCoroutineScope()
+    var season by remember(key) { mutableStateOf<List<Sky.MilkyWayScore>?>(null) }
+    var searching by remember(key) { mutableStateOf(false) }
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Text("Best Milky Way nights", color = HeadsupColors.Ink, style = MaterialTheme.typography.titleSmall, modifier = Modifier.weight(1f))
+        Chip(if (searching) "Looking…" else "Find in the next year", {
+            if (!searching) {
+                searching = true
+                scope.launch {
+                    season = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) { Sky.milkyWaySeason(place, zone, st.day, 365) }
+                    searching = false
+                }
+            }
+        })
+    }
+    season?.let { list ->
+        if (list.isEmpty()) Text("No night here has the centre up in a dark, moonless sky.", color = HeadsupColors.TextMuted, style = MaterialTheme.typography.bodyMedium)
+        for (n in list.take(10)) {
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(HeadsupColors.SurfaceHigh)
+                    .clickable {
+                        // Opens that night at the start of its moonless window.
+                        n.moonless.firstOrNull()?.let { iv ->
+                            val t = java.time.Instant.ofEpochMilli(iv.start).atZone(zone)
+                            st.day = t.toLocalDate()
+                            st.minute = (t.hour * 60 + t.minute).toFloat()
+                        }
+                    }
+                    .padding(10.dp),
+            ) {
+                Text(n.date.toString(), color = HeadsupColors.Ink, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
+                Text("${spans(n.moonless)} · up to ${n.bestAltitude.roundToInt()}°", color = MilkyBlue, style = MaterialTheme.typography.labelMedium)
+            }
+        }
+    }
 }
 
 /** Day and time zone of the plan. */

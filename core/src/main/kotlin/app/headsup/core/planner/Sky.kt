@@ -57,29 +57,82 @@ object Sky {
 
     private fun obliquity(d: Double) = (23.4393 - 3.563e-7 * d) * RAD
 
-    private fun sunEquatorial(epochMillis: Long): DoubleArray {
+    /** The sun's ecliptic longitude in degrees. */
+    private fun sunLongitude(epochMillis: Long): Double {
         val d = julianDay(epochMillis) - 2_451_545.0
         val l = norm360(280.460 + 0.9856474 * d)
         val g = norm360(357.528 + 0.9856003 * d) * RAD
-        val lambda = (l + 1.915 * sin(g) + 0.020 * sin(2 * g)) * RAD
+        return norm360(l + 1.915 * sin(g) + 0.020 * sin(2 * g))
+    }
+
+    private fun sunEquatorial(epochMillis: Long): DoubleArray {
+        val d = julianDay(epochMillis) - 2_451_545.0
+        val lambda = sunLongitude(epochMillis) * RAD
         val e = obliquity(d)
         val ra = norm360(atan2(cos(e) * sin(lambda), cos(lambda)) * DEG)
         val dec = asin(sin(e) * sin(lambda)) * DEG
         return doubleArrayOf(ra, dec)
     }
 
+    /**
+     * The moon's ecliptic longitude and latitude (degrees) and distance (km), with the main terms of
+     * its motion (evection, variation, the annual term and the larger smaller ones): about 0.1–0.2°.
+     */
+    private fun moonEcliptic(epochMillis: Long): DoubleArray {
+        val d = julianDay(epochMillis) - 2_451_545.0
+        val l = norm360(218.316 + 13.176396 * d)
+        val m = norm360(134.963 + 13.064993 * d) * RAD // the moon's mean anomaly
+        val f = norm360(93.272 + 13.229350 * d) * RAD // its argument of latitude
+        val dd = norm360(297.850 + 12.190749 * d) * RAD // mean elongation from the sun
+        val ms = norm360(357.529 + 0.98560028 * d) * RAD // the sun's mean anomaly
+        val lon = l + 6.289 * sin(m) + 1.274 * sin(2 * dd - m) + 0.658 * sin(2 * dd) - 0.186 * sin(ms) -
+            0.059 * sin(2 * m - 2 * dd) - 0.057 * sin(m - 2 * dd + ms) + 0.053 * sin(m + 2 * dd) +
+            0.046 * sin(2 * dd - ms) + 0.041 * sin(m - ms) - 0.035 * sin(dd) - 0.031 * sin(m + ms) -
+            0.015 * sin(2 * f - 2 * dd) + 0.011 * sin(m - 4 * dd)
+        val lat = 5.128 * sin(f) + 0.281 * sin(m + f) + 0.278 * sin(m - f) + 0.173 * sin(2 * dd - f) +
+            0.055 * sin(2 * dd - m + f) + 0.046 * sin(2 * dd - m - f) + 0.033 * sin(2 * dd + f) + 0.017 * sin(2 * m + f)
+        val distance = 385_001.0 - 20_905.0 * cos(m) - 3_699.0 * cos(2 * dd - m) - 2_956.0 * cos(2 * dd) - 570.0 * cos(2 * m)
+        return doubleArrayOf(norm360(lon), lat, distance)
+    }
+
     private fun moonEquatorial(epochMillis: Long): DoubleArray {
         val d = julianDay(epochMillis) - 2_451_545.0
-        val l = norm360(218.316 + 13.176396 * d) * RAD
-        val m = norm360(134.963 + 13.064993 * d) * RAD
-        val f = norm360(93.272 + 13.229350 * d) * RAD
-        val lon = l + 6.289 * RAD * sin(m)
-        val lat = 5.128 * RAD * sin(f)
+        val ecl = moonEcliptic(epochMillis)
+        val lon = ecl[0] * RAD
+        val lat = ecl[1] * RAD
         val e = obliquity(d)
         val ra = norm360(atan2(sin(lon) * cos(e) - tan(lat) * sin(e), cos(lon)) * DEG)
         val dec = asin(sin(lat) * cos(e) + cos(lat) * sin(e) * sin(lon)) * DEG
-        val distance = 385_001.0 - 20_905.0 * cos(m) // km
-        return doubleArrayOf(ra, dec, distance)
+        return doubleArrayOf(ra, dec, ecl[2])
+    }
+
+    /** How far the moon has gone round from the sun, degrees: 0 new, 90 first quarter, 180 full, 270 last quarter. */
+    fun moonPhaseAngle(epochMillis: Long): Double = norm360(moonEcliptic(epochMillis)[0] - sunLongitude(epochMillis))
+
+    /** A moment the moon reaches a phase. */
+    data class MoonPhase(val millis: Long, val name: String)
+
+    /** New moons, quarters and full moons from [fromMillis] for [days] days. */
+    fun moonPhases(fromMillis: Long, days: Int): List<MoonPhase> {
+        val names = listOf(0.0 to "New moon", 90.0 to "First quarter", 180.0 to "Full moon", 270.0 to "Last quarter")
+        val out = ArrayList<MoonPhase>()
+        val step = 6 * 3_600_000L
+        var t = fromMillis
+        val end = fromMillis + days * 86_400_000L
+        fun past(target: Double, at: Long) = ((moonPhaseAngle(at) - target + 540.0) % 360.0) - 180.0
+        while (t < end) {
+            for ((angle, name) in names) {
+                val a = past(angle, t)
+                val b = past(angle, t + step)
+                if (a < 0 && b >= 0 && b - a < 90) {
+                    var lo = t; var hi = t + step
+                    repeat(24) { val mid = (lo + hi) / 2; if (past(angle, mid) < 0) lo = mid else hi = mid }
+                    out += MoonPhase((lo + hi) / 2, name)
+                }
+            }
+            t += step
+        }
+        return out
     }
 
     /** Where the sun is. */
@@ -235,13 +288,31 @@ object Sky {
      */
     data class MilkyWayNight(val dark: List<Interval>, val moonless: List<Interval>)
 
-    fun milkyWayNight(place: Place, zone: ZoneId, date: LocalDate, minAltitude: Double = 10.0): MilkyWayNight {
+    fun milkyWayNight(place: Place, zone: ZoneId, date: LocalDate, minAltitude: Double = 5.0): MilkyWayNight {
         val noon = date.atStartOfDay(zone).toInstant().toEpochMilli() + 12 * 3_600_000L
         val samples = (0..288).map { noon + it * 5 * 60_000L }
         fun dark(t: Long) = sun(place, t).altitude <= -18.0 && galacticCentre(place, t).altitude >= minAltitude
         fun moonless(t: Long) = dark(t) && moon(place, t).let { it.position.altitude < 0.0 || it.lit < 0.25 }
         return MilkyWayNight(stretches(samples, ::dark), stretches(samples, ::moonless))
     }
+    /** One night's chance for the Milky Way: how long its centre is up in a dark, moonless sky, and how high it climbs then. */
+    data class MilkyWayScore(val date: LocalDate, val moonless: List<Interval>, val moonlessMinutes: Int, val darkMinutes: Int, val bestAltitude: Double)
+
+    /** The nights from [from] for [days] days, best first: the longest moonless window with the centre up. */
+    fun milkyWaySeason(place: Place, zone: ZoneId, from: LocalDate, days: Int, minAltitude: Double = 5.0): List<MilkyWayScore> =
+        (0 until days).map { i ->
+            val date = from.plusDays(i.toLong())
+            val n = milkyWayNight(place, zone, date, minAltitude)
+            val minutes = { list: List<Interval> -> list.sumOf { ((it.end - it.start) / 60_000L).toInt() } }
+            val best = n.moonless.maxOfOrNull { iv ->
+                var top = -90.0
+                var t = iv.start
+                while (t <= iv.end) { top = maxOf(top, galacticCentre(place, t).altitude); t += 15 * 60_000L }
+                top
+            } ?: 0.0
+            MilkyWayScore(date, n.moonless, minutes(n.moonless), minutes(n.dark), best)
+        }.filter { it.moonlessMinutes > 0 }.sortedWith(compareByDescending<MilkyWayScore> { it.moonlessMinutes }.thenByDescending { it.bestAltitude })
+
 
     /** The instant [epochMillis] as a local date in [zone]. */
     fun dateOf(epochMillis: Long, zone: ZoneId): LocalDate = Instant.ofEpochMilli(epochMillis).atZone(zone).toLocalDate()

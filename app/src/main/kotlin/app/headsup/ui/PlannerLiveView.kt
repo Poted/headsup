@@ -188,7 +188,8 @@ internal fun LiveView(st: PlannerState, onLocate: () -> Unit, modifier: Modifier
                 val w = size.width.toDouble()
                 val h = size.height.toDouble()
                 val f = Ar.focalPx(longFov ?: 65.0, w, h)
-                fun at(az: Double, alt: Double) = Ar.project(rotation, Ar.magneticAzimuth(az, declination), alt, f, w, h)
+                // The phone's own error (found by aiming at the sun or moon) taken out of every direction drawn.
+                fun at(az: Double, alt: Double) = Ar.project(rotation, Ar.magneticAzimuth(az, declination + st.compassOffset), alt - st.tiltOffset, f, w, h)
                 fun ok(p: app.headsup.core.planner.ScreenPoint) = p.front && abs(p.x) < 20_000 && abs(p.y) < 20_000
                 fun line(a: app.headsup.core.planner.ScreenPoint, b: app.headsup.core.planner.ScreenPoint, c: Color, width: Float) {
                     if (ok(a) && ok(b)) drawLine(c, Offset(a.x.toFloat(), a.y.toFloat()), Offset(b.x.toFloat(), b.y.toFloat()), strokeWidth = width)
@@ -258,7 +259,7 @@ internal fun LiveView(st: PlannerState, onLocate: () -> Unit, modifier: Modifier
                     drawCircle(Color(0xFFF44336), 20.dp.toPx(), c, style = Stroke(width = 3.dp.toPx()))
                 } else {
                     // Out of view: an arrow at the edge towards it.
-                    val d = Ar.enu(Ar.magneticAzimuth(sun.azimuth, declination), sun.altitude)
+                    val d = Ar.enu(Ar.magneticAzimuth(sun.azimuth, declination + st.compassOffset), sun.altitude - st.tiltOffset)
                     val dx = rotation[0] * d[0] + rotation[3] * d[1] + rotation[6] * d[2]
                     val dy = rotation[1] * d[0] + rotation[4] * d[1] + rotation[7] * d[2]
                     val angle = atan2(-dy, dx).toFloat()
@@ -281,7 +282,12 @@ internal fun LiveView(st: PlannerState, onLocate: () -> Unit, modifier: Modifier
 
             // What the phone looks at.
             LookReadout({ tick }, rotation, declination, st, hasSensor, Modifier.align(Alignment.TopStart).padding(12.dp))
-            Box(Modifier.align(Alignment.TopEnd).padding(12.dp)) { Chip("My location", onLocate) }
+            var calibrating by remember { mutableStateOf(false) }
+            Column(Modifier.align(Alignment.TopEnd).padding(12.dp), horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Chip("My location", onLocate)
+                Chip("Calibrate", { calibrating = !calibrating }, selected = calibrating)
+                if (calibrating) CalibratePanel(st, rotation, declination)
+            }
 
             // The hour, the light the camera reads, and the settings that fit it.
             Column(
@@ -331,15 +337,55 @@ private fun compass(az: Double): String = listOf("N", "NE", "E", "SE", "S", "SW"
 private fun LookReadout(tick: () -> Int, rotation: DoubleArray, declination: Double, st: PlannerState, hasSensor: Boolean, modifier: Modifier) {
     tick() // follow the phone
     val look = Ar.cameraDirection(rotation)
-    val trueAz = (look.azimuth + declination + 360.0) % 360.0
+    val trueAz = (look.azimuth + declination + st.compassOffset + 360.0) % 360.0
     val sun = Sky.sun(st.place, st.now)
     // The way the phone looks is the cone on the sun view's map. Not while pointing up or down, where the heading is not steady.
     SideEffect {
         if (abs(look.altitude) < 75.0 && abs(((trueAz - st.viewAz + 540.0) % 360.0) - 180.0) > 2.0) st.viewAz = trueAz.toFloat()
     }
     Column(modifier.background(Color(0x99000000)).padding(8.dp)) {
-        Text("Looking ${trueAz.roundToInt()}° (${compass(trueAz)}), tilt ${look.altitude.roundToInt()}°", color = Color.White, style = MaterialTheme.typography.labelMedium)
+        Text("Looking ${trueAz.roundToInt()}° (${compass(trueAz)}), tilt ${(look.altitude + st.tiltOffset).roundToInt()}°", color = Color.White, style = MaterialTheme.typography.labelMedium)
         Text("Sun at ${hhmm(st.minute)}: ${sun.azimuth.roundToInt()}°, ${sun.altitude.roundToInt()}° up", color = Gold, style = MaterialTheme.typography.labelMedium)
         if (!hasSensor) Text("This phone has no orientation sensor.", color = Color.White, style = MaterialTheme.typography.labelSmall)
+    }
+}
+
+/**
+ * Calibration: the phone's compass is often a few degrees off (and its tilt a little). Aim the cross
+ * in the middle at the real sun (through a dark filter, or its edge) or the moon, and tap Align:
+ * the difference to where it truly is becomes the correction. Or move the overlay a degree at a time.
+ */
+@Composable
+private fun CalibratePanel(st: PlannerState, rotation: DoubleArray, declination: Double) {
+    val now = System.currentTimeMillis()
+    val sun = Sky.sun(st.place, now)
+    val moon = Sky.moon(st.place, now).position
+    Column(
+        Modifier.background(Color(0xCC000000), androidx.compose.foundation.shape.RoundedCornerShape(10.dp)).padding(10.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+        horizontalAlignment = Alignment.End,
+    ) {
+        Text("Aim the cross at the real sun or moon (now), then Align.", color = Color.White, style = MaterialTheme.typography.labelSmall)
+        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            if (sun.altitude > -0.5) Chip("Align on sun", {
+                val (c, t) = Ar.alignment(Ar.cameraDirection(rotation), declination, sun)
+                st.compassOffset = c; st.tiltOffset = t
+            })
+            if (moon.altitude > -0.5) Chip("Align on moon", {
+                val (c, t) = Ar.alignment(Ar.cameraDirection(rotation), declination, moon)
+                st.compassOffset = c; st.tiltOffset = t
+            })
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            Chip("◀ 1°", { st.compassOffset -= 1.0 })
+            Chip("1° ▶", { st.compassOffset += 1.0 })
+            Chip("▲", { st.tiltOffset += 0.5 })
+            Chip("▼", { st.tiltOffset -= 0.5 })
+        }
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            Text("Compass ${one(st.compassOffset)}°, tilt ${one(st.tiltOffset)}°", color = Color.White, style = MaterialTheme.typography.labelSmall)
+            Chip("Reset", { st.compassOffset = 0.0; st.tiltOffset = 0.0 })
+        }
+        Text("Never look at the sun through the phone without a filter for long.", color = Color(0xFFBDBDBD), style = MaterialTheme.typography.labelSmall)
     }
 }

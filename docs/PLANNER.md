@@ -10,10 +10,11 @@ settings and saved places are kept by `PlannerPrefs` in `PlannerScreen.kt`, not 
 ## Where it lives
 
 `:core` `planner/` (pure, tested):
-- `Sky`: the sun (to about 0.02°), the moon (to about 0.3°, its height as seen from the ground, with
-  parallax), the galactic centre and plane (J2000 sky); sunrise/sunset and twilights,
+- `Sky`: the sun (to about 0.02°), the moon (to about 0.1–0.2°: the main terms of its motion, its
+  height as seen from the ground, with parallax), the galactic centre and plane (J2000 sky); sunrise/sunset and twilights,
   moonrise/moonset, golden hours (sun −4°…6°), blue hours (−8°…−4°), and the Milky Way's window: its
-  centre 10° up in a fully dark sky, and the part of that with the moon down or under a quarter lit.
+  centre 5° up in a fully dark sky, and the part of that with the moon down or under a quarter lit;
+  the best Milky Way nights of a year (longest moonless window); moon phases.
 - `SceneLight`: scene EV at ISO 100 from sun and moon height, place height, Bortle class, cloud.
 - `Exposure`: the triangle with ND, one setting auto, warnings with a suggested filter, the filter
   window for a held shutter, lux from EV, camera-style printing of the values.
@@ -35,7 +36,7 @@ settings and saved places are kept by `PlannerPrefs` in `PlannerScreen.kt`, not 
   in a fully dark sky.
 - `WebMercator`: map pixels from latitude and longitude.
 - `Ar`: the phone's attitude and a direction in the sky to a point on the screen; the lens's
-  focal length in pixels.
+  focal length in pixels; the compass and tilt correction from aiming at the sun or moon.
 
 `:app` `ui/`:
 - `PlannerScreen`: the host, tabs Sun / Live / Calculator, a button to the editor.
@@ -74,6 +75,10 @@ light it reads), the calculator is for working out settings for one hour (it is 
   (`Measured`). A reading is used only while the place stays within about 20 km of where it was
   taken, and is kept on the phone for 12 hours.
 - The way the phone looks (true heading) sets the cone on the sun view's map.
+- Calibrate: aim the cross at the real sun or moon and tap Align; the difference to its true place
+  becomes the compass and tilt correction (kept on the phone), or nudge by 1° / 0.5°. Phones'
+  compasses are often a few degrees off; the green skyline shows whether the overlay fits.
+- The Milky Way threshold is 5° up: at 50°N its centre never climbs much above 11°.
 - Not built: a choice of lens, a compass correction, a compass chart (polar sun diagram), a month bar.
 
 References looked at for the layout: Sun Seeker (AR path, solar compass), SunCast and SunQuest

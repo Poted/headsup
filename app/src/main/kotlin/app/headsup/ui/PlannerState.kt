@@ -258,6 +258,13 @@ internal class PlannerState(context: Context) {
         writePlans(prefs, plans)
     }
 
+    /**
+     * Corrections for this phone's compass and tilt (degrees), found in Live by aiming at the sun or
+     * the moon, or set by hand. Kept on the phone: a phone's error mostly stays (until it is recalibrated).
+     */
+    var compassOffset by Saved(prefs.get("compass", 0f).toDouble()) { prefs.put("compass", it.toFloat()) }
+    var tiltOffset by Saved(prefs.get("tilt", 0f).toDouble()) { prefs.put("tilt", it.toFloat()) }
+
     var places by mutableStateOf(readPlaces(prefs))
     var selectedPlace by mutableStateOf<Int?>(null)
 
