@@ -1,6 +1,7 @@
 package app.headsup.ui
 
 import android.content.Context
+import android.graphics.BitmapFactory
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -9,12 +10,14 @@ import app.headsup.core.planner.CloudForecast
 import app.headsup.core.planner.CameraLimits
 import app.headsup.core.planner.ExposureSetup
 import app.headsup.core.planner.NdFilter
-import app.headsup.core.planner.OpenMeteo
+import app.headsup.core.planner.MetNorway
+import app.headsup.core.planner.Terrain
 import app.headsup.core.planner.Place
 import app.headsup.core.planner.SkyConditions
 import app.headsup.core.planner.Measured
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
 import java.time.LocalDate
@@ -71,45 +74,87 @@ internal class PlannerState(context: Context) {
     var isoMax by Saved(prefs.get("isomax", 25_600f).toDouble()) { prefs.put("isomax", it.toFloat()) }
     var isoMin by Saved(prefs.get("isomin", 100f).toDouble()) { prefs.put("isomin", it.toFloat()) }
 
-    /** The last forecast fetched, and the place and day it is for. It is kept, so a place seen once has its forecast with no signal. */
-    var forecast by mutableStateOf(OpenMeteo.parse(prefs.getString("fc_json", "")))
+    /** The last forecast fetched, and the place it is for. It is kept, so a place seen once has its forecast with no signal. */
+    var forecast by mutableStateOf(MetNorway.parse(prefs.getString("fc_json", "")))
     private var forecastKey by mutableStateOf(prefs.getString("fc_key", ""))
     /** What the last fetch said, if it went wrong or is going on. */
     var forecastStatus by mutableStateOf("")
 
-    private fun key() = String.format(Locale.US, "%.1f|%.1f|%s", lat, lon, day)
+    private fun key() = String.format(Locale.US, "%.1f|%.1f", lat, lon)
 
-    /** The forecast, while it is for this place and day. */
-    val forecastHere: CloudForecast? get() = forecast?.takeIf { forecastKey == key() }
+    /** The forecast, while it is for this place and reaches the day shown. */
+    val forecastHere: CloudForecast? get() =
+        forecast?.takeIf { forecastKey == key() && it.covers(dayStart, dayStart + 24 * 3_600_000L) }
 
-    /** Asks the weather service for the cloud cover of this place and day. */
+    /** Asks MET Norway for the cloud cover of this place, the next nine days or so. */
     suspend fun fetchForecast() {
         val k = key()
-        val url = OpenMeteo.url(lat, lon, day)
         forecastStatus = "Loading the forecast…"
-        val body = withContext(Dispatchers.IO) {
-            runCatching {
-                val c = URL(url).openConnection() as HttpURLConnection
-                c.connectTimeout = 8000
-                c.readTimeout = 8000
-                c.setRequestProperty("User-Agent", "SweetSpotPlanner/1.0 (Android)")
-                try {
-                    if (c.responseCode == 200) c.inputStream.bufferedReader().use { it.readText() } else null
-                } finally {
-                    c.disconnect()
-                }
-            }.getOrNull()
-        }
-        val parsed = body?.let { OpenMeteo.parse(it) }
+        val body = download(MetNorway.url(lat, lon))?.toString(Charsets.UTF_8)
+        val parsed = body?.let { MetNorway.parse(it) }
         if (parsed != null && body != null) {
             forecast = parsed
             forecastKey = k
             prefs.putString("fc_json", body)
             prefs.putString("fc_key", k)
-            forecastStatus = ""
+            forecastStatus = if (parsed.covers(dayStart, dayStart + 24 * 3_600_000L)) "" else "The forecast reaches about nine days ahead; this day is outside it."
         } else {
-            forecastStatus = "No forecast for this place and day: no signal, or too far ahead (about two weeks)."
+            forecastStatus = "No forecast: no signal, or the service did not answer."
         }
+    }
+
+    /** How high above the ground the camera is (a drone, a roof), in metres: the horizon dips, the sun rises sooner. */
+    var aboveGround by Saved(prefs.get("above", 0f).toDouble()) { prefs.put("above", it.toFloat()) }
+    /** What the last ground-height lookup said. */
+    var groundStatus by mutableStateOf("")
+    /** Counts the times the ground height was set from the terrain model, so its field shows the new number. */
+    var groundVersion by mutableStateOf(0)
+
+    /** Looks up the ground's height at the place in the terrain model (tiles kept on the phone once fetched). */
+    suspend fun fetchGround() {
+        val la = lat
+        val lo = lon
+        val t = Terrain.tilePixel(la, lo)
+        val height = withContext(Dispatchers.IO) {
+            runCatching {
+                val dir = File(cacheDir, "terrain_tiles").apply { mkdirs() }
+                val file = File(dir, "${Terrain.ZOOM}-${t.x}-${t.y}.png")
+                val url = "https://s3.amazonaws.com/elevation-tiles-prod/terrarium/${Terrain.ZOOM}/${t.x}/${t.y}.png"
+                val bytes = (if (file.exists()) file.readBytes() else download(url)?.also { file.writeBytes(it) })
+                    ?: return@runCatching null
+                val bmp = BitmapFactory.decodeByteArray(bytes, 0, bytes.size) ?: return@runCatching null
+                val h = Terrain.bilinear(t.px, t.py) { x, y ->
+                    val c = bmp.getPixel(x, y)
+                    Terrain.decode((c shr 16) and 0xFF, (c shr 8) and 0xFF, c and 0xFF)
+                }
+                bmp.recycle()
+                h
+            }.getOrNull()
+        }
+        if (height == null) {
+            groundStatus = "No ground height (no signal): set it by hand."
+        } else if (la == lat && lo == lon) {
+            elevation = height.coerceAtLeast(-430.0).let { Math.round(it).toDouble() }
+            groundVersion++
+            groundStatus = "Ground height from the terrain model."
+        }
+    }
+
+    private val cacheDir: File = context.cacheDir
+
+    /** The bytes at [url], or null; names the app to the server, as the weather service asks. */
+    private suspend fun download(url: String): ByteArray? = withContext(Dispatchers.IO) {
+        runCatching {
+            val c = URL(url).openConnection() as HttpURLConnection
+            c.connectTimeout = 8000
+            c.readTimeout = 8000
+            c.setRequestProperty("User-Agent", PLANNER_USER_AGENT)
+            try {
+                if (c.responseCode == 200) c.inputStream.use { it.readBytes() } else null
+            } finally {
+                c.disconnect()
+            }
+        }.getOrNull()
     }
 
     var plans by mutableStateOf(readPlans(prefs))
@@ -179,7 +224,8 @@ internal class PlannerState(context: Context) {
     val measured: Measured? get() =
         measuredEv?.takeIf { abs(lat - measuredLat) < 0.2 && abs(lon - measuredLon) < 0.3 }?.let { Measured(measuredAt, it) }
 
-    val place: Place get() = Place(lat.coerceIn(-90.0, 90.0), lon.coerceIn(-180.0, 180.0), elevation)
+    /** The place: where it is, and the camera's height above the sea (the ground's plus how high above it). */
+    val place: Place get() = Place(lat.coerceIn(-90.0, 90.0), lon.coerceIn(-180.0, 180.0), elevation + aboveGround)
     val zone: ZoneOffset get() = ZoneOffset.ofHours(offsetHours.coerceIn(-12, 14))
     val dayStart: Long get() = day.atStartOfDay(zone).toInstant().toEpochMilli()
     val now: Long get() = dayStart + minute.toLong() * 60_000L
@@ -270,3 +316,9 @@ private fun writePlans(p: PlannerPrefs, list: List<SavedPlan>) {
     }
     p.putString("plans", a.toString())
 }
+
+/**
+ * How the planner names itself to the servers it asks (MET Norway requires a name and a way to
+ * reach the maker). Before a release, put the maker's contact (a website or an e-mail) here.
+ */
+internal const val PLANNER_USER_AGENT = "SweetSpotPlanner/1.0 (Android; github.com/Poted/headsup)"

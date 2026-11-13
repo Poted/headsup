@@ -20,6 +20,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -43,6 +44,12 @@ fun PlannerScreen(onEditor: () -> Unit) {
     val st = remember { PlannerState(context) }
     var view by rememberSaveable { mutableStateOf(0) } // 0 sun, 1 live, 2 calculator
     var plansOpen by rememberSaveable { mutableStateOf(false) }
+
+    // The ground's height follows the place (a moment after it stops changing, e.g. while typing).
+    LaunchedEffect(st.lat, st.lon) {
+        kotlinx.coroutines.delay(700)
+        st.fetchGround()
+    }
 
     val locationPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         if (granted) lastKnown(context)?.let { st.setPlace(it.first, it.second, it.third) }

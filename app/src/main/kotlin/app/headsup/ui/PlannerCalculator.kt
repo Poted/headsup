@@ -37,7 +37,7 @@ internal fun CalculatorView(st: PlannerState) {
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
         // Where and when, and the hour to try.
         Text(
-            "${one(st.lat)}, ${one(st.lon)} · ${st.elevation.roundToInt()} m · ${st.day} · ${frame.phase}",
+            "${one(st.lat)}, ${one(st.lon)} · ${st.elevation.roundToInt()} m" + (if (st.aboveGround > 0) " + ${st.aboveGround.roundToInt()} m up" else "") + " · ${st.day} · ${frame.phase}",
             color = HeadsupColors.TextMuted, style = MaterialTheme.typography.labelMedium,
         )
         DateRow(st)
@@ -67,7 +67,7 @@ internal fun CalculatorView(st: PlannerState) {
         }
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Text(
-                st.forecastHere?.let { "Forecast cloud now ${(it.at(st.now) * 100).roundToInt()}%" } ?: "No forecast loaded",
+                st.forecastHere?.let { "Forecast cloud at ${hhmm(st.minute)}: ${(it.at(st.now) * 100).roundToInt()}% · ${app.headsup.core.planner.MetNorway.CREDIT}" } ?: "No forecast for this place and day",
                 color = HeadsupColors.TextMuted, style = MaterialTheme.typography.labelMedium, modifier = Modifier.weight(1f),
             )
             Chip(if (st.forecastHere == null) "Get forecast" else "Refresh forecast", { scope.launch { st.fetchForecast() } })

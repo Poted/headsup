@@ -162,12 +162,16 @@ object Sky {
     private fun wholeDay(zone: ZoneId, date: LocalDate): List<Long> =
         daySamples(zone, date, 5) + date.plusDays(1).atStartOfDay(zone).toInstant().toEpochMilli()
 
-    /** Sunrise, sunset and the twilights of [date] at [place]. Rise and set mean the sun's top edge on the horizon (−0.833°). */
-    fun sunTimes(place: Place, zone: ZoneId, date: LocalDate): SunTimes {
+    /**
+     * Sunrise, sunset and the twilights of [date] at [place]. Rise and set mean the sun's top edge on
+     * the horizon (−0.833°), seen from [aboveGround] metres up (a drone or a roof sees it a little sooner).
+     */
+    fun sunTimes(place: Place, zone: ZoneId, date: LocalDate, aboveGround: Double = 0.0): SunTimes {
         val samples = wholeDay(zone, date)
         val alt = { t: Long -> sun(place, t).altitude }
+        val edge = -0.833 - Terrain.horizonDip(aboveGround)
         return SunTimes(
-            crossing(samples, alt, -0.833, true), crossing(samples, alt, -0.833, false),
+            crossing(samples, alt, edge, true), crossing(samples, alt, edge, false),
             crossing(samples, alt, -6.0, true), crossing(samples, alt, -6.0, false),
             crossing(samples, alt, -18.0, true), crossing(samples, alt, -18.0, false),
         )
@@ -177,10 +181,11 @@ object Sky {
     data class RiseSet(val rise: Long?, val set: Long?)
 
     /** Moonrise and moonset of [date] at [place]: the moon's top edge on the horizon, as seen from the ground. */
-    fun moonTimes(place: Place, zone: ZoneId, date: LocalDate): RiseSet {
+    fun moonTimes(place: Place, zone: ZoneId, date: LocalDate, aboveGround: Double = 0.0): RiseSet {
         val samples = wholeDay(zone, date)
         val alt = { t: Long -> moon(place, t).position.altitude }
-        return RiseSet(crossing(samples, alt, -0.833, true), crossing(samples, alt, -0.833, false))
+        val edge = -0.833 - Terrain.horizonDip(aboveGround)
+        return RiseSet(crossing(samples, alt, edge, true), crossing(samples, alt, edge, false))
     }
 
     /** A stretch of time, in milliseconds since 1970. */

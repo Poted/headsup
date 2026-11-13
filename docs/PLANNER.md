@@ -18,8 +18,10 @@ settings and saved places are kept by `PlannerPrefs` in `PlannerScreen.kt`, not 
 - `Exposure`: the triangle with ND, one setting auto, warnings with a suggested filter, the filter
   window for a held shutter, lux from EV, camera-style printing of the values.
 - `Planner.frame`: all of it for one moment, optionally from a measured EV and under a forecast.
-- `Weather`: `CloudForecast` (hourly cloud, moved smoothly between hours); `OpenMeteo` (asks for
+- `Weather`: `CloudForecast` (hourly cloud, moved smoothly between hours); `MetNorway` (asks for
   and reads the cloud cover).
+- `Terrain`: the ground's height from Terrarium terrain tiles; the horizon's dip for a camera
+  above the ground (used by sunrise, sunset, moonrise and moonset).
 - `CameraScale`: the camera's dials a third of a stop apart (shutter 1/8000 s … 30 s and a few
   long times, f/1 … f/32, ISO 50 …); settings move along them, worked-out values are shown as the
   nearest of them (so nothing reads 1/1s).
@@ -87,16 +89,37 @@ editor → planner by restarting the app.
 ## Cloud: the sky as set, and the forecast beside it
 
 Every result is given for the sky as set (the cloud slider, clear by default) and, once a forecast
-is loaded (Open-Meteo, no key, hourly total cloud cover, fetched on request for the place and day
-and kept on the phone), under the forecast's cloud in brackets: "ISO 400 (1600)", "EV 11.2 (with
-forecast 9.4)". A forecast of cloud is sometimes wrong, so it never replaces the result. A reading
-taken with the camera was made under the sky as set, so the forecast moves it by the difference.
-A forecast is used only while it is for the place (to 0.1°) and day shown. Open-Meteo's free
-service is for non-commercial use and reaches about two weeks ahead.
+is loaded, under the forecast's cloud in brackets: "ISO 400 (1600)", "EV 11.2 (with forecast 9.4)".
+A forecast of cloud is sometimes wrong, so it never replaces the result. A reading taken with the
+camera was made under the sky as set, so the forecast moves it by the difference. The forecast is
+MET Norway's Locationforecast (worldwide, about nine days ahead), fetched on request, kept on the
+phone, and used only while it is for the place (to 0.1°) and reaches the day shown.
+
+## Height
+
+The ground's height comes from the terrain model when the place changes (typed, picked on the
+map, found by the phone, a plan opened), a moment after it stops changing; it can be typed over.
+The phone's GPS height is not used for it (it is measured from the ellipsoid, tens of metres off).
+"Camera above the ground" (a drone, a roof) adds to it for the light, and dips the horizon
+(1.76′ × √metres) for sunrise, sunset, moonrise and moonset: 100 m up, the sun rises about two
+minutes sooner.
+
+## Data and services: only what may be used commercially
+
+A rule for the planner: no data or service that may not be used in a paid app.
+
+| What | Source | Terms (as checked 2026-11) |
+|---|---|---|
+| Sun, moon, Milky Way | computed on the phone | ours |
+| Cloud forecast | MET Norway, api.met.no Locationforecast 2.0 | free, commercial use with credit ("Data from MET Norway", NLOD / CC BY 4.0); a User-Agent naming the app and a contact is required (`PLANNER_USER_AGENT`: put the maker's contact there before a release); keep answers until they expire. To confirm on api.met.no/doc/TermsOfService before a release. |
+| Ground height | Terrain Tiles on AWS (Terrarium) | sources public domain or open licences (SRTM, USGS, Copernicus EU-DEM, …) with credit; shown in the Place panel |
+| Map | OpenStreetMap's tile server | data ODbL (commercial with credit), but the tile server is for light use only: replace with a tile provider before a release |
+| Light pollution | none yet | the night-sky atlas (Falchi 2016) is CC BY-NC: not used. Bortle is set by hand. |
+| Weather (earlier) | Open-Meteo free API | non-commercial: taken out |
 
 ## Network
 
-The planner is the only part with network use (permission INTERNET): the weather forecast, and the map's tiles from
+The planner is the only part with network use (permission INTERNET): the weather forecast, terrain heights, and the map's tiles from
 OpenStreetMap's own tile server, with its credit on the map and an identifying user agent, kept in
 the cache folder so a place seen once can be seen again with no signal. That server's policy is
 for light use; for a store release use a tile provider with a key. The editor uses no network.
@@ -105,7 +128,8 @@ for light use; for a store release use a tile provider with a key. The editor us
 
 1. [done, to be tried on a phone] Live view: camera behind the sky, compass and tilt, the light
    it reads as a base (`Measured`).
-2. Light pollution raster (VIIRS / Falchi atlas, small, bundled) instead of the Bortle stepper.
+2. Light pollution: only from a source usable commercially (VIIRS night lights with a sky-glow
+   model, if its licence allows); until then Bortle is set by hand.
 3. Terrain: horizon profile from elevation data, the sun hidden behind peaks, a 3D horizon.
    Needs data fetched or bundled.
 4. [done] Map with the pin, the cone for the way the phone looks, and the sun's rise, set and

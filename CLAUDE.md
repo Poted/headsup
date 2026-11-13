@@ -64,6 +64,8 @@ drives the dashboard overlay.
   - several `pointerInput`s chained on one box, so order and pass (Initial or Main) matter;
   - a gesture that outlives compositions reads `rememberUpdatedState` values or plain holders,
     never `remember(key)` state that gets replaced.
+- **Only data and services that may be used commercially** (models, maps, weather, datasets):
+  no "non-commercial" licences or free tiers. See `docs/PLANNER.md` for the planner's sources.
 - **Code style:**
   - doc comments in plain English sentences that say what a thing is for the user;
   - UI text in English;
@@ -73,6 +75,7 @@ drives the dashboard overlay.
   - `docs/ROADMAP.md`: done and planned;
   - `docs/TEN_BIT_PIPELINE.md`: 10-bit export;
   - `docs/ARCHITECTURE.md`: the original FIT and time-sync design.
+  - `docs/PLANNER.md`: the light planner (sun, moon, Milky Way, exposure, live view).
 
 ## Commits
 

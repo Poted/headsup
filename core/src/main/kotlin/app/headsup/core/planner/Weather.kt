@@ -1,13 +1,14 @@
 package app.headsup.core.planner
 
-import java.time.LocalDate
-import java.time.LocalDateTime
-import java.time.ZoneOffset
+import java.time.Instant
 import java.util.Locale
 
 /** Cloud cover hour by hour: moments (milliseconds since 1970) with the part of the sky covered (0 clear … 1 overcast). */
 class CloudForecast(val hours: List<Pair<Long, Double>>) {
     val isEmpty: Boolean get() = hours.isEmpty()
+
+    /** True when the forecast reaches over some of the stretch from [from] to [to]. */
+    fun covers(from: Long, to: Long): Boolean = hours.isNotEmpty() && hours.first().first <= to && hours.last().first >= from
 
     /** The cover at [millis], moved smoothly between the hours; the first or last hour's outside the forecast. */
     fun at(millis: Long): Double {
@@ -21,28 +22,29 @@ class CloudForecast(val hours: List<Pair<Long, Double>>) {
     }
 }
 
-/** Asking a free weather service (Open-Meteo, no key) for the cloud cover of a place and reading its answer. */
-object OpenMeteo {
-    /** The address asking for the hourly cloud cover of [date] and the days either side (the place's zone may spill over), in UTC. */
-    fun url(lat: Double, lon: Double, date: LocalDate): String =
-        String.format(
-            Locale.US,
-            "https://api.open-meteo.com/v1/forecast?latitude=%.4f&longitude=%.4f&hourly=cloud_cover&timezone=GMT&start_date=%s&end_date=%s",
-            lat, lon, date.minusDays(1), date.plusDays(1),
-        )
+/**
+ * Asking MET Norway (the Norwegian Meteorological Institute, api.met.no) for the cloud cover of a
+ * place: its Locationforecast, worldwide, about nine days ahead (hourly at first, then every six
+ * hours). Its data may be used commercially with credit ("Data from MET Norway"); it asks every
+ * client to name itself in the User-Agent and to keep answers until they expire.
+ */
+object MetNorway {
+    /** The address for a place (coordinates to four decimals, as the service asks). */
+    fun url(lat: Double, lon: Double): String =
+        String.format(Locale.US, "https://api.met.no/weatherapi/locationforecast/2.0/compact?lat=%.4f&lon=%.4f", lat, lon)
 
-    /** Reads the answer; null if it holds no hours. Hours with no value are left out. */
+    /** The credit to show where its forecast is used. */
+    const val CREDIT = "Weather: MET Norway"
+
+    /** Reads the answer: each moment's cloud_area_fraction (%); null if there is none. */
     fun parse(json: String): CloudForecast? {
-        val times = Regex("\"time\"\\s*:\\s*\\[(.*?)]").find(json)?.groupValues?.get(1) ?: return null
-        val values = Regex("\"cloud_cover\"\\s*:\\s*\\[(.*?)]").find(json)?.groupValues?.get(1) ?: return null
-        val ts = times.split(',').map { it.trim().trim('"') }.filter { it.isNotEmpty() }
-        val vs = values.split(',').map { it.trim() }.filter { it.isNotEmpty() }
-        if (ts.size != vs.size) return null
+        val step = Regex("\"time\"\\s*:\\s*\"([^\"]+)\"\\s*,\\s*\"data\"\\s*:\\s*\\{\\s*\"instant\"\\s*:\\s*\\{\\s*\"details\"\\s*:\\s*\\{([^}]*)}")
+        val cloud = Regex("\"cloud_area_fraction\"\\s*:\\s*(-?[0-9.]+)")
         val out = ArrayList<Pair<Long, Double>>()
-        for (i in ts.indices) {
-            val v = vs[i].toDoubleOrNull() ?: continue
-            val t = runCatching { LocalDateTime.parse(ts[i]).toInstant(ZoneOffset.UTC).toEpochMilli() }.getOrNull() ?: continue
-            out += t to (v / 100.0).coerceIn(0.0, 1.0)
+        for (m in step.findAll(json)) {
+            val t = runCatching { Instant.parse(m.groupValues[1]).toEpochMilli() }.getOrNull() ?: continue
+            val c = cloud.find(m.groupValues[2])?.groupValues?.get(1)?.toDoubleOrNull() ?: continue
+            out += t to (c / 100.0).coerceIn(0.0, 1.0)
         }
         return if (out.isEmpty()) null else CloudForecast(out.sortedBy { it.first })
     }

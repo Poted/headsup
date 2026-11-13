@@ -75,7 +75,7 @@ internal object TileStore {
                 val c = URL("https://tile.openstreetmap.org/$z/$x/$y.png").openConnection() as HttpURLConnection
                 c.connectTimeout = 8000
                 c.readTimeout = 8000
-                c.setRequestProperty("User-Agent", "SweetSpotPlanner/1.0 (Android)")
+                c.setRequestProperty("User-Agent", PLANNER_USER_AGENT)
                 try {
                     if (c.responseCode == 200) c.inputStream.use { it.readBytes() } else null
                 } finally {

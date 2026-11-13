@@ -66,7 +66,7 @@ internal fun SunView(st: PlannerState, onLocate: () -> Unit, modifier: Modifier 
     val place = st.place
     val sun = Sky.sun(place, st.now)
     val moon = Sky.moon(place, st.now)
-    val times = remember(place, st.day, st.offsetHours) { Sky.sunTimes(place, st.zone, st.day) }
+    val times = remember(place, st.day, st.offsetHours, st.aboveGround) { Sky.sunTimes(place, st.zone, st.day, st.aboveGround) }
     val map = remember { TileMapState(st.lat, st.lon) }
     LaunchedEffect(st.recentre) { map.centre(st.lat, st.lon) }
     var mapBig by rememberSaveable { mutableStateOf(false) }
@@ -150,15 +150,29 @@ private fun PlacePanel(st: PlannerState, onLocate: () -> Unit, onGoToPin: () -> 
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         NumberField("Latitude", st.lat, st.reload, Modifier.weight(1f)) { st.lat = it.coerceIn(-90.0, 90.0) }
         NumberField("Longitude", st.lon, st.reload, Modifier.weight(1f)) { st.lon = it.coerceIn(-180.0, 180.0) }
-        NumberField("Height (m)", st.elevation, st.reload, Modifier.weight(1f)) { st.elevation = it.coerceIn(-400.0, 8900.0) }
+        NumberField("Ground (m)", st.elevation, st.reload + st.groundVersion * 100_000, Modifier.weight(1f)) { st.elevation = it.coerceIn(-430.0, 8900.0) }
     }
+    Text(
+        st.groundStatus.ifEmpty { "The ground's height comes from the terrain model when the place changes; it can be typed over." },
+        color = HeadsupColors.TextMuted, style = MaterialTheme.typography.labelSmall,
+    )
+    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text("Camera above the ground: ${st.aboveGround.roundToInt()} m", color = HeadsupColors.Ink, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
+        Chip("−10", { st.aboveGround = (st.aboveGround - 10).coerceAtLeast(0.0) })
+        Chip("+10", { st.aboveGround = (st.aboveGround + 10).coerceAtMost(500.0) })
+    }
+    Text("For a drone, a roof or a tower: the horizon dips and the sun rises sooner and sets later.", color = HeadsupColors.TextMuted, style = MaterialTheme.typography.labelSmall)
     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         Chip("Use my location", onLocate)
         Chip("Go to the pin", onGoToPin)
     }
-    Text("Tap the map to put the pin there. Height is not on the map: set it by hand.", color = HeadsupColors.TextMuted, style = MaterialTheme.typography.labelSmall)
+    Text("Tap the map to put the pin there.", color = HeadsupColors.TextMuted, style = MaterialTheme.typography.labelSmall)
     DateRow(st)
     PlacesBar(st)
+    Text(
+        "Map © OpenStreetMap contributors. Heights: Terrain Tiles on AWS (SRTM and USGS 3DEP courtesy of the U.S. Geological Survey; Copernicus EU-DEM, funded by the European Union; and others).",
+        color = HeadsupColors.TextMuted, style = MaterialTheme.typography.labelSmall,
+    )
 }
 
 /** The day's times: sun, golden and blue hours, the moon, and when the Milky Way's centre can be shot. */
@@ -166,9 +180,9 @@ private fun PlacePanel(st: PlannerState, onLocate: () -> Unit, onGoToPin: () -> 
 private fun TimesPanel(st: PlannerState) {
     val place = st.place
     val zone = st.zone
-    val key = Triple(place, st.day, st.offsetHours)
-    val sunT = remember(key) { Sky.sunTimes(place, zone, st.day) }
-    val moonT = remember(key) { Sky.moonTimes(place, zone, st.day) }
+    val key = listOf(place, st.day, st.offsetHours, st.aboveGround)
+    val sunT = remember(key) { Sky.sunTimes(place, zone, st.day, st.aboveGround) }
+    val moonT = remember(key) { Sky.moonTimes(place, zone, st.day, st.aboveGround) }
     val golden = remember(key) { Sky.goldenHours(place, zone, st.day) }
     val blue = remember(key) { Sky.blueHours(place, zone, st.day) }
     val milky = remember(key) { Sky.milkyWayNight(place, zone, st.day) }
