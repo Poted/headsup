@@ -9,27 +9,36 @@ settings and saved places are kept by `PlannerPrefs` in `PlannerScreen.kt`, not 
 
 ## Where it lives
 
-`:core` `planner/` (pure, tested): `Sky` (sun to about 0.02°, moon to about 0.3°, galactic centre and
-plane for the J2000 sky, sunrise/sunset and twilights), `SceneLight` (scene EV at ISO 100 from sun
-and moon height, place height, Bortle class, cloud), `Exposure` (the triangle with ND, one setting
-auto, warnings with a suggested filter, the filter window for a held shutter), `Planner.frame` (all
-of it for one moment, optionally from a measured EV), `Timelapse` (the filter cannot change during
-a timelapse: from the light's span over a window, the filter range that one filter must lie in,
-and the shutter and ISO at each moment; shutter first, at the lowest ISO), `WebMercator` (map
-pixels from latitude and longitude, for the map), `Weather` (`CloudForecast`, hourly cloud moved smoothly between hours; `OpenMeteo` asks for and reads the cloud cover), `Ar` (the phone's attitude and a direction in the
-sky to a point on the screen, and the lens's focal length in pixels).
+`:core` `planner/` (pure, tested):
+- `Sky`: the sun (to about 0.02°), the moon (to about 0.3°, its height as seen from the ground, with
+  parallax), the galactic centre and plane (J2000 sky); sunrise/sunset and twilights,
+  moonrise/moonset, golden hours (sun −4°…6°), blue hours (−8°…−4°), and the Milky Way's window: its
+  centre 10° up in a fully dark sky, and the part of that with the moon down or under a quarter lit.
+- `SceneLight`: scene EV at ISO 100 from sun and moon height, place height, Bortle class, cloud.
+- `Exposure`: the triangle with ND, one setting auto, warnings with a suggested filter, the filter
+  window for a held shutter, lux from EV, camera-style printing of the values.
+- `Planner.frame`: all of it for one moment, optionally from a measured EV and under a forecast.
+- `Weather`: `CloudForecast` (hourly cloud, moved smoothly between hours); `OpenMeteo` (asks for
+  and reads the cloud cover).
+- `WebMercator`: map pixels from latitude and longitude.
+- `Ar`: the phone's attitude and a direction in the sky to a point on the screen; the lens's
+  focal length in pixels.
 
-`:app` `ui/`: `PlannerScreen` (the host: tabs Sun / Live / Calculator, button to the editor),
-`PlannerState` (everything the two views share, kept on the phone as it changes, and the saved
-places), `PlannerSunView` (sky chart, the map in its corner, hour, day, place), `PlannerLiveView`
-(camera behind the sky overlay, compass and tilt, the light it reads), `PlannerCalculator`
-(exposure, filter, timelapse), `TileMap` (the map: tiles fetched when seen and kept in the cache
-folder, drag, pinch, tap to put the pin; the pin, a cone for the way the phone looks, rays for the
-sun), `PlannerParts` (small controls), `ModeChooser` (Editor or Planner after the logo).
+`:app` `ui/`:
+- `PlannerScreen`: the host, tabs Sun / Live / Calculator, a button to the editor.
+- `PlannerState`: everything the views share, kept on the phone as it changes; saved places; the
+  camera's reading; the forecast.
+- `PlannerSunView`: the sky over the whole view (drag to turn and tilt, pinch to zoom), the map in
+  its corner, the day bar, panels for the place and for the day's times.
+- `PlannerLiveView`: the camera behind the sky overlay, compass and tilt, the light it reads (EV, lux).
+- `PlannerCalculator`: exposure and filter for the hour.
+- `TileMap`: the map (tiles fetched when seen and kept in the cache folder; drag, pinch, tap to
+  put the pin; the pin, a cone for the way the phone looks, rays for the sun, hour dots).
+- `PlannerParts`: small controls and the day bar. `ModeChooser`: Editor or Planner after the logo.
 
 Three views, not one page: the sun view is for looking (the sky with the map in its corner, ⤢ swaps
 them), the live view is for standing there (the camera, the sun's real path with a dot per hour, the
-light it reads), the calculator is for working out settings. They share place, day and hour.
+light it reads), the calculator is for working out settings for one hour (it is not a timelapse planner). They share place, day and hour.
 
 ## Live view
 
@@ -69,24 +78,15 @@ editor → planner by restarting the app.
   camera's lowest, only while ISO is the auto setting.
 - Time zone is a whole-hour UTC offset (starts at the phone's), set by hand for another place.
 
-## Timelapse in short
+## Cloud: the sky as set, and the forecast beside it
 
-Shutter × ISO the light asks for is 100·N²·2^ND / 2^EV. It must lie in [ISOmin·shutterMin,
-ISOmax·shutterMax] at every moment of the window, so ND ≥ EVmax + log2(ISOmin·shutterMin/(100·N²))
-and ND ≤ EVmin + log2(ISOmax·shutterMax/(100·N²)). If the lower bound is above the upper one, no
-filter serves the window and the plan says by how many stops. The shortest shutter sets how much
-the day is blurred, the longest is limited by the interval.
-
-## Cloud: by hand, forecast, or both
-
-The sky's cloud is set by hand (a slider) or taken from a forecast (Open-Meteo, no key, hourly
-total cloud cover, fetched on request for the place and day and kept on the phone). A forecast of
-cloud is sometimes wrong, so it is never silent: "By hand" / "Forecast" chooses which the plan
-uses, and once a forecast is loaded the calculator shows both skies side by side for the hour
-(EV and settings) and, for a timelapse, the filter each would have you take, with a note when they
-differ. A reading taken with the camera was made under the cloud set by hand, so the forecast moves
-it by the difference. A forecast is used only while it is for the place (to 0.1°) and day shown.
-Open-Meteo's free service is for non-commercial use and reaches about two weeks ahead.
+Every result is given for the sky as set (the cloud slider, clear by default) and, once a forecast
+is loaded (Open-Meteo, no key, hourly total cloud cover, fetched on request for the place and day
+and kept on the phone), under the forecast's cloud in brackets: "ISO 400 (1600)", "EV 11.2 (with
+forecast 9.4)". A forecast of cloud is sometimes wrong, so it never replaces the result. A reading
+taken with the camera was made under the sky as set, so the forecast moves it by the difference.
+A forecast is used only while it is for the place (to 0.1°) and day shown. Open-Meteo's free
+service is for non-commercial use and reaches about two weeks ahead.
 
 ## Network
 
@@ -104,6 +104,5 @@ for light use; for a store release use a tile provider with a key. The editor us
    Needs data fetched or bundled.
 4. [done] Map with the pin, the cone for the way the phone looks, and the sun's rise, set and
    current directions. The cone follows the dragged sky now; it will follow the compass in live view.
-5. [done] Cloud forecast (Open-Meteo): optional, shown beside the by-hand result, with the manual
-   cloud slider kept.
-6. Saved plans (a place with its timelapse settings); saved places exist already.
+5. [done] Cloud forecast (Open-Meteo), shown in brackets beside the result.
+6. Saved plans (a place with a day and hour); saved places exist already.
