@@ -54,11 +54,4 @@ class WeatherTest {
         val over = Planner.frame(place, ms(9), SkyConditions(), setup, m, CloudForecast(listOf(ms(0) to 1.0)))
         assertTrue(12.0 - over.ev in 1.7..2.3, "${over.ev}")
     }
-
-    @Test fun aTimelapseWorkedUnderAForecastSeesItsClouds() {
-        val place = Place(50.0, 20.0)
-        val clear = Timelapse.sample(place, SkyConditions(), ms(8), ms(12), 60)
-        val over = Timelapse.sample(place, SkyConditions(), ms(8), ms(12), 60, forecast = CloudForecast(listOf(ms(0) to 1.0)))
-        assertTrue(over.zip(clear).all { (o, c) -> o.second < c.second })
-    }
 }

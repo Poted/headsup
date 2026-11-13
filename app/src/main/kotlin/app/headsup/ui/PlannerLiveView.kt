@@ -283,7 +283,8 @@ internal fun LiveView(st: PlannerState, onLocate: () -> Unit, modifier: Modifier
                 Modifier.align(Alignment.BottomCenter).fillMaxWidth().background(Color(0xB3000000)).padding(12.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                val frame = Planner.frame(place, st.now, st.conditions, st.setup, st.measured, st.activeForecast)
+                val frame = Planner.frame(place, st.now, st.conditions, st.setup, st.measured)
+                val fc = st.forecastHere?.let { Planner.frame(place, st.now, st.conditions, st.setup, st.measured, it) }
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Chip("◀", { st.day = st.day.minusDays(1) })
                     Text("${hhmm(st.minute)} · ${st.day}", color = Color.White, style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f))
@@ -293,7 +294,7 @@ internal fun LiveView(st: PlannerState, onLocate: () -> Unit, modifier: Modifier
                 val r = reading
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text(
-                        if (r == null) "Reading the light…" else "Camera reads EV ${one(r)}" + (if (st.measured != null) " · base in use" else ""),
+                        if (r == null) "Reading the light…" else "Camera reads EV ${one(r)} · ${lux(r)}" + (if (st.measured != null) " · base in use" else ""),
                         color = Color.White, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f),
                     )
                     if (r != null) Chip("Use as base", { st.useReading(r) })
@@ -301,9 +302,12 @@ internal fun LiveView(st: PlannerState, onLocate: () -> Unit, modifier: Modifier
                 }
                 if (st.readingElsewhere) Text("The reading is from another place: not used.", color = Color(0xFFFF8A80), style = MaterialTheme.typography.labelSmall)
                 val e = frame.exposure
+                fun settings(x: app.headsup.core.planner.ExposureResult) =
+                    "${Exposure.formatAperture(x.aperture)} · ${Exposure.formatShutter(x.shutter)} · ISO ${Exposure.snapIso(x.iso)} · ${x.nd.label}" +
+                        (if (x.warning != null) " (out of reach)" else "")
                 Text(
-                    "At ${hhmm(st.minute)}: EV ${one(frame.ev)} → ${Exposure.formatAperture(e.aperture)} · ${Exposure.formatShutter(e.shutter)} · ISO ${Exposure.snapIso(e.iso)} · ${e.nd.label}" +
-                        (if (e.warning != null) "  (out of the camera's reach)" else ""),
+                    "At ${hhmm(st.minute)}: EV ${one(frame.ev)} → ${settings(e)}" +
+                        (fc?.let { " (with forecast: EV ${one(it.ev)} → ${settings(it.exposure)})" } ?: ""),
                     color = if (e.warning != null) Color(0xFFFF8A80) else Color.White, style = MaterialTheme.typography.bodyMedium,
                 )
                 Text(

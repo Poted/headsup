@@ -3,7 +3,7 @@ package app.headsup.ui
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -11,14 +11,14 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -31,6 +31,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
@@ -44,21 +45,24 @@ import androidx.compose.ui.unit.sp
 import app.headsup.core.planner.Place
 import app.headsup.core.planner.Sky
 import java.time.LocalDate
+import java.time.ZoneOffset
 import kotlin.math.abs
 import kotlin.math.roundToInt
 
 private val SunOrange = Color(0xFFFF9800)
 private val SunriseBlue = Color(0xFF42A5F5)
 private val SunsetRed = Color(0xFFEF5350)
+private val MilkyBlue = Color(0xFF8FB4FF)
 
 /**
- * The sun view: the sky of the place as a chart (the sun's path with its disc at the chosen hour,
- * the moon, the Milky Way) with a small map in its corner showing the place, the way the phone
- * looks, and where the sun rises, sets and stands. The map and the sky swap places with ⤢.
- * Below: the hour, the day and the place itself, typed, found by the phone, or picked on the map.
+ * The sun view: the sky of the place over the whole screen (the sun's path with a dot for every hour
+ * and its disc at the chosen hour, the moon, the Milky Way), turned and tilted by dragging and
+ * zoomed by pinching, with a small map in the corner showing the place, the way the phone looks,
+ * and where the sun rises, sets and stands (⤢ swaps the two). Below: the day bar and the day.
+ * The place and the day's times open as panels over the sky.
  */
 @Composable
-internal fun SunView(st: PlannerState, onLocate: () -> Unit) {
+internal fun SunView(st: PlannerState, onLocate: () -> Unit, modifier: Modifier = Modifier) {
     val place = st.place
     val sun = Sky.sun(place, st.now)
     val moon = Sky.moon(place, st.now)
@@ -66,14 +70,14 @@ internal fun SunView(st: PlannerState, onLocate: () -> Unit) {
     val map = remember { TileMapState(st.lat, st.lon) }
     LaunchedEffect(st.recentre) { map.centre(st.lat, st.lon) }
     var mapBig by rememberSaveable { mutableStateOf(false) }
+    var panel by rememberSaveable { mutableStateOf(0) } // 0 none, 1 place, 2 times
 
-    // Where the sun rises, sets and stands, as directions from the pin.
+    // Where the sun rises, sets and stands, as directions from the pin; a dot for each hour it is up.
     val rays = buildList {
         times.sunrise?.let { add(Sky.sun(place, it).azimuth to SunriseBlue) }
         times.sunset?.let { add(Sky.sun(place, it).azimuth to SunsetRed) }
         add(sun.azimuth to SunOrange)
     }
-    // A dot for each hour the sun is up: its direction, height and the hour.
     val hourMarks = remember(place, st.day, st.offsetHours) {
         (0..23).mapNotNull { h -> Sky.sun(place, st.dayStart + h * 3_600_000L).let { if (it.altitude > 0) Triple(it.azimuth, it.altitude, h) else null } }
     }
@@ -84,55 +88,110 @@ internal fun SunView(st: PlannerState, onLocate: () -> Unit) {
         SkyChart(place, st.now, st.dayStart, st.viewAz, onTurn = { st.viewAz = ((it % 360f) + 360f) % 360f }, modifier = m)
     }
 
-    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        Box(Modifier.fillMaxWidth().height(380.dp).clip(RoundedCornerShape(14.dp))) {
+    Column(modifier) {
+        Box(Modifier.weight(1f).fillMaxWidth().clipToBounds()) {
             if (!mapBig) skyView(Modifier.fillMaxSize()) else mapView(Modifier.fillMaxSize())
+            // What is up at the chosen hour.
+            Column(Modifier.align(Alignment.TopStart).padding(10.dp).background(Color(0x99000000), RoundedCornerShape(8.dp)).padding(8.dp)) {
+                Text("${hhmm(st.minute)} · ${st.day}", color = Color.White, style = MaterialTheme.typography.labelLarge)
+                Text("Sun ${sun.azimuth.roundToInt()}° · ${sun.altitude.roundToInt()}° up", color = SunOrange, style = MaterialTheme.typography.labelMedium)
+                Text("Moon ${moon.position.azimuth.roundToInt()}° · ${moon.position.altitude.roundToInt()}° up · ${(moon.lit * 100).roundToInt()}% lit", color = Color(0xFFE0E0E0), style = MaterialTheme.typography.labelMedium)
+            }
             // The other view, small, in the corner.
             Box(
                 Modifier
                     .align(Alignment.BottomEnd)
-                    .padding(8.dp)
-                    .size(150.dp)
+                    .padding(10.dp)
+                    .size(140.dp)
                     .clip(RoundedCornerShape(10.dp))
-                    .border(2.dp, HeadsupColors.Ink, RoundedCornerShape(10.dp)),
+                    .border(2.dp, Color.White, RoundedCornerShape(10.dp)),
             ) {
                 if (!mapBig) mapView(Modifier.fillMaxSize()) else skyView(Modifier.fillMaxSize())
                 Box(Modifier.align(Alignment.TopEnd).padding(4.dp)) { Chip("⤢", { mapBig = !mapBig }) }
             }
+            // A panel over the sky: the place, or the day's times.
+            if (panel != 0) {
+                Column(
+                    Modifier
+                        .align(Alignment.BottomCenter)
+                        .fillMaxWidth()
+                        .heightIn(max = 460.dp)
+                        .background(HeadsupColors.Background.copy(alpha = 0.96f), RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp))
+                        .verticalScroll(rememberScrollState())
+                        .padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(if (panel == 1) "Place" else "Times of the day", color = HeadsupColors.Ink, style = MaterialTheme.typography.titleSmall, modifier = Modifier.weight(1f))
+                        Chip("Close", { panel = 0 })
+                    }
+                    if (panel == 1) PlacePanel(st, onLocate, onGoToPin = { map.centre(st.lat, st.lon) }) else TimesPanel(st)
+                }
+            }
         }
-        if (mapBig) Text("Tap the big map to put the pin there; drag and pinch to move and zoom.", color = HeadsupColors.TextMuted, style = MaterialTheme.typography.labelSmall)
-        else Text("Drag the sky to turn where the phone looks (the red cone on the map). Tap the small map to put the pin there, or ⤢ to make it big.", color = HeadsupColors.TextMuted, style = MaterialTheme.typography.labelSmall)
-        Text(
-            "Map lines: blue sunrise ${clock(times.sunrise, st.zone)} (${times.sunrise?.let { Sky.sun(place, it).azimuth.roundToInt() } ?: "–"}°), red sunset ${clock(times.sunset, st.zone)} (${times.sunset?.let { Sky.sun(place, it).azimuth.roundToInt() } ?: "–"}°), orange the sun at ${hhmm(st.minute)}. The phone looks ${st.viewAz.roundToInt()}°.",
-            color = HeadsupColors.TextMuted, style = MaterialTheme.typography.labelSmall,
-        )
-
-        // The hour.
-        Text(
-            "${hhmm(st.minute)} · sun ${sun.altitude.roundToInt()}° at ${sun.azimuth.roundToInt()}° · moon ${moon.position.altitude.roundToInt()}° (${(moon.lit * 100).roundToInt()}% lit)",
-            color = HeadsupColors.Ink, style = MaterialTheme.typography.bodyMedium,
-        )
-        DayBar(st)
-        Text(
-            "Sunrise ${clock(times.sunrise, st.zone)} · Sunset ${clock(times.sunset, st.zone)} · Blue hour ends ${clock(times.civilDawn, st.zone)} / starts ${clock(times.civilDusk, st.zone)} · Dark from ${clock(times.astroDusk, st.zone)}",
-            color = HeadsupColors.TextMuted, style = MaterialTheme.typography.labelSmall,
-        )
-        DateRow(st)
-
-        // The place.
-        Text("Place", color = HeadsupColors.Ink, style = MaterialTheme.typography.titleSmall)
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            NumberField("Latitude", st.lat, st.reload, Modifier.weight(1f)) { st.lat = it.coerceIn(-90.0, 90.0) }
-            NumberField("Longitude", st.lon, st.reload, Modifier.weight(1f)) { st.lon = it.coerceIn(-180.0, 180.0) }
-            NumberField("Height (m)", st.elevation, st.reload, Modifier.weight(1f)) { st.elevation = it.coerceIn(-400.0, 8900.0) }
+        // The hour and the day.
+        Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            DayBar(st)
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Chip("◀", { st.day = st.day.minusDays(1) })
+                Chip("▶", { st.day = st.day.plusDays(1) })
+                Chip("Today", { st.day = LocalDate.now() })
+                Box(Modifier.weight(1f))
+                Chip("Times", { panel = if (panel == 2) 0 else 2 }, selected = panel == 2)
+                Chip("Place", { panel = if (panel == 1) 0 else 1 }, selected = panel == 1)
+            }
         }
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Chip("Use my location", onLocate)
-            Chip("Go to the pin", { map.centre(st.lat, st.lon) })
-            Text("Height is not on the map: set it by hand.", color = HeadsupColors.TextMuted, style = MaterialTheme.typography.labelSmall)
-        }
-        PlacesBar(st)
     }
+}
+
+/** The place: typed, found by the phone, picked on the map, or one kept by name. */
+@Composable
+private fun PlacePanel(st: PlannerState, onLocate: () -> Unit, onGoToPin: () -> Unit) {
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        NumberField("Latitude", st.lat, st.reload, Modifier.weight(1f)) { st.lat = it.coerceIn(-90.0, 90.0) }
+        NumberField("Longitude", st.lon, st.reload, Modifier.weight(1f)) { st.lon = it.coerceIn(-180.0, 180.0) }
+        NumberField("Height (m)", st.elevation, st.reload, Modifier.weight(1f)) { st.elevation = it.coerceIn(-400.0, 8900.0) }
+    }
+    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Chip("Use my location", onLocate)
+        Chip("Go to the pin", onGoToPin)
+    }
+    Text("Tap the map to put the pin there. Height is not on the map: set it by hand.", color = HeadsupColors.TextMuted, style = MaterialTheme.typography.labelSmall)
+    DateRow(st)
+    PlacesBar(st)
+}
+
+/** The day's times: sun, golden and blue hours, the moon, and when the Milky Way's centre can be shot. */
+@Composable
+private fun TimesPanel(st: PlannerState) {
+    val place = st.place
+    val zone = st.zone
+    val key = Triple(place, st.day, st.offsetHours)
+    val sunT = remember(key) { Sky.sunTimes(place, zone, st.day) }
+    val moonT = remember(key) { Sky.moonTimes(place, zone, st.day) }
+    val golden = remember(key) { Sky.goldenHours(place, zone, st.day) }
+    val blue = remember(key) { Sky.blueHours(place, zone, st.day) }
+    val milky = remember(key) { Sky.milkyWayNight(place, zone, st.day) }
+    val moonNoon = remember(key) { Sky.moon(place, st.dayStart + 12 * 3_600_000L) }
+    fun spans(list: List<Sky.Interval>) = if (list.isEmpty()) "–" else list.joinToString(", ") { "${clock(it.start, zone)}–${clock(it.end, zone)}" }
+    @Composable fun line(label: String, value: String, colour: Color = HeadsupColors.Ink) {
+        Row {
+            Text(label, color = HeadsupColors.TextMuted, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
+            Text(value, color = colour, style = MaterialTheme.typography.bodyMedium)
+        }
+    }
+    line("Sunrise / sunset", "${clock(sunT.sunrise, zone)} / ${clock(sunT.sunset, zone)}", SunOrange)
+    line("Golden hour", spans(golden))
+    line("Blue hour", spans(blue))
+    line("Fully dark", "${clock(sunT.astroDusk, zone)} → ${clock(sunT.astroDawn, zone)}")
+    line("Moonrise / moonset", "${clock(moonT.rise, zone)} / ${clock(moonT.set, zone)}")
+    line("Moon", "${(moonNoon.lit * 100).roundToInt()}% lit")
+    line("Milky Way centre, dark", spans(milky.dark), MilkyBlue)
+    line("… and no moon", spans(milky.moonless), MilkyBlue)
+    Text(
+        "Milky Way: its centre at least 10° up while the sky is fully dark (sun 18° down), in the night after this day; \"no moon\" also needs the moon down or under a quarter lit.",
+        color = HeadsupColors.TextMuted, style = MaterialTheme.typography.labelSmall,
+    )
 }
 
 /** Day and time zone of the plan. */
@@ -178,39 +237,51 @@ private fun PlacesBar(st: PlannerState) {
     }
 }
 
-/** The sky as a flat chart: the horizon, the sun's path with its disc at the chosen time, the moon's path and the Milky Way. */
+/**
+ * The sky as a flat chart: the horizon, height lines every 30°, the sun's path with a dot for every
+ * hour and its disc at the chosen time, the moon's path and the Milky Way. Drag to turn and tilt,
+ * pinch to zoom; degrees are the same size across and up.
+ */
 @Composable
 internal fun SkyChart(place: Place, now: Long, dayStart: Long, viewAz: Float, onTurn: (Float) -> Unit, modifier: Modifier = Modifier) {
     val measurer = rememberTextMeasurer()
     val turn = rememberUpdatedState(onTurn)
     val centre = rememberUpdatedState(viewAz)
-    val fov = 120f
-    val top = 75f
-    val bottom = -25f
+    var fov by remember { mutableStateOf(120f) } // degrees across
+    var viewAlt by remember { mutableStateOf(20f) } // the height at the middle of the chart
     Canvas(
         modifier
-            .background(HeadsupColors.Surface)
+            .background(Color(0xFF0B1020))
             .pointerInput(Unit) {
-                detectDragGestures { change, drag ->
-                    change.consume()
-                    turn.value(centre.value - drag.x / size.width * fov)
+                detectTransformGestures { _, pan, zoom, _ ->
+                    val perPx = fov / size.width
+                    turn.value(centre.value - pan.x * perPx)
+                    viewAlt = (viewAlt + pan.y * perPx).coerceIn(-10f, 80f)
+                    fov = (fov / zoom).coerceIn(30f, 200f)
                 }
             },
     ) {
         val w = size.width
         val h = size.height
+        val perPx = fov / w
         fun x(az: Double): Float {
             val rel = ((az - centre.value + 540.0) % 360.0) - 180.0
-            return (rel / fov * w + w / 2).toFloat()
+            return (w / 2 + rel / perPx).toFloat()
         }
-        fun y(alt: Double): Float = ((top - alt) / (top - bottom) * h).toFloat()
+        fun y(alt: Double): Float = (h / 2 - (alt - viewAlt) / perPx).toFloat()
         val horizon = y(0.0)
-        // The ground below the horizon, and its line.
-        drawRect(HeadsupColors.SurfaceHigh, Offset(0f, horizon), Size(w, h - horizon))
-        drawLine(HeadsupColors.Ink, Offset(0f, horizon), Offset(w, horizon), strokeWidth = 3.dp.toPx())
-        for ((name, az) in listOf("N" to 0.0, "E" to 90.0, "S" to 180.0, "W" to 270.0)) {
-            val px = x(az)
-            if (px in 0f..w) drawText(measurer.measure(name, TextStyle(color = HeadsupColors.TextMuted, fontSize = 13.sp)), topLeft = Offset(px - 4.dp.toPx(), horizon + 4.dp.toPx()))
+        // The ground, the horizon, height lines and the points of the compass.
+        if (horizon < h) drawRect(Color(0xFF1C1F26), Offset(0f, horizon), Size(w, h - horizon))
+        for (alt in listOf(30.0, 60.0)) drawLine(Color(0x33FFFFFF), Offset(0f, y(alt)), Offset(w, y(alt)), strokeWidth = 1.dp.toPx())
+        for (alt in listOf(30, 60)) drawText(measurer.measure("$alt°", TextStyle(color = Color(0x66FFFFFF), fontSize = 10.sp)), topLeft = Offset(4.dp.toPx(), y(alt.toDouble()) - 14.dp.toPx()))
+        drawLine(Color.White, Offset(0f, horizon), Offset(w, horizon), strokeWidth = 2.dp.toPx())
+        for ((i, name) in listOf("N", "NE", "E", "SE", "S", "SW", "W", "NW").withIndex()) {
+            val px = x(i * 45.0)
+            if (px in 0f..w) {
+                drawLine(Color(0x88FFFFFF), Offset(px, horizon), Offset(px, horizon + 6.dp.toPx()), strokeWidth = 1.5.dp.toPx())
+                val l = measurer.measure(name, TextStyle(color = Color(0xCCFFFFFF), fontSize = 12.sp))
+                drawText(l, topLeft = Offset(px - l.size.width / 2f, horizon + 8.dp.toPx()))
+            }
         }
         // A path as joined points; a jump across the chart's edge is not joined.
         fun path(points: List<Pair<Double, Double>>, colour: Color, width: Float, closed: Boolean = false) {
@@ -223,33 +294,33 @@ internal fun SkyChart(place: Place, now: Long, dayStart: Long, viewAz: Float, on
                 drawLine(colour, Offset(ax, y(a.second)), Offset(bx, y(b.second)), strokeWidth = width, alpha = if (a.second < 0 && b.second < 0) 0.35f else 1f)
             }
         }
-        // The Milky Way's band.
+        // The Milky Way's band and its centre.
         val arc = Sky.milkyWayArc(place, now, 5).map { it.azimuth to it.altitude }
-        path(arc, Color(0xFF8FB4FF), 5.dp.toPx(), closed = true)
+        path(arc, MilkyBlue.copy(alpha = 0.7f), 5.dp.toPx(), closed = true)
         val gc = Sky.galacticCentre(place, now)
-        drawCircle(Color(0xFFBFD3FF), 7.dp.toPx(), Offset(x(gc.azimuth), y(gc.altitude)))
+        drawCircle(Color(0xFFBFD3FF), 6.dp.toPx(), Offset(x(gc.azimuth), y(gc.altitude)))
         drawText(measurer.measure("Galactic centre", TextStyle(color = Color(0xFFBFD3FF), fontSize = 11.sp)), topLeft = Offset(x(gc.azimuth) + 9.dp.toPx(), y(gc.altitude) - 7.dp.toPx()))
         // The moon's and the sun's paths over the day.
         val samples = (0..144).map { dayStart + it * 10L * 60_000L }
-        path(samples.map { Sky.moon(place, it).position.let { p -> p.azimuth to p.altitude } }, Color(0xFFCFCFCF), 2.dp.toPx())
-        path(samples.map { Sky.sun(place, it).let { p -> p.azimuth to p.altitude } }, SunOrange, 4.dp.toPx())
+        path(samples.map { Sky.moon(place, it).position.let { p -> p.azimuth to p.altitude } }, Color(0xFF9E9E9E), 2.dp.toPx())
+        path(samples.map { Sky.sun(place, it).let { p -> p.azimuth to p.altitude } }, SunOrange, 3.dp.toPx())
         // A dot on the sun's path for each hour, with its number.
         for (hour in 0..23) {
             val s = Sky.sun(place, dayStart + hour * 3_600_000L)
             if (s.altitude < -3) continue
             val c = Offset(x(s.azimuth), y(s.altitude))
             if (c.x < 0f || c.x > w) continue
-            drawCircle(Color.White, 9.dp.toPx(), c)
-            drawCircle(SunOrange, 7.5f.dp.toPx(), c)
-            val l = measurer.measure(hour.toString(), TextStyle(color = Color.Black, fontSize = 9.sp))
+            drawCircle(Color.White, 10.dp.toPx(), c)
+            drawCircle(SunOrange, 8.5f.dp.toPx(), c)
+            val l = measurer.measure(hour.toString(), TextStyle(color = Color.Black, fontSize = 10.sp))
             drawText(l, topLeft = Offset(c.x - l.size.width / 2f, c.y - l.size.height / 2f))
         }
         // The moon and the sun as they stand at the chosen time (the sun a large disc, ringed).
         val moon = Sky.moon(place, now).position
-        drawCircle(Color(0xFFEFEFEF), 7.dp.toPx(), Offset(x(moon.azimuth), y(moon.altitude)))
+        drawCircle(Color(0xFFEFEFEF), 8.dp.toPx(), Offset(x(moon.azimuth), y(moon.altitude)))
         val sun = Sky.sun(place, now)
         val c = Offset(x(sun.azimuth), y(sun.altitude))
-        drawCircle(SunOrange, 14.dp.toPx(), c)
+        drawCircle(Color(0xFFFFB300), 14.dp.toPx(), c)
         drawCircle(Color(0xFFF44336), 17.dp.toPx(), c, style = Stroke(width = 3.dp.toPx()))
     }
 }

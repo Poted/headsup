@@ -141,12 +141,24 @@ object Exposure {
     }
 
     /** A shutter time as a camera shows it: 1/250s, 1/2s, 0.8s, 4s, 30s. */
-    fun formatShutter(seconds: Double): String = when {
-        seconds >= 10 -> "${seconds.roundToInt()}s"
-        seconds >= 0.95 -> "${((seconds * 10).roundToInt() / 10.0).let { if (it % 1.0 == 0.0) it.toInt().toString() else it.toString() }}s"
-        seconds >= 0.4 -> "1/${(1 / seconds).roundToInt().coerceAtLeast(1)}s"
-        else -> "1/${niceDenominator(1 / seconds)}s"
+    fun formatShutter(seconds: Double): String {
+        val inverse = 1 / seconds
+        return when {
+            seconds >= 10 -> "${seconds.roundToInt()}s"
+            seconds >= 0.95 -> "${((seconds * 10).roundToInt() / 10.0).let { if (it % 1.0 == 0.0) it.toInt().toString() else it.toString() }}s"
+            // Between a third and one second cameras print 1/2 and 1/3 where it is one, otherwise tenths (0.8s, 0.6s).
+            seconds >= 0.3 && abs(inverse - inverse.roundToInt()) < 0.08 -> "1/${inverse.roundToInt()}s"
+            seconds >= 0.3 -> "${(seconds * 10).roundToInt() / 10.0}s"
+            else -> "1/${niceDenominator(inverse)}s"
+        }
     }
+
+    /**
+     * The light on the scene in lux for an exposure value at ISO 100, as a light meter states it
+     * (calibration constant 250): EV 0 is 2.5 lux, a clear noon about 80 000. For a reading taken off
+     * the scene (as the phone's camera takes it) it holds for a mid-grey scene.
+     */
+    fun luxFromEv(ev: Double): Double = 2.5 * 2.0.pow(ev)
 
     private fun niceDenominator(d: Double): Int {
         val scale = listOf(2, 3, 4, 5, 6, 8, 10, 13, 15, 20, 25, 30, 40, 50, 60, 80, 100, 125, 160, 200, 250, 320, 400, 500, 640, 800, 1000, 1250, 1600, 2000, 2500, 3200, 4000, 5000, 6400, 8000)

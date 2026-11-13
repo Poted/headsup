@@ -72,6 +72,11 @@ class ExposureTest {
         assertEquals("1/250s", Exposure.formatShutter(1.0 / 250))
         assertEquals("30s", Exposure.formatShutter(30.0))
         assertEquals("4s", Exposure.formatShutter(4.0))
+        assertEquals("1s", Exposure.formatShutter(1.0))
+        assertEquals("0.8s", Exposure.formatShutter(0.8))
+        assertEquals("1/3s", Exposure.formatShutter(1.0 / 3))
+        assertEquals("1/4s", Exposure.formatShutter(0.25))
+        for (t in listOf(0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9)) assertTrue("1/1s" != Exposure.formatShutter(t))
         assertEquals("f/2.8", Exposure.formatAperture(2.8))
         assertEquals("f/11", Exposure.formatAperture(11.0))
         assertEquals(3200, Exposure.snapIso(3345.0))
@@ -93,5 +98,10 @@ class ExposureTest {
         val w = Exposure.ndWindow(-5.0, 2.8, 1.0, CameraLimits(100.0, 3200.0))
         assertTrue(w.endInclusive < 0.0)
         assertEquals(emptyList(), Exposure.filtersIn(w))
+    }
+
+    @Test fun luxFromEv() {
+        assertEquals(2.5, Exposure.luxFromEv(0.0), 1e-9)
+        assertEquals(81_920.0, Exposure.luxFromEv(15.0), 1e-6)
     }
 }

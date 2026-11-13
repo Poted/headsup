@@ -72,7 +72,10 @@ fun PlannerScreen(onEditor: () -> Unit) {
             Row(Modifier.weight(1f)) {}
             Chip("Editor", onEditor)
         }
-        if (view == 1) {
+        if (view == 0) {
+            // The sky fills what is left; the place and times open over it.
+            SunView(st, locate, Modifier.weight(1f).fillMaxWidth())
+        } else if (view == 1) {
             // The live view fills what is left and does not scroll: the camera is the page.
             LiveView(st, locate, Modifier.weight(1f).fillMaxWidth())
         } else {
@@ -80,7 +83,7 @@ fun PlannerScreen(onEditor: () -> Unit) {
                 Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(horizontal = 16.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
-                if (view == 0) SunView(st, locate) else CalculatorView(st)
+                CalculatorView(st)
                 Row(Modifier.padding(bottom = 16.dp)) {}
             }
         }

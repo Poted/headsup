@@ -78,7 +78,8 @@ object Sky {
         val e = obliquity(d)
         val ra = norm360(atan2(sin(lon) * cos(e) - tan(lat) * sin(e), cos(lon)) * DEG)
         val dec = asin(sin(lat) * cos(e) + cos(lat) * sin(e) * sin(lon)) * DEG
-        return doubleArrayOf(ra, dec)
+        val distance = 385_001.0 - 20_905.0 * cos(m) // km
+        return doubleArrayOf(ra, dec, distance)
     }
 
     /** Where the sun is. */
@@ -87,15 +88,20 @@ object Sky {
         return horizontal(s[0], s[1], place, epochMillis)
     }
 
-    /** Where the moon is, and how much of it is lit. */
+    /**
+     * Where the moon is, and how much of it is lit. Its height is as seen from the ground, not from the
+     * Earth's centre: the moon is near enough to stand up to a degree lower near the horizon (parallax).
+     */
     fun moon(place: Place, epochMillis: Long): MoonState {
         val m = moonEquatorial(epochMillis)
         val s = sunEquatorial(epochMillis)
         val phi = acos((sin(s[1] * RAD) * sin(m[1] * RAD) + cos(s[1] * RAD) * cos(m[1] * RAD) * cos((s[0] - m[0]) * RAD)).coerceIn(-1.0, 1.0))
         val sunDist = 149_598_000.0
-        val moonDist = 385_001.0
+        val moonDist = m[2]
         val inc = atan2(sunDist * sin(phi), moonDist - sunDist * cos(phi))
-        return MoonState(horizontal(m[0], m[1], place, epochMillis), (1 + cos(inc)) / 2)
+        val geocentric = horizontal(m[0], m[1], place, epochMillis)
+        val parallax = asin(6378.14 / moonDist * cos(geocentric.altitude * RAD)) * DEG
+        return MoonState(SkyPoint(geocentric.azimuth, geocentric.altitude - parallax), (1 + cos(inc)) / 2)
     }
 
     /** Where the centre of the Milky Way (the bright bulge in Sagittarius) is. */
@@ -134,32 +140,86 @@ object Sky {
         val astroDawn: Long?, val astroDusk: Long?,
     )
 
+    /** The moment in [samples] where [altitude] passes [level] going up ([rising]) or down; refined to a fraction of a second. */
+    private fun crossing(samples: List<Long>, altitude: (Long) -> Double, level: Double, rising: Boolean): Long? {
+        for (i in 0 until samples.size - 1) {
+            val a = altitude(samples[i]) - level
+            val b = altitude(samples[i + 1]) - level
+            val hit = if (rising) a < 0 && b >= 0 else a >= 0 && b < 0
+            if (hit) {
+                var lo = samples[i]; var hi = samples[i + 1]
+                repeat(24) {
+                    val mid = (lo + hi) / 2
+                    val below = altitude(mid) - level < 0
+                    if (below == rising) lo = mid else hi = mid
+                }
+                return (lo + hi) / 2
+            }
+        }
+        return null
+    }
+
+    private fun wholeDay(zone: ZoneId, date: LocalDate): List<Long> =
+        daySamples(zone, date, 5) + date.plusDays(1).atStartOfDay(zone).toInstant().toEpochMilli()
+
     /** Sunrise, sunset and the twilights of [date] at [place]. Rise and set mean the sun's top edge on the horizon (−0.833°). */
     fun sunTimes(place: Place, zone: ZoneId, date: LocalDate): SunTimes {
-        val samples = daySamples(zone, date, 5) + date.plusDays(1).atStartOfDay(zone).toInstant().toEpochMilli()
-        fun crossing(level: Double, rising: Boolean): Long? {
-            for (i in 0 until samples.size - 1) {
-                val a = sun(place, samples[i]).altitude - level
-                val b = sun(place, samples[i + 1]).altitude - level
-                val hit = if (rising) a < 0 && b >= 0 else a >= 0 && b < 0
-                if (hit) {
-                    var lo = samples[i]; var hi = samples[i + 1]
-                    repeat(24) {
-                        val mid = (lo + hi) / 2
-                        val v = sun(place, mid).altitude - level
-                        val below = v < 0
-                        if (below == rising) lo = mid else hi = mid
-                    }
-                    return (lo + hi) / 2
-                }
-            }
-            return null
-        }
+        val samples = wholeDay(zone, date)
+        val alt = { t: Long -> sun(place, t).altitude }
         return SunTimes(
-            crossing(-0.833, true), crossing(-0.833, false),
-            crossing(-6.0, true), crossing(-6.0, false),
-            crossing(-18.0, true), crossing(-18.0, false),
+            crossing(samples, alt, -0.833, true), crossing(samples, alt, -0.833, false),
+            crossing(samples, alt, -6.0, true), crossing(samples, alt, -6.0, false),
+            crossing(samples, alt, -18.0, true), crossing(samples, alt, -18.0, false),
         )
+    }
+
+    /** When the moon rises and sets on a local day (null when it does not, which happens about once a month each). */
+    data class RiseSet(val rise: Long?, val set: Long?)
+
+    /** Moonrise and moonset of [date] at [place]: the moon's top edge on the horizon, as seen from the ground. */
+    fun moonTimes(place: Place, zone: ZoneId, date: LocalDate): RiseSet {
+        val samples = wholeDay(zone, date)
+        val alt = { t: Long -> moon(place, t).position.altitude }
+        return RiseSet(crossing(samples, alt, -0.833, true), crossing(samples, alt, -0.833, false))
+    }
+
+    /** A stretch of time, in milliseconds since 1970. */
+    data class Interval(val start: Long, val end: Long)
+
+    /** The stretches of [samples] (5 minutes apart) where [inside] holds. */
+    private fun stretches(samples: List<Long>, inside: (Long) -> Boolean): List<Interval> {
+        val out = ArrayList<Interval>()
+        var start: Long? = null
+        for (t in samples) {
+            val now = inside(t)
+            if (now && start == null) start = t
+            if (!now && start != null) { out += Interval(start, t); start = null }
+        }
+        if (start != null) out += Interval(start, samples.last())
+        return out
+    }
+
+    /** The golden hours of a local day: the sun between 4° below and 6° above the horizon (warm, low light), morning and evening. */
+    fun goldenHours(place: Place, zone: ZoneId, date: LocalDate): List<Interval> =
+        stretches(wholeDay(zone, date)) { t -> sun(place, t).altitude.let { it > -4.0 && it < 6.0 } }
+
+    /** The blue hours of a local day: the sun between 4° and 8° below the horizon. */
+    fun blueHours(place: Place, zone: ZoneId, date: LocalDate): List<Interval> =
+        stretches(wholeDay(zone, date)) { t -> sun(place, t).altitude.let { it > -8.0 && it <= -4.0 } }
+
+    /**
+     * When the centre of the Milky Way can be photographed in the night after [date] (noon to noon):
+     * [dark] where it is at least [minAltitude] up and the sky is fully dark (sun 18° down); [moonless]
+     * the part of that where the moon is also down or a thin crescent (under a quarter lit).
+     */
+    data class MilkyWayNight(val dark: List<Interval>, val moonless: List<Interval>)
+
+    fun milkyWayNight(place: Place, zone: ZoneId, date: LocalDate, minAltitude: Double = 10.0): MilkyWayNight {
+        val noon = date.atStartOfDay(zone).toInstant().toEpochMilli() + 12 * 3_600_000L
+        val samples = (0..288).map { noon + it * 5 * 60_000L }
+        fun dark(t: Long) = sun(place, t).altitude <= -18.0 && galacticCentre(place, t).altitude >= minAltitude
+        fun moonless(t: Long) = dark(t) && moon(place, t).let { it.position.altitude < 0.0 || it.lit < 0.25 }
+        return MilkyWayNight(stretches(samples, ::dark), stretches(samples, ::moonless))
     }
 
     /** The instant [epochMillis] as a local date in [zone]. */

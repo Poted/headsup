@@ -71,14 +71,6 @@ internal class PlannerState(context: Context) {
     var isoMax by Saved(prefs.get("isomax", 25_600f).toDouble()) { prefs.put("isomax", it.toFloat()) }
     var isoMin by Saved(prefs.get("isomin", 100f).toDouble()) { prefs.put("isomin", it.toFloat()) }
 
-    // Timelapse: the window of the day (minutes from midnight) and the shutter the camera may use in it.
-    var tlFrom by Saved(prefs.get("tlfrom", 4f * 60f)) { prefs.put("tlfrom", it) }
-    var tlTo by Saved(prefs.get("tlto", 8f * 60f)) { prefs.put("tlto", it) }
-    var shutterMin by Saved(prefs.get("smin", 0.5f).toDouble()) { prefs.put("smin", it.toFloat()) }
-    var shutterMax by Saved(prefs.get("smax", 4f).toDouble()) { prefs.put("smax", it.toFloat()) }
-
-    /** True when the plan is worked under the forecast's clouds; false when under the cloud set by hand. */
-    var useForecast by Saved(prefs.get("useforecast", 0f) > 0.5f) { prefs.put("useforecast", if (it) 1f else 0f) }
     /** The last forecast fetched, and the place and day it is for. It is kept, so a place seen once has its forecast with no signal. */
     var forecast by mutableStateOf(OpenMeteo.parse(prefs.getString("fc_json", "")))
     private var forecastKey by mutableStateOf(prefs.getString("fc_key", ""))
@@ -89,9 +81,6 @@ internal class PlannerState(context: Context) {
 
     /** The forecast, while it is for this place and day. */
     val forecastHere: CloudForecast? get() = forecast?.takeIf { forecastKey == key() }
-
-    /** The forecast the plan is worked under: only when chosen, and only when it is for this place and day. */
-    val activeForecast: CloudForecast? get() = if (useForecast) forecastHere else null
 
     /** Asks the weather service for the cloud cover of this place and day. */
     suspend fun fetchForecast() {
