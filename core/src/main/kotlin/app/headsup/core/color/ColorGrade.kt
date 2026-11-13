@@ -1,5 +1,6 @@
 package app.headsup.core.color
 
+import kotlin.math.abs
 import kotlin.math.pow
 
 /**
@@ -81,6 +82,8 @@ data class ColorGrade(
      * timed a print (a point is 1/12 stop of that colour's light); 0 is none.
      */
     val printer: List<Float> = PrinterLights.NEUTRAL,
+    /** Where the skin that [skinHue] turns was measured (vectorscope degrees, before the turn). */
+    val skinFrom: Float = SkinTone.LINE_DEGREES.toFloat(),
 ) {
     /** The corrections that look at a pixel's surroundings, drawn by the shader before the colour table. */
     val presence: Presence get() = Presence(texture, clarity, dehaze, defringe)
@@ -114,6 +117,7 @@ data class ColorGrade(
         points.map { it.copy(hue = it.hue * k, saturation = it.saturation * k, luminance = it.luminance * k) },
         colourPop * k,
         printer.map { it * k },
+        skinFrom,
     )
 
     /**
@@ -133,7 +137,7 @@ data class ColorGrade(
         whites = (whites + other.whites).coerceIn(-1f, 1f),
         vibrance = (vibrance + other.vibrance).coerceIn(-1f, 1f),
         tint = (tint + other.tint).coerceIn(-1f, 1f),
-        skinHue = (skinHue + other.skinHue).coerceIn(-30f, 30f),
+        skinHue = (skinHue + other.skinHue).coerceIn(-45f, 45f),
         rolloff = (rolloff + other.rolloff).coerceIn(0f, 1f),
         toneAmount = (toneAmount + other.toneAmount).coerceIn(0f, 1f),
         // Hues cannot be added; the stronger toning decides them.
@@ -172,6 +176,8 @@ data class ColorGrade(
         points = other.points.ifEmpty { points },
         colourPop = maxOf(colourPop, other.colourPop),
         printer = List(3) { i -> (printer.getOrElse(i) { 0f } + other.printer.getOrElse(i) { 0f }).coerceIn(-PrinterLights.MAX, PrinterLights.MAX) },
+        // Where the skin is cannot be added: the stronger turn's.
+        skinFrom = if (abs(other.skinHue) > abs(skinHue)) other.skinFrom else skinFrom,
     )
 
     /**
@@ -236,6 +242,7 @@ data class ColorGrade(
         defringe = if (after.defringe != before.defringe) after.defringe else defringe,
         points = if (after.points != before.points) after.points else points,
         colourPop = if (after.colourPop != before.colourPop) after.colourPop else colourPop,
+        skinFrom = if (after.skinFrom != before.skinFrom) after.skinFrom else skinFrom,
         printer = List(3) { i -> if (after.printer.getOrElse(i) { 0f } != before.printer.getOrElse(i) { 0f }) after.printer.getOrElse(i) { 0f } else printer.getOrElse(i) { 0f } },
     )
 
@@ -374,7 +381,7 @@ object LutBaker {
         ToneCurve.apply(grade.curves, rgb)
         ColourWheels.apply(grade.wheels, rgb)
         if (grade.skinHue != 0f) {
-            SkinTone.rotate(rgb, grade.skinHue)
+            SkinTone.rotate(rgb, grade.skinHue, grade.skinFrom)
             for (i in 0..2) rgb[i] = rgb[i].coerceIn(0f, 1f)
         }
     }

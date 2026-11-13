@@ -158,12 +158,14 @@ object ShotMatch {
     private fun matchSkin(samples: FloatArray, count: Int, lut: CubeLut?, grade: ColorGrade, reference: MatchStats): ColorGrade {
         val wanted = reference.skinAngle ?: return grade
         var current = grade
-        // Two passes: the rotation is weighted by distance from the skin line, so one step may fall short.
-        repeat(2) {
-            val now = MatchStats.of(graded(samples, count, lut, current)).skinAngle ?: return current
-            val delta = SkinTone.angleDifference(wanted.toDouble(), now.toDouble()).toFloat()
-            current = current.copy(skinHue = (current.skinHue + delta).coerceIn(-30f, 30f))
-        }
+        // The skin's hue before the turn is where the turn works; a second pass for what the first
+        // fell short of (the turn fades out at the edges of the skin's colours).
+        val first = MatchStats.of(graded(samples, count, lut, current)).skinAngle ?: return current
+        val from = (first - current.skinHue + 360f) % 360f
+        current = current.copy(skinFrom = from, skinHue = SkinTone.angleDifference(wanted.toDouble(), from.toDouble()).toFloat().coerceIn(-45f, 45f))
+        val now = MatchStats.of(graded(samples, count, lut, current)).skinAngle ?: return current
+        val rest = SkinTone.angleDifference(wanted.toDouble(), now.toDouble()).toFloat()
+        current = current.copy(skinHue = (current.skinHue + rest).coerceIn(-45f, 45f))
         return current
     }
 

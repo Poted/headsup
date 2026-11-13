@@ -3326,7 +3326,7 @@ internal enum class Adjustment(
     DENSITY("Dn", "Density", -1f..1f, 0.02f, "%+.2f", { it.density }, { g, v -> g.copy(density = v) }),
     TEMPERATURE("K", "Temperature", -1f..1f, 0.02f, "%+.2f", { it.temperature }, { g, v -> g.copy(temperature = v) }),
     TINT("Tn", "Tint", -1f..1f, 0.02f, "%+.2f", { it.tint }, { g, v -> g.copy(tint = v) }),
-    SKIN("Sk", "Skin tone", -30f..30f, 0.5f, "%+.1f°", { it.skinHue }, { g, v -> g.copy(skinHue = v) }),
+    SKIN("Sk", "Skin tone", -45f..45f, 0.5f, "%+.1f°", { it.skinHue }, { g, v -> g.copy(skinHue = v) }),
     VIGNETTE("Vig", "Vignette", 0f..1f, 0.02f, "%.2f", { it.vignette }, { g, v -> g.copy(vignette = v) }),
     ROLLOFF("Rl", "Roll-off", 0f..1f, 0.02f, "%.2f", { it.rolloff }, { g, v -> g.copy(rolloff = v) }),
     SPLIT("Sp", "Split tone", 0f..1f, 0.02f, "%.2f", { it.toneAmount }, { g, v -> g.copy(toneAmount = v) }),
@@ -5202,7 +5202,7 @@ private fun RenameDialog(initial: String, onDismiss: () -> Unit, title: String =
 private fun SkinToneTool(scope: ScopeResult?, onMatch: () -> Unit) {
     ToolSection(
         "Skin line",
-        info = "On a vectorscope, skin of every complexion falls close to one line. Tap a face on the picture to measure it; Match line turns the skin tones onto that line, leaving greys and other colours alone.",
+        info = "On a vectorscope, skin of every complexion falls close to one line. Tap a lit part of a face (a cheek, the forehead) to measure it; Match line turns the colours of that skin onto the line. Only colours like the measured skin turn (its hue and its gentle saturation): a room in lamplight, wood, brick or a sunset stay as they are. Pressed again, it stays put.",
     ) {
     // In a narrow column (held sideways with the tools drawn in) the reading goes under the scope.
     androidx.compose.foundation.layout.BoxWithConstraints {
@@ -5215,7 +5215,9 @@ private fun SkinToneTool(scope: ScopeResult?, onMatch: () -> Unit) {
                 val off = SkinTone.angleDifference(measured.angleDegrees, SkinTone.LINE_DEGREES)
                 Text(String.format(Locale.US, "%.0f°", measured.angleDegrees), style = MaterialTheme.typography.headlineSmall)
                 Hint(
-                    String.format(Locale.US, "%+.0f° from the skin line (%s)", off, if (off > 0) "towards yellow/green" else "towards red/magenta"),
+                    String.format(Locale.US, "%+.0f° from the skin line (%s)", off, if (off > 0) "towards yellow/green" else "towards red/magenta") +
+                        // Nearly grey there (shade, a highlight): its hue is rough.
+                        if (measured.magnitude < 0.025) ". Pale here: the reading is rough; tap a lit part of the skin." else "",
                 )
             }
             Button(onClick = onMatch, enabled = measured != null, modifier = if (narrow) Modifier.fillMaxWidth() else Modifier) {

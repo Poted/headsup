@@ -586,6 +586,7 @@ internal object Json {
         .put("vibrance", g.vibrance)
         .put("tint", g.tint)
         .put("skinHue", g.skinHue)
+        .put("skinFrom", g.skinFrom.toDouble())
         .put("rolloff", g.rolloff)
         .put("toneAmount", g.toneAmount)
         .put("shadowHue", g.shadowHue)
@@ -631,6 +632,7 @@ internal object Json {
             vibrance = f("vibrance"),
             tint = f("tint"),
             skinHue = f("skinHue"),
+            skinFrom = f("skinFrom", app.headsup.core.color.SkinTone.LINE_DEGREES.toFloat()),
             rolloff = f("rolloff"),
             toneAmount = f("toneAmount"),
             shadowHue = f("shadowHue", ColorGrade.DEFAULT_SHADOW_HUE),

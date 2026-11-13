@@ -57,7 +57,8 @@ object Vectorscope {
         val cy = (markerY * height).toInt().coerceIn(0, height - 1)
         val avg = FloatArray(3)
         var n = 0
-        for (y in cy - 3..cy + 3) for (x in cx - 3..cx + 3) {
+        val reach = maxOf(3, width / 100)
+        for (y in cy - reach..cy + reach) for (x in cx - reach..cx + reach) {
             if (x !in 0 until width || y !in 0 until height) continue
             graded(pixels[y * width + x], cube, rgb)
             for (k in 0..2) avg[k] += rgb[k]
