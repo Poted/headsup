@@ -105,6 +105,7 @@ internal fun TileMap(
     onPick: (Double, Double) -> Unit,
     modifier: Modifier = Modifier,
     hours: List<Triple<Double, Double, Int>> = emptyList(),
+    target: Pair<Double, Double>? = null,
 ) {
     val context = LocalContext.current
     val density = LocalDensity.current.density
@@ -206,6 +207,16 @@ internal fun TileMap(
         }
         drawPath(cone, Color(0x55F44336))
         drawPath(cone, Color(0xFFF44336), style = Stroke(width = 1.5.dp.toPx()))
+        // The target looked for (a peak, a tower) and the line of sight to it.
+        if (target != null) {
+            val t = Offset(
+                (WebMercator.x(target.second, state.zoom, base) - cx + box.width / 2.0).toFloat(),
+                (WebMercator.y(target.first, state.zoom, base) - cy + box.height / 2.0).toFloat(),
+            )
+            drawLine(Color(0xFF7C4DFF), pin, t, strokeWidth = 2.5.dp.toPx())
+            drawCircle(Color.White, 8.dp.toPx(), t)
+            drawCircle(Color(0xFF7C4DFF), 6.dp.toPx(), t)
+        }
         drawCircle(Color.White, 7.dp.toPx(), pin)
         drawCircle(Color(0xFFF44336), 5.dp.toPx(), pin)
         drawText(

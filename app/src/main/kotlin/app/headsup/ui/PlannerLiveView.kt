@@ -205,6 +205,15 @@ internal fun LiveView(st: PlannerState, onLocate: () -> Unit, modifier: Modifier
                     line(prev, p, Color.White, 2.dp.toPx())
                     prev = p
                 }
+                // The land's skyline (hills and mountains), to check the overlay against the real view.
+                st.skylineHere?.let { sky ->
+                    var p0 = at(0.0, sky.at(0.0))
+                    for (az in 2..360 step 2) {
+                        val p = at(az.toDouble(), sky.at(az.toDouble()))
+                        line(p0, p, Color(0xFF8BC34A), 2.dp.toPx())
+                        p0 = p
+                    }
+                }
                 for ((name, az) in listOf("N" to 0.0, "E" to 90.0, "S" to 180.0, "W" to 270.0)) {
                     val p = at(az, 0.0)
                     if (ok(p)) label(name, app.headsup.core.planner.ScreenPoint(p.x, p.y - 22.dp.toPx(), true), Color.White, 16)

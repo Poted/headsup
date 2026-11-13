@@ -25,6 +25,14 @@ settings and saved places are kept by `PlannerPrefs` in `PlannerScreen.kt`, not 
 - `CameraScale`: the camera's dials a third of a stop apart (shutter 1/8000 s … 30 s and a few
   long times, f/1 … f/32, ISO 50 …); settings move along them, worked-out values are shown as the
   nearest of them (so nothing reads 1/1s).
+- `Geo`: distance and direction between places, destination, how high a point looks (Earth's
+  curve and the air's bending, k = 0.13), refraction of a body near the horizon.
+- `Horizon`: the skyline from a terrain model: along each degree of azimuth, points out to 60 km
+  (close together near, wider far; terrain zoom 12 / 11 / 10 by distance), the highest angle.
+  `Sky.sunOverSkyline` / `moonOverSkyline`: when the top edge clears it (refraction included).
+- `Alignment`: when the sun, the moon or the Milky Way's centre stands in a direction (and, if
+  asked, within 1° of a height): day by day the moment it crosses that azimuth; the Milky Way only
+  in a fully dark sky.
 - `WebMercator`: map pixels from latitude and longitude.
 - `Ar`: the phone's attitude and a direction in the sky to a point on the screen; the lens's
   focal length in pixels.
@@ -40,6 +48,8 @@ settings and saved places are kept by `PlannerPrefs` in `PlannerScreen.kt`, not 
 - `TileMap`: the map (tiles fetched when seen and kept in the cache folder; drag, pinch, tap to
   put the pin; the pin, a cone for the way the phone looks, rays for the sun, hour dots).
 - `PlannerPlans`: saved plans (place, day and hour, camera settings, sky), opened from the header.
+- `PlannerTerrain`: `TerrainStore`, terrain tiles fetched and kept on the phone; a point's height;
+  the skyline of a place.
 - `PlannerParts`: small controls and the day bar. `ModeChooser`: Editor or Planner after the logo.
 
 Three views, not one page: the sun view is for looking (the sky with the map in its corner, ⤢ swaps
@@ -104,6 +114,22 @@ The phone's GPS height is not used for it (it is measured from the ellipsoid, te
 (1.76′ × √metres) for sunrise, sunset, moonrise and moonset: 100 m up, the sun rises about two
 minutes sooner.
 
+## Skyline and Find
+
+When the place changes, the land around it is read (about 70 terrain tiles the first time, a few
+MB, kept on the phone) and the skyline worked out from the camera's height. It is drawn on the sky
+chart (the land filled, a green line) and in Live (a green line, to check the overlay against the
+real hills). The Times panel adds when the sun and moon clear the land and go behind it.
+
+Find: pick a target on the map (a peak, a tower; its ground from the terrain plus how tall it
+stands) or take the way the phone looks; choose Sun, Moon or Milky Way centre; search 30, 90 or
+365 days from the day shown, at the target's height (within 1°; for the phone's direction, the
+skyline's height there) or at any height. A found moment opens that day and hour everywhere.
+
+Limits: terrain at about 25 m near and 100 m far, so a narrow summit or a building may be missed or
+lower (a building or a tree is not in the model: give the target's height by hand); the moon's
+position is good to about 0.3°.
+
 ## Data and services: only what may be used commercially
 
 A rule for the planner: no data or service that may not be used in a paid app.
@@ -130,8 +156,7 @@ for light use; for a store release use a tile provider with a key. The editor us
    it reads as a base (`Measured`).
 2. Light pollution: only from a source usable commercially (VIIRS night lights with a sky-glow
    model, if its licence allows); until then Bortle is set by hand.
-3. Terrain: horizon profile from elevation data, the sun hidden behind peaks, a 3D horizon.
-   Needs data fetched or bundled.
+3. [done] Terrain: skyline from elevation data, the sun hidden behind peaks; Find. A 3D view is not planned.
 4. [done] Map with the pin, the cone for the way the phone looks, and the sun's rise, set and
    current directions. The cone follows the dragged sky now; it will follow the compass in live view.
 5. [done] Cloud forecast (Open-Meteo), shown in brackets beside the result.

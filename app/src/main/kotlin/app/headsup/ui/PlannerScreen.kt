@@ -49,6 +49,12 @@ fun PlannerScreen(onEditor: () -> Unit) {
     LaunchedEffect(st.lat, st.lon) {
         kotlinx.coroutines.delay(700)
         st.fetchGround()
+        st.buildSkyline()
+    }
+    // A camera higher up sees another skyline.
+    LaunchedEffect(st.aboveGround) {
+        kotlinx.coroutines.delay(700)
+        st.buildSkyline()
     }
 
     val locationPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->

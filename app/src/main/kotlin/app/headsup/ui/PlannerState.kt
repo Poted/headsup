@@ -1,7 +1,6 @@
 package app.headsup.ui
 
 import android.content.Context
-import android.graphics.BitmapFactory
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -10,8 +9,12 @@ import app.headsup.core.planner.CloudForecast
 import app.headsup.core.planner.CameraLimits
 import app.headsup.core.planner.ExposureSetup
 import app.headsup.core.planner.NdFilter
+import app.headsup.core.planner.AlignMatch
+import app.headsup.core.planner.Alignment
+import app.headsup.core.planner.Body
+import app.headsup.core.planner.Geo
+import app.headsup.core.planner.HorizonProfile
 import app.headsup.core.planner.MetNorway
-import app.headsup.core.planner.Terrain
 import app.headsup.core.planner.Place
 import app.headsup.core.planner.SkyConditions
 import app.headsup.core.planner.Measured
@@ -114,33 +117,100 @@ internal class PlannerState(context: Context) {
     suspend fun fetchGround() {
         val la = lat
         val lo = lon
-        val t = Terrain.tilePixel(la, lo)
-        val height = withContext(Dispatchers.IO) {
-            runCatching {
-                val dir = File(cacheDir, "terrain_tiles").apply { mkdirs() }
-                val file = File(dir, "${Terrain.ZOOM}-${t.x}-${t.y}.png")
-                val url = "https://s3.amazonaws.com/elevation-tiles-prod/terrarium/${Terrain.ZOOM}/${t.x}/${t.y}.png"
-                val bytes = (if (file.exists()) file.readBytes() else download(url)?.also { file.writeBytes(it) })
-                    ?: return@runCatching null
-                val bmp = BitmapFactory.decodeByteArray(bytes, 0, bytes.size) ?: return@runCatching null
-                val h = Terrain.bilinear(t.px, t.py) { x, y ->
-                    val c = bmp.getPixel(x, y)
-                    Terrain.decode((c shr 16) and 0xFF, (c shr 8) and 0xFF, c and 0xFF)
-                }
-                bmp.recycle()
-                h
-            }.getOrNull()
-        }
+        val height = terrain.height(la, lo)
         if (height == null) {
             groundStatus = "No ground height (no signal): set it by hand."
         } else if (la == lat && lo == lon) {
-            elevation = height.coerceAtLeast(-430.0).let { Math.round(it).toDouble() }
+            elevation = Math.round(height.coerceAtLeast(-430.0)).toDouble()
             groundVersion++
             groundStatus = "Ground height from the terrain model."
         }
     }
 
+    // The skyline: the hills and mountains around the place, seen from the camera's height.
+    var skyline by mutableStateOf<HorizonProfile?>(null)
+    private var skylineKey by mutableStateOf("")
+    var skylineStatus by mutableStateOf("")
+    private fun skyKey() = String.format(Locale.US, "%.4f|%.4f|%.0f", lat, lon, aboveGround)
+
+    /** The skyline, while it is for this place and height. */
+    val skylineHere: HorizonProfile? get() = skyline?.takeIf { skylineKey == skyKey() }
+
+    /** Reads the land up to 60 km around and works out the skyline (about 70 terrain tiles the first time, a few MB). */
+    suspend fun buildSkyline() {
+        val k = skyKey()
+        if (skylineKey == k && skyline != null) return
+        val la = lat
+        val lo = lon
+        val eye = elevation + aboveGround + 1.6
+        skylineStatus = "Reading the land around…"
+        val p = terrain.skyline(la, lo, eye) { done, all -> skylineStatus = "Reading the land around… $done / $all" }
+        if (skyKey() != k) return
+        if (p != null) {
+            skyline = p
+            skylineKey = k
+            skylineStatus = ""
+        } else {
+            skylineStatus = "No terrain (no signal): the horizon is taken as flat."
+        }
+    }
+
+    // Finding when a body stands in a direction: towards a target on the map, or where the phone looks.
+    var findBody by mutableStateOf(Body.Sun)
+    var findUseLook by mutableStateOf(false)
+    var target by mutableStateOf<Pair<Double, Double>?>(null)
+    var targetGround by mutableStateOf<Double?>(null)
+    /** How tall the target stands above its ground (a tower, a tree, a cross on a peak), metres. */
+    var targetAbove by mutableStateOf(0.0)
+    var pickingTarget by mutableStateOf(false)
+    var findAnyHeight by mutableStateOf(false)
+    var findDays by mutableStateOf(365)
+    var findResults by mutableStateOf<List<AlignMatch>>(emptyList())
+    var findStatus by mutableStateOf("")
+
+    private val eye: Double get() = elevation + aboveGround + 1.6
+    val targetDistance: Double? get() = target?.let { Geo.distance(lat, lon, it.first, it.second) }
+    val targetAzimuth: Double? get() = target?.let { Geo.bearing(lat, lon, it.first, it.second) }
+    /** How high the target's top looks from the camera, degrees (needs its ground's height). */
+    val targetAltitude: Double? get() {
+        val d = targetDistance ?: return null
+        val g = targetGround ?: return null
+        return Geo.elevationAngle(d, g + targetAbove - eye)
+    }
+
+    /** The direction searched: the target's, or where the phone looks. */
+    val findAzimuth: Double? get() = if (findUseLook) viewAz.toDouble() else targetAzimuth
+    /** The height searched, or null for any: the target's top, or the skyline where the phone looks. */
+    val findAltitude: Double? get() = when {
+        findAnyHeight -> null
+        findUseLook -> skylineHere?.at(viewAz.toDouble()) ?: 0.0
+        else -> targetAltitude
+    }
+
+    suspend fun setTarget(la: Double, lo: Double) {
+        target = la to lo
+        findUseLook = false
+        pickingTarget = false
+        targetGround = null
+        targetGround = terrain.height(la, lo)
+    }
+
+    suspend fun search() {
+        val az = findAzimuth ?: run { findStatus = "Set a target first."; return }
+        val alt = findAltitude
+        findStatus = "Searching…"
+        val p = place
+        val z = zone
+        val from = day
+        val body = findBody
+        val days = findDays
+        val r = withContext(Dispatchers.Default) { Alignment.find(p, z, from, days, body, az, alt, 1.0) }
+        findResults = r
+        findStatus = if (r.isEmpty()) "Not in these days." + (if (alt != null) " Try Any height, or more days." else "") else ""
+    }
+
     private val cacheDir: File = context.cacheDir
+    private val terrain = TerrainStore(cacheDir) { download(it) }
 
     /** The bytes at [url], or null; names the app to the server, as the weather service asks. */
     private suspend fun download(url: String): ByteArray? = withContext(Dispatchers.IO) {

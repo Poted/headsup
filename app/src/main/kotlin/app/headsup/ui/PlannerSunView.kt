@@ -3,6 +3,7 @@ package app.headsup.ui
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -25,6 +26,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
@@ -35,6 +37,7 @@ import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.TextStyle
@@ -42,11 +45,15 @@ import androidx.compose.ui.text.drawText
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import app.headsup.core.planner.AlignMatch
+import app.headsup.core.planner.Body
+import app.headsup.core.planner.HorizonProfile
 import app.headsup.core.planner.Place
 import app.headsup.core.planner.Sky
 import java.time.LocalDate
 import java.time.ZoneOffset
 import kotlin.math.abs
+import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
 
 private val SunOrange = Color(0xFFFF9800)
@@ -70,7 +77,8 @@ internal fun SunView(st: PlannerState, onLocate: () -> Unit, modifier: Modifier 
     val map = remember { TileMapState(st.lat, st.lon) }
     LaunchedEffect(st.recentre) { map.centre(st.lat, st.lon) }
     var mapBig by rememberSaveable { mutableStateOf(false) }
-    var panel by rememberSaveable { mutableStateOf(0) } // 0 none, 1 place, 2 times
+    var panel by rememberSaveable { mutableStateOf(0) } // 0 none, 1 place, 2 times, 3 find
+    val scope = rememberCoroutineScope()
 
     // Where the sun rises, sets and stands, as directions from the pin; a dot for each hour it is up.
     val rays = buildList {
@@ -82,10 +90,20 @@ internal fun SunView(st: PlannerState, onLocate: () -> Unit, modifier: Modifier 
         (0..23).mapNotNull { h -> Sky.sun(place, st.dayStart + h * 3_600_000L).let { if (it.altitude > 0) Triple(it.azimuth, it.altitude, h) else null } }
     }
     val mapView: @Composable (Modifier) -> Unit = { m ->
-        TileMap(map, st.lat, st.lon, st.viewAz, rays, onPick = { la, lo -> st.setPlace(la, lo, fromMap = true) }, modifier = m, hours = hourMarks)
+        TileMap(
+            map, st.lat, st.lon, st.viewAz, rays,
+            onPick = { la, lo ->
+                // While a target is being picked a tap sets the target; otherwise it moves the place.
+                if (st.pickingTarget) { scope.launch { st.setTarget(la, lo) }; panel = 3 } else st.setPlace(la, lo, fromMap = true)
+            },
+            modifier = m, hours = hourMarks, target = if (st.findUseLook) null else st.target,
+        )
     }
     val skyView: @Composable (Modifier) -> Unit = { m ->
-        SkyChart(place, st.now, st.dayStart, st.viewAz, onTurn = { st.viewAz = ((it % 360f) + 360f) % 360f }, modifier = m)
+        SkyChart(
+            place, st.now, st.dayStart, st.viewAz, onTurn = { st.viewAz = ((it % 360f) + 360f) % 360f }, modifier = m,
+            skyline = st.skylineHere, target = st.findAzimuth?.let { it to st.findAltitude },
+        )
     }
 
     Column(modifier) {
@@ -109,7 +127,13 @@ internal fun SunView(st: PlannerState, onLocate: () -> Unit, modifier: Modifier 
                 if (!mapBig) mapView(Modifier.fillMaxSize()) else skyView(Modifier.fillMaxSize())
                 Box(Modifier.align(Alignment.TopEnd).padding(4.dp)) { Chip("⤢", { mapBig = !mapBig }) }
             }
-            // A panel over the sky: the place, or the day's times.
+            if (st.pickingTarget) {
+                Column(Modifier.align(Alignment.TopCenter).padding(top = 70.dp).background(Color(0xCC7C4DFF), RoundedCornerShape(8.dp)).padding(10.dp)) {
+                    Text("Tap the target on the map (a peak, a tower).", color = Color.White, style = MaterialTheme.typography.labelLarge)
+                    Chip("Cancel", { st.pickingTarget = false; panel = 3 })
+                }
+            }
+            // A panel over the sky: the place, the day's times, or finding when.
             if (panel != 0) {
                 Column(
                     Modifier
@@ -122,10 +146,14 @@ internal fun SunView(st: PlannerState, onLocate: () -> Unit, modifier: Modifier 
                     verticalArrangement = Arrangement.spacedBy(10.dp),
                 ) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(if (panel == 1) "Place" else "Times of the day", color = HeadsupColors.Ink, style = MaterialTheme.typography.titleSmall, modifier = Modifier.weight(1f))
+                        Text(when (panel) { 1 -> "Place"; 2 -> "Times of the day"; else -> "Find when" }, color = HeadsupColors.Ink, style = MaterialTheme.typography.titleSmall, modifier = Modifier.weight(1f))
                         Chip("Close", { panel = 0 })
                     }
-                    if (panel == 1) PlacePanel(st, onLocate, onGoToPin = { map.centre(st.lat, st.lon) }) else TimesPanel(st)
+                    when (panel) {
+                        1 -> PlacePanel(st, onLocate, onGoToPin = { map.centre(st.lat, st.lon) })
+                        2 -> TimesPanel(st)
+                        else -> FindPanel(st, onPickOnMap = { st.pickingTarget = true; mapBig = true; panel = 0 })
+                    }
                 }
             }
         }
@@ -137,6 +165,7 @@ internal fun SunView(st: PlannerState, onLocate: () -> Unit, modifier: Modifier 
                 Chip("▶", { st.day = st.day.plusDays(1) })
                 Chip("Today", { st.day = LocalDate.now() })
                 Box(Modifier.weight(1f))
+                Chip("Find", { panel = if (panel == 3) 0 else 3 }, selected = panel == 3)
                 Chip("Times", { panel = if (panel == 2) 0 else 2 }, selected = panel == 2)
                 Chip("Place", { panel = if (panel == 1) 0 else 1 }, selected = panel == 1)
             }
@@ -200,6 +229,16 @@ private fun TimesPanel(st: PlannerState) {
     line("Fully dark", "${clock(sunT.astroDusk, zone)} → ${clock(sunT.astroDawn, zone)}")
     line("Moonrise / moonset", "${clock(moonT.rise, zone)} / ${clock(moonT.set, zone)}")
     line("Moon", "${(moonNoon.lit * 100).roundToInt()}% lit")
+    st.skylineHere?.let { sky ->
+        val sunLand = remember(key, sky) { Sky.sunOverSkyline(place, zone, st.day, sky) }
+        val moonLand = remember(key, sky) { Sky.moonOverSkyline(place, zone, st.day, sky) }
+        line("Sun over the land / behind it", "${clock(sunLand.rise, zone)} / ${clock(sunLand.set, zone)}", Color(0xFF8BC34A))
+        line("Moon over the land / behind it", "${clock(moonLand.rise, zone)} / ${clock(moonLand.set, zone)}", Color(0xFF8BC34A))
+    }
+    Text(
+        st.skylineStatus.ifEmpty { if (st.skylineHere != null) "Over the land: when the sun or moon clears the hills and mountains around (green line on the sky), up to 60 km away." else "" },
+        color = HeadsupColors.TextMuted, style = MaterialTheme.typography.labelSmall,
+    )
     line("Milky Way centre, dark", spans(milky.dark), MilkyBlue)
     line("… and no moon", spans(milky.moonless), MilkyBlue)
     Text(
@@ -257,7 +296,10 @@ private fun PlacesBar(st: PlannerState) {
  * pinch to zoom; degrees are the same size across and up.
  */
 @Composable
-internal fun SkyChart(place: Place, now: Long, dayStart: Long, viewAz: Float, onTurn: (Float) -> Unit, modifier: Modifier = Modifier) {
+internal fun SkyChart(
+    place: Place, now: Long, dayStart: Long, viewAz: Float, onTurn: (Float) -> Unit, modifier: Modifier = Modifier,
+    skyline: HorizonProfile? = null, target: Pair<Double, Double?>? = null,
+) {
     val measurer = rememberTextMeasurer()
     val turn = rememberUpdatedState(onTurn)
     val centre = rememberUpdatedState(viewAz)
@@ -285,10 +327,41 @@ internal fun SkyChart(place: Place, now: Long, dayStart: Long, viewAz: Float, on
         fun y(alt: Double): Float = (h / 2 - (alt - viewAlt) / perPx).toFloat()
         val horizon = y(0.0)
         // The ground, the horizon, height lines and the points of the compass.
-        if (horizon < h) drawRect(Color(0xFF1C1F26), Offset(0f, horizon), Size(w, h - horizon))
+        if (skyline == null) {
+            if (horizon < h) drawRect(Color(0xFF1C1F26), Offset(0f, horizon), Size(w, h - horizon))
+        } else {
+            // The land: hills and mountains as they stand around the place.
+            val land = Path().apply {
+                moveTo(0f, h)
+                var px = 0f
+                while (px <= w + 3f) {
+                    lineTo(px, y(skyline.at((centre.value + (px - w / 2) * perPx).toDouble())))
+                    px += 3f
+                }
+                lineTo(w, h)
+                close()
+            }
+            drawPath(land, Color(0xFF1C1F26))
+        }
         for (alt in listOf(30.0, 60.0)) drawLine(Color(0x33FFFFFF), Offset(0f, y(alt)), Offset(w, y(alt)), strokeWidth = 1.dp.toPx())
         for (alt in listOf(30, 60)) drawText(measurer.measure("$alt°", TextStyle(color = Color(0x66FFFFFF), fontSize = 10.sp)), topLeft = Offset(4.dp.toPx(), y(alt.toDouble()) - 14.dp.toPx()))
-        drawLine(Color.White, Offset(0f, horizon), Offset(w, horizon), strokeWidth = 2.dp.toPx())
+        drawLine(Color.White.copy(alpha = if (skyline == null) 1f else 0.35f), Offset(0f, horizon), Offset(w, horizon), strokeWidth = 2.dp.toPx())
+        if (skyline != null) {
+            var px = 0f
+            var prev = Offset(0f, y(skyline.at((centre.value - w / 2 * perPx).toDouble())))
+            while (px <= w) {
+                px += 3f
+                val p = Offset(px, y(skyline.at((centre.value + (px - w / 2) * perPx).toDouble())))
+                drawLine(Color(0xFF8BC34A), prev, p, strokeWidth = 2.dp.toPx())
+                prev = p
+            }
+        }
+        // The target looked for: its direction, and its top when known.
+        if (target != null) {
+            val tx = x(target.first)
+            drawLine(Color(0xFF7C4DFF), Offset(tx, 0f), Offset(tx, h), strokeWidth = 1.5.dp.toPx(), alpha = 0.7f)
+            target.second?.let { drawCircle(Color(0xFF7C4DFF), 6.dp.toPx(), Offset(tx, y(it))) }
+        }
         for ((i, name) in listOf("N", "NE", "E", "SE", "S", "SW", "W", "NW").withIndex()) {
             val px = x(i * 45.0)
             if (px in 0f..w) {
@@ -336,5 +409,87 @@ internal fun SkyChart(place: Place, now: Long, dayStart: Long, viewAz: Float, on
         val c = Offset(x(sun.azimuth), y(sun.altitude))
         drawCircle(Color(0xFFFFB300), 14.dp.toPx(), c)
         drawCircle(Color(0xFFF44336), 17.dp.toPx(), c, style = Stroke(width = 3.dp.toPx()))
+    }
+}
+
+/**
+ * Finding when: the target is a point picked on the map (a peak, a tower; its height from the
+ * terrain plus how tall it stands) or the way the phone looks (at the skyline's height there).
+ * The body is looked for day by day from the day shown; a found moment opens that day and hour.
+ */
+@Composable
+private fun FindPanel(st: PlannerState, onPickOnMap: () -> Unit) {
+    val scope = rememberCoroutineScope()
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        for (b in Body.entries) Chip(b.label, { st.findBody = b }, selected = st.findBody == b)
+    }
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Chip("Target on the map", onPickOnMap, selected = !st.findUseLook && st.target != null)
+        Chip("Where the phone looks", { st.findUseLook = true }, selected = st.findUseLook)
+    }
+    val az = st.findAzimuth
+    if (st.findUseLook) {
+        Text(
+            "Direction ${st.viewAz.roundToInt()}° (drag the sky, or turn the phone in Live); height: " +
+                (st.skylineHere?.let { "the skyline there, ${one(it.at(st.viewAz.toDouble()))}°" } ?: "the flat horizon"),
+            color = HeadsupColors.Ink, style = MaterialTheme.typography.bodyMedium,
+        )
+    } else if (st.target != null && az != null) {
+        val d = st.targetDistance ?: 0.0
+        Text(
+            "Target ${one(d / 1000)} km away at ${az.roundToInt()}°; " +
+                (st.targetGround?.let { g -> "ground ${g.roundToInt()} m" + (if (st.targetAbove > 0) " + ${st.targetAbove.roundToInt()} m" else "") + ", its top ${one(st.targetAltitude ?: 0.0)}° up" } ?: "its height is being read…"),
+            color = HeadsupColors.Ink, style = MaterialTheme.typography.bodyMedium,
+        )
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text("Target stands ${st.targetAbove.roundToInt()} m tall", color = HeadsupColors.TextMuted, style = MaterialTheme.typography.labelMedium, modifier = Modifier.weight(1f))
+            Chip("−10", { st.targetAbove = (st.targetAbove - 10).coerceAtLeast(0.0) })
+            Chip("+10", { st.targetAbove = (st.targetAbove + 10).coerceAtMost(1000.0) })
+        }
+    } else {
+        Text("Pick a target on the map, or use where the phone looks.", color = HeadsupColors.TextMuted, style = MaterialTheme.typography.bodyMedium)
+    }
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Chip("At its height", { st.findAnyHeight = false }, selected = !st.findAnyHeight)
+        Chip("Any height", { st.findAnyHeight = true }, selected = st.findAnyHeight)
+    }
+    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        for (d in listOf(30, 90, 365)) Chip("$d days", { st.findDays = d }, selected = st.findDays == d)
+        Box(Modifier.weight(1f))
+        Chip("Search", { scope.launch { st.search() } })
+    }
+    Text(
+        "From ${st.day}. \"At its height\" finds the moments it stands within 1° of the target's top (or the skyline); \"Any height\" every time it passes that direction.",
+        color = HeadsupColors.TextMuted, style = MaterialTheme.typography.labelSmall,
+    )
+    if (st.findStatus.isNotEmpty()) Text(st.findStatus, color = HeadsupColors.TextMuted, style = MaterialTheme.typography.bodyMedium)
+    for (m in st.findResults.take(60)) FoundRow(st, m)
+    if (st.findResults.size > 60) Text("…and ${st.findResults.size - 60} more.", color = HeadsupColors.TextMuted, style = MaterialTheme.typography.labelSmall)
+}
+
+@Composable
+private fun FoundRow(st: PlannerState, m: AlignMatch) {
+    val t = java.time.Instant.ofEpochMilli(m.millis).atZone(st.zone)
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(10.dp))
+            .background(HeadsupColors.SurfaceHigh)
+            .clickable {
+                // Opens that day and hour in every view.
+                st.day = t.toLocalDate()
+                st.minute = (t.hour * 60 + t.minute).toFloat()
+            }
+            .padding(10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            "${t.toLocalDate()} ${String.format(java.util.Locale.US, "%02d:%02d", t.hour, t.minute)}",
+            color = HeadsupColors.Ink, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f),
+        )
+        Text(
+            "${one(m.altitude)}° up · moon ${(m.moonLit * 100).roundToInt()}%",
+            color = HeadsupColors.TextMuted, style = MaterialTheme.typography.labelMedium,
+        )
     }
 }

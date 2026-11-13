@@ -188,6 +188,22 @@ object Sky {
         return RiseSet(crossing(samples, alt, edge, true), crossing(samples, alt, edge, false))
     }
 
+    /**
+     * Sunrise and sunset over the land: when the sun's top edge clears the [skyline] (hills,
+     * mountains) and when it goes behind it, as seen through the air (refraction lifts it a little).
+     */
+    fun sunOverSkyline(place: Place, zone: ZoneId, date: LocalDate, skyline: HorizonProfile): RiseSet =
+        overSkyline(wholeDay(zone, date), skyline, 0.27) { sun(place, it) }
+
+    /** Moonrise and moonset over the land, as [sunOverSkyline]. */
+    fun moonOverSkyline(place: Place, zone: ZoneId, date: LocalDate, skyline: HorizonProfile): RiseSet =
+        overSkyline(wholeDay(zone, date), skyline, 0.26) { moon(place, it).position }
+
+    private fun overSkyline(samples: List<Long>, skyline: HorizonProfile, semiDiameter: Double, at: (Long) -> SkyPoint): RiseSet {
+        val clear = { t: Long -> at(t).let { p -> p.altitude + Geo.refraction(p.altitude) + semiDiameter - skyline.at(p.azimuth) } }
+        return RiseSet(crossing(samples, clear, 0.0, true), crossing(samples, clear, 0.0, false))
+    }
+
     /** A stretch of time, in milliseconds since 1970. */
     data class Interval(val start: Long, val end: Long)
 
