@@ -30,7 +30,7 @@ import kotlin.math.roundToInt
  */
 @Composable
 internal fun CalculatorView(st: PlannerState) {
-    val frame = Planner.frame(st.place, st.now, st.conditions, st.setup)
+    val frame = Planner.frame(st.place, st.now, st.conditions, st.setup, st.measured)
     val r = frame.exposure
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
         // Where and when (set in the sun view), and the hour to try.
@@ -40,7 +40,18 @@ internal fun CalculatorView(st: PlannerState) {
         )
         DateRow(st)
         Text("${hhmm(st.minute)} · sun ${frame.sun.altitude.roundToInt()}° · moon ${frame.moon.position.altitude.roundToInt()}° (${(frame.moon.lit * 100).roundToInt()}% lit)", color = HeadsupColors.Ink, style = MaterialTheme.typography.bodyMedium)
-        Slider(value = st.minute, onValueChange = { st.minute = it }, valueRange = 0f..1439f)
+        DayBar(st)
+
+        // A reading of the light taken in the live view, when there is one.
+        st.measuredEv?.let { ev ->
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(
+                    if (st.measured != null) "Base: the camera's reading, EV ${one(ev)}. The hours follow from it." else "The camera's reading is from another place: not used.",
+                    color = if (st.measured != null) HeadsupColors.Good else HeadsupColors.Warn, style = MaterialTheme.typography.labelMedium, modifier = Modifier.weight(1f),
+                )
+                Chip("Clear", { st.clearReading() })
+            }
+        }
 
         // The light of the place at night and under cloud.
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -129,8 +140,9 @@ private fun TimelapseSection(st: PlannerState) {
     val span = (st.tlTo - st.tlFrom).coerceAtLeast(10f)
     val stepMinutes = (span / 12f).roundToInt().coerceAtLeast(5)
     val place = st.place
-    val tl = remember(place, st.day, st.offsetHours, st.tlFrom, st.tlTo, st.bortle, st.cloud, limits) {
-        Timelapse.plan(Timelapse.sample(place, st.conditions, st.dayStart + st.tlFrom.toLong() * 60_000L, st.dayStart + st.tlTo.toLong() * 60_000L, stepMinutes), limits)
+    val reading = st.measured
+    val tl = remember(place, st.day, st.offsetHours, st.tlFrom, st.tlTo, st.bortle, st.cloud, limits, reading) {
+        Timelapse.plan(Timelapse.sample(place, st.conditions, st.dayStart + st.tlFrom.toLong() * 60_000L, st.dayStart + st.tlTo.toLong() * 60_000L, stepMinutes, st.measured), limits)
     }
     Text("Light in this window: EV ${one(tl.evMin)} to ${one(tl.evMax)} (${one(tl.evMax - tl.evMin)} stops); the camera covers ${one(limits.rangeStops)}.",
         color = HeadsupColors.Ink, style = MaterialTheme.typography.bodyMedium)

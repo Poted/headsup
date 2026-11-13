@@ -73,8 +73,12 @@ internal fun SunView(st: PlannerState, onLocate: () -> Unit) {
         times.sunset?.let { add(Sky.sun(place, it).azimuth to SunsetRed) }
         add(sun.azimuth to SunOrange)
     }
+    // A dot for each hour the sun is up: its direction, height and the hour.
+    val hourMarks = remember(place, st.day, st.offsetHours) {
+        (0..23).mapNotNull { h -> Sky.sun(place, st.dayStart + h * 3_600_000L).let { if (it.altitude > 0) Triple(it.azimuth, it.altitude, h) else null } }
+    }
     val mapView: @Composable (Modifier) -> Unit = { m ->
-        TileMap(map, st.lat, st.lon, st.viewAz, rays, onPick = { la, lo -> st.setPlace(la, lo, fromMap = true) }, modifier = m)
+        TileMap(map, st.lat, st.lon, st.viewAz, rays, onPick = { la, lo -> st.setPlace(la, lo, fromMap = true) }, modifier = m, hours = hourMarks)
     }
     val skyView: @Composable (Modifier) -> Unit = { m ->
         SkyChart(place, st.now, st.dayStart, st.viewAz, onTurn = { st.viewAz = ((it % 360f) + 360f) % 360f }, modifier = m)
@@ -108,7 +112,7 @@ internal fun SunView(st: PlannerState, onLocate: () -> Unit) {
             "${hhmm(st.minute)} · sun ${sun.altitude.roundToInt()}° at ${sun.azimuth.roundToInt()}° · moon ${moon.position.altitude.roundToInt()}° (${(moon.lit * 100).roundToInt()}% lit)",
             color = HeadsupColors.Ink, style = MaterialTheme.typography.bodyMedium,
         )
-        Slider(value = st.minute, onValueChange = { st.minute = it }, valueRange = 0f..1439f)
+        DayBar(st)
         Text(
             "Sunrise ${clock(times.sunrise, st.zone)} · Sunset ${clock(times.sunset, st.zone)} · Blue hour ends ${clock(times.civilDawn, st.zone)} / starts ${clock(times.civilDusk, st.zone)} · Dark from ${clock(times.astroDusk, st.zone)}",
             color = HeadsupColors.TextMuted, style = MaterialTheme.typography.labelSmall,
@@ -229,6 +233,17 @@ internal fun SkyChart(place: Place, now: Long, dayStart: Long, viewAz: Float, on
         val samples = (0..144).map { dayStart + it * 10L * 60_000L }
         path(samples.map { Sky.moon(place, it).position.let { p -> p.azimuth to p.altitude } }, Color(0xFFCFCFCF), 2.dp.toPx())
         path(samples.map { Sky.sun(place, it).let { p -> p.azimuth to p.altitude } }, SunOrange, 4.dp.toPx())
+        // A dot on the sun's path for each hour, with its number.
+        for (hour in 0..23) {
+            val s = Sky.sun(place, dayStart + hour * 3_600_000L)
+            if (s.altitude < -3) continue
+            val c = Offset(x(s.azimuth), y(s.altitude))
+            if (c.x < 0f || c.x > w) continue
+            drawCircle(Color.White, 9.dp.toPx(), c)
+            drawCircle(SunOrange, 7.5f.dp.toPx(), c)
+            val l = measurer.measure(hour.toString(), TextStyle(color = Color.Black, fontSize = 9.sp))
+            drawText(l, topLeft = Offset(c.x - l.size.width / 2f, c.y - l.size.height / 2f))
+        }
         // The moon and the sun as they stand at the chosen time (the sun a large disc, ringed).
         val moon = Sky.moon(place, now).position
         drawCircle(Color(0xFFEFEFEF), 7.dp.toPx(), Offset(x(moon.azimuth), y(moon.altitude)))

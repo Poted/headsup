@@ -10,8 +10,10 @@ import app.headsup.core.planner.ExposureSetup
 import app.headsup.core.planner.NdFilter
 import app.headsup.core.planner.Place
 import app.headsup.core.planner.SkyConditions
+import app.headsup.core.planner.Measured
 import java.time.LocalDate
 import java.time.ZoneOffset
+import kotlin.math.abs
 import kotlin.math.roundToInt
 import kotlin.reflect.KProperty
 
@@ -75,6 +77,29 @@ internal class PlannerState(context: Context) {
     var reload by mutableStateOf(0)
     /** Counts the times the map should move to the place (not when the place was picked on the map itself). */
     var recentre by mutableStateOf(0)
+
+    // A reading of the light taken with the camera, where and when it was taken. Kept for the visit only.
+    var measuredEv by mutableStateOf<Double?>(null)
+    private var measuredAt = 0L
+    private var measuredLat = 0.0
+    private var measuredLon = 0.0
+
+    /** Takes the camera's reading of the light here and now as the base of the hours. */
+    fun useReading(ev: Double) {
+        measuredEv = ev
+        measuredAt = System.currentTimeMillis()
+        measuredLat = lat
+        measuredLon = lon
+    }
+
+    fun clearReading() { measuredEv = null }
+
+    /** True when a reading was taken but the place has since moved away from it (it is then not used). */
+    val readingElsewhere: Boolean get() = measuredEv != null && measured == null
+
+    /** The reading, while the place is still about where it was taken. */
+    val measured: Measured? get() =
+        measuredEv?.takeIf { abs(lat - measuredLat) < 0.2 && abs(lon - measuredLon) < 0.3 }?.let { Measured(measuredAt, it) }
 
     val place: Place get() = Place(lat.coerceIn(-90.0, 90.0), lon.coerceIn(-180.0, 180.0), elevation)
     val zone: ZoneOffset get() = ZoneOffset.ofHours(offsetHours.coerceIn(-12, 14))

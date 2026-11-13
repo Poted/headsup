@@ -104,6 +104,7 @@ internal fun TileMap(
     rays: List<Pair<Double, Color>>,
     onPick: (Double, Double) -> Unit,
     modifier: Modifier = Modifier,
+    hours: List<Triple<Double, Double, Int>> = emptyList(),
 ) {
     val context = LocalContext.current
     val density = LocalDensity.current.density
@@ -182,6 +183,17 @@ internal fun TileMap(
         // The sun's directions: where it rises, sets and stands at the chosen time.
         for ((az, colour) in rays) {
             drawLine(colour, pin, pin + dir(az) * (len * 1.6f), strokeWidth = 2.dp.toPx())
+        }
+        // The sun's hours around the pin: the higher it climbs the nearer the pin, as the shadow of its path on the ground.
+        if (hours.isNotEmpty()) {
+            val r1 = len * 1.3f
+            for ((az, alt, hour) in hours) {
+                val p = pin + dir(az) * (r1 * cos(Math.toRadians(alt)).toFloat())
+                drawCircle(Color.White, 9.dp.toPx(), p)
+                drawCircle(Color(0xFFFFB300), 7.5f.dp.toPx(), p)
+                val l = measurer.measure(hour.toString(), TextStyle(color = Color.Black, fontSize = 9.sp))
+                drawText(l, topLeft = Offset(p.x - l.size.width / 2f, p.y - l.size.height / 2f))
+            }
         }
         // The way the phone looks: a cone.
         val cone = Path().apply {

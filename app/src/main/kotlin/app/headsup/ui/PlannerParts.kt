@@ -7,7 +7,10 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
@@ -22,6 +25,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import java.time.ZoneOffset
@@ -112,4 +116,63 @@ internal fun lastKnown(context: Context): Triple<Double, Double, Double>? {
     val lm = context.getSystemService(Context.LOCATION_SERVICE) as? LocationManager ?: return null
     val best = lm.getProviders(true).mapNotNull { runCatching { lm.getLastKnownLocation(it) }.getOrNull() }.maxByOrNull { it.time } ?: return null
     return Triple(best.latitude, best.longitude, if (best.hasAltitude()) best.altitude else 0.0)
+}
+
+private fun sunColour(altitude: Double): androidx.compose.ui.graphics.Color {
+    val night = androidx.compose.ui.graphics.Color(0xFF0D1B4F)
+    val blue = androidx.compose.ui.graphics.Color(0xFF3949AB)
+    val red = androidx.compose.ui.graphics.Color(0xFFE64A19)
+    val orange = androidx.compose.ui.graphics.Color(0xFFFF9800)
+    val yellow = androidx.compose.ui.graphics.Color(0xFFFFD54F)
+    fun mix(a: androidx.compose.ui.graphics.Color, b: androidx.compose.ui.graphics.Color, f: Double) =
+        androidx.compose.ui.graphics.lerp(a, b, f.coerceIn(0.0, 1.0).toFloat())
+    return when {
+        altitude > 10 -> yellow
+        altitude > 0 -> mix(orange, yellow, altitude / 10)
+        altitude > -6 -> mix(red, orange, (altitude + 6) / 6)
+        altitude > -12 -> mix(blue, red, (altitude + 12) / 6)
+        altitude > -18 -> mix(night, blue, (altitude + 18) / 6)
+        else -> night
+    }
+}
+
+/**
+ * The day as a bar coloured by the sun's height (dark blue night, blue and red twilights, orange
+ * and yellow day) with the chosen hour as a round thumb: tap or drag to move the hour.
+ */
+@Composable
+internal fun DayBar(st: PlannerState, modifier: Modifier = Modifier) {
+    val place = st.place
+    val colours = remember(place, st.day, st.offsetHours) {
+        (0 until 96).map { i -> sunColour(app.headsup.core.planner.Sky.sun(place, st.dayStart + i * 15 * 60_000L).altitude) }
+    }
+    androidx.compose.foundation.Canvas(
+        modifier
+            .fillMaxWidth()
+            .height(40.dp)
+            .clip(RoundedCornerShape(20.dp))
+            .pointerInput(Unit) {
+                detectTapGestures { st.minute = (it.x / size.width * 1439f).coerceIn(0f, 1439f) }
+            }
+            .pointerInput(Unit) {
+                detectHorizontalDragGestures { change, _ ->
+                    change.consume()
+                    st.minute = (change.position.x / size.width * 1439f).coerceIn(0f, 1439f)
+                }
+            },
+    ) {
+        val cell = size.width / colours.size
+        colours.forEachIndexed { i, c ->
+            drawRect(c, androidx.compose.ui.geometry.Offset(i * cell, 0f), androidx.compose.ui.geometry.Size(cell + 1f, size.height))
+        }
+        // Every six hours a faint tick and its label's place.
+        for (h in 0..24 step 6) {
+            val x = h / 24f * size.width
+            drawLine(androidx.compose.ui.graphics.Color(0x66FFFFFF), androidx.compose.ui.geometry.Offset(x, size.height * 0.7f), androidx.compose.ui.geometry.Offset(x, size.height), strokeWidth = 1.5.dp.toPx())
+        }
+        val x = st.minute / 1439f * size.width
+        val centre = androidx.compose.ui.geometry.Offset(x, size.height / 2)
+        drawCircle(androidx.compose.ui.graphics.Color.White, 15.dp.toPx(), centre)
+        drawCircle(androidx.compose.ui.graphics.Color(0xFFFFB300), 11.dp.toPx(), centre)
+    }
 }

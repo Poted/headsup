@@ -31,8 +31,8 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 
 /**
- * The light planner: two views of one plan. The sun view shows where the sun, moon and Milky Way
- * go over a place (with a map of it); the calculator works out the exposure and the filter. The
+ * The light planner: three views of one plan. The sun view shows where the sun, moon and Milky Way
+ * go over a place (with a map of it); the live view lays that sky over the camera and reads the light; the calculator works out the exposure and the filter. The
  * place, day and hour are shared, so what is set in one is seen in the other. Offline, except
  * the map's tiles, which are kept once seen.
  */
@@ -40,7 +40,7 @@ import androidx.compose.ui.unit.dp
 fun PlannerScreen(onEditor: () -> Unit) {
     val context = LocalContext.current
     val st = remember { PlannerState(context) }
-    var view by rememberSaveable { mutableStateOf(0) } // 0 sun, 1 calculator
+    var view by rememberSaveable { mutableStateOf(0) } // 0 sun, 1 live, 2 calculator
 
     val locationPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         if (granted) lastKnown(context)?.let { st.setPlace(it.first, it.second, it.third) }
@@ -67,16 +67,22 @@ fun PlannerScreen(onEditor: () -> Unit) {
         ) {
             Text("Planner", style = MaterialTheme.typography.titleMedium, color = HeadsupColors.Ink, modifier = Modifier.padding(end = 8.dp))
             Chip("Sun", { view = 0 }, selected = view == 0)
-            Chip("Calculator", { view = 1 }, selected = view == 1)
+            Chip("Live", { view = 1 }, selected = view == 1)
+            Chip("Calculator", { view = 2 }, selected = view == 2)
             Row(Modifier.weight(1f)) {}
             Chip("Editor", onEditor)
         }
-        Column(
-            Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(horizontal = 16.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp),
-        ) {
-            if (view == 0) SunView(st, locate) else CalculatorView(st)
-            Row(Modifier.padding(bottom = 16.dp)) {}
+        if (view == 1) {
+            // The live view fills what is left and does not scroll: the camera is the page.
+            LiveView(st, locate, Modifier.weight(1f).fillMaxWidth())
+        } else {
+            Column(
+                Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(horizontal = 16.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                if (view == 0) SunView(st, locate) else CalculatorView(st)
+                Row(Modifier.padding(bottom = 16.dp)) {}
+            }
         }
     }
 }
