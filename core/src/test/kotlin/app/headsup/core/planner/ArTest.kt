@@ -53,8 +53,13 @@ class ArTest {
 
     @Test fun focalLengthFollowsTheSideThatFitsTheScreen() {
         // A tall screen is fitted by the picture's long side: focal = height / (2 tan(fov/2)).
-        val f = Ar.focalPx(70.0, 0.75, 1080.0, 2400.0)
+        val f = Ar.focalPx(70.0, 1080.0, 2400.0)
         assertEquals(2400.0 / (2 * Math.tan(Math.toRadians(35.0))), f, 1e-6)
+        // Held sideways the picture turns with the screen: the same lens, the same focal length.
+        assertEquals(f, Ar.focalPx(70.0, 2400.0, 1080.0), 1e-6)
+        // A screen squarer than the picture is filled by its width instead.
+        val square = Ar.focalPx(70.0, 1000.0, 1000.0)
+        assertEquals(1000.0 / 0.75 / (2 * Math.tan(Math.toRadians(35.0))), square, 1e-6)
         // A phone's main camera: a 6.4 mm side behind a 5 mm lens sees about 65°.
         assertTrue(abs(Ar.fieldOfView(6.4, 5.0) - 65.0) < 1.0)
     }

@@ -77,6 +77,7 @@ class ExposureTest {
         assertEquals("1/3s", Exposure.formatShutter(1.0 / 3))
         assertEquals("1/4s", Exposure.formatShutter(0.25))
         for (t in listOf(0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9)) assertTrue("1/1s" != Exposure.formatShutter(t))
+        assertEquals("1/2s", Exposure.formatShutter(0.5))
         assertEquals("f/2.8", Exposure.formatAperture(2.8))
         assertEquals("f/11", Exposure.formatAperture(11.0))
         assertEquals(3200, Exposure.snapIso(3345.0))

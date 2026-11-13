@@ -5,6 +5,7 @@ import kotlin.math.asin
 import kotlin.math.atan
 import kotlin.math.atan2
 import kotlin.math.cos
+import kotlin.math.max
 import kotlin.math.sin
 import kotlin.math.tan
 
@@ -52,18 +53,17 @@ object Ar {
     }
 
     /**
-     * The focal length in pixels for a preview that fills a screen of [width]×[height] from a picture
-     * [pictureAspect] (width ÷ height, portrait) whose long side sees [longSideFov] degrees: the
-     * picture is scaled up to cover the screen, so the side it fits by sets the scale.
+     * The focal length in pixels for a camera preview (a 4:3 picture, turned with the screen) that
+     * fills a [width]×[height] screen, cropped at the sides it overflows, when the picture's long
+     * side sees [longSideFov] degrees. Held upright or sideways alike.
      */
-    fun focalPx(longSideFov: Double, pictureAspect: Double, width: Double, height: Double): Double {
-        val verticalLimited = width / height <= pictureAspect
-        return if (verticalLimited) height / (2 * tan(longSideFov * RAD / 2))
-        else {
-            // The short side sees fov' where tan(fov'/2) = aspect · tan(fov/2).
-            val shortFov = 2 * atan(pictureAspect * tan(longSideFov * RAD / 2))
-            width / (2 * tan(shortFov / 2))
-        }
+    fun focalPx(longSideFov: Double, width: Double, height: Double): Double {
+        val landscape = width > height
+        // The picture's sides with its long side as 1, as it lies on the screen.
+        val pictureW = if (landscape) 1.0 else 0.75
+        val pictureH = if (landscape) 0.75 else 1.0
+        val scale = max(width / pictureW, height / pictureH)
+        return scale * 0.5 / tan(longSideFov * RAD / 2)
     }
 
     /** The field of view of a sensor side of [sensorSide] mm behind a lens of [focalLength] mm, in degrees. */

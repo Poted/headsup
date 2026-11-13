@@ -7,6 +7,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
@@ -41,6 +42,7 @@ fun PlannerScreen(onEditor: () -> Unit) {
     val context = LocalContext.current
     val st = remember { PlannerState(context) }
     var view by rememberSaveable { mutableStateOf(0) } // 0 sun, 1 live, 2 calculator
+    var plansOpen by rememberSaveable { mutableStateOf(false) }
 
     val locationPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         if (granted) lastKnown(context)?.let { st.setPlace(it.first, it.second, it.third) }
@@ -65,27 +67,31 @@ fun PlannerScreen(onEditor: () -> Unit) {
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            Text("Planner", style = MaterialTheme.typography.titleMedium, color = HeadsupColors.Ink, modifier = Modifier.padding(end = 8.dp))
             Chip("Sun", { view = 0 }, selected = view == 0)
             Chip("Live", { view = 1 }, selected = view == 1)
             Chip("Calculator", { view = 2 }, selected = view == 2)
             Row(Modifier.weight(1f)) {}
+            Chip("Plans", { plansOpen = !plansOpen }, selected = plansOpen)
             Chip("Editor", onEditor)
         }
-        if (view == 0) {
-            // The sky fills what is left; the place and times open over it.
-            SunView(st, locate, Modifier.weight(1f).fillMaxWidth())
-        } else if (view == 1) {
-            // The live view fills what is left and does not scroll: the camera is the page.
-            LiveView(st, locate, Modifier.weight(1f).fillMaxWidth())
-        } else {
-            Column(
-                Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(horizontal = 16.dp),
-                verticalArrangement = Arrangement.spacedBy(10.dp),
-            ) {
-                CalculatorView(st)
-                Row(Modifier.padding(bottom = 16.dp)) {}
+        Box(Modifier.weight(1f).fillMaxWidth()) {
+            if (view == 0) {
+                // The sky fills what is left; the place and times open over it.
+                SunView(st, locate, Modifier.fillMaxSize())
+            } else if (view == 1) {
+                // The live view fills what is left and does not scroll: the camera is the page.
+                LiveView(st, locate, Modifier.fillMaxSize())
+            } else {
+                Column(
+                    Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    CalculatorView(st)
+                    Row(Modifier.padding(bottom = 16.dp)) {}
+                }
             }
+            // Saved plans, over whichever view is open.
+            if (plansOpen) PlansPanel(st, onClose = { plansOpen = false }, modifier = Modifier.fillMaxSize())
         }
     }
 }

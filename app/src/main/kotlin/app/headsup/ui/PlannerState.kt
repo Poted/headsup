@@ -112,6 +112,37 @@ internal class PlannerState(context: Context) {
         }
     }
 
+    var plans by mutableStateOf(readPlans(prefs))
+
+    /** Keeps everything now set (place, day, hour, camera, sky) as a plan under [name]; a plan of that name is replaced. */
+    fun savePlan(name: String) {
+        val one = SavedPlan(
+            name, lat, lon, elevation, offsetHours, day.toString(), minute,
+            auto.ordinal, aperture, shutter, iso, ndIndex, isoMin, isoMax, bortle, cloud,
+        )
+        val at = plans.indexOfFirst { it.name == name }
+        plans = if (at >= 0) plans.toMutableList().also { it[at] = one } else listOf(one) + plans
+        writePlans(prefs, plans)
+    }
+
+    /** Sets everything as the plan had it. */
+    fun openPlan(i: Int) {
+        val p = plans.getOrNull(i) ?: return
+        lat = p.lat; lon = p.lon; elevation = p.elevation; offsetHours = p.utc
+        day = runCatching { LocalDate.parse(p.date) }.getOrDefault(day)
+        minute = p.minute
+        auto = AutoSetting.entries[p.auto.coerceIn(0, AutoSetting.entries.size - 1)]
+        aperture = p.aperture; shutter = p.shutter; iso = p.iso; ndIndex = p.nd
+        isoMin = p.isoMin; isoMax = p.isoMax; bortle = p.bortle; cloud = p.cloud
+        selectedPlace = null
+        reload++; recentre++
+    }
+
+    fun deletePlan(i: Int) {
+        plans = plans.filterIndexed { j, _ -> j != i }
+        writePlans(prefs, plans)
+    }
+
     var places by mutableStateOf(readPlaces(prefs))
     var selectedPlace by mutableStateOf<Int?>(null)
 
@@ -120,11 +151,14 @@ internal class PlannerState(context: Context) {
     /** Counts the times the map should move to the place (not when the place was picked on the map itself). */
     var recentre by mutableStateOf(0)
 
-    // A reading of the light taken with the camera, where and when it was taken. Kept for the visit only.
-    var measuredEv by mutableStateOf<Double?>(null)
-    private var measuredAt = 0L
-    private var measuredLat = 0.0
-    private var measuredLon = 0.0
+    // A reading of the light taken with the camera, where and when it was taken. Kept on the phone
+    // (it survives turning the phone) and forgotten after 12 hours.
+    private var measuredAt = prefs.getString("m_at", "0").toLongOrNull() ?: 0L
+    var measuredEv by mutableStateOf(
+        prefs.getString("m_ev", "").toDoubleOrNull()?.takeIf { System.currentTimeMillis() - measuredAt < 12 * 3_600_000L },
+    )
+    private var measuredLat = prefs.get("m_lat", 0f).toDouble()
+    private var measuredLon = prefs.get("m_lon", 0f).toDouble()
 
     /** Takes the camera's reading of the light here and now as the base of the hours. */
     fun useReading(ev: Double) {
@@ -132,9 +166,11 @@ internal class PlannerState(context: Context) {
         measuredAt = System.currentTimeMillis()
         measuredLat = lat
         measuredLon = lon
+        prefs.putString("m_ev", ev.toString()); prefs.putString("m_at", measuredAt.toString())
+        prefs.put("m_lat", lat.toFloat()); prefs.put("m_lon", lon.toFloat())
     }
 
-    fun clearReading() { measuredEv = null }
+    fun clearReading() { measuredEv = null; prefs.putString("m_ev", "") }
 
     /** True when a reading was taken but the place has since moved away from it (it is then not used). */
     val readingElsewhere: Boolean get() = measuredEv != null && measured == null
@@ -196,4 +232,41 @@ private fun writePlaces(p: PlannerPrefs, list: List<SavedPlace>) {
     val a = org.json.JSONArray()
     list.forEach { a.put(org.json.JSONObject().put("n", it.name).put("a", it.lat).put("o", it.lon).put("e", it.elev).put("u", it.utc)) }
     p.putString("places", a.toString())
+}
+
+/** A plan: a place, a day and hour, and the camera and sky as they were set, kept under a name. */
+internal data class SavedPlan(
+    val name: String, val lat: Double, val lon: Double, val elevation: Double, val utc: Int,
+    val date: String, val minute: Float,
+    val auto: Int, val aperture: Double, val shutter: Double, val iso: Double, val nd: Int,
+    val isoMin: Double, val isoMax: Double, val bortle: Int, val cloud: Float,
+)
+
+private fun readPlans(p: PlannerPrefs): List<SavedPlan> = runCatching {
+    val a = org.json.JSONArray(p.getString("plans", "[]"))
+    (0 until a.length()).mapNotNull { i ->
+        runCatching {
+            val o = a.getJSONObject(i)
+            SavedPlan(
+                o.getString("name"), o.getDouble("lat"), o.getDouble("lon"), o.optDouble("elev", 0.0), o.optInt("utc", 0),
+                o.getString("date"), o.optDouble("min", 720.0).toFloat(),
+                o.optInt("auto", 0), o.optDouble("ap", 2.8), o.optDouble("sh", 0.5), o.optDouble("iso", 100.0), o.optInt("nd", -1),
+                o.optDouble("isomin", 100.0), o.optDouble("isomax", 25_600.0), o.optInt("bortle", 3), o.optDouble("cloud", 0.0).toFloat(),
+            )
+        }.getOrNull()
+    }
+}.getOrDefault(emptyList())
+
+private fun writePlans(p: PlannerPrefs, list: List<SavedPlan>) {
+    val a = org.json.JSONArray()
+    for (x in list) {
+        a.put(
+            org.json.JSONObject()
+                .put("name", x.name).put("lat", x.lat).put("lon", x.lon).put("elev", x.elevation).put("utc", x.utc)
+                .put("date", x.date).put("min", x.minute.toDouble())
+                .put("auto", x.auto).put("ap", x.aperture).put("sh", x.shutter).put("iso", x.iso).put("nd", x.nd)
+                .put("isomin", x.isoMin).put("isomax", x.isoMax).put("bortle", x.bortle).put("cloud", x.cloud.toDouble()),
+        )
+    }
+    p.putString("plans", a.toString())
 }

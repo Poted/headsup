@@ -13,6 +13,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import app.headsup.core.planner.AutoSetting
+import app.headsup.core.planner.CameraScale
 import app.headsup.core.planner.Exposure
 import app.headsup.core.planner.ExposureResult
 import app.headsup.core.planner.ExposureWarning
@@ -20,7 +21,6 @@ import app.headsup.core.planner.NdFilter
 import app.headsup.core.planner.Planner
 import app.headsup.core.planner.PlannerFrame
 import kotlinx.coroutines.launch
-import kotlin.math.pow
 import kotlin.math.roundToInt
 
 /**
@@ -83,13 +83,13 @@ internal fun CalculatorView(st: PlannerState) {
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             SettingTile("Aperture", withForecast(st.auto == AutoSetting.Aperture, Exposure.formatAperture(if (st.auto == AutoSetting.Aperture) r.aperture else st.aperture), fe?.let { Exposure.formatAperture(it.aperture) }),
                 st.auto == AutoSetting.Aperture, Modifier.weight(1f),
-                onToggle = { st.auto = AutoSetting.Aperture }, onLess = { st.aperture = stepStops(st.aperture, -1.0 / 3, true) }, onMore = { st.aperture = stepStops(st.aperture, 1.0 / 3, true) })
+                onToggle = { st.auto = AutoSetting.Aperture }, onLess = { st.aperture = CameraScale.step(CameraScale.apertures, st.aperture, -1) }, onMore = { st.aperture = CameraScale.step(CameraScale.apertures, st.aperture, 1) })
             SettingTile("Shutter", withForecast(st.auto == AutoSetting.Shutter, Exposure.formatShutter(if (st.auto == AutoSetting.Shutter) r.shutter else st.shutter), fe?.let { Exposure.formatShutter(it.shutter) }),
                 st.auto == AutoSetting.Shutter, Modifier.weight(1f),
-                onToggle = { st.auto = AutoSetting.Shutter }, onLess = { st.shutter = stepStops(st.shutter, -1.0 / 3, false) }, onMore = { st.shutter = stepStops(st.shutter, 1.0 / 3, false) })
+                onToggle = { st.auto = AutoSetting.Shutter }, onLess = { st.shutter = CameraScale.step(CameraScale.shutters, st.shutter, -1) }, onMore = { st.shutter = CameraScale.step(CameraScale.shutters, st.shutter, 1) })
             SettingTile("ISO", withForecast(st.auto == AutoSetting.Iso, Exposure.snapIso(if (st.auto == AutoSetting.Iso) r.iso else st.iso).toString(), fe?.let { Exposure.snapIso(it.iso).toString() }),
                 st.auto == AutoSetting.Iso, Modifier.weight(1f),
-                onToggle = { st.auto = AutoSetting.Iso }, onLess = { st.iso = (st.iso / 2.0.pow(1.0 / 3)).coerceAtLeast(st.isoMin) }, onMore = { st.iso = (st.iso * 2.0.pow(1.0 / 3)).coerceAtMost(st.isoMax) })
+                onToggle = { st.auto = AutoSetting.Iso }, onLess = { st.iso = CameraScale.step(CameraScale.isos, st.iso, -1).coerceAtLeast(st.isoMin) }, onMore = { st.iso = CameraScale.step(CameraScale.isos, st.iso, 1).coerceAtMost(st.isoMax) })
         }
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Text(

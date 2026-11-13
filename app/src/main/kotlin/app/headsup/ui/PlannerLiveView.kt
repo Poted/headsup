@@ -1,10 +1,7 @@
 package app.headsup.ui
 
 import android.Manifest
-import android.app.Activity
 import android.content.Context
-import android.content.ContextWrapper
-import android.content.pm.ActivityInfo
 import android.content.pm.PackageManager
 import android.hardware.GeomagneticField
 import android.hardware.Sensor
@@ -16,6 +13,8 @@ import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CaptureRequest
 import android.hardware.camera2.CaptureResult
 import android.hardware.camera2.TotalCaptureResult
+import android.view.Surface
+import android.view.WindowManager
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.camera.camera2.interop.Camera2CameraInfo
@@ -73,18 +72,12 @@ import kotlin.math.sin
 
 private val Gold = Color(0xFFFFB300)
 
-private fun Context.findActivity(): Activity? {
-    var c: Context? = this
-    while (c is ContextWrapper) { if (c is Activity) return c; c = c.baseContext }
-    return null
-}
-
 /**
  * The live view: the camera with the sky laid over it. The sun's path for the chosen day is drawn
  * where it really goes, with a dot for every hour, the horizon, the moon and (at night) the Milky
  * Way, turning as the phone does. Aim it at the place you will shoot: it reads the light there,
  * which can be taken as the base of the hours, so the exposure for later is worked from what the
- * camera really sees. Held upright (the view keeps the phone from turning sideways while it is open).
+ * camera really sees. Held upright or sideways: the sky is laid for the way the screen is turned.
  */
 @OptIn(ExperimentalCamera2Interop::class)
 @Composable
@@ -93,14 +86,6 @@ internal fun LiveView(st: PlannerState, onLocate: () -> Unit, modifier: Modifier
     val lifecycleOwner = LocalLifecycleOwner.current
     var granted by remember { mutableStateOf(context.checkSelfPermission(Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) }
     val permission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted = it }
-
-    // The overlay is laid for the phone held upright, so the screen stays so while this view is open.
-    DisposableEffect(Unit) {
-        val activity = context.findActivity()
-        val before = activity?.requestedOrientation
-        activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
-        onDispose { if (activity != null && before != null) activity.requestedOrientation = before }
-    }
 
     // The phone's attitude (smoothed), and a count of its changes to redraw by.
     val rotation = remember { DoubleArray(9) { if (it % 4 == 0) 1.0 else 0.0 } }
@@ -111,10 +96,21 @@ internal fun LiveView(st: PlannerState, onLocate: () -> Unit, modifier: Modifier
         val sensor = sm.getDefaultSensor(Sensor.TYPE_ROTATION_VECTOR)
         hasSensor = sensor != null
         val m = FloatArray(9)
+        val screen = FloatArray(9)
+        @Suppress("DEPRECATION")
+        val display = (context.getSystemService(Context.WINDOW_SERVICE) as WindowManager).defaultDisplay
         val listener = object : SensorEventListener {
             override fun onSensorChanged(e: SensorEvent) {
                 SensorManager.getRotationMatrixFromVector(m, e.values)
-                for (i in 0 until 9) rotation[i] += (m[i] - rotation[i]) * 0.25
+                // The phone's axes turned into the screen's, as the screen is turned (upright, sideways either way, upside down).
+                val (ax, ay) = when (display.rotation) {
+                    Surface.ROTATION_90 -> SensorManager.AXIS_Y to SensorManager.AXIS_MINUS_X
+                    Surface.ROTATION_180 -> SensorManager.AXIS_MINUS_X to SensorManager.AXIS_MINUS_Y
+                    Surface.ROTATION_270 -> SensorManager.AXIS_MINUS_Y to SensorManager.AXIS_X
+                    else -> SensorManager.AXIS_X to SensorManager.AXIS_Y
+                }
+                SensorManager.remapCoordinateSystem(m, ax, ay, screen)
+                for (i in 0 until 9) rotation[i] += (screen[i] - rotation[i]) * 0.25
                 tick++
             }
             override fun onAccuracyChanged(s: Sensor?, accuracy: Int) {}
@@ -191,7 +187,7 @@ internal fun LiveView(st: PlannerState, onLocate: () -> Unit, modifier: Modifier
                 tick.let { } // redraw as the phone turns
                 val w = size.width.toDouble()
                 val h = size.height.toDouble()
-                val f = Ar.focalPx(longFov ?: 65.0, 0.75, w, h)
+                val f = Ar.focalPx(longFov ?: 65.0, w, h)
                 fun at(az: Double, alt: Double) = Ar.project(rotation, Ar.magneticAzimuth(az, declination), alt, f, w, h)
                 fun ok(p: app.headsup.core.planner.ScreenPoint) = p.front && abs(p.x) < 20_000 && abs(p.y) < 20_000
                 fun line(a: app.headsup.core.planner.ScreenPoint, b: app.headsup.core.planner.ScreenPoint, c: Color, width: Float) {

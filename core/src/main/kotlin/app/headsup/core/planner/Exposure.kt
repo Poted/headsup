@@ -132,26 +132,10 @@ object Exposure {
     }
 
     /** An ISO rounded to the nearest third of a stop on the usual scale (100, 125, 160, 200, 250, 320, 400…). */
-    fun snapIso(iso: Double): Int {
-        val third = (log2(iso / 100.0) * 3).roundToInt()
-        val v = 100.0 * 2.0.pow(third / 3.0)
-        // The scale cameras print, not the exact powers of the cube root.
-        val printed = listOf(100, 125, 160, 200, 250, 320, 400, 500, 640, 800, 1000, 1250, 1600, 2000, 2500, 3200, 4000, 5000, 6400, 8000, 10000, 12800, 16000, 20000, 25600, 32000, 40000, 51200, 64000, 80000, 102400)
-        return printed.minByOrNull { abs(log2(it / v)) } ?: v.roundToInt()
-    }
+    fun snapIso(iso: Double): Int = CameraScale.isoValue(iso)
 
-    /** A shutter time as a camera shows it: 1/250s, 1/2s, 0.8s, 4s, 30s. */
-    fun formatShutter(seconds: Double): String {
-        val inverse = 1 / seconds
-        return when {
-            seconds >= 10 -> "${seconds.roundToInt()}s"
-            seconds >= 0.95 -> "${((seconds * 10).roundToInt() / 10.0).let { if (it % 1.0 == 0.0) it.toInt().toString() else it.toString() }}s"
-            // Between a third and one second cameras print 1/2 and 1/3 where it is one, otherwise tenths (0.8s, 0.6s).
-            seconds >= 0.3 && abs(inverse - inverse.roundToInt()) < 0.08 -> "1/${inverse.roundToInt()}s"
-            seconds >= 0.3 -> "${(seconds * 10).roundToInt() / 10.0}s"
-            else -> "1/${niceDenominator(inverse)}s"
-        }
-    }
+    /** A shutter time as a camera shows it: 1/250s, 1/2s, 0.8s, 1s, 4s, 30s. */
+    fun formatShutter(seconds: Double): String = CameraScale.shutterLabel(seconds)
 
     /**
      * The light on the scene in lux for an exposure value at ISO 100, as a light meter states it
@@ -160,11 +144,6 @@ object Exposure {
      */
     fun luxFromEv(ev: Double): Double = 2.5 * 2.0.pow(ev)
 
-    private fun niceDenominator(d: Double): Int {
-        val scale = listOf(2, 3, 4, 5, 6, 8, 10, 13, 15, 20, 25, 30, 40, 50, 60, 80, 100, 125, 160, 200, 250, 320, 400, 500, 640, 800, 1000, 1250, 1600, 2000, 2500, 3200, 4000, 5000, 6400, 8000)
-        return scale.minByOrNull { abs(log2(it / d)) } ?: d.roundToInt()
-    }
-
     /** An f-number as printed: f/2.8, f/11. */
-    fun formatAperture(n: Double): String = "f/" + (if (n >= 10) n.roundToInt().toString() else ((n * 10).roundToInt() / 10.0).toString())
+    fun formatAperture(n: Double): String = CameraScale.apertureLabel(n)
 }

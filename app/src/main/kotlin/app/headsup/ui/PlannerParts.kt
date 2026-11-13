@@ -31,7 +31,6 @@ import androidx.compose.ui.unit.dp
 import java.time.ZoneOffset
 import java.time.ZonedDateTime
 import java.util.Locale
-import kotlin.math.pow
 
 /** A small round button; [selected] marks the one chosen of several. */
 @Composable
@@ -98,10 +97,6 @@ internal fun NumberField(label: String, value: Double, reload: Int, modifier: Mo
         modifier = modifier,
     )
 }
-
-/** A value moved by [stops] of light along the usual scale: an f-number moves by √2 per stop, a shutter by 2×. */
-internal fun stepStops(v: Double, stops: Double, aperture: Boolean): Double =
-    if (aperture) (v * 2.0.pow(stops / 2)).coerceIn(1.0, 64.0) else (v * 2.0.pow(stops)).coerceIn(1.0 / 8000, 600.0)
 
 internal fun hhmm(minute: Float): String = String.format(Locale.US, "%02d:%02d", (minute / 60).toInt(), (minute % 60).toInt())
 
