@@ -12,13 +12,25 @@ settings and saved places are kept by `PlannerPrefs` in `PlannerScreen.kt`, not 
 `:core` `planner/` (pure, tested): `Sky` (sun to about 0.02°, moon to about 0.3°, galactic centre and
 plane for the J2000 sky, sunrise/sunset and twilights), `SceneLight` (scene EV at ISO 100 from sun
 and moon height, place height, Bortle class, cloud), `Exposure` (the triangle with ND, one setting
-auto, warnings with a suggested filter), `Planner.frame` (all of it for one moment, optionally from
-a measured EV), `Timelapse` (the filter cannot change during a timelapse: from the light's span
-over a window, the filter range that one filter must lie in, and the shutter and ISO at each
-moment; shutter first, at the lowest ISO).
+auto, warnings with a suggested filter, the filter window for a held shutter), `Planner.frame` (all
+of it for one moment, optionally from a measured EV), `Timelapse` (the filter cannot change during
+a timelapse: from the light's span over a window, the filter range that one filter must lie in,
+and the shutter and ISO at each moment; shutter first, at the lowest ISO), `WebMercator` (map
+pixels from latitude and longitude, for the map).
 
-`:app` `ui/PlannerScreen.kt`: place and date, the sky chart (drag to turn; sun path with its disc,
-moon path, Milky Way band), time bar, conditions, the exposure tiles and the warning.
+`:app` `ui/`: `PlannerScreen` (the host: tabs Sun / Calculator, button to the editor),
+`PlannerState` (everything the two views share, kept on the phone as it changes, and the saved
+places), `PlannerSunView` (sky chart, the map in its corner, hour, day, place), `PlannerCalculator`
+(exposure, filter, timelapse), `TileMap` (the map: tiles fetched when seen and kept in the cache
+folder, drag, pinch, tap to put the pin; the pin, a cone for the way the phone looks, rays for the
+sun), `PlannerParts` (small controls), `ModeChooser` (Editor or Planner after the logo).
+
+Two views, not one page: the sun view is for looking (the sky with the map in its corner, ⤢ swaps
+them), the calculator is for working out settings. They share place, day and hour.
+
+The phone's back button is not used by the planner or by the choice screen (it is left to each
+half; the UI work will decide how to move between them). Today: planner → editor by its button;
+editor → planner by restarting the app.
 
 ## Decisions to know
 
@@ -40,14 +52,21 @@ and ND ≤ EVmin + log2(ISOmax·shutterMax/(100·N²)). If the lower bound is ab
 filter serves the window and the plan says by how many stops. The shortest shutter sets how much
 the day is blurred, the longest is limited by the interval.
 
+## Network
+
+The planner is the only part with network use (permission INTERNET): the map's tiles from
+OpenStreetMap's own tile server, with its credit on the map and an identifying user agent, kept in
+the cache folder so a place seen once can be seen again with no signal. That server's policy is
+for light use; for a store release use a tile provider with a key. The editor uses no network.
+
 ## Not built yet (in this order)
 
 1. Live view: camera behind the chart, GPS, compass and gyro, a metered EV as the base (`Measured`).
 2. Light pollution raster (VIIRS / Falchi atlas, small, bundled) instead of the Bortle stepper.
 3. Terrain: horizon profile from elevation data, the sun hidden behind peaks, a 3D horizon.
    Needs data fetched or bundled.
-4. Mini map (needs network: adds the INTERNET permission, used by the planner only) with the
-   observation point and an arrow for the way the phone looks.
+4. [done] Map with the pin, the cone for the way the phone looks, and the sun's rise, set and
+   current directions. The cone follows the dragged sky now; it will follow the compass in live view.
 5. Cloud forecast (Open-Meteo): optional, shown beside the clear-sky result, with a manual cloud
    slider, since a forecast of cloud is sometimes wrong.
 6. Saved plans (a place with its timelapse settings); saved places exist already.

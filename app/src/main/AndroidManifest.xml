@@ -5,6 +5,8 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROCESSING" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- The planner's map tiles (OpenStreetMap), kept on the phone once seen. The editor uses no network. -->
+    <uses-permission android:name="android.permission.INTERNET" />
     <!-- Only when "Use my location" is tapped in the light planner; the place is not kept except in its settings. -->
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
 
