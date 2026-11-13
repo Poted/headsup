@@ -67,8 +67,11 @@ class MainActivity : ComponentActivity() {
                 var splash by rememberSaveable { mutableStateOf(savedInstanceState == null) }
                 // The editor is built once the logo is complete, so building it does not eat the animation's frames.
                 var editor by rememberSaveable { mutableStateOf(savedInstanceState != null) }
+                // The light planner covers the editor, which stays as it was beneath it.
+                var planner by rememberSaveable { mutableStateOf(false) }
                 Box {
-                    if (editor) HeadsupScreen()
+                    if (editor) HeadsupScreen(onPlanner = { planner = true })
+                    if (planner) app.headsup.ui.PlannerScreen(onClose = { planner = false })
                     if (splash) SplashOverlay(onRevealed = { editor = true }) { splash = false; editor = true }
                 }
             }

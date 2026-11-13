@@ -1,0 +1,29 @@
+package app.headsup.core.planner
+
+/** A light reading taken with the phone's camera at [atMillis]: the planner's later hours are worked from it. */
+data class Measured(val atMillis: Long, val ev: Double)
+
+/** Everything the planner shows for one moment. */
+data class PlannerFrame(
+    val sun: SkyPoint,
+    val moon: MoonState,
+    val galacticCentre: SkyPoint,
+    /** The light of the scene as exposure value at ISO 100. */
+    val ev: Double,
+    /** Day, Golden hour, Blue hour… */
+    val phase: String,
+    val exposure: ExposureResult,
+)
+
+/** The planner's whole calculation for a place and a moment: where things are, how bright it is, what to set. */
+object Planner {
+    fun frame(place: Place, epochMillis: Long, conditions: SkyConditions, setup: ExposureSetup, measured: Measured? = null): PlannerFrame {
+        val sun = Sky.sun(place, epochMillis)
+        val ev = if (measured == null) SceneLight.ev(place, epochMillis, conditions)
+        else SceneLight.relative(place, measured.atMillis, measured.ev, epochMillis, conditions)
+        return PlannerFrame(
+            sun, Sky.moon(place, epochMillis), Sky.galacticCentre(place, epochMillis),
+            ev, SceneLight.phase(sun.altitude), Exposure.solve(ev, setup),
+        )
+    }
+}

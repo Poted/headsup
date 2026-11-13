@@ -51,6 +51,11 @@ photos/clips; left-handed layout (Settings › Layout).
 - export: developed into a half-float picture, graded on the GPU at that precision, drawn at
   10 bits and dithered into the JPEG.
 
+**Light planner (2026-11, first part):** sun, moon and Milky Way for any place and day, scene light
+(EV) through the day, exposure triangle with ND filters and warnings; offline. See
+`docs/PLANNER.md` for what is built and what follows (live camera view, light pollution raster,
+terrain, mini map).
+
 ## Test notes (2026-10-25 / 10-28) — UI/UX before testers
 
 Already done in the build of 2026-10-25: Project page in two levels (projects ↔ the open
