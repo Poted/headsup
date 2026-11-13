@@ -2750,8 +2750,13 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
     /** Sets the skin correction so the measured colour lands on the skin line. */
     fun matchSkinLine() {
         val measured = _state.value.scope?.measured ?: return
-        val delta = SkinTone.angleDifference(SkinTone.LINE_DEGREES, measured.angleDegrees).toFloat()
-        updateGrade { it.copy(skinHue = (it.skinHue + delta).coerceIn(-30f, 30f)) }
+        // The skin as it was before any turn already on it: the turn works on those colours and
+        // takes them to the line (pressed again, it stays put).
+        updateGrade { g ->
+            val turned = g.skinHue != 0f && kotlin.math.abs(SkinTone.angleDifference(measured.angleDegrees, (g.skinFrom + g.skinHue).toDouble())) < SkinTone.HUE_REACH
+            val from = if (turned) g.skinFrom.toDouble() else measured.angleDegrees
+            g.copy(skinFrom = from.toFloat(), skinHue = SkinTone.angleDifference(SkinTone.LINE_DEGREES, from).toFloat().coerceIn(-45f, 45f))
+        }
     }
 
     private suspend fun analyseScope() {
@@ -2878,6 +2883,7 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
                 tint = matched.tint - applied.tint,
                 saturation = matched.saturation - applied.saturation,
                 skinHue = matched.skinHue - applied.skinHue,
+                skinFrom = matched.skinFrom,
             )
             val members = if (group == null) emptyMap() else s.clips.filter { it.groupId == group.id }.associate { it.id to it.grade }
             val session = MatchSession(clip.id, group?.id, clip.grade, delta, MATCH_STRENGTH, members)
@@ -2908,7 +2914,8 @@ class HeadsupViewModel(app: Application) : AndroidViewModel(app) {
             temperature = (b.temperature + d.temperature * k).coerceIn(-1f, 1f),
             tint = (b.tint + d.tint * k).coerceIn(-1f, 1f),
             saturation = (b.saturation + d.saturation * k).coerceIn(-1f, 1f),
-            skinHue = (b.skinHue + d.skinHue * k).coerceIn(-30f, 30f),
+            skinHue = (b.skinHue + d.skinHue * k).coerceIn(-45f, 45f),
+            skinFrom = if (d.skinHue != 0f) change.skinFrom else b.skinFrom,
         )
         }
         val grade = matched(m.base)

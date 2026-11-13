@@ -211,7 +211,7 @@ fun ClipPreview(
     liveSample: Boolean = false,
     /** Changes when the subject is to be found again (the photo's kept one forgotten). */
     subjectVersion: Int = 0,
-    /** Point last measured, 0..1 of the frame, drawn as a target. */
+    /** Point last measured, 0..1 of the picture (before its framing), drawn as a target where it shows. */
     marker: Offset? = null,
     /** Playhead position within the (trimmed) clip, reported as it changes. */
     onPosition: (Long) -> Unit = {},
@@ -1712,13 +1712,14 @@ fun ClipPreview(
                                     val live = liveSampleNow
                                     // Picking a colour: the place in the picture itself (through its framing), and
                                     // the frame grabbed larger when zoomed in, so a small spot can be picked.
+                                    // (The grabbed frame is the picture as it comes, before its framing,
+                                    // so the place is always mapped through it.)
                                     fun picked(p: Offset): Offset {
-                                        if (!live) return at(p)
                                         val g = geometryRef.value
                                         val (sx, sy) = currentReframe.sourceOf(p.x, p.y, g.boxW, g.boxH, g.pictureW, g.pictureH)
                                         return Offset((sx / g.pictureW).coerceIn(0f, 1f), (sy / g.pictureH).coerceIn(0f, 1f))
                                     }
-                                    val width = if (live) (SAMPLE_WIDTH * viewZoom * 2f).toInt().coerceIn(SAMPLE_WIDTH, 1536) else SAMPLE_WIDTH
+                                    val width = if (live) (SAMPLE_WIDTH * viewZoom * 2f).toInt().coerceIn(SAMPLE_WIDTH, 1536) else (SAMPLE_WIDTH * 2 * viewZoom).toInt().coerceIn(SAMPLE_WIDTH * 2, 1536)
                                     liveMarker = at(down.position)
                                     var last = down.position
                                     var lastLiveMs = 0L
@@ -1856,7 +1857,13 @@ fun ClipPreview(
                         }
                     }
                     // Not while playing or after: the picture has moved on from what was measured.
-                    (liveMarker ?: marker?.takeIf { !wantsPlay && !markerStale })?.let { m ->
+                    // The live one is where the finger is (on the frame); the measured one is a place
+                    // in the picture, shown where its framing puts it.
+                    (liveMarker ?: marker?.takeIf { !wantsPlay && !markerStale }?.let { m ->
+                        val g = geometryRef.value
+                        val (fx, fy) = currentReframe.frameOf(m.x * g.pictureW, m.y * g.pictureH, g.boxW, g.boxH, g.pictureW, g.pictureH)
+                        Offset(fx / g.boxW.coerceAtLeast(1f), fy / g.boxH.coerceAtLeast(1f))
+                    })?.let { m ->
                         val c = Offset(m.x * size.width, m.y * size.height)
                         drawCircle(Color.Black.copy(alpha = 0.5f), radius = 14.dp.toPx(), center = c, style = Stroke(3.dp.toPx()))
                         drawCircle(HeadsupColors.Accent, radius = 14.dp.toPx(), center = c, style = Stroke(1.5.dp.toPx()))
