@@ -58,34 +58,3 @@ class PlaceInputTest {
         }
     }
 }
-
-class CaptureTest {
-    @Test fun videoShutterFollowsTheFrameRate() {
-        assertEquals(1.0 / 50, Capture.videoShutter(25.0), 1e-12)
-        assertEquals(1.0 / 120, Capture.videoShutter(60.0), 1e-12)
-        assertEquals(1.0 / 100, Capture.videoShutter(25.0, 90.0), 1e-12)
-    }
-
-    @Test fun videoAtNoonNeedsAStrongFilter() {
-        // Clear noon (EV 15), f/2.8, 1/50: ISO 100 needs about 6–7 stops of filter.
-        val cfg = CaptureConfig(CaptureMode.Video, fps = 25.0)
-        val setup = Capture.setup(cfg, ExposureSetup(AutoSetting.Shutter, 2.8, 1.0, 400.0, null, CameraLimits(100.0, 3200.0)))
-        assertEquals(AutoSetting.Iso, setup.auto)
-        assertEquals(0.02, setup.shutter, 1e-12)
-        val r = Exposure.solve(15.0, setup)
-        assertTrue(r.nd.stops >= 6.0, "nd ${r.nd}")
-        assertEquals(null, r.warning)
-    }
-
-    @Test fun timelapseShutterIsHalfTheInterval() {
-        val setup = Capture.setup(CaptureConfig(CaptureMode.Timelapse, interval = 4.0), ExposureSetup())
-        assertEquals(2.0, setup.shutter, 1e-12)
-        val r = Exposure.solve(15.0, setup.copy(nd = NdFilter.None))
-        assertTrue(Capture.notes(CaptureConfig(CaptureMode.Timelapse, interval = 4.0), r).isNotEmpty())
-    }
-
-    @Test fun aPhotoIsAsSet() {
-        val base = ExposureSetup(AutoSetting.Shutter, 8.0, 1.0, 100.0)
-        assertEquals(base, Capture.setup(CaptureConfig(CaptureMode.Photo), base))
-    }
-}

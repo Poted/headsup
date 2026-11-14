@@ -58,7 +58,6 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import app.headsup.core.planner.Ar
-import app.headsup.core.planner.AutoSetting
 import app.headsup.core.planner.Exposure
 import app.headsup.core.planner.Planner
 import app.headsup.core.planner.Sky
@@ -312,7 +311,7 @@ internal fun LiveView(st: PlannerState, onLocate: () -> Unit, onCalculator: () -
                 if (st.readingElsewhere) Text("The reading is from another place: not used.", color = Color(0xFFFF8A80), style = MaterialTheme.typography.labelSmall)
                 ExposureHud(st, onCalculator)
                 Text(
-                    "Aim at the scene you will shoot, not at the sun. Settings: ${if (st.auto == AutoSetting.Iso) "ISO follows" else if (st.auto == AutoSetting.Shutter) "shutter follows" else "aperture follows"} (set in Calculator).",
+                    "Aim at the scene you will shoot, not at the sun.",
                     color = Color(0xFFBDBDBD), style = MaterialTheme.typography.labelSmall,
                 )
             }

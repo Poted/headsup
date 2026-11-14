@@ -4,13 +4,12 @@ import android.content.Context
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
-import app.headsup.core.planner.AutoSetting
-import app.headsup.core.planner.Capture
-import app.headsup.core.planner.CaptureConfig
-import app.headsup.core.planner.CaptureMode
+import app.headsup.core.planner.CameraProfile
 import app.headsup.core.planner.CloudForecast
-import app.headsup.core.planner.CameraLimits
-import app.headsup.core.planner.ExposureSetup
+import app.headsup.core.planner.Meter
+import app.headsup.core.planner.MeterReading
+import app.headsup.core.planner.MeterSettings
+import app.headsup.core.planner.Planner
 import app.headsup.core.planner.Gazetteer
 import app.headsup.core.planner.NdFilter
 import app.headsup.core.planner.HorizonProfile
@@ -68,17 +67,51 @@ internal class PlannerState(context: Context) {
     /** The way the phone looks, degrees from north: the centre of the sky chart and the cone on the map. */
     var viewAz by Saved(prefs.get("az", 180f)) { prefs.put("az", it) }
 
-    var auto by Saved(AutoSetting.entries[prefs.get("auto", 0f).roundToInt().coerceIn(0, 2)]) { prefs.put("auto", it.ordinal.toFloat()) }
+    // The shutter and the ISO each set by hand or left to the camera (Auto), as on the camera itself.
+    // Older versions had one setting following the light ("auto": 0 ISO, 1 shutter, 2 aperture).
+    private val oldAuto = prefs.get("auto", 0f).roundToInt()
+    var shutterAuto by Saved(prefs.get("shauto", if (oldAuto == 1) 1f else 0f) > 0.5f) { prefs.put("shauto", if (it) 1f else 0f) }
+    var isoAuto by Saved(prefs.get("isoauto", if (oldAuto == 0) 1f else 0f) > 0.5f) { prefs.put("isoauto", if (it) 1f else 0f) }
     var aperture by Saved(prefs.get("ap", 2.8f).toDouble()) { prefs.put("ap", it.toFloat()) }
     var shutter by Saved(prefs.get("sh", 0.5f).toDouble()) { prefs.put("sh", it.toFloat()) }
     var iso by Saved(prefs.get("iso", 100f).toDouble()) { prefs.put("iso", it.toFloat()) }
-    /** The filter's place in the list, or −1 to let the planner pick. */
+    /** The filter's place in the list of all filters (older versions also had −1, "pick for me": now none). */
     // Kept by the filter's name: the list of filters grows, a name stays (older versions kept its place in a shorter list).
     var ndIndex by Saved(ndIndexFrom(prefs.getString("ndl", ""), prefs.get("nd", 4f).roundToInt())) {
-        prefs.putString("ndl", if (it < 0) "pick" else NdFilter.entries[it.coerceIn(0, NdFilter.entries.size - 1)].label)
+        prefs.putString("ndl", NdFilter.entries[it.coerceIn(0, NdFilter.entries.size - 1)].label)
     }
-    var isoMax by Saved(prefs.get("isomax", 25_600f).toDouble()) { prefs.put("isomax", it.toFloat()) }
-    var isoMin by Saved(prefs.get("isomin", 100f).toDouble()) { prefs.put("isomin", it.toFloat()) }
+
+    /** The cameras described (their ISO and shutter range, a fixed aperture, the filters owned) and the one in use. */
+    var profiles by mutableStateOf(readProfiles(prefs))
+    var profileIndex by Saved(prefs.get("profile", 0f).roundToInt()) { prefs.put("profile", it.toFloat()) }
+    val camera: CameraProfile get() = profiles.getOrNull(profileIndex) ?: profiles.first()
+
+    /** Keeps a camera (replacing the one at [at], or adding it) and takes it into use. */
+    fun saveProfile(profile: CameraProfile, at: Int?) {
+        val replace = at != null && at in profiles.indices
+        profiles = if (replace) profiles.toMutableList().also { it[at!!] = profile } else profiles + profile
+        profileIndex = if (replace) at!! else profiles.size - 1
+        writeProfiles(prefs, profiles)
+        keepFilterInProfile()
+    }
+
+    fun deleteProfile(i: Int) {
+        if (profiles.size <= 1) return
+        profiles = profiles.filterIndexed { j, _ -> j != i }
+        profileIndex = profileIndex.coerceIn(0, profiles.size - 1)
+        writeProfiles(prefs, profiles)
+        keepFilterInProfile()
+    }
+
+    fun useProfile(i: Int) {
+        profileIndex = i.coerceIn(0, profiles.size - 1)
+        keepFilterInProfile()
+    }
+
+    /** A filter not owned for this camera is taken off (none on the lens). */
+    private fun keepFilterInProfile() {
+        if (ndFilter !in camera.choices) ndIndex = NdFilter.None.ordinal
+    }
 
     /** The last forecast fetched, and the place it is for. It is kept, so a place seen once has its forecast with no signal. */
     // Read safely: a forecast kept by an older version, or a damaged one, is simply not used.
@@ -159,12 +192,6 @@ internal class PlannerState(context: Context) {
         }
     }
 
-    /** What is being shot (photo, video, timelapse), the video's frame rate and the timelapse's interval. */
-    var mode by Saved(CaptureMode.entries[prefs.get("mode", 0f).roundToInt().coerceIn(0, CaptureMode.entries.size - 1)]) { prefs.put("mode", it.ordinal.toFloat()) }
-    var fps by Saved(prefs.get("fps", 25f).toDouble()) { prefs.put("fps", it.toFloat()) }
-    var interval by Saved(prefs.get("interval", 5f).toDouble()) { prefs.put("interval", it.toFloat()) }
-    val capture: CaptureConfig get() = CaptureConfig(mode, fps, 180.0, interval)
-
     private val cacheDir: File = context.cacheDir
     private val terrain = TerrainStore(cacheDir) { download(it) }
 
@@ -189,8 +216,7 @@ internal class PlannerState(context: Context) {
     fun savePlan(name: String) {
         val one = SavedPlan(
             name, lat, lon, elevation, offsetHours, day.toString(), minute,
-            auto.ordinal, aperture, shutter, iso, ndIndex, isoMin, isoMax, bortle, cloud,
-            mode.ordinal, fps, interval,
+            shutterAuto, isoAuto, aperture, shutter, iso, ndIndex, camera.name, bortle, cloud,
         )
         val at = plans.indexOfFirst { it.name == name }
         plans = if (at >= 0) plans.toMutableList().also { it[at] = one } else listOf(one) + plans
@@ -203,10 +229,10 @@ internal class PlannerState(context: Context) {
         lat = p.lat; lon = p.lon; elevation = p.elevation; offsetHours = p.utc
         day = runCatching { LocalDate.parse(p.date) }.getOrDefault(day)
         minute = p.minute
-        auto = AutoSetting.entries[p.auto.coerceIn(0, AutoSetting.entries.size - 1)]
+        shutterAuto = p.shutterAuto; isoAuto = p.isoAuto
         aperture = p.aperture; shutter = p.shutter; iso = p.iso; ndIndex = p.nd
-        isoMin = p.isoMin; isoMax = p.isoMax; bortle = p.bortle; cloud = p.cloud
-        mode = CaptureMode.entries[p.mode.coerceIn(0, CaptureMode.entries.size - 1)]; fps = p.fps; interval = p.interval
+        bortle = p.bortle; cloud = p.cloud
+        profiles.indexOfFirst { it.name == p.camera }.takeIf { it >= 0 }?.let { profileIndex = it }
         selectedPlace = null
         reload++; recentre++
     }
@@ -278,10 +304,16 @@ internal class PlannerState(context: Context) {
     val dayStart: Long get() = day.atStartOfDay(zone).toInstant().toEpochMilli()
     val now: Long get() = dayStart + minute.toLong() * 60_000L
     val conditions: SkyConditions get() = SkyConditions(bortle, cloud.toDouble())
-    val nd: NdFilter? get() = if (ndIndex < 0) null else NdFilter.entries[ndIndex.coerceIn(0, NdFilter.entries.size - 1)]
-    val limits: CameraLimits get() = CameraLimits(isoMin, isoMax)
-    /** The exposure set-up as the mode holds it (a video's shutter from its frame rate, a timelapse's from its interval). */
-    val setup: ExposureSetup get() = Capture.setup(capture, ExposureSetup(auto, aperture, shutter, iso, nd, limits))
+    val ndFilter: NdFilter get() = if (ndIndex < 0) NdFilter.None else NdFilter.entries[ndIndex.coerceIn(0, NdFilter.entries.size - 1)]
+
+    /** The camera's settings as set: Auto shutter or ISO left to the camera. */
+    val settings: MeterSettings get() = MeterSettings(aperture, if (shutterAuto) null else shutter, if (isoAuto) null else iso, ndFilter)
+
+    /** The light of the plan's hour (EV at ISO 100): estimated, or from the camera's reading; under the forecast when given. */
+    fun lightEv(forecast: CloudForecast? = null): Double = Planner.ev(place, now, conditions, measured, forecast)
+
+    /** What the camera does in that light with these settings, and how far off the exposure is. */
+    fun reading(ev: Double): MeterReading = Meter.read(ev, settings, camera)
 
     /** Sets the place. [fromMap] is true when it was picked on the map, which then stays where the user has put it. */
     fun setPlace(newLat: Double, newLon: Double, newElevation: Double? = null, fromMap: Boolean = false) {
@@ -333,9 +365,8 @@ private fun writePlaces(p: PlannerPrefs, list: List<SavedPlace>) {
 internal data class SavedPlan(
     val name: String, val lat: Double, val lon: Double, val elevation: Double, val utc: Int,
     val date: String, val minute: Float,
-    val auto: Int, val aperture: Double, val shutter: Double, val iso: Double, val nd: Int,
-    val isoMin: Double, val isoMax: Double, val bortle: Int, val cloud: Float,
-    val mode: Int = 0, val fps: Double = 25.0, val interval: Double = 5.0,
+    val shutterAuto: Boolean, val isoAuto: Boolean, val aperture: Double, val shutter: Double, val iso: Double, val nd: Int,
+    val camera: String, val bortle: Int, val cloud: Float,
 )
 
 private fun readPlans(p: PlannerPrefs): List<SavedPlan> = runCatching {
@@ -343,12 +374,14 @@ private fun readPlans(p: PlannerPrefs): List<SavedPlan> = runCatching {
     (0 until a.length()).mapNotNull { i ->
         runCatching {
             val o = a.getJSONObject(i)
+            // Older plans had one setting following the light ("auto": 0 ISO, 1 shutter).
+            val oldAuto = o.optInt("auto", 0)
             SavedPlan(
                 o.getString("name"), o.getDouble("lat"), o.getDouble("lon"), o.optDouble("elev", 0.0), o.optInt("utc", 0),
                 o.getString("date"), o.optDouble("min", 720.0).toFloat(),
-                o.optInt("auto", 0), o.optDouble("ap", 2.8), o.optDouble("sh", 0.5), o.optDouble("iso", 100.0), ndIndexFrom(o.optString("ndl", ""), o.optInt("nd", -1)),
-                o.optDouble("isomin", 100.0), o.optDouble("isomax", 25_600.0), o.optInt("bortle", 3), o.optDouble("cloud", 0.0).toFloat(),
-                o.optInt("mode", 0), o.optDouble("fps", 25.0), o.optDouble("interval", 5.0),
+                o.optBoolean("shauto", oldAuto == 1), o.optBoolean("isoauto", oldAuto == 0),
+                o.optDouble("ap", 2.8), o.optDouble("sh", 0.5), o.optDouble("iso", 100.0), ndIndexFrom(o.optString("ndl", ""), o.optInt("nd", -1)),
+                o.optString("camera", ""), o.optInt("bortle", 3), o.optDouble("cloud", 0.0).toFloat(),
             )
         }.getOrNull()
     }
@@ -361,10 +394,9 @@ private fun writePlans(p: PlannerPrefs, list: List<SavedPlan>) {
             org.json.JSONObject()
                 .put("name", x.name).put("lat", x.lat).put("lon", x.lon).put("elev", x.elevation).put("utc", x.utc)
                 .put("date", x.date).put("min", x.minute.toDouble())
-                .put("auto", x.auto).put("ap", x.aperture).put("sh", x.shutter).put("iso", x.iso)
-                .put("ndl", if (x.nd < 0) "pick" else NdFilter.entries[x.nd.coerceIn(0, NdFilter.entries.size - 1)].label)
-                .put("isomin", x.isoMin).put("isomax", x.isoMax).put("bortle", x.bortle).put("cloud", x.cloud.toDouble())
-                .put("mode", x.mode).put("fps", x.fps).put("interval", x.interval),
+                .put("shauto", x.shutterAuto).put("isoauto", x.isoAuto).put("ap", x.aperture).put("sh", x.shutter).put("iso", x.iso)
+                .put("ndl", NdFilter.entries[x.nd.coerceIn(0, NdFilter.entries.size - 1)].label)
+                .put("camera", x.camera).put("bortle", x.bortle).put("cloud", x.cloud.toDouble()),
         )
     }
     p.putString("plans", a.toString())
@@ -381,9 +413,42 @@ internal const val PLANNER_USER_AGENT = "SweetSpotPlanner/1.0 (Android; github.c
  * or, for what older versions kept, from its place in their list (None, ND4, ND8, ND16, ND32, ND64, ND1000).
  */
 internal fun ndIndexFrom(label: String, oldIndex: Int): Int {
-    if (label == "pick") return -1
+    if (label == "pick") return NdFilter.None.ordinal
     NdFilter.of(label)?.let { return it.ordinal }
-    if (oldIndex < 0) return -1
+    if (oldIndex < 0) return NdFilter.None.ordinal
     val old = listOf("None", "ND4", "ND8", "ND16", "ND32", "ND64", "ND1000")
     return NdFilter.of(old.getOrElse(oldIndex) { "ND16" })?.ordinal ?: NdFilter.Nd16.ordinal
+}
+
+/** The cameras kept: at least "Any camera". Older versions' ISO range becomes that one's. */
+private fun readProfiles(p: PlannerPrefs): List<CameraProfile> {
+    val list = runCatching {
+        val a = org.json.JSONArray(p.getString("profiles", "[]"))
+        (0 until a.length()).mapNotNull { i ->
+            runCatching {
+                val o = a.getJSONObject(i)
+                val f = o.optJSONArray("filters")
+                val filters = if (f == null) NdFilter.entries.toList() else (0 until f.length()).mapNotNull { NdFilter.of(f.getString(it)) }
+                CameraProfile(
+                    o.getString("name"), o.optDouble("isomin", 100.0), o.optDouble("isomax", 25_600.0),
+                    o.optDouble("shmin", 1.0 / 8000), o.optDouble("shmax", 30.0),
+                    if (o.has("aperture")) o.getDouble("aperture") else null, filters,
+                )
+            }.getOrNull()
+        }
+    }.getOrDefault(emptyList())
+    if (list.isNotEmpty()) return list
+    return listOf(CameraProfile.ANY.copy(isoMin = p.get("isomin", 100f).toDouble(), isoMax = p.get("isomax", 25_600f).toDouble()))
+}
+
+private fun writeProfiles(p: PlannerPrefs, list: List<CameraProfile>) {
+    val a = org.json.JSONArray()
+    for (c in list) {
+        val o = org.json.JSONObject().put("name", c.name).put("isomin", c.isoMin).put("isomax", c.isoMax)
+            .put("shmin", c.shutterMin).put("shmax", c.shutterMax)
+            .put("filters", org.json.JSONArray(c.filters.map { it.label }))
+        c.fixedAperture?.let { o.put("aperture", it) }
+        a.put(o)
+    }
+    p.putString("profiles", a.toString())
 }

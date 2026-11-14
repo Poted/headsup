@@ -17,6 +17,13 @@ data class PlannerFrame(
 
 /** The planner's whole calculation for a place and a moment: where things are, how bright it is, what to set. */
 object Planner {
+    /** The light of a scene at a place and moment (EV at ISO 100): estimated, or worked from a reading, under a forecast if given. */
+    fun ev(place: Place, epochMillis: Long, conditions: SkyConditions, measured: Measured? = null, forecast: CloudForecast? = null): Double {
+        val sky = forecast?.let { conditions.copy(cloud = it.at(epochMillis)) } ?: conditions
+        return if (measured == null) SceneLight.ev(place, epochMillis, sky)
+        else SceneLight.relative(place, measured.atMillis, measured.ev, epochMillis, sky, conditions)
+    }
+
     /**
      * Everything for one moment. With a [forecast], the cloud at that moment is the forecast's and [conditions] give the rest
      * (the night sky); a [measured] reading is taken to have been under [conditions] as set, so the forecast then moves it.

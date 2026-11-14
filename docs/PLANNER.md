@@ -16,7 +16,7 @@ settings and saved places are kept by `PlannerPrefs` in `PlannerScreen.kt`, not 
   centre 5° up in a fully dark sky, and the part of that with the moon down or under a quarter lit;
   the best Milky Way nights of a year (longest moonless window); moon phases.
 - `SceneLight`: scene EV at ISO 100 from sun and moon height, place height, Bortle class, cloud.
-- `Exposure`: the triangle with ND, one setting auto, warnings with a suggested filter, the filter
+- `Exposure`: the triangle with ND (still used by `Planner.frame`; the interface uses `Meter`), the filter
   window for a held shutter, lux from EV, camera-style printing of the values.
 - `Planner.frame`: all of it for one moment, optionally from a measured EV and under a forecast.
 - `Weather`: `CloudForecast` (hourly cloud, moved smoothly between hours); `MetNorway` (asks for
@@ -39,8 +39,12 @@ settings and saved places are kept by `PlannerPrefs` in `PlannerScreen.kt`, not 
   town its words name, else from the place set); all on the phone.
 - `Gazetteer`: search by name without accents or case (towns, villages, peaks, passes, lakes,
   huts), best match first, bigger towns and higher peaks before, nearer before farther.
-- `Capture`: Photo / Video / Timelapse: a video's shutter from its frame rate (180°: 1/(2·fps)), a
-  timelapse's from its interval (half of it), with notes for what is out of reach.
+- `Meter`: the planner's core, a light meter. The scene's light (EV) against the camera's settings
+  (aperture, shutter, ISO, filter; shutter and ISO by hand or Auto within the camera's range) gives
+  the shutter and ISO the camera ends with and the offset in stops: EV +1.7 too bright, EV 0.0
+  right, EV −1.7 too dark. Nothing else: no advice, no sentences.
+- `CameraProfile`: a camera's ISO and shutter range, its aperture when fixed, the filters owned.
+  Only limits and lists for the dials and Auto.
 - `WebMercator`: map pixels from latitude and longitude.
 - `Ar`: the phone's attitude and a direction in the sky to a point on the screen; the lens's
   focal length in pixels; the compass and tilt correction from aiming at the sun or moon.
@@ -169,16 +173,20 @@ for fixed choices, sheets for what is used now and then, tokens of the theme, Ge
   at the end.
 - **Times sheet**: Sun and moon, Over the land, Milky Way, Moon phases, Best Milky Way nights.
 - **Plans sheet**: Save this plan, Saved.
-- **Exposure** (was Calculator), from the top: When (day, day bar, phase), the result at the hour
-  (EV and lux, then Aperture · Shutter · ISO · Filter tiles: Auto in the accent, Held, or fixed by the
-  mode; warnings as cards), the dial of the tile tapped (the camera's third-stop steps; in Photo also
-  "Follows the light"), Shooting (Photo / Video / Timelapse, frame rate or interval), Filter (Pick for
-  me / Choose with a dial over ND2 … ND2000, and the filters that fit the held settings), ISO range
-  (two dials), Sky (Bortle, Cloud, the forecast beside them), Light reading (when there is one).
-- In Video and Timelapse the shutter tile is fixed by the mode and only the aperture can be held,
-  which answers the old "Auto on shutter and aperture" problem.
+- **Exposure** (2026-11-14, rebuilt as a light meter), from the top: When (day, day bar, phase);
+  Light (EV and lux, estimated or from the camera's reading, forecast in brackets); Exposure
+  (Aperture · Shutter · ISO · Filter tiles, Auto in the accent; under them the result, EV ±x.x, the
+  forecast's in brackets); the dial of the tile tapped (shutter and ISO: Set / Auto; the filter dial
+  offers only the filters owned for the camera); Camera (choose; Edit / New: name, ISO range,
+  shutter range, fixed aperture, filters owned); Sky (Bortle, Cloud, forecast).
+- Taken out on the owner's word: Photo / Video / Timelapse modes, frame rate and interval, "follows
+  the light" for any of the three, Pick for me, the list of fitting filters, warnings and advice.
 - The live view keeps its overlays on the camera (dark scrims are right there); its pills take the
   app's style.
+
+Calibration: 14 Nov 2026 15:56, Kraków, a minute before sunset: the Osmo read EV 8.25 (f/2.8, 1/120,
+ISO 309), the model gave 6.7, 1.5 stops low. One reading is not enough to change the model; a few more
+(morning, noon, dusk, night) will show whether the table near the horizon should rise.
 
 Still open: the sky chart's vertical scale (the Tatras look flat) and its text sizes; short Plus
 Codes ("X3QR+5F Kluszkowce") to be checked on the phone.

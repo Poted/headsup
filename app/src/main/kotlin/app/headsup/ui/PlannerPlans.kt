@@ -66,7 +66,7 @@ internal fun PlansPanel(st: PlannerState, onOpened: () -> Unit) {
                         color = HeadsupColors.TextMuted, style = MaterialTheme.typography.labelMedium,
                     )
                     Text(
-                        "${Exposure.formatAperture(p.aperture)} · ${Exposure.formatShutter(p.shutter)} · ISO ${p.isoMin.roundToInt()}–${p.isoMax.roundToInt()}",
+                        "${p.camera.ifEmpty { "Any camera" }} · ${Exposure.formatAperture(p.aperture)} · ${if (p.shutterAuto) "Auto" else Exposure.formatShutter(p.shutter)} · ISO ${if (p.isoAuto) "Auto" else Exposure.snapIso(p.iso)}",
                         color = HeadsupColors.TextMuted, style = MaterialTheme.typography.labelSmall,
                     )
                 }
