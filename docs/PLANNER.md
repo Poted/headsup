@@ -187,6 +187,9 @@ from the editor to the planner, the chart's text sizes.
 - Regular expressions: Android's engine (ICU) rejects a lone `}` or `]` that the JVM accepts, so
   a pattern that passes `:core:test` can crash on the phone. Escape every brace and bracket; the
   test `theForecastPatternsWorkOnAndroidToo` checks the planner's patterns.
+- `app/build.gradle.kts` is compiled by Gradle's own, older Kotlin (no `break`/`continue` inside
+  lambdas, no `use { }` there), and this machine cannot compile it (no Android SDK, no Google Maven):
+  only CI tells. A local `:core:test` that passes says nothing about the app's build script.
 - After a crash the next start shows its report on the Editor/Planner screen (Copy, Hide).
 
 ## Data and services: only what may be used commercially

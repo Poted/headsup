@@ -130,22 +130,33 @@ val buildPlaces by tasks.registering {
             for (country in listOf("PL", "SK", "CZ")) {
                 try {
                     val zip = java.util.zip.ZipInputStream(URI("https://download.geonames.org/export/dump/$country.zip").toURL().openStream())
-                    zip.use { z ->
-                        while (true) {
-                            val entry = z.nextEntry ?: break
-                            if (entry.name != "$country.txt") continue
-                            z.bufferedReader().lineSequence().forEach { line ->
+                    try {
+                        var entry = zip.nextEntry
+                        while (entry != null && entry.name != "$country.txt") entry = zip.nextEntry
+                        if (entry != null) {
+                            val reader = zip.bufferedReader()
+                            var line = reader.readLine()
+                            while (line != null) {
                                 val f = line.split('\t')
-                                if (f.size < 17) return@forEach
-                                val cls = f[6]; val code = f[7]
-                                val wanted = keep.any { (c, codes) -> c == cls && (codes == null || code in codes) }
-                                if (!wanted) return@forEach
-                                val elevation = f[15].ifEmpty { f[16] }.toIntOrNull()?.takeIf { it > -1000 } ?: ""
-                                out.write(listOf(f[1], f[4], f[5], elevation.toString(), code, f[14].ifEmpty { "0" }, country).joinToString("\t"))
-                                out.write("\n")
-                                rows++
+                                if (f.size >= 17) {
+                                    val cls = f[6]
+                                    val code = f[7]
+                                    var wanted = false
+                                    for ((c, codes) in keep) if (c == cls && (codes == null || code in codes)) wanted = true
+                                    if (wanted) {
+                                        val height = (if (f[15].isEmpty()) f[16] else f[15]).toIntOrNull()
+                                        val elevation = if (height != null && height > -1000) height.toString() else ""
+                                        val population = if (f[14].isEmpty()) "0" else f[14]
+                                        out.write(listOf(f[1], f[4], f[5], elevation, code, population, country).joinToString("\t"))
+                                        out.write("\n")
+                                        rows++
+                                    }
+                                }
+                                line = reader.readLine()
                             }
                         }
+                    } finally {
+                        zip.close()
                     }
                 } catch (e: Exception) {
                     logger.warn("Place names for $country could not be fetched: ${e.message}")
