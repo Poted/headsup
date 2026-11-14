@@ -73,7 +73,10 @@ internal class PlannerState(context: Context) {
     var shutter by Saved(prefs.get("sh", 0.5f).toDouble()) { prefs.put("sh", it.toFloat()) }
     var iso by Saved(prefs.get("iso", 100f).toDouble()) { prefs.put("iso", it.toFloat()) }
     /** The filter's place in the list, or −1 to let the planner pick. */
-    var ndIndex by Saved(prefs.get("nd", 3f).roundToInt()) { prefs.put("nd", it.toFloat()) }
+    // Kept by the filter's name: the list of filters grows, a name stays (older versions kept its place in a shorter list).
+    var ndIndex by Saved(ndIndexFrom(prefs.getString("ndl", ""), prefs.get("nd", 4f).roundToInt())) {
+        prefs.putString("ndl", if (it < 0) "pick" else NdFilter.entries[it.coerceIn(0, NdFilter.entries.size - 1)].label)
+    }
     var isoMax by Saved(prefs.get("isomax", 25_600f).toDouble()) { prefs.put("isomax", it.toFloat()) }
     var isoMin by Saved(prefs.get("isomin", 100f).toDouble()) { prefs.put("isomin", it.toFloat()) }
 
@@ -343,7 +346,7 @@ private fun readPlans(p: PlannerPrefs): List<SavedPlan> = runCatching {
             SavedPlan(
                 o.getString("name"), o.getDouble("lat"), o.getDouble("lon"), o.optDouble("elev", 0.0), o.optInt("utc", 0),
                 o.getString("date"), o.optDouble("min", 720.0).toFloat(),
-                o.optInt("auto", 0), o.optDouble("ap", 2.8), o.optDouble("sh", 0.5), o.optDouble("iso", 100.0), o.optInt("nd", -1),
+                o.optInt("auto", 0), o.optDouble("ap", 2.8), o.optDouble("sh", 0.5), o.optDouble("iso", 100.0), ndIndexFrom(o.optString("ndl", ""), o.optInt("nd", -1)),
                 o.optDouble("isomin", 100.0), o.optDouble("isomax", 25_600.0), o.optInt("bortle", 3), o.optDouble("cloud", 0.0).toFloat(),
                 o.optInt("mode", 0), o.optDouble("fps", 25.0), o.optDouble("interval", 5.0),
             )
@@ -358,7 +361,8 @@ private fun writePlans(p: PlannerPrefs, list: List<SavedPlan>) {
             org.json.JSONObject()
                 .put("name", x.name).put("lat", x.lat).put("lon", x.lon).put("elev", x.elevation).put("utc", x.utc)
                 .put("date", x.date).put("min", x.minute.toDouble())
-                .put("auto", x.auto).put("ap", x.aperture).put("sh", x.shutter).put("iso", x.iso).put("nd", x.nd)
+                .put("auto", x.auto).put("ap", x.aperture).put("sh", x.shutter).put("iso", x.iso)
+                .put("ndl", if (x.nd < 0) "pick" else NdFilter.entries[x.nd.coerceIn(0, NdFilter.entries.size - 1)].label)
                 .put("isomin", x.isoMin).put("isomax", x.isoMax).put("bortle", x.bortle).put("cloud", x.cloud.toDouble())
                 .put("mode", x.mode).put("fps", x.fps).put("interval", x.interval),
         )
@@ -371,3 +375,15 @@ private fun writePlans(p: PlannerPrefs, list: List<SavedPlan>) {
  * reach the maker). Before a release, put the maker's contact (a website or an e-mail) here.
  */
 internal const val PLANNER_USER_AGENT = "SweetSpotPlanner/1.0 (Android; github.com/Poted/headsup)"
+
+/**
+ * A filter's place in today's list from its kept name ("ND64", or "pick" for the planner's choice),
+ * or, for what older versions kept, from its place in their list (None, ND4, ND8, ND16, ND32, ND64, ND1000).
+ */
+internal fun ndIndexFrom(label: String, oldIndex: Int): Int {
+    if (label == "pick") return -1
+    NdFilter.of(label)?.let { return it.ordinal }
+    if (oldIndex < 0) return -1
+    val old = listOf("None", "ND4", "ND8", "ND16", "ND32", "ND64", "ND1000")
+    return NdFilter.of(old.getOrElse(oldIndex) { "ND16" })?.ordinal ?: NdFilter.Nd16.ordinal
+}

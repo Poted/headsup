@@ -68,7 +68,7 @@ private val MilkyBlue = Color(0xFF8FB4FF)
  * The place and the day's times open as panels over the sky.
  */
 @Composable
-internal fun SunView(st: PlannerState, onLocate: () -> Unit, modifier: Modifier = Modifier) {
+internal fun SunView(st: PlannerState, onLocate: () -> Unit, onCalculator: () -> Unit, modifier: Modifier = Modifier) {
     val place = st.place
     val sun = Sky.sun(place, st.now)
     val moon = Sky.moon(place, st.now)
@@ -144,6 +144,7 @@ internal fun SunView(st: PlannerState, onLocate: () -> Unit, modifier: Modifier 
         }
         // The hour and the day.
         Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            ExposureHud(st, onCalculator)
             DayBar(st)
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Chip("◀", { st.day = st.day.minusDays(1) })
@@ -167,7 +168,8 @@ private fun PlacePanel(st: PlannerState, onLocate: () -> Unit, onGoToPin: () -> 
     LaunchedEffect(Unit) { st.loadPlaceNames() }
     val names = st.gazetteer
     val locate = { words: String -> names?.locate(words, st.lat, st.lon)?.let { it.lat to it.lon } }
-    val parsed = remember(query) { app.headsup.core.planner.PlaceInput.parse(query, st.lat, st.lon, locate) }
+    // Worked again once the names are read: a short Plus Code needs its town's place.
+    val parsed = remember(query, names) { app.headsup.core.planner.PlaceInput.parse(query, st.lat, st.lon, locate) }
     val found = remember(query, names) { if (parsed == null) names?.search(query, st.lat, st.lon, 8).orEmpty() else emptyList() }
     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         OutlinedTextField(

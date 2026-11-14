@@ -90,10 +90,10 @@ fun PlannerScreen(onEditor: () -> Unit) {
         Box(Modifier.weight(1f).fillMaxWidth()) {
             if (view == 0) {
                 // The sky fills what is left; the place and times open over it.
-                SunView(st, locate, Modifier.fillMaxSize())
+                SunView(st, locate, onCalculator = { view = 2 }, modifier = Modifier.fillMaxSize())
             } else if (view == 1) {
                 // The live view fills what is left and does not scroll: the camera is the page.
-                LiveView(st, locate, Modifier.fillMaxSize())
+                LiveView(st, locate, onCalculator = { view = 2 }, modifier = Modifier.fillMaxSize())
             } else {
                 Column(
                     Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp),

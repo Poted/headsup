@@ -6,15 +6,34 @@ import kotlin.math.pow
 import kotlin.math.roundToInt
 import kotlin.math.sqrt
 
-/** The neutral density filters offered, with how many stops of light each takes away. */
-enum class NdFilter(val label: String, val stops: Double) {
-    None("None", 0.0),
-    Nd4("ND4", 2.0),
-    Nd8("ND8", 3.0),
-    Nd16("ND16", 4.0),
-    Nd32("ND32", 5.0),
-    Nd64("ND64", 6.0),
-    Nd1000("ND1000", 10.0),
+/**
+ * The neutral density filters offered, by the name on the filter (its light-cut factor), with how
+ * many stops of light each takes away (log2 of the factor: ND1000 is 9.97 stops).
+ */
+enum class NdFilter(val label: String, val factor: Int) {
+    None("None", 1),
+    Nd2("ND2", 2),
+    Nd4("ND4", 4),
+    Nd8("ND8", 8),
+    Nd16("ND16", 16),
+    Nd32("ND32", 32),
+    Nd64("ND64", 64),
+    Nd128("ND128", 128),
+    Nd256("ND256", 256),
+    Nd400("ND400", 400),
+    Nd500("ND500", 500),
+    Nd1000("ND1000", 1000),
+    Nd2000("ND2000", 2000);
+
+    val stops: Double get() = kotlin.math.ln(factor.toDouble()) / kotlin.math.ln(2.0)
+
+    companion object {
+        /** The filter of a label ("ND64"), or null. */
+        fun of(label: String): NdFilter? = entries.firstOrNull { it.label == label }
+
+        /** The strongest filter offered. */
+        val strongest: NdFilter get() = entries.last()
+    }
 }
 
 /** What the camera can do: the lowest and highest ISO it offers. */
@@ -122,7 +141,7 @@ object Exposure {
     private fun solveIso(ev: Double, s: ExposureSetup, fixedNd: NdFilter?): ExposureResult {
         val lim = s.limits
         // With the filter left to the planner: the weakest one that keeps the ISO from falling below the camera's lowest.
-        val nd = fixedNd ?: NdFilter.entries.firstOrNull { isoFor(ev, s.aperture, s.shutter, it.stops) >= lim.isoMin } ?: NdFilter.Nd1000
+        val nd = fixedNd ?: NdFilter.entries.firstOrNull { isoFor(ev, s.aperture, s.shutter, it.stops) >= lim.isoMin } ?: NdFilter.strongest
         val wanted = isoFor(ev, s.aperture, s.shutter, nd.stops)
         val warning = when {
             wanted > lim.isoMax * 1.02 -> ExposureWarning.IsoTooHigh
@@ -133,7 +152,7 @@ object Exposure {
         val suggestion = if (warning == ExposureWarning.IsoTooLow) {
             val sufficient = NdFilter.entries.firstOrNull { it.stops > nd.stops && isoFor(ev, s.aperture, s.shutter, it.stops) >= lim.isoMin / 1.02 }
             if (sufficient == null) enough = false
-            sufficient ?: NdFilter.Nd1000.takeIf { it.stops > nd.stops }
+            sufficient ?: NdFilter.strongest.takeIf { it.stops > nd.stops }
         } else if (warning == ExposureWarning.IsoTooHigh) {
             NdFilter.entries.lastOrNull { it.stops < nd.stops }
         } else null

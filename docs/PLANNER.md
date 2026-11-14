@@ -159,19 +159,27 @@ What is there and works (logic tested in `:core`, the screens built in CI and tr
   none to the planner yet.
 - Planner header: Sun · Live · Calculator · Plans · Editor (too many for a narrow phone).
 - Sun: the sky full screen (drag to turn and tilt, pinch to zoom), the map in the corner (⤢
-  swaps), the day bar, ◀ ▶ Today, Times and Place panels over the sky.
-- Live: camera with the sun's path, hour dots, horizon, skyline, moon, Milky Way; the reading of
-  the light (EV, lux) and Use as base; My location; Calibrate (align on the sun or moon, nudges).
+  swaps), the exposure bar (EV | aperture | shutter | filter | ISO, the following one marked, red
+  out of reach, forecast in brackets; tap → Calculator), the day bar, ◀ ▶ Today, Times and Place
+  panels over the sky. Place: search by name, or paste coordinates / Plus Code / Maps link.
+- Live: camera with the sun's path, hour dots, horizon, skyline, moon, Milky Way; the exposure bar;
+  the reading of the light (EV, lux) and Use as base; My location; Calibrate (align on the sun or moon, nudges).
 - Calculator: Photo / Video / Timelapse; frame rate or interval; Aperture / Shutter / ISO tiles
   (one auto in Photo; in Video and Timelapse the shutter is held by the mode and ISO follows);
-  filter (Pick for me, ◀ ▶); ISO range; the filter window for the held shutter; warnings; Night
+  filter (None, ND2 … ND2000 with exact stops; Pick for me, ◀ ▶); ISO range; the filter window for the held shutter; warnings; Night
   sky (Bortle), Cloud, Get forecast (results in brackets: "(with forecast …)").
 - Plans: save everything set under a name, open, delete.
+
+Status: an MVP of the first stories (US1 live view and metering, US2 remote planning with map and
+sky, US3 exposure with locks, ND and warnings over the time bar, US4 the bar on one screen). The
+logic is tested; the screens work but were built without design.
 
 Known UX problems to solve there: units and steps of the settings (now the camera's dials), the
 header's width, the shutter and aperture tiles' Auto in Video and Timelapse (ISO is always auto
 there), the sky chart's vertical scale (the Tatras look flat), the Place panel's length, no way
-from the editor to the planner, the chart's text sizes.
+from the editor to the planner, the chart's text sizes; short Plus Codes ("X3QR+5F Kluszkowce")
+were still landing a cell away on the phone (fixed in code: the town is looked up once the names
+are read; to be checked).
 
 ## Later (noted, not started)
 

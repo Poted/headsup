@@ -18,7 +18,8 @@ class ExposureTest {
         val r = Exposure.solve(10.0, s)
         assertEquals(ExposureWarning.IsoTooLow, r.warning)
         assertEquals(100.0, r.iso)
-        assertEquals(NdFilter.Nd1000, r.suggestedNd)
+        // About 6 stops are missing: ND64 falls just short, ND128 is the weakest that is enough.
+        assertEquals(NdFilter.Nd128, r.suggestedNd)
     }
 
     @Test fun darkNightAsksForAHighIso() {
@@ -89,7 +90,7 @@ class ExposureTest {
         val w = Exposure.ndWindow(10.0, 2.8, 1.0, CameraLimits(100.0, 3200.0))
         assertEquals(7.0, w.start, 0.05)
         assertEquals(12.0, w.endInclusive, 0.05)
-        assertEquals(listOf(NdFilter.Nd1000), Exposure.filtersIn(w))
+        assertEquals(listOf(NdFilter.Nd256, NdFilter.Nd400, NdFilter.Nd500, NdFilter.Nd1000, NdFilter.Nd2000), Exposure.filtersIn(w))
         // At that filter the ISO sits inside the range.
         val iso = Exposure.isoFor(10.0, 2.8, 1.0, NdFilter.Nd1000.stops)
         assertTrue(iso in 100.0..3200.0, "iso $iso")
@@ -104,5 +105,13 @@ class ExposureTest {
     @Test fun luxFromEv() {
         assertEquals(2.5, Exposure.luxFromEv(0.0), 1e-9)
         assertEquals(81_920.0, Exposure.luxFromEv(15.0), 1e-6)
+    }
+
+    @Test fun filtersTakeAwayTheStopsTheirFactorSays() {
+        assertEquals(10.0, NdFilter.Nd1000.stops, 0.04)
+        assertEquals(7.0, NdFilter.Nd128.stops, 1e-9)
+        assertEquals(0.0, NdFilter.None.stops, 1e-9)
+        for (i in 0 until NdFilter.entries.size - 1) assertTrue(NdFilter.entries[i].stops < NdFilter.entries[i + 1].stops)
+        assertEquals(NdFilter.Nd256, NdFilter.of("ND256"))
     }
 }

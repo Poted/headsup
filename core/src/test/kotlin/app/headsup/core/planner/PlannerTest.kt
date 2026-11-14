@@ -14,9 +14,13 @@ class PlannerTest {
         val setup = ExposureSetup(AutoSetting.Iso, 2.8, 0.5, nd = NdFilter.Nd16)
         val f = Planner.frame(place, ms(10), SkyConditions(), setup)
         assertEquals(ExposureWarning.IsoTooLow, f.exposure.warning)
-        // Even ND1000 leaves it too bright at f/2.8 and 1/2 s: the suggestion says it is not enough.
-        assertEquals(NdFilter.Nd1000, f.exposure.suggestedNd)
-        assertEquals(false, f.exposure.suggestionEnough)
+        // ND2000 (11 stops) just brings 1/2 s at noon into reach.
+        assertEquals(NdFilter.Nd2000, f.exposure.suggestedNd)
+        assertEquals(true, f.exposure.suggestionEnough)
+        // At 4 s even the strongest filter is not enough: the suggestion says so.
+        val longer = Planner.frame(place, ms(10), SkyConditions(), setup.copy(shutter = 4.0))
+        assertEquals(NdFilter.strongest, longer.exposure.suggestedNd)
+        assertEquals(false, longer.exposure.suggestionEnough)
         assertEquals("Day", f.phase)
     }
 
