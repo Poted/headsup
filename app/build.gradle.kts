@@ -1,5 +1,8 @@
 import java.io.File
 import java.io.FileInputStream
+import java.io.FileOutputStream
+import java.util.zip.GZIPOutputStream
+import java.util.zip.ZipInputStream
 import java.net.URI
 import java.nio.file.Files
 import java.nio.file.StandardCopyOption
@@ -125,11 +128,11 @@ val buildPlaces by tasks.registering {
             "L" to setOf("PRK", "RESN", "AREA", "LCTY"),
         )
         var rows = 0
-        val out = java.util.zip.GZIPOutputStream(java.io.FileOutputStream(file)).bufferedWriter()
+        val out = GZIPOutputStream(FileOutputStream(file)).bufferedWriter()
         try {
             for (country in listOf("PL", "SK", "CZ")) {
                 try {
-                    val zip = java.util.zip.ZipInputStream(URI("https://download.geonames.org/export/dump/$country.zip").toURL().openStream())
+                    val zip = ZipInputStream(URI("https://download.geonames.org/export/dump/$country.zip").toURL().openStream())
                     try {
                         var entry = zip.nextEntry
                         while (entry != null && entry.name != "$country.txt") entry = zip.nextEntry

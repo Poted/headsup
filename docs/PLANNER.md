@@ -190,6 +190,7 @@ from the editor to the planner, the chart's text sizes.
 - `app/build.gradle.kts` is compiled by Gradle's own, older Kotlin (no `break`/`continue` inside
   lambdas, no `use { }` there), and this machine cannot compile it (no Android SDK, no Google Maven):
   only CI tells. A local `:core:test` that passes says nothing about the app's build script.
+  Inside a task, `java` means the project's `java` extension: write `java.util.…` as an import.
 - After a crash the next start shows its report on the Editor/Planner screen (Copy, Hide).
 
 ## Data and services: only what may be used commercially
