@@ -135,6 +135,13 @@ Limits: terrain at about 25 m near and 100 m far, so a narrow summit or a buildi
 lower (a building or a tree is not in the model: give the target's height by hand); the moon's
 position is good to about 0.3°.
 
+## Pitfalls met
+
+- Regular expressions: Android's engine (ICU) rejects a lone `}` or `]` that the JVM accepts, so
+  a pattern that passes `:core:test` can crash on the phone. Escape every brace and bracket; the
+  test `theForecastPatternsWorkOnAndroidToo` checks the planner's patterns.
+- After a crash the next start shows its report on the Editor/Planner screen (Copy, Hide).
+
 ## Data and services: only what may be used commercially
 
 A rule for the planner: no data or service that may not be used in a paid app.

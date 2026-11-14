@@ -78,7 +78,8 @@ internal class PlannerState(context: Context) {
     var isoMin by Saved(prefs.get("isomin", 100f).toDouble()) { prefs.put("isomin", it.toFloat()) }
 
     /** The last forecast fetched, and the place it is for. It is kept, so a place seen once has its forecast with no signal. */
-    var forecast by mutableStateOf(MetNorway.parse(prefs.getString("fc_json", "")))
+    // Read safely: a forecast kept by an older version, or a damaged one, is simply not used.
+    var forecast by mutableStateOf(runCatching { MetNorway.parse(prefs.getString("fc_json", "")) }.getOrNull())
     private var forecastKey by mutableStateOf(prefs.getString("fc_key", ""))
     /** What the last fetch said, if it went wrong or is going on. */
     var forecastStatus by mutableStateOf("")

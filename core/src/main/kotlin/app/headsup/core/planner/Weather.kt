@@ -36,10 +36,15 @@ object MetNorway {
     /** The credit to show where its forecast is used. */
     const val CREDIT = "Weather: MET Norway"
 
+    // Every brace and bracket is escaped: Android's regular expressions (ICU) reject a lone "}" that the JVM accepts.
+    internal val STEP_PATTERN =
+        "\"time\"\\s*:\\s*\"([^\"]+)\"\\s*,\\s*\"data\"\\s*:\\s*\\{\\s*\"instant\"\\s*:\\s*\\{\\s*\"details\"\\s*:\\s*\\{([^\\}]*)\\}"
+    internal const val CLOUD_PATTERN = "\"cloud_area_fraction\"\\s*:\\s*(-?[0-9.]+)"
+    private val step by lazy { Regex(STEP_PATTERN) }
+    private val cloud by lazy { Regex(CLOUD_PATTERN) }
+
     /** Reads the answer: each moment's cloud_area_fraction (%); null if there is none. */
     fun parse(json: String): CloudForecast? {
-        val step = Regex("\"time\"\\s*:\\s*\"([^\"]+)\"\\s*,\\s*\"data\"\\s*:\\s*\\{\\s*\"instant\"\\s*:\\s*\\{\\s*\"details\"\\s*:\\s*\\{([^}]*)}")
-        val cloud = Regex("\"cloud_area_fraction\"\\s*:\\s*(-?[0-9.]+)")
         val out = ArrayList<Pair<Long, Double>>()
         for (m in step.findAll(json)) {
             val t = runCatching { Instant.parse(m.groupValues[1]).toEpochMilli() }.getOrNull() ?: continue
