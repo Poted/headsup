@@ -58,38 +58,26 @@ internal fun CalculatorView(st: PlannerState) {
             )
         }
 
-        // The light of the scene, and where the number comes from.
+        // The settings and the result: how far from right the exposure is.
         ToolSection(
-            "Light",
-            info = "The scene's light as exposure value at ISO 100. Estimated from the sun's and moon's height, the place's height, the night sky and cloud (good to about 1.5 stops), " +
-                "or worked from a reading taken with the camera in Live. With a forecast loaded, the value under its cloud is in brackets.",
+            "Exposure",
+            info = "The camera's settings as set on it; Auto is the camera's own choice within its range. " +
+                "The result is how far the picture is from a right exposure, in stops: + too bright, − too dark. " +
+                "The light is estimated from the sun's and moon's height, the place's height, the night sky and cloud (good to about 1.5 stops), " +
+                "or taken from the camera's reading in Live (Use as base). With a forecast loaded, the result under its cloud is in brackets.",
         ) {
-            Row(verticalAlignment = Alignment.Bottom) {
-                Text("EV ${one(ev)}", color = HeadsupColors.Ink, style = MaterialTheme.typography.headlineSmall.copy(fontFamily = GeistMonoFamily))
-                Text(
-                    "  ${lux(ev)}" + (fcEv?.let { "  (forecast EV ${one(it)})" } ?: ""),
-                    color = HeadsupColors.TextMuted, style = MaterialTheme.typography.labelMedium, modifier = Modifier.padding(bottom = 3.dp),
-                )
-            }
+            // Where the light comes from (one number is shown: the result below).
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
-                    when {
-                        st.measured != null -> "From the camera's reading"
-                        st.measuredEv != null -> "Estimated (the camera's reading is from another place)"
-                        else -> "Estimated"
+                    "Light ${lux(ev)} · " + when {
+                        st.measured != null -> "from the camera's reading"
+                        st.measuredEv != null -> "estimated (the reading is from another place)"
+                        else -> "estimated"
                     },
                     color = HeadsupColors.TextMuted, style = MaterialTheme.typography.labelMedium, modifier = Modifier.weight(1f),
                 )
                 if (st.measuredEv != null) Chip("Clear reading", { st.clearReading() })
             }
-        }
-
-        // The settings and the result: how far from right the exposure is.
-        ToolSection(
-            "Exposure",
-            info = "The camera's settings as set on it; Auto is the camera's own choice within its range. " +
-                "The result is how far the picture is from a right exposure, in stops: + too bright, − too dark.",
-        ) {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 ExposureTile("Aperture", Exposure.formatAperture(r.aperture), if (camera.fixedAperture != null) "Fixed" else "Set", false, dial == "Aperture", Modifier.weight(1f)) { dial = "Aperture" }
                 ExposureTile("Shutter", Exposure.formatShutter(r.shutter), if (st.shutterAuto) "Auto" else "Set", st.shutterAuto, dial == "Shutter", Modifier.weight(1f)) { dial = "Shutter" }
@@ -112,7 +100,8 @@ internal fun CalculatorView(st: PlannerState) {
                     if (fixed != null) {
                         Text("Fixed at ${Exposure.formatAperture(fixed)} on ${camera.name}.", color = HeadsupColors.TextMuted, style = MaterialTheme.typography.bodySmall)
                     } else {
-                        Dial(CameraScale.apertures, st.aperture, { st.aperture = it }, { Exposure.formatAperture(it) }, reset = 2.8)
+                        val scale = CameraScale.apertures.filter { it >= camera.apertureMin * 0.97 && it <= camera.apertureMax * 1.03 }.ifEmpty { CameraScale.apertures }
+                        Dial(scale, st.aperture, { st.aperture = it }, { Exposure.formatAperture(it) }, reset = camera.apertureMin)
                     }
                 }
                 "Shutter" -> {
@@ -177,67 +166,77 @@ private fun Dial(scale: List<Double>, value: Double, set: (Double) -> Unit, labe
     )
 }
 
-/**
- * The cameras: choose the one in use, or describe one (its name, ISO and shutter range, a fixed
- * aperture, the filters owned). Only limits and lists, used by the dials and by Auto.
- */
+/** The cameras: choose the one in use; adding or changing one opens its own window. */
 @Composable
 private fun CameraSection(st: PlannerState) {
     var editing by remember { mutableStateOf<Int?>(null) } // index edited, or −1 for a new one
-    var draft by remember { mutableStateOf(CameraProfile.ANY) }
-    var confirmDelete by remember { mutableStateOf(false) }
-    ToolSection("Camera", info = "The camera in use: its ISO and shutter range, its aperture when fixed, and the filters you own for it. Auto stays inside the range; the filter dial offers only the filters owned.") {
+    ToolSection("Camera", info = "The camera in use: its ISO, shutter and aperture range and the filters you own for it. Auto stays inside the range; the dials offer only what the camera has.") {
         ChoiceGrid(st.profiles.map { it.name }, st.profileIndex, { st.useProfile(it) })
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Chip("Edit", { draft = st.camera; editing = st.profileIndex; confirmDelete = false }, selected = editing == st.profileIndex)
-            Chip("New camera", { draft = CameraProfile("Camera ${st.profiles.size + 1}"); editing = -1; confirmDelete = false }, selected = editing == -1)
+            Chip("Edit", { editing = st.profileIndex })
+            Chip("New camera", { editing = -1 })
         }
-        val at = editing
-        if (at != null) {
-            OutlinedTextField(
-                value = draft.name, onValueChange = { draft = draft.copy(name = it) }, singleLine = true,
-                label = { Text("Name") }, modifier = Modifier.fillMaxWidth(),
-            )
-            val isos = CameraScale.isos
-            val lo = CameraScale.nearest(isos, draft.isoMin)
-            val hi = CameraScale.nearest(isos, draft.isoMax)
-            ValueHeader("Lowest ISO", isos[lo].roundToInt().toString())
-            RulerSlider(lo.toFloat(), 0f..(isos.size - 1).toFloat(), 1f, { v -> draft = draft.copy(isoMin = isos[v.roundToInt().coerceIn(0, hi)]) }, onReset = { draft = draft.copy(isoMin = 100.0) })
-            ValueHeader("Highest ISO", isos[hi].roundToInt().toString())
-            RulerSlider(hi.toFloat(), 0f..(isos.size - 1).toFloat(), 1f, { v -> draft = draft.copy(isoMax = isos[v.roundToInt().coerceIn(lo, isos.size - 1)]) }, onReset = { draft = draft.copy(isoMax = 25_600.0) })
-            val sh = CameraScale.shutters
-            val sLo = CameraScale.nearest(sh, draft.shutterMin)
-            val sHi = CameraScale.nearest(sh, draft.shutterMax)
-            ValueHeader("Shortest shutter", Exposure.formatShutter(sh[sLo]))
-            RulerSlider(sLo.toFloat(), 0f..(sh.size - 1).toFloat(), 1f, { v -> draft = draft.copy(shutterMin = sh[v.roundToInt().coerceIn(0, sHi)]) }, onReset = { draft = draft.copy(shutterMin = 1.0 / 8000) })
-            ValueHeader("Longest shutter", Exposure.formatShutter(sh[sHi]))
-            RulerSlider(sHi.toFloat(), 0f..(sh.size - 1).toFloat(), 1f, { v -> draft = draft.copy(shutterMax = sh[v.roundToInt().coerceIn(sLo, sh.size - 1)]) }, onReset = { draft = draft.copy(shutterMax = 30.0) })
-            LabeledChoice("Aperture", listOf("Adjustable", "Fixed"), { (it == 1) == (draft.fixedAperture != null) }, { draft = draft.copy(fixedAperture = if (it == 1) (draft.fixedAperture ?: 2.8) else null) })
-            draft.fixedAperture?.let { f ->
-                val ap = CameraScale.apertures
-                val i = CameraScale.nearest(ap, f)
-                ValueHeader("Fixed at", Exposure.formatAperture(ap[i]))
-                RulerSlider(i.toFloat(), 0f..(ap.size - 1).toFloat(), 1f, { v -> draft = draft.copy(fixedAperture = ap[v.roundToInt().coerceIn(0, ap.size - 1)]) }, onReset = { draft = draft.copy(fixedAperture = 2.8) })
-            }
-            val all = NdFilter.entries.filter { it != NdFilter.None }
-            LabeledChoice(
-                "Filters owned", all.map { it.label }, { all[it] in draft.filters },
-                { i -> draft = draft.copy(filters = if (all[i] in draft.filters) draft.filters - all[i] else (draft.filters + all[i]).sortedBy { it.stops }) },
-                minCell = 64.dp,
-            )
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Chip("Save", {
-                    if (draft.name.isNotBlank()) {
-                        st.saveProfile(draft.copy(name = draft.name.trim()), if (at >= 0) at else null)
-                        editing = null
-                    }
-                })
-                Chip("Cancel", { editing = null })
-                if (at >= 0 && st.profiles.size > 1) {
-                    Chip(if (confirmDelete) "Tap again to delete" else "Delete", {
-                        if (confirmDelete) { st.deleteProfile(at); editing = null; confirmDelete = false } else confirmDelete = true
-                    })
+    }
+    editing?.let { at ->
+        val start = if (at >= 0) st.profiles.getOrElse(at) { st.camera } else CameraProfile("Camera ${st.profiles.size + 1}", filters = emptyList())
+        OptionsSheet(if (at >= 0) "Edit camera" else "New camera", { editing = null }) {
+            CameraEditor(st, start, at, onDone = { editing = null })
+        }
+    }
+}
+
+/**
+ * A camera described: its name, ISO, shutter and aperture range (one value for a fixed aperture),
+ * and the filters owned for it. A new camera starts with none: tap those you have.
+ */
+@Composable
+private fun CameraEditor(st: PlannerState, start: CameraProfile, at: Int, onDone: () -> Unit) {
+    var draft by remember { mutableStateOf(start) }
+    var confirmDelete by remember { mutableStateOf(false) }
+    Column(Modifier.padding(horizontal = 16.dp).padding(bottom = 24.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        OutlinedTextField(
+            value = draft.name, onValueChange = { draft = draft.copy(name = it) }, singleLine = true,
+            label = { Text("Name") }, modifier = Modifier.fillMaxWidth(),
+        )
+        val isos = CameraScale.isos
+        val lo = CameraScale.nearest(isos, draft.isoMin)
+        val hi = CameraScale.nearest(isos, draft.isoMax)
+        ValueHeader("Lowest ISO", isos[lo].roundToInt().toString())
+        RulerSlider(lo.toFloat(), 0f..(isos.size - 1).toFloat(), 1f, { v -> draft = draft.copy(isoMin = isos[v.roundToInt().coerceIn(0, hi)]) }, onReset = { draft = draft.copy(isoMin = 100.0) })
+        ValueHeader("Highest ISO", isos[hi].roundToInt().toString())
+        RulerSlider(hi.toFloat(), 0f..(isos.size - 1).toFloat(), 1f, { v -> draft = draft.copy(isoMax = isos[v.roundToInt().coerceIn(lo, isos.size - 1)]) }, onReset = { draft = draft.copy(isoMax = 25_600.0) })
+        val sh = CameraScale.shutters
+        val sLo = CameraScale.nearest(sh, draft.shutterMin)
+        val sHi = CameraScale.nearest(sh, draft.shutterMax)
+        ValueHeader("Shortest shutter", Exposure.formatShutter(sh[sLo]))
+        RulerSlider(sLo.toFloat(), 0f..(sh.size - 1).toFloat(), 1f, { v -> draft = draft.copy(shutterMin = sh[v.roundToInt().coerceIn(0, sHi)]) }, onReset = { draft = draft.copy(shutterMin = 1.0 / 8000) })
+        ValueHeader("Longest shutter", Exposure.formatShutter(sh[sHi]))
+        RulerSlider(sHi.toFloat(), 0f..(sh.size - 1).toFloat(), 1f, { v -> draft = draft.copy(shutterMax = sh[v.roundToInt().coerceIn(sLo, sh.size - 1)]) }, onReset = { draft = draft.copy(shutterMax = 30.0) })
+        val ap = CameraScale.apertures
+        val aLo = CameraScale.nearest(ap, draft.apertureMin)
+        val aHi = CameraScale.nearest(ap, draft.apertureMax)
+        ValueHeader("Widest aperture", Exposure.formatAperture(ap[aLo]))
+        RulerSlider(aLo.toFloat(), 0f..(ap.size - 1).toFloat(), 1f, { v -> draft = draft.copy(apertureMin = ap[v.roundToInt().coerceIn(0, aHi)]) }, onReset = { draft = draft.copy(apertureMin = 2.8) })
+        ValueHeader("Narrowest aperture", Exposure.formatAperture(ap[aHi]) + if (aHi == aLo) " (fixed)" else "")
+        RulerSlider(aHi.toFloat(), 0f..(ap.size - 1).toFloat(), 1f, { v -> draft = draft.copy(apertureMax = ap[v.roundToInt().coerceIn(aLo, ap.size - 1)]) }, onReset = { draft = draft.copy(apertureMax = draft.apertureMin) })
+        val all = NdFilter.entries.filter { it != NdFilter.None }
+        LabeledChoice(
+            "Filters owned (tap those you have)", all.map { it.label }, { all[it] in draft.filters },
+            { i -> draft = draft.copy(filters = if (all[i] in draft.filters) draft.filters - all[i] else (draft.filters + all[i]).sortedBy { it.stops }) },
+            minCell = 64.dp,
+        )
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Chip("Save", {
+                if (draft.name.isNotBlank()) {
+                    st.saveProfile(draft.copy(name = draft.name.trim()), if (at >= 0) at else null)
+                    onDone()
                 }
+            }, selected = true)
+            Chip("Cancel", onDone)
+            if (at >= 0 && st.profiles.size > 1) {
+                Chip(if (confirmDelete) "Tap again to delete" else "Delete", {
+                    if (confirmDelete) { st.deleteProfile(at); onDone() } else confirmDelete = true
+                })
             }
         }
     }

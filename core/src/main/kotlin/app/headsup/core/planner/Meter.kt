@@ -3,8 +3,9 @@ package app.headsup.core.planner
 import kotlin.math.log2
 
 /**
- * A camera as far as exposure goes: the ISO and shutter it offers, its aperture when fixed (an
- * action camera's f/2.8), and the filters owned for it. Only limits and lists: it says nothing.
+ * A camera as far as exposure goes: the ISO, shutter and aperture it offers (an aperture range of one
+ * value is a fixed aperture, as an action camera's f/2.8), and the filters owned for it. Only limits
+ * and lists: it says nothing.
  */
 data class CameraProfile(
     val name: String,
@@ -12,11 +13,15 @@ data class CameraProfile(
     val isoMax: Double = 25_600.0,
     val shutterMin: Double = 1.0 / 8000,
     val shutterMax: Double = 30.0,
-    /** The aperture when the lens has only one, else null. */
-    val fixedAperture: Double? = null,
+    /** The widest aperture (smallest f-number) and the narrowest; the same for a fixed aperture. */
+    val apertureMin: Double = 1.0,
+    val apertureMax: Double = 32.0,
     /** The filters owned for it (None is always there). */
     val filters: List<NdFilter> = NdFilter.entries.toList(),
 ) {
+    /** The aperture when the lens has only one, else null. */
+    val fixedAperture: Double? get() = if (apertureMax - apertureMin < 0.05) apertureMin else null
+
     /** The filters to choose from: None and those owned, weakest first. */
     val choices: List<NdFilter> get() = (listOf(NdFilter.None) + filters).distinct().sortedBy { it.stops }
 
@@ -54,7 +59,7 @@ object Meter {
      * whatever is left past their limits is the offset.
      */
     fun read(sceneEv: Double, s: MeterSettings, camera: CameraProfile): MeterReading {
-        val n = camera.fixedAperture ?: s.aperture
+        val n = s.aperture.coerceIn(camera.apertureMin, camera.apertureMax)
         val needed = { t: Double, iso: Double -> sceneEv - settingsEv(n, t, iso, s.nd) } // stops too bright
         var shutter = s.shutter ?: camera.shutterMin
         var iso = s.iso ?: camera.isoMin

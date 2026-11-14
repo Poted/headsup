@@ -429,10 +429,12 @@ private fun readProfiles(p: PlannerPrefs): List<CameraProfile> {
                 val o = a.getJSONObject(i)
                 val f = o.optJSONArray("filters")
                 val filters = if (f == null) NdFilter.entries.toList() else (0 until f.length()).mapNotNull { NdFilter.of(f.getString(it)) }
+                // A fixed aperture was once kept as "aperture"; now a range ("apmin", "apmax"), the same for fixed.
+                val fixed = if (o.has("aperture")) o.getDouble("aperture") else null
                 CameraProfile(
                     o.getString("name"), o.optDouble("isomin", 100.0), o.optDouble("isomax", 25_600.0),
                     o.optDouble("shmin", 1.0 / 8000), o.optDouble("shmax", 30.0),
-                    if (o.has("aperture")) o.getDouble("aperture") else null, filters,
+                    o.optDouble("apmin", fixed ?: 1.0), o.optDouble("apmax", fixed ?: 32.0), filters,
                 )
             }.getOrNull()
         }
@@ -446,8 +448,8 @@ private fun writeProfiles(p: PlannerPrefs, list: List<CameraProfile>) {
     for (c in list) {
         val o = org.json.JSONObject().put("name", c.name).put("isomin", c.isoMin).put("isomax", c.isoMax)
             .put("shmin", c.shutterMin).put("shmax", c.shutterMax)
+            .put("apmin", c.apertureMin).put("apmax", c.apertureMax)
             .put("filters", org.json.JSONArray(c.filters.map { it.label }))
-        c.fixedAperture?.let { o.put("aperture", it) }
         a.put(o)
     }
     p.putString("profiles", a.toString())

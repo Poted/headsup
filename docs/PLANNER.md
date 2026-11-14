@@ -173,12 +173,18 @@ for fixed choices, sheets for what is used now and then, tokens of the theme, Ge
   at the end.
 - **Times sheet**: Sun and moon, Over the land, Milky Way, Moon phases, Best Milky Way nights.
 - **Plans sheet**: Save this plan, Saved.
-- **Exposure** (2026-11-14, rebuilt as a light meter), from the top: When (day, day bar, phase);
-  Light (EV and lux, estimated or from the camera's reading, forecast in brackets); Exposure
-  (Aperture · Shutter · ISO · Filter tiles, Auto in the accent; under them the result, EV ±x.x, the
-  forecast's in brackets); the dial of the tile tapped (shutter and ISO: Set / Auto; the filter dial
-  offers only the filters owned for the camera); Camera (choose; Edit / New: name, ISO range,
-  shutter range, fixed aperture, filters owned); Sky (Bortle, Cloud, forecast).
+- **Navigation** (2026-11-14, on the owner's word): two views, Sky and Exposure. Sky has two
+  sources: "Here, now" (the camera, the phone's place, the present hour: the live view) and "On the
+  map" (the place and hour set: the sky chart with the map in its corner).
+- **Exposure** (rebuilt as a light meter), from the top: When (day, day bar, phase); Exposure (one
+  line for where the light comes from, in lux: estimated or the camera's reading, Clear reading;
+  Aperture · Shutter · ISO · Filter tiles, Auto in the accent; under them the one EV shown, the
+  result: EV ±x.x, the forecast's in brackets); the dial of the tile tapped (shutter and ISO: Set /
+  Auto; aperture, shutter, ISO and filter dials offer only what the camera has); Camera (choose;
+  Edit / New camera open their own window: name, ISO range, shutter range, aperture range (one value
+  = fixed), filters owned, a new camera starting with none); Sky (Bortle, Cloud, forecast).
+- One EV on screen: the result. The scene's light is shown in lux. In Live the camera's reading is
+  in lux too; Use as base makes it the calculator's light and opens Exposure.
 - Taken out on the owner's word: Photo / Video / Timelapse modes, frame rate and interval, "follows
   the light" for any of the three, Pick for me, the list of fitting filters, warnings and advice.
 - The live view keeps its overlays on the camera (dark scrims are right there); its pills take the

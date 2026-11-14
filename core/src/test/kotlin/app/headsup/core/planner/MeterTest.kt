@@ -6,7 +6,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
 class MeterTest {
-    private val osmo = CameraProfile("Osmo", isoMin = 100.0, isoMax = 6400.0, shutterMin = 1.0 / 8000, shutterMax = 30.0, fixedAperture = 2.8,
+    private val osmo = CameraProfile("Osmo", isoMin = 100.0, isoMax = 6400.0, shutterMin = 1.0 / 8000, shutterMax = 30.0, apertureMin = 2.8, apertureMax = 2.8,
         filters = listOf(NdFilter.Nd8, NdFilter.Nd16, NdFilter.Nd32, NdFilter.Nd64))
 
     @Test fun theOsmoPhotoReadsAsItsCameraSetItself() {
@@ -47,9 +47,14 @@ class MeterTest {
         assertEquals(12.0, Meter.settingsEv(2.8, r.shutter, r.iso, NdFilter.Nd8), 1e-9)
     }
 
-    @Test fun aFixedApertureIsTheLenss() {
-        val r = Meter.read(10.0, MeterSettings(8.0, 1.0 / 100, 100.0, NdFilter.None), osmo)
-        assertEquals(2.8, r.aperture, 1e-9)
+    @Test fun theApertureStaysInTheLenssRange() {
+        // A fixed f/2.8 is f/2.8 whatever is set; a range f/2–f/4 holds a setting inside it.
+        assertEquals(2.8, Meter.read(10.0, MeterSettings(8.0, 1.0 / 100, 100.0, NdFilter.None), osmo).aperture, 1e-9)
+        assertEquals(2.8, osmo.fixedAperture!!, 1e-9)
+        val zoom = CameraProfile("Zoom", apertureMin = 2.0, apertureMax = 4.0)
+        assertEquals(null, zoom.fixedAperture)
+        assertEquals(4.0, Meter.read(10.0, MeterSettings(8.0, 1.0 / 100, 100.0, NdFilter.None), zoom).aperture, 1e-9)
+        assertEquals(2.8, Meter.read(10.0, MeterSettings(2.8, 1.0 / 100, 100.0, NdFilter.None), zoom).aperture, 1e-9)
     }
 
     @Test fun theProfileOffersNoneAndItsOwnFiltersOnly() {

@@ -47,7 +47,9 @@ import androidx.compose.ui.unit.dp
 fun PlannerScreen(onBack: () -> Unit, onEditor: () -> Unit) {
     val context = LocalContext.current
     val st = remember { PlannerState(context) }
-    var view by rememberSaveable { mutableStateOf(0) } // 0 sun, 1 live, 2 exposure
+    var view by rememberSaveable { mutableStateOf(0) } // 0 sky, 1 exposure
+    // The sky: here and now through the camera, or the place set on the map at the hour set.
+    var hereNow by rememberSaveable { mutableStateOf(false) }
     var sheet by rememberSaveable { mutableStateOf(0) } // 0 none, 1 place, 2 times, 3 plans
     androidx.activity.compose.BackHandler(onBack = onBack)
 
@@ -109,10 +111,27 @@ fun PlannerScreen(onBack: () -> Unit, onEditor: () -> Unit) {
         }
         Box(Modifier.weight(1f).fillMaxWidth()) {
             when (view) {
-                // The sky fills what is left; the place and times open as sheets.
-                0 -> SunView(st, onCalculator = { view = 2 }, onTimes = { sheet = 2 }, modifier = Modifier.fillMaxSize())
-                // The live view fills what is left and does not scroll: the camera is the page.
-                1 -> LiveView(st, locate, onCalculator = { view = 2 }, modifier = Modifier.fillMaxSize())
+                0 -> Column(Modifier.fillMaxSize()) {
+                    ChoiceGrid(
+                        listOf("Here, now", "On the map"), if (hereNow) 0 else 1,
+                        { i ->
+                            hereNow = i == 0
+                            if (hereNow) {
+                                // Here and now: the phone's place and the present hour.
+                                locate()
+                                val t = java.time.LocalTime.now()
+                                st.day = java.time.LocalDate.now()
+                                st.minute = (t.hour * 60 + t.minute).toFloat()
+                            }
+                        },
+                        Modifier.padding(horizontal = 16.dp, vertical = 6.dp),
+                    )
+                    Box(Modifier.weight(1f).fillMaxWidth()) {
+                        // Here, now: the camera is the page. On the map: the sky chart with the map in its corner.
+                        if (hereNow) LiveView(st, locate, onCalculator = { view = 1 }, modifier = Modifier.fillMaxSize())
+                        else SunView(st, onCalculator = { view = 1 }, onTimes = { sheet = 2 }, modifier = Modifier.fillMaxSize())
+                    }
+                }
                 // Each view opens at its top.
                 else -> androidx.compose.runtime.key(view) {
                     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp).padding(top = 4.dp, bottom = 16.dp)) {

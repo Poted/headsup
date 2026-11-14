@@ -44,7 +44,7 @@ internal fun ExposureHud(st: PlannerState, onOpen: () -> Unit, modifier: Modifie
         verticalArrangement = Arrangement.spacedBy(2.dp),
     ) {
         Row(horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.CenterVertically) {
-            Cell("Light", one(ev), fcEv?.let { one(it) }, follows = false)
+            Cell("Light", lux(ev).removeSuffix(" lux"), null, follows = false)
             Cell("Aperture", Exposure.formatAperture(r.aperture), null, follows = false)
             Cell("Shutter", Exposure.formatShutter(r.shutter), fr?.let { Exposure.formatShutter(it.shutter) }.takeIf { st.shutterAuto }, follows = st.shutterAuto)
             Cell("Filter", st.ndFilter.label, null, follows = false)

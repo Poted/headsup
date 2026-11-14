@@ -111,7 +111,7 @@ internal fun DayPicker(st: PlannerState, modifier: Modifier = Modifier) {
 /** The planner's views at the bottom, as the editor's tools: Sun · Live · Exposure. */
 @Composable
 internal fun PlannerBar(selected: Int, onSelect: (Int) -> Unit) {
-    val items = listOf(Triple("Sun", HeadsupIcons.Sun, 0), Triple("Live", HeadsupIcons.Camera, 1), Triple("Exposure", HeadsupIcons.Aperture, 2))
+    val items = listOf(Triple("Sky", HeadsupIcons.Sun, 0), Triple("Exposure", HeadsupIcons.Aperture, 1))
     val shape = RoundedCornerShape(32.dp)
     Row(
         Modifier

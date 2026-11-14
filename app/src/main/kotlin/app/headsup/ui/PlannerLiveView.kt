@@ -302,10 +302,11 @@ internal fun LiveView(st: PlannerState, onLocate: () -> Unit, onCalculator: () -
                 val r = reading
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text(
-                        if (r == null) "Reading the light…" else "Camera reads EV ${one(r)} · ${lux(r)}" + (if (st.measured != null) " · base in use" else ""),
+                        if (r == null) "Reading the light…" else "Camera reads ${lux(r)}" + (if (st.measured != null) " · base in use" else ""),
                         color = Color.White, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f),
                     )
-                    if (r != null) Chip("Use as base", { st.useReading(r) })
+                    // The reading becomes the light of the calculator, which opens.
+                    if (r != null) Chip("Use as base", { st.useReading(r); onCalculator() })
                     if (st.measuredEv != null) Chip("Clear", { st.clearReading() })
                 }
                 if (st.readingElsewhere) Text("The reading is from another place: not used.", color = Color(0xFFFF8A80), style = MaterialTheme.typography.labelSmall)
