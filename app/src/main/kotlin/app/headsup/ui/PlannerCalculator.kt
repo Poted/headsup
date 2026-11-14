@@ -11,6 +11,10 @@ import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
@@ -28,135 +32,199 @@ import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
 
 /**
- * The calculator: for the place, day and hour chosen, the light's exposure value and the settings
+ * The exposure for the place, day and hour chosen: the light's exposure value and the settings
  * that fit it (aperture, shutter, ISO and filter, one left to follow the light). Each result is
  * given for the sky as set, and, once a forecast is loaded, under the forecast's cloud in brackets.
+ * Laid out as the editor's panels: when, the result, then what can be changed, each a section.
  */
 @Composable
 internal fun CalculatorView(st: PlannerState) {
     val frame = Planner.frame(st.place, st.now, st.conditions, st.setup, st.measured)
     val fc = st.forecastHere?.let { Planner.frame(st.place, st.now, st.conditions, st.setup, st.measured, it) }
     val r = frame.exposure
+    val fe = fc?.exposure
     // The setting that follows the light as the mode has it (video and timelapse: always ISO).
     val auto = st.setup.auto
     val photo = st.mode == CaptureMode.Photo
     val scope = rememberCoroutineScope()
-    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        // Where and when, and the hour to try.
-        Text(
-            "${one(st.lat)}, ${one(st.lon)} · ${st.elevation.roundToInt()} m" + (if (st.aboveGround > 0) " + ${st.aboveGround.roundToInt()} m up" else "") + " · ${st.day} · ${frame.phase}",
-            color = HeadsupColors.TextMuted, style = MaterialTheme.typography.labelMedium,
-        )
-        DateRow(st)
-        Text("${hhmm(st.minute)} · sun ${frame.sun.altitude.roundToInt()}° · moon ${frame.moon.position.altitude.roundToInt()}° (${(frame.moon.lit * 100).roundToInt()}% lit)", color = HeadsupColors.Ink, style = MaterialTheme.typography.bodyMedium)
-        DayBar(st)
+    // Which setting the dial below changes.
+    var dial by rememberSaveable { mutableStateOf("Aperture") }
+    if (!photo && dial == "Shutter") dial = "Aperture"
+
+    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        // When: the day and the hour, and what the sky does then.
+        ToolSection("When", info = "The day and the hour the exposure is worked out for; the same in Sun and Live. Drag along the bar to move the hour: its colours are the sun's height (night, twilight, golden hour, day).") {
+            DayPicker(st)
+            DayBar(st)
+            Text(
+                "${hhmm(st.minute)} · ${frame.phase} · sun ${frame.sun.altitude.roundToInt()}° · moon ${frame.moon.position.altitude.roundToInt()}° (${(frame.moon.lit * 100).roundToInt()} % lit)",
+                color = HeadsupColors.TextMuted, style = MaterialTheme.typography.labelMedium,
+            )
+        }
+
+        // The result: what to set on the camera at that hour.
+        ToolSection(
+            "At ${hhmm(st.minute)}",
+            info = "What to set on the camera. The setting marked Auto follows the light; tap a tile to change it with the dial below. " +
+                "The light is estimated from the sun's and moon's height, the place's height, the night sky (Bortle) and cloud, or worked from a reading taken in Live; good to about 1.5 stops. " +
+                "With a forecast loaded, its result is in brackets: a forecast of cloud is sometimes wrong, so it is shown beside the sky as set, not instead of it.",
+        ) {
+            Row(verticalAlignment = Alignment.Bottom) {
+                Text("EV ${one(frame.ev)}", color = HeadsupColors.Ink, style = MaterialTheme.typography.headlineSmall.copy(fontFamily = GeistMonoFamily))
+                Text(
+                    "  ${lux(frame.ev)}" + (fc?.let { "  (with forecast EV ${one(it.ev)})" } ?: ""),
+                    color = HeadsupColors.TextMuted, style = MaterialTheme.typography.labelMedium, modifier = Modifier.padding(bottom = 3.dp),
+                )
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                ExposureTile(
+                    "Aperture", withForecast(auto == AutoSetting.Aperture, Exposure.formatAperture(if (auto == AutoSetting.Aperture) r.aperture else st.aperture), fe?.let { Exposure.formatAperture(it.aperture) }),
+                    if (auto == AutoSetting.Aperture) "Auto" else "Held", auto == AutoSetting.Aperture, dial == "Aperture", Modifier.weight(1f),
+                ) { dial = "Aperture" }
+                if (photo) {
+                    ExposureTile(
+                        "Shutter", withForecast(auto == AutoSetting.Shutter, Exposure.formatShutter(if (auto == AutoSetting.Shutter) r.shutter else st.shutter), fe?.let { Exposure.formatShutter(it.shutter) }),
+                        if (auto == AutoSetting.Shutter) "Auto" else "Held", auto == AutoSetting.Shutter, dial == "Shutter", Modifier.weight(1f),
+                    ) { dial = "Shutter" }
+                } else {
+                    ExposureTile(
+                        "Shutter", Exposure.formatShutter(st.setup.shutter), if (st.mode == CaptureMode.Video) "${st.fps.toInt()} fps" else "${st.interval.toInt()} s lapse",
+                        auto = false, selected = false, modifier = Modifier.weight(1f), onClick = null,
+                    )
+                }
+                ExposureTile(
+                    "ISO", withForecast(auto == AutoSetting.Iso, Exposure.snapIso(if (auto == AutoSetting.Iso) r.iso else st.iso).toString(), fe?.let { Exposure.snapIso(it.iso).toString() }),
+                    if (auto == AutoSetting.Iso) "Auto" else "Held", auto == AutoSetting.Iso, dial == "ISO", Modifier.weight(1f),
+                ) { dial = "ISO" }
+                ExposureTile(
+                    "Filter", r.nd.label + (if (fe != null && st.ndIndex < 0 && fe.nd != r.nd) " (${fe.nd.label})" else ""),
+                    if (st.ndIndex < 0) "Picked" else "Chosen", auto = st.ndIndex < 0, selected = false, modifier = Modifier.weight(1f), onClick = null,
+                )
+            }
+            // Out of the camera's reach: what to change (photo), or what it means for that kind of shot.
+            if (photo) warningText(r, st)?.let { Warning(it) } else Capture.notes(st.capture, r).forEach { Warning(it) }
+            if (fe != null && fe.warning != r.warning) {
+                val fcNotes = if (photo) listOfNotNull(warningText(fe, st)) else Capture.notes(st.capture, fe)
+                if (fcNotes.isEmpty()) Text("With forecast: within the camera's reach.", color = HeadsupColors.Good, style = MaterialTheme.typography.labelMedium)
+                else fcNotes.forEach { Warning("With forecast: $it") }
+            }
+        }
+
+        // The dial: the setting tapped above, on the camera's own steps (a third of a stop apart).
+        val dialAuto = when (dial) { "Aperture" -> auto == AutoSetting.Aperture; "Shutter" -> auto == AutoSetting.Shutter; else -> auto == AutoSetting.Iso }
+        ToolSection(
+            dial,
+            info = if (photo) "One of the three follows the light (Auto); the other two are held where you set them, on the camera's steps a third of a stop apart. Double-tap the dial to go back to the usual value."
+            else "In ${st.mode.label.lowercase()} the shutter is set by the mode and ISO follows the light; the aperture is yours.",
+        ) {
+            if (photo) {
+                val autos = listOf(AutoSetting.Aperture, AutoSetting.Shutter, AutoSetting.Iso)
+                LabeledChoice("Follows the light", listOf("Aperture", "Shutter", "ISO"), { autos[it] == auto }, { st.auto = autos[it] })
+            }
+            if (dialAuto) {
+                Text("$dial follows the light: it is worked out for the hour. Choose another to follow the light to set it here.", color = HeadsupColors.TextMuted, style = MaterialTheme.typography.bodySmall)
+            } else {
+                val (scale, value, set, label) = when (dial) {
+                    "Aperture" -> DialSpec(CameraScale.apertures, st.aperture, { v: Double -> st.aperture = v }, { v: Double -> Exposure.formatAperture(v) })
+                    "Shutter" -> DialSpec(CameraScale.shutters, st.shutter, { v: Double -> st.shutter = v }, { v: Double -> Exposure.formatShutter(v) })
+                    else -> DialSpec(CameraScale.isos.filter { it in st.isoMin..st.isoMax }.ifEmpty { CameraScale.isos }, st.iso, { v: Double -> st.iso = v }, { v: Double -> Exposure.snapIso(v).toString() })
+                }
+                val at = CameraScale.nearest(scale, value)
+                ValueHeader("", label(scale[at]))
+                RulerSlider(
+                    at.toFloat(), 0f..(scale.size - 1).toFloat(), 1f, { v -> set(scale[v.roundToInt().coerceIn(0, scale.size - 1)]) },
+                    onReset = { set(scale[CameraScale.nearest(scale, if (dial == "Aperture") 2.8 else if (dial == "Shutter") 1.0 / 125 else 100.0)]) },
+                )
+            }
+        }
 
         // What is being shot: a photo (all three settings yours), a video (shutter from the frame rate), a timelapse (shutter from the interval).
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            for (m in CaptureMode.entries) Chip(m.label, { st.mode = m }, selected = st.mode == m)
-        }
-        if (st.mode == CaptureMode.Video) {
-            Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                for (f in listOf(24.0, 25.0, 30.0, 50.0, 60.0, 100.0, 120.0)) Chip("${f.toInt()} fps", { st.fps = f }, selected = st.fps == f)
+        ToolSection(
+            "Shooting",
+            info = when (st.mode) {
+                CaptureMode.Video -> "A video's shutter is twice the frame rate (180°), ${Exposure.formatShutter(Capture.videoShutter(st.fps))} at ${st.fps.toInt()} fps, for natural motion; in bright light the filter keeps it there."
+                CaptureMode.Timelapse -> "A timelapse's shutter is half the interval, ${Exposure.formatShutter(Capture.timelapseShutter(st.interval))} every ${st.interval.toInt()} s, for smooth movement (clouds, water, people)."
+                else -> "A photo: aperture, shutter and ISO are all yours, one following the light."
+            },
+        ) {
+            ChoiceGrid(CaptureMode.entries.map { it.label }, CaptureMode.entries.indexOf(st.mode), { st.mode = CaptureMode.entries[it] })
+            if (st.mode == CaptureMode.Video) {
+                val rates = listOf(24.0, 25.0, 30.0, 50.0, 60.0, 100.0, 120.0)
+                LabeledChoice("Frame rate", rates.map { "${it.toInt()}" }, { rates[it] == st.fps }, { st.fps = rates[it] }, minCell = 48.dp)
             }
-            Text("Shutter ${Exposure.formatShutter(Capture.videoShutter(st.fps))}: twice the frame rate (180°), for natural motion. The filter keeps it there in bright light.", color = HeadsupColors.TextMuted, style = MaterialTheme.typography.labelSmall)
-        }
-        if (st.mode == CaptureMode.Timelapse) {
-            Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                for (i in listOf(1.0, 2.0, 3.0, 5.0, 10.0, 15.0, 30.0)) Chip("${i.toInt()} s", { st.interval = i }, selected = st.interval == i)
+            if (st.mode == CaptureMode.Timelapse) {
+                val intervals = listOf(1.0, 2.0, 3.0, 5.0, 10.0, 15.0, 30.0)
+                LabeledChoice("Interval", intervals.map { "${it.toInt()} s" }, { intervals[it] == st.interval }, { st.interval = intervals[it] }, minCell = 48.dp)
             }
-            Text("Interval ${st.interval.toInt()} s; shutter ${Exposure.formatShutter(Capture.timelapseShutter(st.interval))}: half the interval, for smooth movement (clouds, water, people).", color = HeadsupColors.TextMuted, style = MaterialTheme.typography.labelSmall)
+        }
+
+        // The filter: picked for the light, or the one in the bag.
+        ToolSection(
+            "Filter",
+            info = "Pick for me: the weakest filter that keeps ISO at the camera's lowest, so the cleanest picture (only while ISO follows the light). Choose: the filter you will put on; the others follow from it.",
+        ) {
+            ChoiceGrid(listOf("Pick for me", "Choose"), if (st.ndIndex < 0) 0 else 1, { i -> st.ndIndex = if (i == 0) -1 else r.nd.ordinal })
+            if (st.ndIndex >= 0) {
+                val filters = NdFilter.entries
+                ValueHeader("", filters[st.ndIndex.coerceIn(0, filters.size - 1)].let { "${it.label} · ${one(it.stops)} stops" })
+                RulerSlider(st.ndIndex.toFloat(), 0f..(filters.size - 1).toFloat(), 1f, { v -> st.ndIndex = v.roundToInt().coerceIn(0, filters.size - 1) }, onReset = { st.ndIndex = 0 })
+            }
+            // With the shutter and aperture held: which filters keep the ISO inside its range.
+            if (auto == AutoSetting.Iso) {
+                Text(
+                    "For ${Exposure.formatAperture(st.aperture)} and ${Exposure.formatShutter(st.setup.shutter)}: " + ndNeeded(frame, st) + (fc?.let { " (with forecast ${ndNeeded(it, st)})" } ?: ""),
+                    color = HeadsupColors.Ink, style = MaterialTheme.typography.bodySmall,
+                )
+            }
+        }
+
+        // The camera's ISO range.
+        ToolSection("ISO range", info = "The lowest and highest ISO you will use on this camera: the settings stay inside, and a warning says when the light needs more. Double-tap a dial for the usual.") {
+            val isos = CameraScale.isos
+            val lo = CameraScale.nearest(isos, st.isoMin)
+            val hi = CameraScale.nearest(isos, st.isoMax)
+            ValueHeader("Lowest", isos[lo].roundToInt().toString())
+            RulerSlider(lo.toFloat(), 0f..(isos.size - 1).toFloat(), 1f, { v -> st.isoMin = isos[v.roundToInt().coerceIn(0, hi)] }, onReset = { st.isoMin = 100.0 })
+            ValueHeader("Highest", isos[hi].roundToInt().toString())
+            RulerSlider(hi.toFloat(), 0f..(isos.size - 1).toFloat(), 1f, { v -> st.isoMax = isos[v.roundToInt().coerceIn(lo, isos.size - 1)] }, onReset = { st.isoMax = 25_600.0 })
+        }
+
+        // The sky: night brightness, cloud as expected, and the forecast beside it.
+        ToolSection(
+            "Sky",
+            info = "Night sky: how dark the place is at night, Bortle 1 (no lights for many km) to 9 (city centre). Cloud: as you expect it; the forecast, when loaded, is shown beside it, not instead. ${app.headsup.core.planner.MetNorway.CREDIT}.",
+        ) {
+            ValueHeader("Night sky", "Bortle ${st.bortle}")
+            RulerSlider(st.bortle.toFloat(), 1f..9f, 1f, { v -> st.bortle = v.roundToInt().coerceIn(1, 9) }, onReset = { st.bortle = 3 })
+            ValueHeader("Cloud", "${(st.cloud * 100).roundToInt()} %")
+            RulerSlider(st.cloud, 0f..1f, 0.05f, { v -> st.cloud = v.coerceIn(0f, 1f) }, onReset = { st.cloud = 0f })
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    st.forecastHere?.let { "Forecast at ${hhmm(st.minute)}: ${(it.at(st.now) * 100).roundToInt()} % cloud" } ?: "No forecast for this place and day.",
+                    color = HeadsupColors.TextMuted, style = MaterialTheme.typography.labelMedium, modifier = Modifier.weight(1f),
+                )
+                Chip(if (st.forecastHere == null) "Get forecast" else "Refresh", { scope.launch { st.fetchForecast() } })
+            }
+            if (st.forecastStatus.isNotEmpty()) Text(st.forecastStatus, color = HeadsupColors.TextMuted, style = MaterialTheme.typography.labelSmall)
         }
 
         // A reading of the light taken in the live view, when there is one.
         st.measuredEv?.let { ev ->
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text(
-                    if (st.measured != null) "Base: the camera's reading, EV ${one(ev)} (${lux(ev)}). The hours follow from it." else "The camera's reading is from another place: not used.",
-                    color = if (st.measured != null) HeadsupColors.Good else HeadsupColors.Warn, style = MaterialTheme.typography.labelMedium, modifier = Modifier.weight(1f),
-                )
-                Chip("Clear", { st.clearReading() })
+            ToolSection("Light reading", info = "A reading of the light taken with the camera in Live replaces the estimate's level; the hours then follow from it. Used only near where it was taken, for 12 hours.") {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        if (st.measured != null) "EV ${one(ev)} (${lux(ev)}), from the camera." else "From another place: not used.",
+                        color = if (st.measured != null) HeadsupColors.Good else HeadsupColors.Warn, style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f),
+                    )
+                    Chip("Clear", { st.clearReading() })
+                }
             }
         }
-
-        // The sky: night brightness, cloud as expected, and the forecast beside it.
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text("Night sky (Bortle ${st.bortle})", color = HeadsupColors.TextMuted, style = MaterialTheme.typography.labelMedium, modifier = Modifier.weight(1f))
-            Chip("−", { st.bortle = (st.bortle - 1).coerceAtLeast(1) })
-            Chip("+", { st.bortle = (st.bortle + 1).coerceAtMost(9) })
-        }
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text("Cloud ${(st.cloud * 100).roundToInt()}%", color = HeadsupColors.TextMuted, style = MaterialTheme.typography.labelMedium, modifier = Modifier.padding(end = 12.dp))
-            Slider(value = st.cloud, onValueChange = { st.cloud = it }, valueRange = 0f..1f, modifier = Modifier.weight(1f))
-        }
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text(
-                st.forecastHere?.let { "Forecast cloud at ${hhmm(st.minute)}: ${(it.at(st.now) * 100).roundToInt()}% · ${app.headsup.core.planner.MetNorway.CREDIT}" } ?: "No forecast for this place and day",
-                color = HeadsupColors.TextMuted, style = MaterialTheme.typography.labelMedium, modifier = Modifier.weight(1f),
-            )
-            Chip(if (st.forecastHere == null) "Get forecast" else "Refresh forecast", { scope.launch { st.fetchForecast() } })
-        }
-        if (st.forecastStatus.isNotEmpty()) Text(st.forecastStatus, color = HeadsupColors.TextMuted, style = MaterialTheme.typography.labelSmall)
-
-        // The exposure at this hour: as set, (with forecast).
-        Text(
-            "Scene EV ${one(frame.ev)}" + (fc?.let { " (with forecast ${one(it.ev)})" } ?: "") + " · ${lux(frame.ev)}",
-            color = HeadsupColors.Ink, style = MaterialTheme.typography.titleSmall,
-        )
-        val fe = fc?.exposure
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            SettingTile("Aperture", withForecast(auto == AutoSetting.Aperture, Exposure.formatAperture(if (auto == AutoSetting.Aperture) r.aperture else st.aperture), fe?.let { Exposure.formatAperture(it.aperture) }),
-                auto == AutoSetting.Aperture, Modifier.weight(1f),
-                onToggle = { st.auto = AutoSetting.Aperture }, onLess = { st.aperture = CameraScale.step(CameraScale.apertures, st.aperture, -1) }, onMore = { st.aperture = CameraScale.step(CameraScale.apertures, st.aperture, 1) })
-            if (photo) {
-                SettingTile("Shutter", withForecast(auto == AutoSetting.Shutter, Exposure.formatShutter(if (auto == AutoSetting.Shutter) r.shutter else st.shutter), fe?.let { Exposure.formatShutter(it.shutter) }),
-                    auto == AutoSetting.Shutter, Modifier.weight(1f),
-                    onToggle = { st.auto = AutoSetting.Shutter }, onLess = { st.shutter = CameraScale.step(CameraScale.shutters, st.shutter, -1) }, onMore = { st.shutter = CameraScale.step(CameraScale.shutters, st.shutter, 1) })
-            } else {
-                FixedTile("Shutter", Exposure.formatShutter(st.setup.shutter), if (st.mode == CaptureMode.Video) "${st.fps.toInt()} fps" else "${st.interval.toInt()} s interval", Modifier.weight(1f))
-            }
-            SettingTile("ISO", withForecast(auto == AutoSetting.Iso, Exposure.snapIso(if (auto == AutoSetting.Iso) r.iso else st.iso).toString(), fe?.let { Exposure.snapIso(it.iso).toString() }),
-                auto == AutoSetting.Iso, Modifier.weight(1f),
-                onToggle = { st.auto = AutoSetting.Iso }, onLess = { st.iso = CameraScale.step(CameraScale.isos, st.iso, -1).coerceAtLeast(st.isoMin) }, onMore = { st.iso = CameraScale.step(CameraScale.isos, st.iso, 1).coerceAtMost(st.isoMax) })
-        }
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text(
-                "Filter: ${r.nd.label}${if (st.ndIndex < 0) " (picked)" else ""}" + (if (fe != null && st.ndIndex < 0 && fe.nd != r.nd) " (with forecast ${fe.nd.label})" else ""),
-                color = HeadsupColors.Ink, modifier = Modifier.weight(1f),
-            )
-            Chip("Pick for me", { st.ndIndex = -1 })
-            Chip("◀", { st.ndIndex = ((if (st.ndIndex < 0) r.nd.ordinal else st.ndIndex) - 1).coerceAtLeast(0) })
-            Chip("▶", { st.ndIndex = ((if (st.ndIndex < 0) r.nd.ordinal else st.ndIndex) + 1).coerceAtMost(NdFilter.entries.size - 1) })
-        }
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text("ISO range: ${st.isoMin.roundToInt()}–${st.isoMax.roundToInt()}", color = HeadsupColors.TextMuted, style = MaterialTheme.typography.labelMedium, modifier = Modifier.weight(1f))
-            Chip("max −", { st.isoMax = (st.isoMax / 2).coerceAtLeast(maxOf(800.0, st.isoMin)) })
-            Chip("max +", { st.isoMax = (st.isoMax * 2).coerceAtMost(102_400.0) })
-            Chip("min −", { st.isoMin = (st.isoMin / 2).coerceAtLeast(50.0) })
-            Chip("min +", { st.isoMin = (st.isoMin * 2).coerceAtMost(st.isoMax) })
-        }
-        // With the shutter and aperture held: which filters keep the ISO inside its range.
-        if (auto == AutoSetting.Iso) {
-            Text(
-                "Filter for ${Exposure.formatAperture(st.aperture)} and ${Exposure.formatShutter(st.setup.shutter)} (ISO ${st.isoMin.roundToInt()}–${st.isoMax.roundToInt()}): " +
-                    ndNeeded(frame, st) + (fc?.let { " (with forecast ${ndNeeded(it, st)})" } ?: ""),
-                color = HeadsupColors.Ink, style = MaterialTheme.typography.bodyMedium,
-            )
-        }
-        // Out of the camera's reach: red, and what to change.
-        // Out of reach: in a photo what to change; in a video or timelapse what it means for that kind of shot.
-        if (photo) warningText(r, st)?.let { Warning(it) } else Capture.notes(st.capture, r).forEach { Warning(it) }
-        if (fe != null && fe.warning != r.warning) {
-            val fcNotes = if (photo) listOfNotNull(warningText(fe, st)) else Capture.notes(st.capture, fe)
-            if (fcNotes.isEmpty()) Text("With forecast: within the camera's reach.", color = HeadsupColors.Good, style = MaterialTheme.typography.labelMedium)
-            else fcNotes.forEach { Warning("With forecast: $it") }
-        }
-        Text(
-            "The light is estimated from the sun's and moon's height, the place's height, the night sky (Bortle) and cloud, or worked from a reading taken in Live. A forecast of cloud is sometimes wrong, so it is shown beside the sky as set, not instead of it.",
-            color = HeadsupColors.TextMuted, style = MaterialTheme.typography.labelSmall, modifier = Modifier.padding(bottom = 16.dp),
-        )
     }
 }
+
+/** A dial's steps, the value on it, how to set it and how to print it. */
+private data class DialSpec(val scale: List<Double>, val value: Double, val set: (Double) -> Unit, val label: (Double) -> String)
 
 /** The value as set; for the one that follows the light, the forecast's value in brackets when it differs. */
 private fun withForecast(isAuto: Boolean, value: String, forecast: String?): String =

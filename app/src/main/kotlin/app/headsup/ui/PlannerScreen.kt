@@ -5,6 +5,9 @@ import android.content.pm.PackageManager
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.ui.draw.clip
+import kotlin.math.roundToInt
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -34,16 +37,19 @@ import androidx.compose.ui.unit.dp
 
 /**
  * The light planner: three views of one plan. The sun view shows where the sun, moon and Milky Way
- * go over a place (with a map of it); the live view lays that sky over the camera and reads the light; the calculator works out the exposure and the filter. The
- * place, day and hour are shared, so what is set in one is seen in the other. Offline, except
- * the map's tiles, which are kept once seen.
+ * go over a place (with a map of it); the live view lays that sky over the camera and reads the
+ * light; the exposure view works out the settings and the filter. The place, day and hour are
+ * shared, so what is set in one is seen in the others. Laid out as the editor: the place at the top
+ * (tap it to change it), the views at the bottom, what is used now and then in sheets. Back returns
+ * to the first screen. Offline, except the map's tiles, which are kept once seen.
  */
 @Composable
-fun PlannerScreen(onEditor: () -> Unit) {
+fun PlannerScreen(onBack: () -> Unit, onEditor: () -> Unit) {
     val context = LocalContext.current
     val st = remember { PlannerState(context) }
-    var view by rememberSaveable { mutableStateOf(0) } // 0 sun, 1 live, 2 calculator
-    var plansOpen by rememberSaveable { mutableStateOf(false) }
+    var view by rememberSaveable { mutableStateOf(0) } // 0 sun, 1 live, 2 exposure
+    var sheet by rememberSaveable { mutableStateOf(0) } // 0 none, 1 place, 2 times, 3 plans
+    androidx.activity.compose.BackHandler(onBack = onBack)
 
     // The ground's height follows the place (a moment after it stops changing, e.g. while typing).
     LaunchedEffect(st.lat, st.lon) {
@@ -75,36 +81,57 @@ fun PlannerScreen(onEditor: () -> Unit) {
             .statusBarsPadding()
             .navigationBarsPadding(),
     ) {
+        // The top: back, the place (tap to change it), plans and the editor.
         Row(
-            Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+            Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
         ) {
-            Chip("Sun", { view = 0 }, selected = view == 0)
-            Chip("Live", { view = 1 }, selected = view == 1)
-            Chip("Calculator", { view = 2 }, selected = view == 2)
-            Row(Modifier.weight(1f)) {}
-            Chip("Plans", { plansOpen = !plansOpen }, selected = plansOpen)
-            Chip("Editor", onEditor)
+            IconAction(HeadsupIcons.Back, "Back to the start", onBack)
+            Column(
+                Modifier
+                    .weight(1f)
+                    .clip(MaterialTheme.shapes.small)
+                    .clickable(onClickLabel = "Change the place") { sheet = 1 }
+                    .padding(horizontal = 8.dp, vertical = 4.dp),
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(placeTitle(st), color = HeadsupColors.Ink, style = MaterialTheme.typography.titleMedium, maxLines = 1, modifier = Modifier.weight(1f, fill = false))
+                    Text(" ▾", color = HeadsupColors.TextMuted, style = MaterialTheme.typography.titleMedium)
+                }
+                Text(
+                    "${st.elevation.roundToInt()} m" + (if (st.aboveGround > 0) " + ${st.aboveGround.roundToInt()} m up" else "") + " · UTC${if (st.offsetHours >= 0) "+" else ""}${st.offsetHours}",
+                    color = HeadsupColors.TextMuted, style = MaterialTheme.typography.labelSmall.copy(fontFamily = GeistMonoFamily), maxLines = 1,
+                )
+            }
+            IconAction(HeadsupIcons.Bookmark, "Plans", { sheet = 3 })
+            IconAction(HeadsupIcons.Pencil, "Open the editor", onEditor)
         }
         Box(Modifier.weight(1f).fillMaxWidth()) {
-            if (view == 0) {
-                // The sky fills what is left; the place and times open over it.
-                SunView(st, locate, onCalculator = { view = 2 }, modifier = Modifier.fillMaxSize())
-            } else if (view == 1) {
+            when (view) {
+                // The sky fills what is left; the place and times open as sheets.
+                0 -> SunView(st, onCalculator = { view = 2 }, onTimes = { sheet = 2 }, modifier = Modifier.fillMaxSize())
                 // The live view fills what is left and does not scroll: the camera is the page.
-                LiveView(st, locate, onCalculator = { view = 2 }, modifier = Modifier.fillMaxSize())
-            } else {
-                Column(
-                    Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp),
-                    verticalArrangement = Arrangement.spacedBy(10.dp),
-                ) {
-                    CalculatorView(st)
-                    Row(Modifier.padding(bottom = 16.dp)) {}
+                1 -> LiveView(st, locate, onCalculator = { view = 2 }, modifier = Modifier.fillMaxSize())
+                // Each view opens at its top.
+                else -> androidx.compose.runtime.key(view) {
+                    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp).padding(top = 4.dp, bottom = 16.dp)) {
+                        CalculatorView(st)
+                    }
                 }
             }
-            // Saved plans, over whichever view is open.
-            if (plansOpen) PlansPanel(st, onClose = { plansOpen = false }, modifier = Modifier.fillMaxSize())
         }
+        PlannerBar(view) { view = it }
+    }
+
+    when (sheet) {
+        1 -> OptionsSheet("Place", { sheet = 0 }) { PlacePanel(st, locate) }
+        2 -> OptionsSheet("Times of the day", { sheet = 0 }) { TimesPanel(st) }
+        3 -> OptionsSheet("Plans", { sheet = 0 }) { PlansPanel(st, onOpened = { sheet = 0 }) }
     }
 }
+
+/** The place as the top bar names it: the saved name, or its coordinates. */
+private fun placeTitle(st: PlannerState): String =
+    st.selectedPlace?.let { st.places.getOrNull(it)?.name }
+        ?: String.format(java.util.Locale.US, "%.4f, %.4f", st.lat, st.lon)

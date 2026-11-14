@@ -32,36 +32,22 @@ import kotlin.math.roundToInt
  * to open again later, e.g. at home the day before and then on the spot.
  */
 @Composable
-internal fun PlansPanel(st: PlannerState, onClose: () -> Unit, modifier: Modifier = Modifier) {
+internal fun PlansPanel(st: PlannerState, onOpened: () -> Unit) {
     var name by remember { mutableStateOf("") }
     var deleting by remember { mutableStateOf<Int?>(null) }
-    Column(
-        modifier
-            .background(HeadsupColors.Background)
-            // Touches stop here: the view beneath must not feel them.
-            .pointerInput(Unit) { detectTapGestures { } }
-            .verticalScroll(rememberScrollState())
-            .padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(10.dp),
-    ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text("Plans", color = HeadsupColors.Ink, style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
-            Chip("Close", onClose)
-        }
-        Text(
-            "A plan keeps the place, the day and hour, the camera's settings and the sky as they are set now.",
-            color = HeadsupColors.TextMuted, style = MaterialTheme.typography.labelSmall,
-        )
+    ToolSection("Save this plan", info = "A plan keeps the place, the day and hour, the camera's settings and the sky as they are set now, e.g. made at home the day before and opened on the spot.") {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             OutlinedTextField(
                 value = name, onValueChange = { name = it }, singleLine = true,
-                label = { Text("Name this plan", maxLines = 1) }, modifier = Modifier.weight(1f),
+                label = { Text("Name", maxLines = 1) }, modifier = Modifier.weight(1f),
             )
             Chip("Save", {
                 val n = name.trim()
                 if (n.isNotEmpty()) { st.savePlan(n); name = "" }
             })
         }
+    }
+    ToolSection("Saved", info = "Tap a plan to open it. ✕, then Delete?, removes it.") {
         if (st.plans.isEmpty()) Text("No plans yet.", color = HeadsupColors.TextMuted, style = MaterialTheme.typography.bodyMedium)
         st.plans.forEachIndexed { i, p ->
             Row(
@@ -69,7 +55,7 @@ internal fun PlansPanel(st: PlannerState, onClose: () -> Unit, modifier: Modifie
                     .fillMaxWidth()
                     .clip(RoundedCornerShape(12.dp))
                     .background(HeadsupColors.SurfaceHigh)
-                    .clickable { st.openPlan(i); onClose() }
+                    .clickable { st.openPlan(i); onOpened() }
                     .padding(12.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {

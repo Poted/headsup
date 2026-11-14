@@ -151,35 +151,37 @@ right, but on a chart 120° wide a degree is a few pixels, so the Tatras look fl
 interface: a vertical scale that shows a degree or two clearly, and a cross-section of the ground
 from the camera to a point on the map (the line of sight over it).
 
-## Handover to the UI work (2026-11-14)
+## Layout (2026-11-14, the UI pass)
 
-What is there and works (logic tested in `:core`, the screens built in CI and tried on a phone):
-- Editor / Planner choice after the logo (`ModeChooser`, with the last crash report and Copy);
-  the phone's back button is left alone; the planner has a button to the editor; the editor has
-  none to the planner yet.
-- Planner header: Sun · Live · Calculator · Plans · Editor (too many for a narrow phone).
-- Sun: the sky full screen (drag to turn and tilt, pinch to zoom), the map in the corner (⤢
-  swaps), the exposure bar (EV | aperture | shutter | filter | ISO, the following one marked, red
-  out of reach, forecast in brackets; tap → Calculator), the day bar, ◀ ▶ Today, Times and Place
-  panels over the sky. Place: search by name, or paste coordinates / Plus Code / Maps link.
-- Live: camera with the sun's path, hour dots, horizon, skyline, moon, Milky Way; the exposure bar;
-  the reading of the light (EV, lux) and Use as base; My location; Calibrate (align on the sun or moon, nudges).
-- Calculator: Photo / Video / Timelapse; frame rate or interval; Aperture / Shutter / ISO tiles
-  (one auto in Photo; in Video and Timelapse the shutter is held by the mode and ISO follows);
-  filter (None, ND2 … ND2000 with exact stops; Pick for me, ◀ ▶); ISO range; the filter window for the held shutter; warnings; Night
-  sky (Bortle), Cloud, Get forecast (results in brackets: "(with forecast …)").
-- Plans: save everything set under a name, open, delete.
+The planner follows the editor's design rules (panel anatomy, ToolSection cards with ⓘ, ChoiceGrid
+for fixed choices, sheets for what is used now and then, tokens of the theme, Geist Mono for numbers).
 
-Status: an MVP of the first stories (US1 live view and metering, US2 remote planning with map and
-sky, US3 exposure with locks, ND and warnings over the time bar, US4 the bar on one screen). The
-logic is tested; the screens work but were built without design.
+- **First screen** (`ModeChooser`): the mark and SweetSpot, then two cards, Editor and Planner, each
+  with its icon. The phone's back button in either half returns here; what is open inside a half
+  (a sheet, the album, full screen) closes first. This is also the way from the editor to the planner.
+- **Top bar**: Back · the place (its saved name or coordinates, height, time zone; tap → the
+  Place sheet) · Plans · Editor.
+- **Bottom bar** (`PlannerBar`): Sun · Live · Exposure, as the editor's tools.
+- **Sun**: the sky full screen, the map in the corner (the swap icon makes either large), the
+  exposure strip (tap → Exposure), the day bar, the day (◀ date ▶ Today) and Times.
+- **Place sheet**: Find (my location, go to the pin, search or paste), Coordinates (latitude,
+  longitude, ground), Camera height (a dial, 0 to 500 m), Day and time zone, Saved places; credits
+  at the end.
+- **Times sheet**: Sun and moon, Over the land, Milky Way, Moon phases, Best Milky Way nights.
+- **Plans sheet**: Save this plan, Saved.
+- **Exposure** (was Calculator), from the top: When (day, day bar, phase), the result at the hour
+  (EV and lux, then Aperture · Shutter · ISO · Filter tiles: Auto in the accent, Held, or fixed by the
+  mode; warnings as cards), the dial of the tile tapped (the camera's third-stop steps; in Photo also
+  "Follows the light"), Shooting (Photo / Video / Timelapse, frame rate or interval), Filter (Pick for
+  me / Choose with a dial over ND2 … ND2000, and the filters that fit the held settings), ISO range
+  (two dials), Sky (Bortle, Cloud, the forecast beside them), Light reading (when there is one).
+- In Video and Timelapse the shutter tile is fixed by the mode and only the aperture can be held,
+  which answers the old "Auto on shutter and aperture" problem.
+- The live view keeps its overlays on the camera (dark scrims are right there); its pills take the
+  app's style.
 
-Known UX problems to solve there: units and steps of the settings (now the camera's dials), the
-header's width, the shutter and aperture tiles' Auto in Video and Timelapse (ISO is always auto
-there), the sky chart's vertical scale (the Tatras look flat), the Place panel's length, no way
-from the editor to the planner, the chart's text sizes; short Plus Codes ("X3QR+5F Kluszkowce")
-were still landing a cell away on the phone (fixed in code: the town is looked up once the names
-are read; to be checked).
+Still open: the sky chart's vertical scale (the Tatras look flat) and its text sizes; short Plus
+Codes ("X3QR+5F Kluszkowce") to be checked on the phone.
 
 ## Later (noted, not started)
 

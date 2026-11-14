@@ -10,6 +10,11 @@ import androidx.compose.runtime.getValue
 import androidx.compose.foundation.layout.Row
 import android.content.Context
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material3.Icon
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
@@ -44,29 +49,41 @@ fun ModeChooser(onEditor: () -> Unit, onPlanner: () -> Unit) {
             .statusBarsPadding()
             .navigationBarsPadding()
             .padding(24.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp, Alignment.CenterVertically),
+        verticalArrangement = Arrangement.spacedBy(12.dp, Alignment.CenterVertically),
     ) {
-        Text("Sweet Spot", style = MaterialTheme.typography.headlineMedium, color = HeadsupColors.Ink)
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.padding(bottom = 12.dp)) {
+            SweetSpotMark(Modifier.size(40.dp))
+            Text("SweetSpot", style = MaterialTheme.typography.headlineMedium, color = HeadsupColors.Ink)
+        }
         LastCrash()
-        ModeCard("Editor", "Cut, grade and export films and photos.", onEditor)
-        ModeCard("Planner", "Where the sun, moon and Milky Way will be, and the filter, shutter and ISO to set there.", onPlanner)
+        ModeCard(HeadsupIcons.Pencil, "Editor", "Cut, grade and export films and photos.", onEditor)
+        ModeCard(HeadsupIcons.Sun, "Planner", "Where the sun, moon and Milky Way will be, and the aperture, shutter, ISO and filter to set there.", onPlanner)
+        Text("Back from either returns here.", style = MaterialTheme.typography.labelSmall, color = HeadsupColors.TextMuted, modifier = Modifier.padding(top = 4.dp))
     }
 }
 
 @Composable
-private fun ModeCard(title: String, text: String, onClick: () -> Unit) {
-    val shape = RoundedCornerShape(24.dp)
-    Column(
+private fun ModeCard(icon: androidx.compose.ui.graphics.vector.ImageVector, title: String, text: String, onClick: () -> Unit) {
+    val shape = RoundedCornerShape(20.dp)
+    Row(
         Modifier
             .fillMaxWidth()
             .clip(shape)
             .background(HeadsupColors.CardGradient)
-            .clickable(onClick = onClick)
-            .padding(20.dp),
-        verticalArrangement = Arrangement.spacedBy(6.dp),
+            .border(1.dp, HeadsupColors.Outline, shape)
+            .clickable(onClickLabel = "Open the $title", onClick = onClick)
+            .padding(18.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(16.dp),
     ) {
-        Text(title, style = MaterialTheme.typography.titleLarge, color = HeadsupColors.Ink)
-        Text(text, style = MaterialTheme.typography.bodyMedium, color = HeadsupColors.TextMuted)
+        Box(Modifier.size(48.dp).clip(CircleShape).background(HeadsupColors.SurfaceHigh), contentAlignment = Alignment.Center) {
+            Icon(icon, contentDescription = null, Modifier.size(24.dp), tint = HeadsupColors.Ink)
+        }
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Text(title, style = MaterialTheme.typography.titleLarge, color = HeadsupColors.Ink)
+            Text(text, style = MaterialTheme.typography.bodyMedium, color = HeadsupColors.TextMuted)
+        }
+        Text("›", style = MaterialTheme.typography.titleLarge, color = HeadsupColors.TextMuted)
     }
 }
 

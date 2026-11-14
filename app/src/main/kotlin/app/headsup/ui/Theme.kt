@@ -461,6 +461,62 @@ object HeadsupIcons {
         }
     }
 
+    /** A sun with rays: the sky of a place (the planner's sun view). */
+    val Sun = icon("sun") {
+        stroke {
+            moveTo(12f, 8f); arcTo(4f, 4f, 0f, true, true, 12f, 16f); arcTo(4f, 4f, 0f, true, true, 12f, 8f)
+            for (k in 0 until 8) {
+                val a = Math.toRadians(k * 45.0)
+                val c = kotlin.math.cos(a).toFloat()
+                val s = kotlin.math.sin(a).toFloat()
+                moveTo(12f + 6.5f * c, 12f + 6.5f * s); lineTo(12f + 9f * c, 12f + 9f * s)
+            }
+        }
+    }
+
+    /** A camera: the live view. */
+    val Camera = icon("camera") {
+        stroke {
+            moveTo(3.5f, 8f); lineTo(7.5f, 8f); lineTo(9f, 5.5f); lineTo(15f, 5.5f); lineTo(16.5f, 8f); lineTo(20.5f, 8f); lineTo(20.5f, 18.5f); lineTo(3.5f, 18.5f); close()
+            moveTo(12f, 9.5f); arcTo(3.5f, 3.5f, 0f, true, true, 12f, 16.5f); arcTo(3.5f, 3.5f, 0f, true, true, 12f, 9.5f)
+        }
+    }
+
+    /** An aperture: exposure. */
+    val Aperture = icon("aperture") {
+        stroke {
+            moveTo(12f, 3f); arcTo(9f, 9f, 0f, true, true, 12f, 21f); arcTo(9f, 9f, 0f, true, true, 12f, 3f)
+            moveTo(9f, 3.6f); lineTo(15.5f, 14.5f)
+            moveTo(20.4f, 9f); lineTo(8f, 9.5f)
+            moveTo(18f, 18.5f); lineTo(11f, 6.5f)
+            moveTo(3.6f, 15f); lineTo(16f, 14.5f)
+        }
+    }
+
+    /** A bookmark: saved plans. */
+    val Bookmark = icon("bookmark") { stroke { moveTo(6.5f, 3.5f); lineTo(17.5f, 3.5f); lineTo(17.5f, 20.5f); lineTo(12f, 16f); lineTo(6.5f, 20.5f); close() } }
+
+    /** A pin: a place. */
+    val Pin = icon("pin") {
+        stroke {
+            moveTo(12f, 21f); lineTo(6.6f, 13.5f); arcTo(6.5f, 6.5f, 0f, true, true, 17.4f, 13.5f); close()
+            moveTo(12f, 7.5f); arcTo(2.5f, 2.5f, 0f, true, true, 12f, 12.5f); arcTo(2.5f, 2.5f, 0f, true, true, 12f, 7.5f)
+        }
+    }
+
+    /** A chevron left: back. */
+    val Back = icon("back") { stroke { moveTo(15f, 5f); lineTo(8f, 12f); lineTo(15f, 19f) } }
+
+    /** Swapping two views (the map and the sky). */
+    val SwapViews = icon("swap-views") {
+        stroke {
+            moveTo(4f, 4f); lineTo(13f, 4f); lineTo(13f, 11f); lineTo(4f, 11f); close()
+            moveTo(11f, 13f); lineTo(20f, 13f); lineTo(20f, 20f); lineTo(11f, 20f); close()
+            moveTo(16.5f, 5f); lineTo(19.5f, 8f); lineTo(16.5f, 11f)
+            moveTo(7.5f, 13f); lineTo(4.5f, 16f); lineTo(7.5f, 19f)
+        }
+    }
+
     /** Two arrows, one each way: switch to another project. */
     val Switch = icon("switch") {
         stroke {

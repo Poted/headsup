@@ -68,7 +68,7 @@ private val MilkyBlue = Color(0xFF8FB4FF)
  * The place and the day's times open as panels over the sky.
  */
 @Composable
-internal fun SunView(st: PlannerState, onLocate: () -> Unit, onCalculator: () -> Unit, modifier: Modifier = Modifier) {
+internal fun SunView(st: PlannerState, onCalculator: () -> Unit, onTimes: () -> Unit, modifier: Modifier = Modifier) {
     val place = st.place
     val sun = Sky.sun(place, st.now)
     val moon = Sky.moon(place, st.now)
@@ -76,7 +76,6 @@ internal fun SunView(st: PlannerState, onLocate: () -> Unit, onCalculator: () ->
     val map = remember { TileMapState(st.lat, st.lon) }
     LaunchedEffect(st.recentre) { map.centre(st.lat, st.lon) }
     var mapBig by rememberSaveable { mutableStateOf(false) }
-    var panel by rememberSaveable { mutableStateOf(0) } // 0 none, 1 place, 2 times
 
     // Where the sun rises, sets and stands, as directions from the pin; a dot for each hour it is up.
     val rays = buildList {
@@ -117,42 +116,19 @@ internal fun SunView(st: PlannerState, onLocate: () -> Unit, onCalculator: () ->
                     .padding(10.dp)
                     .size(140.dp)
                     .clip(RoundedCornerShape(10.dp))
-                    .border(2.dp, Color.White, RoundedCornerShape(10.dp)),
+                    .border(1.5.dp, HeadsupColors.ControlEdge, RoundedCornerShape(10.dp)),
             ) {
                 if (!mapBig) mapView(Modifier.fillMaxSize()) else skyView(Modifier.fillMaxSize())
-                Box(Modifier.align(Alignment.TopEnd).padding(4.dp)) { Chip("⤢", { mapBig = !mapBig }) }
-            }
-            // A panel over the sky: the place, or the day's times.
-            if (panel != 0) {
-                Column(
-                    Modifier
-                        .align(Alignment.BottomCenter)
-                        .fillMaxWidth()
-                        .heightIn(max = 460.dp)
-                        .background(HeadsupColors.Background.copy(alpha = 0.96f), RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp))
-                        .verticalScroll(rememberScrollState())
-                        .padding(16.dp),
-                    verticalArrangement = Arrangement.spacedBy(10.dp),
-                ) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(if (panel == 1) "Place" else "Times of the day", color = HeadsupColors.Ink, style = MaterialTheme.typography.titleSmall, modifier = Modifier.weight(1f))
-                        Chip("Close", { panel = 0 })
-                    }
-                    if (panel == 1) PlacePanel(st, onLocate, onGoToPin = { map.centre(st.lat, st.lon) }) else TimesPanel(st)
-                }
+                Box(Modifier.align(Alignment.TopEnd)) { IconAction(HeadsupIcons.SwapViews, if (mapBig) "Show the sky large" else "Show the map large", { mapBig = !mapBig }) }
             }
         }
         // The hour and the day.
         Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             ExposureHud(st, onCalculator)
             DayBar(st)
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Chip("◀", { st.day = st.day.minusDays(1) })
-                Chip("▶", { st.day = st.day.plusDays(1) })
-                Chip("Today", { st.day = LocalDate.now() })
-                Box(Modifier.weight(1f))
-                Chip("Times", { panel = if (panel == 2) 0 else 2 }, selected = panel == 2)
-                Chip("Place", { panel = if (panel == 1) 0 else 1 }, selected = panel == 1)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                DayPicker(st, Modifier.weight(1f))
+                Chip("Times", onTimes)
             }
         }
     }
@@ -160,7 +136,7 @@ internal fun SunView(st: PlannerState, onLocate: () -> Unit, onCalculator: () ->
 
 /** The place: typed, found by the phone, picked on the map, or one kept by name. */
 @Composable
-private fun PlacePanel(st: PlannerState, onLocate: () -> Unit, onGoToPin: () -> Unit) {
+internal fun PlacePanel(st: PlannerState, onLocate: () -> Unit) {
     // A place found by name (towns, villages, peaks, passes, lakes, huts in Poland, Slovakia and Czechia),
     // or pasted: coordinates, a Plus Code (as Google Maps now shows), or a Google Maps link.
     var query by remember { mutableStateOf("") }
@@ -171,10 +147,15 @@ private fun PlacePanel(st: PlannerState, onLocate: () -> Unit, onGoToPin: () -> 
     // Worked again once the names are read: a short Plus Code needs its town's place.
     val parsed = remember(query, names) { app.headsup.core.planner.PlaceInput.parse(query, st.lat, st.lon, locate) }
     val found = remember(query, names) { if (parsed == null) names?.search(query, st.lat, st.lon, 8).orEmpty() else emptyList() }
+    ToolSection("Find", info = "Search towns, villages, peaks, passes, lakes and huts in Poland, Slovakia and Czechia, or paste coordinates, a Plus Code or a Google Maps link. On the Sun view, a tap on the map puts the pin there.") {
+    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Chip("Use my location", onLocate)
+        Chip("Go to the pin", { st.recentre++ })
+    }
     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         OutlinedTextField(
             value = query, onValueChange = { query = it; note = "" }, singleLine = true,
-            label = { Text("Search a place, or paste coordinates, a Plus Code, a Maps link", maxLines = 1) }, modifier = Modifier.weight(1f),
+            label = { Text("Place, coordinates or Maps link", maxLines = 1) }, modifier = Modifier.weight(1f),
         )
         if (parsed != null) Chip("Go", {
             st.setPlace(parsed.lat, parsed.lon)
@@ -211,28 +192,25 @@ private fun PlacePanel(st: PlannerState, onLocate: () -> Unit, onGoToPin: () -> 
         )
     }
     if (note.isNotEmpty()) Text(note, color = HeadsupColors.Good, style = MaterialTheme.typography.labelMedium)
-    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        NumberField("Latitude", st.lat, st.reload, Modifier.weight(1f)) { st.lat = it.coerceIn(-90.0, 90.0) }
-        NumberField("Longitude", st.lon, st.reload, Modifier.weight(1f)) { st.lon = it.coerceIn(-180.0, 180.0) }
-        NumberField("Ground (m)", st.elevation, st.reload + st.groundVersion * 100_000, Modifier.weight(1f)) { st.elevation = it.coerceIn(-430.0, 8900.0) }
     }
-    Text(
-        st.groundStatus.ifEmpty { "The ground's height comes from the terrain model when the place changes; it can be typed over." },
-        color = HeadsupColors.TextMuted, style = MaterialTheme.typography.labelSmall,
-    )
-    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        Text("Camera above the ground: ${st.aboveGround.roundToInt()} m", color = HeadsupColors.Ink, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
-        Chip("−10", { st.aboveGround = (st.aboveGround - 10).coerceAtLeast(0.0) })
-        Chip("+10", { st.aboveGround = (st.aboveGround + 10).coerceAtMost(500.0) })
+    ToolSection("Coordinates", info = "The ground's height comes from the terrain model when the place changes; it can be typed over.") {
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            NumberField("Latitude", st.lat, st.reload, Modifier.weight(1f)) { st.lat = it.coerceIn(-90.0, 90.0) }
+            NumberField("Longitude", st.lon, st.reload, Modifier.weight(1f)) { st.lon = it.coerceIn(-180.0, 180.0) }
+            NumberField("Ground (m)", st.elevation, st.reload + st.groundVersion * 100_000, Modifier.weight(1f)) { st.elevation = it.coerceIn(-430.0, 8900.0) }
+        }
+        if (st.groundStatus.isNotEmpty()) Text(st.groundStatus, color = HeadsupColors.TextMuted, style = MaterialTheme.typography.labelSmall)
     }
-    Text("For a drone, a roof or a tower: the horizon dips and the sun rises sooner and sets later.", color = HeadsupColors.TextMuted, style = MaterialTheme.typography.labelSmall)
-    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        Chip("Use my location", onLocate)
-        Chip("Go to the pin", onGoToPin)
+    ToolSection("Camera height", info = "How far above the ground the camera is, for a drone, a roof or a tower: the horizon dips, and the sun rises sooner and sets later. Double-tap the dial for the ground.") {
+        ValueHeader("Above the ground", "${st.aboveGround.roundToInt()} m")
+        RulerSlider(st.aboveGround.toFloat(), 0f..500f, 5f, { v -> st.aboveGround = v.toDouble().coerceIn(0.0, 500.0) }, onReset = { st.aboveGround = 0.0 })
     }
-    Text("Tap the map to put the pin there.", color = HeadsupColors.TextMuted, style = MaterialTheme.typography.labelSmall)
-    DateRow(st)
-    PlacesBar(st)
+    ToolSection("Day and time zone", info = "The day of the plan, and the zone its hours are given in.") {
+        DateRow(st)
+    }
+    ToolSection("Saved places", info = "Places kept by name, to open again. Delete asks once more before it removes one.") {
+        PlacesBar(st)
+    }
     Text(
         "Place names: GeoNames (CC BY 4.0). Map © OpenStreetMap contributors. Heights: Terrain Tiles on AWS (SRTM and USGS 3DEP courtesy of the U.S. Geological Survey; Copernicus EU-DEM, funded by the European Union; and others).",
         color = HeadsupColors.TextMuted, style = MaterialTheme.typography.labelSmall,
@@ -241,7 +219,7 @@ private fun PlacePanel(st: PlannerState, onLocate: () -> Unit, onGoToPin: () -> 
 
 /** The day's times: sun, golden and blue hours, the moon, and when the Milky Way's centre can be shot. */
 @Composable
-private fun TimesPanel(st: PlannerState) {
+internal fun TimesPanel(st: PlannerState) {
     val place = st.place
     val zone = st.zone
     val key = listOf(place, st.day, st.offsetHours, st.aboveGround)
@@ -255,46 +233,47 @@ private fun TimesPanel(st: PlannerState) {
     @Composable fun line(label: String, value: String, colour: Color = HeadsupColors.Ink) {
         Row {
             Text(label, color = HeadsupColors.TextMuted, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
-            Text(value, color = colour, style = MaterialTheme.typography.bodyMedium)
+            Text(value, color = colour, style = MaterialTheme.typography.bodyMedium.copy(fontFamily = GeistMonoFamily))
         }
     }
+    ToolSection("Sun and moon", info = "The day's light at this place, in the plan's time zone. Golden hour: the sun up to 6° high, warm and low. Blue hour: the sun 4° to 6° below the horizon.") {
     line("Sunrise / sunset", "${clock(sunT.sunrise, zone)} / ${clock(sunT.sunset, zone)}", SunOrange)
     line("Golden hour", spans(golden))
     line("Blue hour", spans(blue))
     line("Fully dark", "${clock(sunT.astroDusk, zone)} → ${clock(sunT.astroDawn, zone)}")
     line("Moonrise / moonset", "${clock(moonT.rise, zone)} / ${clock(moonT.set, zone)}")
     line("Moon", "${(moonNoon.lit * 100).roundToInt()}% lit")
+    }
     st.skylineHere?.let { sky ->
+      ToolSection("Over the land", info = "When the sun or moon clears the hills and mountains around (the green line on the sky), up to 60 km away.") {
         val sunLand = remember(key, sky) { Sky.sunOverSkyline(place, zone, st.day, sky) }
         val moonLand = remember(key, sky) { Sky.moonOverSkyline(place, zone, st.day, sky) }
         line("Sun over the land / behind it", "${clock(sunLand.rise, zone)} / ${clock(sunLand.set, zone)}", Color(0xFF8BC34A))
         line("Moon over the land / behind it", "${clock(moonLand.rise, zone)} / ${clock(moonLand.set, zone)}", Color(0xFF8BC34A))
+      }
     }
-    Text(
-        st.skylineStatus.ifEmpty { if (st.skylineHere != null) "Over the land: when the sun or moon clears the hills and mountains around (green line on the sky), up to 60 km away." else "" },
-        color = HeadsupColors.TextMuted, style = MaterialTheme.typography.labelSmall,
-    )
-    line("Milky Way centre, dark", spans(milky.dark), MilkyBlue)
+    if (st.skylineStatus.isNotEmpty()) Text(st.skylineStatus, color = HeadsupColors.TextMuted, style = MaterialTheme.typography.labelSmall)
+    ToolSection("Milky Way", info = "Its centre at least 5° up while the sky is fully dark (sun 18° down), in the night after this day; \"no moon\" also needs the moon down or under a quarter lit.") {
+    line("Centre, dark", spans(milky.dark), MilkyBlue)
     line("… and no moon", spans(milky.moonless), MilkyBlue)
-    Text(
-        "Milky Way: its centre at least 5° up while the sky is fully dark (sun 18° down), in the night after this day; \"no moon\" also needs the moon down or under a quarter lit.",
-        color = HeadsupColors.TextMuted, style = MaterialTheme.typography.labelSmall,
-    )
+    }
 
     // The moon's phases from this day.
-    Text("Moon phases", color = HeadsupColors.Ink, style = MaterialTheme.typography.titleSmall)
+    ToolSection("Moon phases", info = "The moon's phases in the month from this day, in the plan's time zone.") {
     val phases = remember(st.day, st.offsetHours) { Sky.moonPhases(st.dayStart, 30) }
     for (p in phases) {
         val t = java.time.Instant.ofEpochMilli(p.millis).atZone(zone)
         line(p.name, "${t.toLocalDate()} ${String.format(java.util.Locale.US, "%02d:%02d", t.hour, t.minute)}")
+    }
     }
 
     // The best nights for the Milky Way in the year from this day.
     val scope = rememberCoroutineScope()
     var season by remember(key) { mutableStateOf<List<Sky.MilkyWayScore>?>(null) }
     var searching by remember(key) { mutableStateOf(false) }
+    ToolSection("Best Milky Way nights", info = "The nights in the year from this day with the centre highest in a dark, moonless sky. Tap one to open it at the start of its moonless window.") {
     Row(verticalAlignment = Alignment.CenterVertically) {
-        Text("Best Milky Way nights", color = HeadsupColors.Ink, style = MaterialTheme.typography.titleSmall, modifier = Modifier.weight(1f))
+        Text(season?.let { "${it.size.coerceAtMost(10)} found" } ?: "Not looked for yet.", color = HeadsupColors.TextMuted, style = MaterialTheme.typography.labelMedium, modifier = Modifier.weight(1f))
         Chip(if (searching) "Looking…" else "Find in the next year", {
             if (!searching) {
                 searching = true
@@ -328,18 +307,20 @@ private fun TimesPanel(st: PlannerState) {
             }
         }
     }
+    }
 }
 
 /** Day and time zone of the plan. */
 @Composable
 internal fun DateRow(st: PlannerState) {
-    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        Chip("◀", { st.day = st.day.minusDays(1) })
-        Text(st.day.toString(), color = HeadsupColors.Ink, style = MaterialTheme.typography.bodyLarge)
-        Chip("▶", { st.day = st.day.plusDays(1) })
-        Chip("Today", { st.day = LocalDate.now() })
-        Box(Modifier.weight(1f))
-        Chip("UTC${if (st.offsetHours >= 0) "+" else ""}${st.offsetHours} −", { st.offsetHours = (st.offsetHours - 1).coerceAtLeast(-12) })
+    DayPicker(st)
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Text("Time zone", color = HeadsupColors.TextMuted, style = MaterialTheme.typography.labelLarge, modifier = Modifier.weight(1f))
+        Chip("−", { st.offsetHours = (st.offsetHours - 1).coerceAtLeast(-12) })
+        Text(
+            "UTC${if (st.offsetHours >= 0) "+" else ""}${st.offsetHours}",
+            color = HeadsupColors.Ink, style = MaterialTheme.typography.labelLarge.copy(fontFamily = GeistMonoFamily), modifier = Modifier.padding(horizontal = 8.dp),
+        )
         Chip("+", { st.offsetHours = (st.offsetHours + 1).coerceAtMost(14) })
     }
 }

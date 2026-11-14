@@ -66,14 +66,16 @@ class MainActivity : ComponentActivity() {
                 // The logo animation plays once per launch, not on rotation.
                 var splash by rememberSaveable { mutableStateOf(savedInstanceState == null) }
                 // Which half of the app is open: 0 asks, 1 the editor, 2 the light planner. They share nothing
-                // but the phone. The phone's back button is left to each half; the planner has a button to the editor.
+                // but the phone. Back from either returns here (what is open inside a half, a sheet or the album, closes first).
                 var mode by rememberSaveable { mutableStateOf(0) }
                 // The editor is built the first time it is chosen (not before, so the logo's frames stay free)
                 // and then kept, so going to the planner and back finds it as it was.
                 var editorBuilt by rememberSaveable { mutableStateOf(false) }
+                // Registered before the editor's own, so those (full screen, the album) come first.
+                androidx.activity.compose.BackHandler(enabled = mode == 1) { mode = 0 }
                 Box {
                     if (editorBuilt) HeadsupScreen()
-                    if (mode == 2) app.headsup.ui.PlannerScreen(onEditor = { editorBuilt = true; mode = 1 })
+                    if (mode == 2) app.headsup.ui.PlannerScreen(onBack = { mode = 0 }, onEditor = { editorBuilt = true; mode = 1 })
                     if (mode == 0) app.headsup.ui.ModeChooser(
                         onEditor = { editorBuilt = true; mode = 1 },
                         onPlanner = { mode = 2 },
