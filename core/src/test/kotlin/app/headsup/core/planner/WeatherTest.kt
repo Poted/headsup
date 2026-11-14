@@ -60,31 +60,11 @@ class WeatherTest {
         assertTrue(12.0 - over.ev in 1.7..2.3, "${over.ev}")
     }
 
-    /** Places of braces and closing brackets that are not escaped (other than a quantifier like {2,3}). */
-    private fun loneBraces(pattern: String): List<Int> {
-        val bad = ArrayList<Int>()
-        var inClass = false
-        var i = 0
-        while (i < pattern.length) {
-            val c = pattern[i]
-            when {
-                c == '\\' -> { i += 2; continue }
-                inClass && c == ']' -> inClass = false
-                inClass && (c == '{' || c == '}') -> bad += i
-                !inClass && c == '[' -> inClass = true
-                !inClass && c == '{' && Regex("^\\{\\d+(,\\d*)?\\}").containsMatchIn(pattern.substring(i)) -> i = pattern.indexOf('}', i)
-                !inClass && (c == '{' || c == '}' || c == ']') -> bad += i
-            }
-            i++
-        }
-        return bad
-    }
-
     @Test fun theForecastPatternsWorkOnAndroidToo() {
         // Android's regular expressions (ICU) reject a lone "}" or "]" that the JVM running these tests accepts.
-        assertEquals(emptyList(), loneBraces(MetNorway.STEP_PATTERN), MetNorway.STEP_PATTERN)
-        assertEquals(emptyList(), loneBraces(MetNorway.CLOUD_PATTERN))
+        assertEquals(emptyList(), PatternCheck.loneBraces(MetNorway.STEP_PATTERN), MetNorway.STEP_PATTERN)
+        assertEquals(emptyList(), PatternCheck.loneBraces(MetNorway.CLOUD_PATTERN))
         // The checker itself: it catches the pattern that crashed.
-        assertTrue(loneBraces("\\{([^}]*)}").isNotEmpty())
+        assertTrue(PatternCheck.loneBraces("\\{([^}]*)}").isNotEmpty())
     }
 }

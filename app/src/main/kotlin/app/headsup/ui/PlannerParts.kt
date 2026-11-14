@@ -84,6 +84,22 @@ internal fun SettingTile(
     }
 }
 
+/** A setting the mode holds (a video's shutter from its frame rate): shown, not changed here. */
+@Composable
+internal fun FixedTile(label: String, value: String, note: String, modifier: Modifier) {
+    Column(
+        modifier
+            .clip(RoundedCornerShape(12.dp))
+            .background(HeadsupColors.SurfaceHigh)
+            .padding(8.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Text(label, color = HeadsupColors.Ink, style = MaterialTheme.typography.labelSmall)
+        Text(value, color = HeadsupColors.Ink, style = MaterialTheme.typography.titleMedium)
+        Text(note, color = HeadsupColors.TextMuted, style = MaterialTheme.typography.labelSmall)
+    }
+}
+
 /** A number typed in, kept as typed until it parses; [reload] changing sets it again from [value] (a place set from outside). */
 @Composable
 internal fun NumberField(label: String, value: Double, reload: Int, modifier: Modifier, onValue: (Double) -> Unit) {

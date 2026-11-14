@@ -34,6 +34,11 @@ settings and saved places are kept by `PlannerPrefs` in `PlannerScreen.kt`, not 
 - `Alignment`: when the sun, the moon or the Milky Way's centre stands in a direction (and, if
   asked, within 1° of a height): day by day the moment it crosses that azimuth; the Milky Way only
   in a fully dark sky.
+- `PlaceInput` / `PlusCode`: a place pasted as text: decimal or degrees-minutes-seconds
+  coordinates, a Google Maps link with coordinates, a Plus Code (full, or short completed from the
+  place set); all on the phone.
+- `Capture`: Photo / Video / Timelapse: a video's shutter from its frame rate (180°: 1/(2·fps)), a
+  timelapse's from its interval (half of it), with notes for what is out of reach.
 - `WebMercator`: map pixels from latitude and longitude.
 - `Ar`: the phone's attitude and a direction in the sky to a point on the screen; the lens's
   focal length in pixels; the compass and tilt correction from aiming at the sun or moon.
@@ -119,14 +124,15 @@ The phone's GPS height is not used for it (it is measured from the ellipsoid, te
 (1.76′ × √metres) for sunrise, sunset, moonrise and moonset: 100 m up, the sun rises about two
 minutes sooner.
 
-## Skyline and Find
+## Skyline (Find is out of the interface)
 
 When the place changes, the land around it is read (about 70 terrain tiles the first time, a few
 MB, kept on the phone) and the skyline worked out from the camera's height. It is drawn on the sky
 chart (the land filled, a green line) and in Live (a green line, to check the overlay against the
 real hills). The Times panel adds when the sun and moon clear the land and go behind it.
 
-Find: pick a target on the map (a peak, a tower; its ground from the terrain plus how tall it
+Find (not in the interface since 2026-11-14: it confused more than it helped; `Alignment` and its
+tests stay in `:core`): pick a target on the map (a peak, a tower; its ground from the terrain plus how tall it
 stands) or take the way the phone looks; choose Sun, Moon or Milky Way centre; search 30, 90 or
 365 days from the day shown, at the target's height (within 1°; for the phone's direction, the
 skyline's height there) or at any height. A found moment opens that day and hour everywhere.
@@ -134,6 +140,45 @@ skyline's height there) or at any height. A found moment opens that day and hour
 Limits: terrain at about 25 m near and 100 m far, so a narrow summit or a building may be missed or
 lower (a building or a tree is not in the model: give the target's height by hand); the moon's
 position is good to about 0.3°.
+
+## Checked against real terrain (2026-11-14)
+
+From Turbacz's summit (1302 m) the model gives the Tatras (Kasprowy 1962 m at 36 km, Gerlach
+2591 m at 42 km) 1.0–1.4° above level, and every other direction below level (−0.3° to −1.3°):
+right, but on a chart 120° wide a degree is a few pixels, so the Tatras look flat. To do in the
+interface: a vertical scale that shows a degree or two clearly, and a cross-section of the ground
+from the camera to a point on the map (the line of sight over it).
+
+## Handover to the UI work (2026-11-14)
+
+What is there and works (logic tested in `:core`, the screens built in CI and tried on a phone):
+- Editor / Planner choice after the logo (`ModeChooser`, with the last crash report and Copy);
+  the phone's back button is left alone; the planner has a button to the editor; the editor has
+  none to the planner yet.
+- Planner header: Sun · Live · Calculator · Plans · Editor (too many for a narrow phone).
+- Sun: the sky full screen (drag to turn and tilt, pinch to zoom), the map in the corner (⤢
+  swaps), the day bar, ◀ ▶ Today, Times and Place panels over the sky.
+- Live: camera with the sun's path, hour dots, horizon, skyline, moon, Milky Way; the reading of
+  the light (EV, lux) and Use as base; My location; Calibrate (align on the sun or moon, nudges).
+- Calculator: Photo / Video / Timelapse; frame rate or interval; Aperture / Shutter / ISO tiles
+  (one auto in Photo; in Video and Timelapse the shutter is held by the mode and ISO follows);
+  filter (Pick for me, ◀ ▶); ISO range; the filter window for the held shutter; warnings; Night
+  sky (Bortle), Cloud, Get forecast (results in brackets: "(with forecast …)").
+- Plans: save everything set under a name, open, delete.
+
+Known UX problems to solve there: units and steps of the settings (now the camera's dials), the
+header's width, the shutter and aperture tiles' Auto in Video and Timelapse (ISO is always auto
+there), the sky chart's vertical scale (the Tatras look flat), the Place panel's length, no way
+from the editor to the planner, the chart's text sizes.
+
+## Later (noted, not started)
+
+- Name search for places: needs a geocoding service usable commercially (paid); pasting
+  coordinates, Plus Codes and Maps links works offline now.
+- The frame on the map: the cone drawn as the camera's field of view for a chosen focal length
+  and sensor (300 mm 8°, 135 mm 18°, 85 mm 28°, 50 mm 46°, 35 mm 63°, 24 mm 84°, 14 mm 114° on full
+  frame), and a depth-of-field calculator (near and far limit, hyperfocal distance).
+- A cross-section of the ground from the camera to a point on the map.
 
 ## Pitfalls met
 

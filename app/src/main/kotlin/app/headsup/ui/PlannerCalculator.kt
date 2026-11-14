@@ -1,9 +1,11 @@
 package app.headsup.ui
 
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
@@ -13,6 +15,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import app.headsup.core.planner.AutoSetting
+import app.headsup.core.planner.Capture
+import app.headsup.core.planner.CaptureMode
 import app.headsup.core.planner.CameraScale
 import app.headsup.core.planner.Exposure
 import app.headsup.core.planner.ExposureResult
@@ -33,6 +37,9 @@ internal fun CalculatorView(st: PlannerState) {
     val frame = Planner.frame(st.place, st.now, st.conditions, st.setup, st.measured)
     val fc = st.forecastHere?.let { Planner.frame(st.place, st.now, st.conditions, st.setup, st.measured, it) }
     val r = frame.exposure
+    // The setting that follows the light as the mode has it (video and timelapse: always ISO).
+    val auto = st.setup.auto
+    val photo = st.mode == CaptureMode.Photo
     val scope = rememberCoroutineScope()
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
         // Where and when, and the hour to try.
@@ -43,6 +50,23 @@ internal fun CalculatorView(st: PlannerState) {
         DateRow(st)
         Text("${hhmm(st.minute)} · sun ${frame.sun.altitude.roundToInt()}° · moon ${frame.moon.position.altitude.roundToInt()}° (${(frame.moon.lit * 100).roundToInt()}% lit)", color = HeadsupColors.Ink, style = MaterialTheme.typography.bodyMedium)
         DayBar(st)
+
+        // What is being shot: a photo (all three settings yours), a video (shutter from the frame rate), a timelapse (shutter from the interval).
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            for (m in CaptureMode.entries) Chip(m.label, { st.mode = m }, selected = st.mode == m)
+        }
+        if (st.mode == CaptureMode.Video) {
+            Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                for (f in listOf(24.0, 25.0, 30.0, 50.0, 60.0, 100.0, 120.0)) Chip("${f.toInt()} fps", { st.fps = f }, selected = st.fps == f)
+            }
+            Text("Shutter ${Exposure.formatShutter(Capture.videoShutter(st.fps))}: twice the frame rate (180°), for natural motion. The filter keeps it there in bright light.", color = HeadsupColors.TextMuted, style = MaterialTheme.typography.labelSmall)
+        }
+        if (st.mode == CaptureMode.Timelapse) {
+            Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                for (i in listOf(1.0, 2.0, 3.0, 5.0, 10.0, 15.0, 30.0)) Chip("${i.toInt()} s", { st.interval = i }, selected = st.interval == i)
+            }
+            Text("Interval ${st.interval.toInt()} s; shutter ${Exposure.formatShutter(Capture.timelapseShutter(st.interval))}: half the interval, for smooth movement (clouds, water, people).", color = HeadsupColors.TextMuted, style = MaterialTheme.typography.labelSmall)
+        }
 
         // A reading of the light taken in the live view, when there is one.
         st.measuredEv?.let { ev ->
@@ -81,14 +105,18 @@ internal fun CalculatorView(st: PlannerState) {
         )
         val fe = fc?.exposure
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            SettingTile("Aperture", withForecast(st.auto == AutoSetting.Aperture, Exposure.formatAperture(if (st.auto == AutoSetting.Aperture) r.aperture else st.aperture), fe?.let { Exposure.formatAperture(it.aperture) }),
-                st.auto == AutoSetting.Aperture, Modifier.weight(1f),
+            SettingTile("Aperture", withForecast(auto == AutoSetting.Aperture, Exposure.formatAperture(if (auto == AutoSetting.Aperture) r.aperture else st.aperture), fe?.let { Exposure.formatAperture(it.aperture) }),
+                auto == AutoSetting.Aperture, Modifier.weight(1f),
                 onToggle = { st.auto = AutoSetting.Aperture }, onLess = { st.aperture = CameraScale.step(CameraScale.apertures, st.aperture, -1) }, onMore = { st.aperture = CameraScale.step(CameraScale.apertures, st.aperture, 1) })
-            SettingTile("Shutter", withForecast(st.auto == AutoSetting.Shutter, Exposure.formatShutter(if (st.auto == AutoSetting.Shutter) r.shutter else st.shutter), fe?.let { Exposure.formatShutter(it.shutter) }),
-                st.auto == AutoSetting.Shutter, Modifier.weight(1f),
-                onToggle = { st.auto = AutoSetting.Shutter }, onLess = { st.shutter = CameraScale.step(CameraScale.shutters, st.shutter, -1) }, onMore = { st.shutter = CameraScale.step(CameraScale.shutters, st.shutter, 1) })
-            SettingTile("ISO", withForecast(st.auto == AutoSetting.Iso, Exposure.snapIso(if (st.auto == AutoSetting.Iso) r.iso else st.iso).toString(), fe?.let { Exposure.snapIso(it.iso).toString() }),
-                st.auto == AutoSetting.Iso, Modifier.weight(1f),
+            if (photo) {
+                SettingTile("Shutter", withForecast(auto == AutoSetting.Shutter, Exposure.formatShutter(if (auto == AutoSetting.Shutter) r.shutter else st.shutter), fe?.let { Exposure.formatShutter(it.shutter) }),
+                    auto == AutoSetting.Shutter, Modifier.weight(1f),
+                    onToggle = { st.auto = AutoSetting.Shutter }, onLess = { st.shutter = CameraScale.step(CameraScale.shutters, st.shutter, -1) }, onMore = { st.shutter = CameraScale.step(CameraScale.shutters, st.shutter, 1) })
+            } else {
+                FixedTile("Shutter", Exposure.formatShutter(st.setup.shutter), if (st.mode == CaptureMode.Video) "${st.fps.toInt()} fps" else "${st.interval.toInt()} s interval", Modifier.weight(1f))
+            }
+            SettingTile("ISO", withForecast(auto == AutoSetting.Iso, Exposure.snapIso(if (auto == AutoSetting.Iso) r.iso else st.iso).toString(), fe?.let { Exposure.snapIso(it.iso).toString() }),
+                auto == AutoSetting.Iso, Modifier.weight(1f),
                 onToggle = { st.auto = AutoSetting.Iso }, onLess = { st.iso = CameraScale.step(CameraScale.isos, st.iso, -1).coerceAtLeast(st.isoMin) }, onMore = { st.iso = CameraScale.step(CameraScale.isos, st.iso, 1).coerceAtMost(st.isoMax) })
         }
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -108,17 +136,20 @@ internal fun CalculatorView(st: PlannerState) {
             Chip("min +", { st.isoMin = (st.isoMin * 2).coerceAtMost(st.isoMax) })
         }
         // With the shutter and aperture held: which filters keep the ISO inside its range.
-        if (st.auto == AutoSetting.Iso) {
+        if (auto == AutoSetting.Iso) {
             Text(
-                "At ${Exposure.formatAperture(st.aperture)} and ${Exposure.formatShutter(st.shutter)}, ISO ${st.isoMin.roundToInt()}–${st.isoMax.roundToInt()} needs " +
+                "At ${Exposure.formatAperture(st.aperture)} and ${Exposure.formatShutter(st.setup.shutter)}, ISO ${st.isoMin.roundToInt()}–${st.isoMax.roundToInt()} needs " +
                     ndNeeded(frame, st) + (fc?.let { " (with forecast ${ndNeeded(it, st)})" } ?: ""),
                 color = HeadsupColors.Ink, style = MaterialTheme.typography.bodyMedium,
             )
         }
         // Out of the camera's reach: red, and what to change.
-        warningText(r, st)?.let { Warning(it) }
+        // Out of reach: in a photo what to change; in a video or timelapse what it means for that kind of shot.
+        if (photo) warningText(r, st)?.let { Warning(it) } else Capture.notes(st.capture, r).forEach { Warning(it) }
         if (fe != null && fe.warning != r.warning) {
-            warningText(fe, st)?.let { Warning("With forecast: $it") } ?: Text("With forecast: within the camera's reach.", color = HeadsupColors.Good, style = MaterialTheme.typography.labelMedium)
+            val fcNotes = if (photo) listOfNotNull(warningText(fe, st)) else Capture.notes(st.capture, fe)
+            if (fcNotes.isEmpty()) Text("With forecast: within the camera's reach.", color = HeadsupColors.Good, style = MaterialTheme.typography.labelMedium)
+            else fcNotes.forEach { Warning("With forecast: $it") }
         }
         Text(
             "The light is estimated from the sun's and moon's height, the place's height, the night sky (Bortle) and cloud, or worked from a reading taken in Live. A forecast of cloud is sometimes wrong, so it is shown beside the sky as set, not instead of it.",
@@ -133,7 +164,7 @@ private fun withForecast(isAuto: Boolean, value: String, forecast: String?): Str
 
 /** How many stops of filter keep the ISO in range at this hour, and the listed filters among them. */
 private fun ndNeeded(f: PlannerFrame, st: PlannerState): String {
-    val window = Exposure.ndWindow(f.ev, st.aperture, st.shutter, st.limits)
+    val window = Exposure.ndWindow(f.ev, st.aperture, st.setup.shutter, st.limits)
     val fits = Exposure.filtersIn(window)
     return if (window.endInclusive < 0) "no filter (too dim even bare)"
     else "${one(window.start.coerceAtLeast(0.0))}–${one(window.endInclusive)} stops of filter" +

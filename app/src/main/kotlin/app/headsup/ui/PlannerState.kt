@@ -5,14 +5,13 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import app.headsup.core.planner.AutoSetting
+import app.headsup.core.planner.Capture
+import app.headsup.core.planner.CaptureConfig
+import app.headsup.core.planner.CaptureMode
 import app.headsup.core.planner.CloudForecast
 import app.headsup.core.planner.CameraLimits
 import app.headsup.core.planner.ExposureSetup
 import app.headsup.core.planner.NdFilter
-import app.headsup.core.planner.AlignMatch
-import app.headsup.core.planner.Alignment
-import app.headsup.core.planner.Body
-import app.headsup.core.planner.Geo
 import app.headsup.core.planner.HorizonProfile
 import app.headsup.core.planner.MetNorway
 import app.headsup.core.planner.Place
@@ -156,59 +155,11 @@ internal class PlannerState(context: Context) {
         }
     }
 
-    // Finding when a body stands in a direction: towards a target on the map, or where the phone looks.
-    var findBody by mutableStateOf(Body.Sun)
-    var findUseLook by mutableStateOf(false)
-    var target by mutableStateOf<Pair<Double, Double>?>(null)
-    var targetGround by mutableStateOf<Double?>(null)
-    /** How tall the target stands above its ground (a tower, a tree, a cross on a peak), metres. */
-    var targetAbove by mutableStateOf(0.0)
-    var pickingTarget by mutableStateOf(false)
-    var findAnyHeight by mutableStateOf(false)
-    var findDays by mutableStateOf(365)
-    var findResults by mutableStateOf<List<AlignMatch>>(emptyList())
-    var findStatus by mutableStateOf("")
-
-    private val eye: Double get() = elevation + aboveGround + 1.6
-    val targetDistance: Double? get() = target?.let { Geo.distance(lat, lon, it.first, it.second) }
-    val targetAzimuth: Double? get() = target?.let { Geo.bearing(lat, lon, it.first, it.second) }
-    /** How high the target's top looks from the camera, degrees (needs its ground's height). */
-    val targetAltitude: Double? get() {
-        val d = targetDistance ?: return null
-        val g = targetGround ?: return null
-        return Geo.elevationAngle(d, g + targetAbove - eye)
-    }
-
-    /** The direction searched: the target's, or where the phone looks. */
-    val findAzimuth: Double? get() = if (findUseLook) viewAz.toDouble() else targetAzimuth
-    /** The height searched, or null for any: the target's top, or the skyline where the phone looks. */
-    val findAltitude: Double? get() = when {
-        findAnyHeight -> null
-        findUseLook -> skylineHere?.at(viewAz.toDouble()) ?: 0.0
-        else -> targetAltitude
-    }
-
-    suspend fun setTarget(la: Double, lo: Double) {
-        target = la to lo
-        findUseLook = false
-        pickingTarget = false
-        targetGround = null
-        targetGround = terrain.height(la, lo)
-    }
-
-    suspend fun search() {
-        val az = findAzimuth ?: run { findStatus = "Set a target first."; return }
-        val alt = findAltitude
-        findStatus = "Searching…"
-        val p = place
-        val z = zone
-        val from = day
-        val body = findBody
-        val days = findDays
-        val r = withContext(Dispatchers.Default) { Alignment.find(p, z, from, days, body, az, alt, 1.0) }
-        findResults = r
-        findStatus = if (r.isEmpty()) "Not in these days." + (if (alt != null) " Try Any height, or more days." else "") else ""
-    }
+    /** What is being shot (photo, video, timelapse), the video's frame rate and the timelapse's interval. */
+    var mode by Saved(CaptureMode.entries[prefs.get("mode", 0f).roundToInt().coerceIn(0, CaptureMode.entries.size - 1)]) { prefs.put("mode", it.ordinal.toFloat()) }
+    var fps by Saved(prefs.get("fps", 25f).toDouble()) { prefs.put("fps", it.toFloat()) }
+    var interval by Saved(prefs.get("interval", 5f).toDouble()) { prefs.put("interval", it.toFloat()) }
+    val capture: CaptureConfig get() = CaptureConfig(mode, fps, 180.0, interval)
 
     private val cacheDir: File = context.cacheDir
     private val terrain = TerrainStore(cacheDir) { download(it) }
@@ -235,6 +186,7 @@ internal class PlannerState(context: Context) {
         val one = SavedPlan(
             name, lat, lon, elevation, offsetHours, day.toString(), minute,
             auto.ordinal, aperture, shutter, iso, ndIndex, isoMin, isoMax, bortle, cloud,
+            mode.ordinal, fps, interval,
         )
         val at = plans.indexOfFirst { it.name == name }
         plans = if (at >= 0) plans.toMutableList().also { it[at] = one } else listOf(one) + plans
@@ -250,6 +202,7 @@ internal class PlannerState(context: Context) {
         auto = AutoSetting.entries[p.auto.coerceIn(0, AutoSetting.entries.size - 1)]
         aperture = p.aperture; shutter = p.shutter; iso = p.iso; ndIndex = p.nd
         isoMin = p.isoMin; isoMax = p.isoMax; bortle = p.bortle; cloud = p.cloud
+        mode = CaptureMode.entries[p.mode.coerceIn(0, CaptureMode.entries.size - 1)]; fps = p.fps; interval = p.interval
         selectedPlace = null
         reload++; recentre++
     }
@@ -310,7 +263,8 @@ internal class PlannerState(context: Context) {
     val conditions: SkyConditions get() = SkyConditions(bortle, cloud.toDouble())
     val nd: NdFilter? get() = if (ndIndex < 0) null else NdFilter.entries[ndIndex.coerceIn(0, NdFilter.entries.size - 1)]
     val limits: CameraLimits get() = CameraLimits(isoMin, isoMax)
-    val setup: ExposureSetup get() = ExposureSetup(auto, aperture, shutter, iso, nd, limits)
+    /** The exposure set-up as the mode holds it (a video's shutter from its frame rate, a timelapse's from its interval). */
+    val setup: ExposureSetup get() = Capture.setup(capture, ExposureSetup(auto, aperture, shutter, iso, nd, limits))
 
     /** Sets the place. [fromMap] is true when it was picked on the map, which then stays where the user has put it. */
     fun setPlace(newLat: Double, newLon: Double, newElevation: Double? = null, fromMap: Boolean = false) {
@@ -364,6 +318,7 @@ internal data class SavedPlan(
     val date: String, val minute: Float,
     val auto: Int, val aperture: Double, val shutter: Double, val iso: Double, val nd: Int,
     val isoMin: Double, val isoMax: Double, val bortle: Int, val cloud: Float,
+    val mode: Int = 0, val fps: Double = 25.0, val interval: Double = 5.0,
 )
 
 private fun readPlans(p: PlannerPrefs): List<SavedPlan> = runCatching {
@@ -376,6 +331,7 @@ private fun readPlans(p: PlannerPrefs): List<SavedPlan> = runCatching {
                 o.getString("date"), o.optDouble("min", 720.0).toFloat(),
                 o.optInt("auto", 0), o.optDouble("ap", 2.8), o.optDouble("sh", 0.5), o.optDouble("iso", 100.0), o.optInt("nd", -1),
                 o.optDouble("isomin", 100.0), o.optDouble("isomax", 25_600.0), o.optInt("bortle", 3), o.optDouble("cloud", 0.0).toFloat(),
+                o.optInt("mode", 0), o.optDouble("fps", 25.0), o.optDouble("interval", 5.0),
             )
         }.getOrNull()
     }
@@ -389,7 +345,8 @@ private fun writePlans(p: PlannerPrefs, list: List<SavedPlan>) {
                 .put("name", x.name).put("lat", x.lat).put("lon", x.lon).put("elev", x.elevation).put("utc", x.utc)
                 .put("date", x.date).put("min", x.minute.toDouble())
                 .put("auto", x.auto).put("ap", x.aperture).put("sh", x.shutter).put("iso", x.iso).put("nd", x.nd)
-                .put("isomin", x.isoMin).put("isomax", x.isoMax).put("bortle", x.bortle).put("cloud", x.cloud.toDouble()),
+                .put("isomin", x.isoMin).put("isomax", x.isoMax).put("bortle", x.bortle).put("cloud", x.cloud.toDouble())
+                .put("mode", x.mode).put("fps", x.fps).put("interval", x.interval),
         )
     }
     p.putString("plans", a.toString())
