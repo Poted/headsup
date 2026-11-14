@@ -36,7 +36,9 @@ settings and saved places are kept by `PlannerPrefs` in `PlannerScreen.kt`, not 
   in a fully dark sky.
 - `PlaceInput` / `PlusCode`: a place pasted as text: decimal or degrees-minutes-seconds
   coordinates, a Google Maps link with coordinates, a Plus Code (full, or short completed from the
-  place set); all on the phone.
+  town its words name, else from the place set); all on the phone.
+- `Gazetteer`: search by name without accents or case (towns, villages, peaks, passes, lakes,
+  huts), best match first, bigger towns and higher peaks before, nearer before farther.
 - `Capture`: Photo / Video / Timelapse: a video's shutter from its frame rate (180°: 1/(2·fps)), a
   timelapse's from its interval (half of it), with notes for what is out of reach.
 - `WebMercator`: map pixels from latitude and longitude.
@@ -173,8 +175,8 @@ from the editor to the planner, the chart's text sizes.
 
 ## Later (noted, not started)
 
-- Name search for places: needs a geocoding service usable commercially (paid); pasting
-  coordinates, Plus Codes and Maps links works offline now.
+- Name search beyond GeoNames (streets, addresses, any point of interest): needs a geocoding
+  service usable commercially (paid). Other countries: add their codes to `buildPlaces`.
 - The frame on the map: the cone drawn as the camera's field of view for a chosen focal length
   and sensor (300 mm 8°, 135 mm 18°, 85 mm 28°, 50 mm 46°, 35 mm 63°, 24 mm 84°, 14 mm 114° on full
   frame), and a depth-of-field calculator (near and far limit, hyperfocal distance).
@@ -197,6 +199,7 @@ A rule for the planner: no data or service that may not be used in a paid app.
 | Cloud forecast | MET Norway, api.met.no Locationforecast 2.0 | free, commercial use with credit ("Data from MET Norway", NLOD / CC BY 4.0); a User-Agent naming the app and a contact is required (`PLANNER_USER_AGENT`: put the maker's contact there before a release); keep answers until they expire. To confirm on api.met.no/doc/TermsOfService before a release. |
 | Ground height | Terrain Tiles on AWS (Terrarium) | sources public domain or open licences (SRTM, USGS, Copernicus EU-DEM, …) with credit; shown in the Place panel |
 | Map | OpenStreetMap's tile server | data ODbL (commercial with credit), but the tile server is for light use only: replace with a tile provider before a release |
+| Place names | GeoNames country dumps (PL, SK, CZ), fetched by the build (`buildPlaces`) into the asset `places.tsv.gz` | CC BY 4.0: commercial with credit ("Place names: GeoNames", shown in the Place panel). Not pinned (dumps change daily); a failed download leaves the search empty. |
 | Light pollution | none yet | the night-sky atlas (Falchi 2016) is CC BY-NC: not used. Bortle is set by hand. |
 | Weather (earlier) | Open-Meteo free API | non-commercial: taken out |
 

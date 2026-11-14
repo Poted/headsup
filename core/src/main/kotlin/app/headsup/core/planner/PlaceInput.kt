@@ -85,7 +85,8 @@ object PlusCode {
 /**
  * Reading a place pasted as text: coordinates as Google Maps or a GPS shows them (49.2318, 19.9817;
  * 49°13'54.5"N 19°58'54.1"E; 49.2318N 19.9817E), a Google Maps link with coordinates in it, or a
- * Plus Code (short ones completed from [refLat], [refLon]). Nothing is asked of a service.
+ * Plus Code. A short Plus Code ("X3QR+5F Zakopane") is completed from the place its words name, when
+ * [locality] can find it, otherwise from [refLat], [refLon]. Nothing is asked of a service.
  */
 object PlaceInput {
     // Every brace and bracket in these patterns is escaped or a quantifier: Android's engine rejects lone ones.
@@ -107,7 +108,7 @@ object PlaceInput {
     private fun num(s: String) = s.replace(',', '.').toDoubleOrNull()
     private fun ok(lat: Double, lon: Double) = lat in -90.0..90.0 && lon in -180.0..180.0
 
-    fun parse(text: String, refLat: Double, refLon: Double): ParsedPlace? {
+    fun parse(text: String, refLat: Double, refLon: Double, locality: ((String) -> Pair<Double, Double>?)? = null): ParsedPlace? {
         val t = text.trim()
         if (t.isEmpty()) return null
         // A link: the place it shows (data!3d!4d is the pin, @ the view's centre).
@@ -126,7 +127,13 @@ object PlaceInput {
         // A Plus Code (before plain numbers: its digits are not coordinates).
         plus.find(t)?.let { m ->
             val code = m.groupValues[1]
-            if (PlusCode.looksLike(code)) PlusCode.recover(code, refLat, refLon)?.let { (a, b) -> return ParsedPlace(a, b, "Plus Code") }
+            if (PlusCode.looksLike(code)) {
+                // The words around a short code name the place it is near (Google Maps shows "X3QR+5F Zakopane, Polska").
+                val words = t.replace(code, " ").trim().trim(',', ' ')
+                val near = if (code.indexOf('+') < 8 && words.isNotEmpty()) locality?.invoke(words) else null
+                val (rl, ro) = near ?: (refLat to refLon)
+                PlusCode.recover(code, rl, ro)?.let { (a, b) -> return ParsedPlace(a, b, if (near != null) "Plus Code near $words" else "Plus Code") }
+            }
         }
         // Decimal degrees.
         decimal.find(t)?.let { m ->

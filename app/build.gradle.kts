@@ -107,7 +107,58 @@ val downloadModels by tasks.registering {
         Files.move(part.toPath(), file.toPath(), StandardCopyOption.REPLACE_EXISTING)
     }
 }
-tasks.named("preBuild") { dependsOn(downloadModels) }
+// Place names for the planner's search (towns, villages, peaks, passes, lakes, huts) from GeoNames
+// (CC BY 4.0: commercial use with credit). Their dumps change daily, so they are not pinned by hash;
+// a failed download leaves the search empty rather than failing the build.
+val buildPlaces by tasks.registering {
+    val target = layout.buildDirectory.file("models/assets/places.tsv.gz")
+    outputs.file(target)
+    doLast {
+        val file = target.get().asFile
+        if (file.exists() && file.length() > 1000) return@doLast
+        file.parentFile.mkdirs()
+        val keep = setOf(
+            "P" to null,
+            "T" to setOf("MT", "MTS", "PK", "PKS", "HLL", "HLLS", "PASS", "RDGE", "CLF", "SPUR", "CRQ", "CRQS", "SDL", "VAL", "GRGE", "CNYN", "GAP"),
+            "H" to setOf("LK", "LKS", "LKN", "RSV", "WTRF", "PND"),
+            "S" to setOf("HUT", "HUTS", "OBPT", "TOWR", "CSTL", "CH", "MSTY", "RUIN"),
+            "L" to setOf("PRK", "RESN", "AREA", "LCTY"),
+        )
+        var rows = 0
+        val out = java.util.zip.GZIPOutputStream(java.io.FileOutputStream(file)).bufferedWriter()
+        try {
+            for (country in listOf("PL", "SK", "CZ")) {
+                try {
+                    val zip = java.util.zip.ZipInputStream(URI("https://download.geonames.org/export/dump/$country.zip").toURL().openStream())
+                    zip.use { z ->
+                        while (true) {
+                            val entry = z.nextEntry ?: break
+                            if (entry.name != "$country.txt") continue
+                            z.bufferedReader().lineSequence().forEach { line ->
+                                val f = line.split('\t')
+                                if (f.size < 17) return@forEach
+                                val cls = f[6]; val code = f[7]
+                                val wanted = keep.any { (c, codes) -> c == cls && (codes == null || code in codes) }
+                                if (!wanted) return@forEach
+                                val elevation = f[15].ifEmpty { f[16] }.toIntOrNull()?.takeIf { it > -1000 } ?: ""
+                                out.write(listOf(f[1], f[4], f[5], elevation.toString(), code, f[14].ifEmpty { "0" }, country).joinToString("\t"))
+                                out.write("\n")
+                                rows++
+                            }
+                        }
+                    }
+                } catch (e: Exception) {
+                    logger.warn("Place names for $country could not be fetched: ${e.message}")
+                }
+            }
+        } finally {
+            out.close()
+        }
+        logger.lifecycle("Place names: $rows places")
+    }
+}
+
+tasks.named("preBuild") { dependsOn(downloadModels, buildPlaces) }
 
 kotlin {
     compilerOptions { jvmTarget.set(JvmTarget.JVM_17) }

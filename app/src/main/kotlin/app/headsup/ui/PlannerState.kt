@@ -11,6 +11,7 @@ import app.headsup.core.planner.CaptureMode
 import app.headsup.core.planner.CloudForecast
 import app.headsup.core.planner.CameraLimits
 import app.headsup.core.planner.ExposureSetup
+import app.headsup.core.planner.Gazetteer
 import app.headsup.core.planner.NdFilter
 import app.headsup.core.planner.HorizonProfile
 import app.headsup.core.planner.MetNorway
@@ -218,6 +219,19 @@ internal class PlannerState(context: Context) {
      */
     var compassOffset by Saved(prefs.get("compass", 0f).toDouble()) { prefs.put("compass", it.toFloat()) }
     var tiltOffset by Saved(prefs.get("tilt", 0f).toDouble()) { prefs.put("tilt", it.toFloat()) }
+
+    /** Place names for search (towns, peaks, passes, lakes; from GeoNames, built into the app), read once when first needed. */
+    var gazetteer by mutableStateOf<Gazetteer?>(null)
+    private val assets = context.assets
+
+    suspend fun loadPlaceNames() {
+        if (gazetteer != null) return
+        gazetteer = withContext(Dispatchers.IO) {
+            runCatching {
+                java.util.zip.GZIPInputStream(assets.open("places.tsv.gz")).bufferedReader().useLines { Gazetteer.parse(it) }
+            }.getOrDefault(Gazetteer(emptyList()))
+        }
+    }
 
     var places by mutableStateOf(readPlaces(prefs))
     var selectedPlace by mutableStateOf<Int?>(null)

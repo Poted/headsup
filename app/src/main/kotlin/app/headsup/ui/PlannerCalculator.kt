@@ -138,7 +138,7 @@ internal fun CalculatorView(st: PlannerState) {
         // With the shutter and aperture held: which filters keep the ISO inside its range.
         if (auto == AutoSetting.Iso) {
             Text(
-                "At ${Exposure.formatAperture(st.aperture)} and ${Exposure.formatShutter(st.setup.shutter)}, ISO ${st.isoMin.roundToInt()}–${st.isoMax.roundToInt()} needs " +
+                "Filter for ${Exposure.formatAperture(st.aperture)} and ${Exposure.formatShutter(st.setup.shutter)} (ISO ${st.isoMin.roundToInt()}–${st.isoMax.roundToInt()}): " +
                     ndNeeded(frame, st) + (fc?.let { " (with forecast ${ndNeeded(it, st)})" } ?: ""),
                 color = HeadsupColors.Ink, style = MaterialTheme.typography.bodyMedium,
             )
@@ -164,11 +164,15 @@ private fun withForecast(isAuto: Boolean, value: String, forecast: String?): Str
 
 /** How many stops of filter keep the ISO in range at this hour, and the listed filters among them. */
 private fun ndNeeded(f: PlannerFrame, st: PlannerState): String {
-    val window = Exposure.ndWindow(f.ev, st.aperture, st.setup.shutter, st.limits)
-    val fits = Exposure.filtersIn(window)
-    return if (window.endInclusive < 0) "no filter (too dim even bare)"
-    else "${one(window.start.coerceAtLeast(0.0))}–${one(window.endInclusive)} stops of filter" +
-        (if (fits.isEmpty()) ", none of the listed" else ": " + fits.joinToString(" or ") { it.label })
+    val choices = Exposure.filterChoices(f.ev, st.aperture, st.setup.shutter, st.limits)
+    if (choices.isEmpty()) {
+        val window = Exposure.ndWindow(f.ev, st.aperture, st.setup.shutter, st.limits)
+        return if (window.endInclusive < 0) "more light than there is: no filter, and still too dark" else "${one(window.start.coerceAtLeast(0.0))} stops of filter, which none of the listed gives"
+    }
+    // The weakest filter that is enough gives the lowest ISO, so the cleanest picture.
+    val (best, bestIso) = choices.first()
+    val others = choices.drop(1).take(2).joinToString(", ") { (nd, iso) -> "${nd.label} → ISO ${Exposure.snapIso(iso)}" }
+    return "${best.label} (ISO ${Exposure.snapIso(bestIso)}, cleanest)" + (if (others.isNotEmpty()) "; also $others" else "")
 }
 
 private fun warningText(r: ExposureResult, st: PlannerState): String? = when (r.warning) {

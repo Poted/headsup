@@ -45,6 +45,7 @@ import androidx.compose.ui.text.drawText
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import app.headsup.core.planner.Geo
 import app.headsup.core.planner.HorizonProfile
 import app.headsup.core.planner.Place
 import app.headsup.core.planner.Sky
@@ -159,30 +160,55 @@ internal fun SunView(st: PlannerState, onLocate: () -> Unit, modifier: Modifier 
 /** The place: typed, found by the phone, picked on the map, or one kept by name. */
 @Composable
 private fun PlacePanel(st: PlannerState, onLocate: () -> Unit, onGoToPin: () -> Unit) {
-    // A place pasted from elsewhere: coordinates, a Plus Code (as Google Maps now shows), or a Google Maps link.
-    var pasted by remember { mutableStateOf("") }
-    var pasteNote by remember { mutableStateOf("") }
+    // A place found by name (towns, villages, peaks, passes, lakes, huts in Poland, Slovakia and Czechia),
+    // or pasted: coordinates, a Plus Code (as Google Maps now shows), or a Google Maps link.
+    var query by remember { mutableStateOf("") }
+    var note by remember { mutableStateOf("") }
+    LaunchedEffect(Unit) { st.loadPlaceNames() }
+    val names = st.gazetteer
+    val locate = { words: String -> names?.locate(words, st.lat, st.lon)?.let { it.lat to it.lon } }
+    val parsed = remember(query) { app.headsup.core.planner.PlaceInput.parse(query, st.lat, st.lon, locate) }
+    val found = remember(query, names) { if (parsed == null) names?.search(query, st.lat, st.lon, 8).orEmpty() else emptyList() }
     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         OutlinedTextField(
-            value = pasted, onValueChange = { pasted = it; pasteNote = "" }, singleLine = true,
-            label = { Text("Paste coordinates, a Plus Code or a Maps link", maxLines = 1) }, modifier = Modifier.weight(1f),
+            value = query, onValueChange = { query = it; note = "" }, singleLine = true,
+            label = { Text("Search a place, or paste coordinates, a Plus Code, a Maps link", maxLines = 1) }, modifier = Modifier.weight(1f),
         )
-        Chip("Go", {
-            val p = app.headsup.core.planner.PlaceInput.parse(pasted, st.lat, st.lon)
-            if (p != null) {
-                st.setPlace(p.lat, p.lon)
-                pasteNote = "Found from the ${p.from}: ${String.format(java.util.Locale.US, "%.5f, %.5f", p.lat, p.lon)}"
-                pasted = ""
-            } else {
-                pasteNote = "Not understood. A short Maps link (maps.app.goo.gl) has no place in it: open it and copy the coordinates or the Plus Code."
-            }
+        if (parsed != null) Chip("Go", {
+            st.setPlace(parsed.lat, parsed.lon)
+            note = "From the ${parsed.from}: ${String.format(java.util.Locale.US, "%.5f, %.5f", parsed.lat, parsed.lon)}"
+            query = ""
         })
     }
-    if (pasteNote.isNotEmpty()) Text(pasteNote, color = HeadsupColors.TextMuted, style = MaterialTheme.typography.labelSmall)
-    Text(
-        "A short Plus Code (like X3QR+5F Zakopane) is completed from the place now set, so set somewhere near first (within about 50 km).",
-        color = HeadsupColors.TextMuted, style = MaterialTheme.typography.labelSmall,
-    )
+    for (p in found) {
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(10.dp))
+                .background(HeadsupColors.SurfaceHigh)
+                .clickable {
+                    st.setPlace(p.lat, p.lon)
+                    note = "${p.name} (${p.kind}${p.elevation?.let { ", $it m" } ?: ""})"
+                    query = ""
+                }
+                .padding(10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(p.name, color = HeadsupColors.Ink, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
+            Text(
+                "${p.kind}${p.elevation?.let { " · $it m" } ?: ""} · ${p.country} · ${one(Geo.distance(st.lat, st.lon, p.lat, p.lon) / 1000)} km",
+                color = HeadsupColors.TextMuted, style = MaterialTheme.typography.labelMedium,
+            )
+        }
+    }
+    if (query.length >= 2 && parsed == null && found.isEmpty()) {
+        Text(
+            if (names?.places?.isEmpty() == true) "Place names are not in this build; coordinates, Plus Codes and Maps links still work."
+            else "Nothing by that name. A short Maps link (maps.app.goo.gl) has no place in it: open it and copy the Plus Code or the coordinates.",
+            color = HeadsupColors.TextMuted, style = MaterialTheme.typography.labelSmall,
+        )
+    }
+    if (note.isNotEmpty()) Text(note, color = HeadsupColors.Good, style = MaterialTheme.typography.labelMedium)
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         NumberField("Latitude", st.lat, st.reload, Modifier.weight(1f)) { st.lat = it.coerceIn(-90.0, 90.0) }
         NumberField("Longitude", st.lon, st.reload, Modifier.weight(1f)) { st.lon = it.coerceIn(-180.0, 180.0) }
@@ -206,7 +232,7 @@ private fun PlacePanel(st: PlannerState, onLocate: () -> Unit, onGoToPin: () -> 
     DateRow(st)
     PlacesBar(st)
     Text(
-        "Map © OpenStreetMap contributors. Heights: Terrain Tiles on AWS (SRTM and USGS 3DEP courtesy of the U.S. Geological Survey; Copernicus EU-DEM, funded by the European Union; and others).",
+        "Place names: GeoNames (CC BY 4.0). Map © OpenStreetMap contributors. Heights: Terrain Tiles on AWS (SRTM and USGS 3DEP courtesy of the U.S. Geological Survey; Copernicus EU-DEM, funded by the European Union; and others).",
         color = HeadsupColors.TextMuted, style = MaterialTheme.typography.labelSmall,
     )
 }

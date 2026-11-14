@@ -92,6 +92,15 @@ object Exposure {
     fun filtersIn(window: ClosedFloatingPointRange<Double>): List<NdFilter> =
         NdFilter.entries.filter { it.stops >= window.start - 0.025 && it.stops <= window.endInclusive + 0.025 }
 
+    /**
+     * The listed filters that keep the ISO within the camera's range at this aperture and shutter,
+     * each with the ISO it needs, weakest filter first. The first gives the lowest ISO, so the
+     * cleanest picture; the others work too, with more ISO (more noise).
+     */
+    fun filterChoices(ev: Double, aperture: Double, shutter: Double, limits: CameraLimits): List<Pair<NdFilter, Double>> =
+        NdFilter.entries.map { it to isoFor(ev, aperture, shutter, it.stops) }
+            .filter { (_, iso) -> iso >= limits.isoMin / 1.02 && iso <= limits.isoMax * 1.02 }
+
     /** Works the exposure out for a scene of [ev] (at ISO 100). */
     fun solve(ev: Double, s: ExposureSetup): ExposureResult {
         val fixedNd = s.nd
